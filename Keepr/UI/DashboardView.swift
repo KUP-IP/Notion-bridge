@@ -1,6 +1,6 @@
 // DashboardView.swift — Minimal Status Popover
-// Notion Bridge v1: Shows active connections, registered tool count, and server uptime
-// Reflects real status from observable state, not hardcoded placeholders.
+// Notion Bridge v1: Shows active connections, tool calls, registered tool count, and server uptime
+// PKT-317: Added tool calls row for live server status from unified binary
 
 import SwiftUI
 
@@ -61,6 +61,12 @@ public struct DashboardView: View {
                 iconColor: .blue,
                 label: "Tools",
                 value: "\(statusBar.registeredToolCount) registered"
+            )
+            statusRow(
+                icon: "hammer",
+                iconColor: .purple,
+                label: "Tool Calls",
+                value: "\(statusBar.totalToolCalls)"
             )
             statusRow(
                 icon: "clock",

@@ -1,5 +1,6 @@
 // KeeprApp.swift — @main App Entry Point
-// Notion Bridge v1: Menu bar app shell with MenuBarExtra + icon loading
+// Notion Bridge v1: Unified menu bar app + MCP server in a single binary
+// PKT-317: StatusBarController now owned by AppDelegate (server wires it on launch)
 // No Dock icon — pure menu bar app via MenuBarExtra pattern
 
 import SwiftUI
@@ -20,12 +21,11 @@ private func loadMenuBarIcon() -> NSImage? {
 @main
 struct KeeprApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @State private var statusBar = StatusBarController()
     @State private var permissionManager = PermissionManager()
 
     var body: some Scene {
         MenuBarExtra {
-            DashboardView(statusBar: statusBar, permissionManager: permissionManager)
+            DashboardView(statusBar: appDelegate.statusBar, permissionManager: permissionManager)
                 .frame(width: 320, height: 460)
                 .onAppear {
                     permissionManager.checkAll()

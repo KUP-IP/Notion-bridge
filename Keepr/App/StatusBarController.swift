@@ -1,13 +1,14 @@
 // StatusBarController.swift — Observable State for Menu Bar + Popover
-// V1-02: Manages connection count, tool count, and uptime
+// V1-02: Manages connection count, tool count, uptime, and tool call count
+// PKT-317: Added totalToolCalls counter for live server status in DashboardView
 
 import Foundation
 import Observation
 
 /// Observable state controller for the menu bar app.
-/// Provides live connection count, registered tool count, and server uptime
-/// to the DashboardView popover. All state updates are main-actor-isolated
-/// for safe SwiftUI binding.
+/// Provides live connection count, registered tool count, total tool calls,
+/// and server uptime to the DashboardView popover. All state updates are
+/// main-actor-isolated for safe SwiftUI binding.
 @MainActor
 @Observable
 public final class StatusBarController {
@@ -21,6 +22,9 @@ public final class StatusBarController {
 
     /// Number of registered MCP tools
     public var registeredToolCount: Int = 0
+
+    /// Total number of tool calls dispatched since server start
+    public var totalToolCalls: Int = 0
 
     /// Server start time (nil if server not running)
     public var serverStartTime: Date? = nil
@@ -52,6 +56,7 @@ public final class StatusBarController {
     public func markServerStarted(toolCount: Int) {
         serverStartTime = Date()
         registeredToolCount = toolCount
+        totalToolCalls = 0
     }
 
     /// Mark the server as stopped. Resets connections and uptime.
@@ -63,5 +68,10 @@ public final class StatusBarController {
     /// Update the active connection count.
     public func updateConnections(_ count: Int) {
         activeConnections = count
+    }
+
+    /// Increment the tool call counter. Called by ServerManager after each dispatch.
+    public func incrementToolCalls() {
+        totalToolCalls += 1
     }
 }

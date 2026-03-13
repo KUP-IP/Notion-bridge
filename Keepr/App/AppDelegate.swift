@@ -1,16 +1,21 @@
-// AppDelegate.swift — App Lifecycle + SMAppService Auto-Launch
-// Notion Bridge v1: Lifecycle wiring for menu bar app
+// AppDelegate.swift — App Lifecycle + MCP Server + SMAppService Auto-Launch
+// Notion Bridge v1: Unified binary — starts MCP server on launch, stops on quit
+// PKT-317: Merged KeeprServer runtime into KeeprApp via ServerManager
 
 import AppKit
 import ServiceManagement
 
-/// Manages app lifecycle and auto-launch registration via SMAppService.
-/// SMAppService.mainApp.register() may fail if:
-/// - User hasn't granted permission in System Settings > General > Login Items
-/// - App is running from a non-standard location (e.g., ~/Downloads)
-/// - App bundle is not properly signed
-/// Error handling is explicit — failures are logged with actionable guidance.
-public final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
+/// Manages app lifecycle, auto-launch registration, and MCP server lifecycle.
+/// The server starts in a detached Task on launch (Nudge Server pattern) so the
+/// SwiftUI main thread is never blocked. StatusBarController receives live updates
+/// for connections, tool calls, and uptime.
+@MainActor
+public final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var serverTask: Task<Void, Never>?
+
+    /// Observable state for the DashboardView popover.
+    /// Owned here so it's available before the first SwiftUI render.
+    public let statusBar = StatusBarController()
 
     public override init() {
         super.init()
@@ -18,10 +23,44 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Send
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         registerAutoLaunch()
+        startMCPServer()
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
-        // Future: graceful MCP server shutdown, audit log flush
+        print("[Notion Bridge] Shutting down MCP server...")
+        serverTask?.cancel()
+        serverTask = nil
+        statusBar.markServerStopped()
+        print("[Notion Bridge] Server stopped.")
+    }
+
+    // MARK: - MCP Server
+
+    private func startMCPServer() {
+        let statusBar = self.statusBar
+        serverTask = Task.detached {
+            let manager = ServerManager(onToolCall: {
+                statusBar.incrementToolCalls()
+            })
+            let toolCount = await manager.setup()
+
+            await MainActor.run {
+                statusBar.markServerStarted(toolCount: toolCount)
+            }
+            print("[Notion Bridge] MCP server started with \(toolCount) tools")
+
+            do {
+                try await manager.run()
+            } catch is CancellationError {
+                print("[Notion Bridge] Server task cancelled")
+            } catch {
+                print("[Notion Bridge] Server error: \(error.localizedDescription)")
+            }
+
+            await MainActor.run {
+                statusBar.markServerStopped()
+            }
+        }
     }
 
     // MARK: - Auto-Launch

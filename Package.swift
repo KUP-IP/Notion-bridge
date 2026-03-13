@@ -5,7 +5,6 @@ let package = Package(
     name: "KeeprBridge",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "KeeprServer", targets: ["KeeprServer"]),
         .executable(name: "KeeprApp", targets: ["KeeprApp"]),
         .executable(name: "KeeprTests", targets: ["KeeprTests"]),
     ],
@@ -20,14 +19,6 @@ let package = Package(
             ],
             path: "Keepr",
             exclude: ["Server/main.swift", "App/KeeprApp.swift", "App/Resources"]
-        ),
-        .executableTarget(
-            name: "KeeprServer",
-            dependencies: ["KeeprLib",
-                .product(name: "MCP", package: "swift-sdk")
-            ],
-            path: "Keepr/Server",
-            sources: ["main.swift"]
         ),
         .executableTarget(
             name: "KeeprApp",
