@@ -19,8 +19,7 @@ struct KeeprApp: App {
                     permissionManager.checkAll()
                 }
         } label: {
-            // SF Symbol placeholder for v1 app icon
-            Image(systemName: "bridge.fill")
+            Image("keepr-menubar", bundle: .module)
         }
         .menuBarExtraStyle(.window)
     }

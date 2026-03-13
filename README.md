@@ -1,0 +1,358 @@
+# 🌉 Keepr · Mac Bridge
+
+**A native macOS menu bar app that replaces the Python + ngrok MCP server, serving as the persistent bidirectional bridge between Notion agents and the local Mac.**
+
+Version 1.0.0 · macOS 14+ · Apple Silicon · Swift 6
+
+---
+
+## Overview
+
+Keepr is a native SwiftUI menu bar app that exposes 29 tools across 6 modules over MCP (Model Context Protocol) transports. It replaces the previous Python + ngrok bridge with a single binary that auto-launches on login, routes every tool call through a 4-tier security gate, and logs every action to an append-only audit trail.
+
+### Architecture
+
+```
+Remote Agent (Notion)  ──SSE :9700──►  ┌──────────────────────┐
+                                       │   Keepr.app          │
+Local Client (Claude)  ──stdio──────►  │                      │
+                                       │   Transport Layer    │
+                                       │      ↓               │
+                                       │   Tool Router        │
+                                       │      ↓               │
+                                       │   Security Gate      │
+                                       │      ↓               │
+                                       │   Module Handler     │
+                                       │      ↓               │
+                                       │   Audit Log          │
+                                       └──────────────────────┘
+                                              ↓
+                                       macOS APIs / Notion REST
+```
+
+**Data flow:** All requests route through Transport → Tool Router → Security Gate → Module Handler → Audit Log → Response. The router is transport-agnostic — modules never know which transport delivered the request.
+
+---
+
+## Prerequisites
+
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| **macOS** | 14.0+ (Sonoma) | Required for SMAppService, ScreenCaptureKit |
+| **Xcode** | 16.0+ | Swift 6.0 toolchain |
+| **Swift** | 6.0+ | Strict concurrency enforced |
+| **Hardware** | Apple Silicon (M1+) | ARM64 only |
+| **Git** | 2.39+ | Trunk-based development |
+
+### TCC Permissions Required
+
+Keepr requires the following macOS permissions (granted interactively at first launch):
+
+| Permission | Purpose | Tools Affected |
+|-----------|---------|----------------|
+| **Full Disk Access** | Messages chat.db, file operations | FileModule, MessagesModule |
+| **Accessibility** | AXUIElement tree inspection | Future: AccessibilityModule |
+| **Automation** | AppleScript → Messages, Shortcuts | MessagesModule (send) |
+| **Screen Recording** | Screen capture, OCR | Future: ScreenModule |
+| **Contacts** | Contact search | Future: contacts_search |
+
+---
+
+## Quick Start
+
+### Build
+
+```bash
+# Clone and build
+git clone https://github.com/kup-solutions/keepr-bridge.git
+cd keepr-bridge
+swift build
+
+# Build release binary
+swift build -c release -Xswiftc -strict-concurrency=complete
+```
+
+### Run
+
+```bash
+# Start MCP server (stdio transport)
+swift run KeeprServer
+
+# Run tests
+swift run KeeprTests
+
+# Or use Make targets
+make build
+make test
+```
+
+### Connect from Claude Code / Cursor
+
+Add to your MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "keepr": {
+      "command": "/path/to/keepr-bridge/.build/release/KeeprServer",
+      "args": []
+    }
+  }
+}
+```
+
+---
+
+## Tool Reference
+
+### V1 Surface: 29 tools across 6 modules
+
+#### ShellModule (2 tools)
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `shell_exec` | 🟠 Write-Confirm | Execute a shell command with timeout and working directory |
+| `run_script` | 🟢 Read-Only | Execute a pre-approved script from ~/.mcp_scripts |
+
+#### FileModule (12 tools)
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `file_list` | 🟢 Read-Only | List directory contents (recursive, hidden files) |
+| `file_search` | 🟢 Read-Only | Search for files by name pattern |
+| `file_metadata` | 🟢 Read-Only | Get file/directory metadata (size, dates, type) |
+| `file_read` | 🟢 Read-Only | Read file contents with encoding support |
+| `file_write` | 🟠 Write-Confirm | Write text to file with optional parent dir creation |
+| `file_append` | 🟠 Write-Confirm | Append text to existing file |
+| `file_move` | 🟠 Write-Confirm | Move file or directory |
+| `file_rename` | 🟠 Write-Confirm | Rename file or directory in place |
+| `file_copy` | 🟡 Write-Auto | Copy file or directory |
+| `dir_create` | 🟠 Write-Confirm | Create directory with intermediates |
+| `clipboard_read` | 🟢 Read-Only | Read system clipboard |
+| `clipboard_write` | 🟡 Write-Auto | Write to system clipboard |
+
+#### MessagesModule (6 tools)
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `messages_search` | 🟢 Read-Only | Search messages by keyword |
+| `messages_recent` | 🟢 Read-Only | List recent conversations |
+| `messages_chat` | 🟢 Read-Only | Get message thread with contact |
+| `messages_content` | 🟢 Read-Only | Get single message with metadata |
+| `messages_participants` | 🟢 Read-Only | List chat participants |
+| `messages_send` | 🔴 Destructive | Send iMessage/SMS (requires confirm='SEND') |
+
+#### SystemModule (3 tools — v1 partial)
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `system_info` | 🟢 Read-Only | OS, CPU, memory, disk, battery, uptime |
+| `process_list` | 🟢 Read-Only | Running processes sorted by CPU/memory |
+| `notify` | 🟡 Write-Auto | Send macOS notification |
+
+#### NotionModule (3 tools — v1 narrow)
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `notion_search` | 🟢 Read-Only | Search Notion workspace pages/databases |
+| `notion_page_read` | 🟢 Read-Only | Read Notion page properties and content |
+| `notion_page_update` | 🟠 Write-Confirm | Update Notion page properties |
+
+#### SessionModule (3 tools)
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `tools_list` | 🟢 Read-Only | Runtime tool registry (all tools with metadata) |
+| `session_info` | 🟢 Read-Only | Uptime, connections, tool call count |
+| `session_clear` | 🟠 Write-Confirm | Clear session state (requires confirm) |
+
+---
+
+## Security Model
+
+### 4-Tier Security Gate
+
+Every tool call passes through the Security Gate before execution. No exceptions.
+
+| Tier | Name | Behavior |
+|------|------|----------|
+| 🟢 | **Read-Only** | Execute immediately. Zero side effects. |
+| 🟡 | **Write-Auto** | Execute immediately. Post-confirmation in audit log. |
+| 🟠 | **Write-Confirm** | Pause and present to calling agent for approval. |
+| 🔴 | **Destructive** | Hard stop. Impact assessment required before execution. |
+
+### Auto-Escalation Patterns
+
+Commands containing these patterns are automatically escalated to 🔴 red tier:
+- `rm` (file deletion)
+- `kill` (process termination)
+- `chmod 777` (open permissions)
+- Pipe to `sh` / `bash` / `eval` (arbitrary execution)
+
+**`sudo` is hard blocked** — always rejected, never executed, regardless of tier.
+
+### Forbidden Paths
+
+These paths are blocked across all tiers:
+- `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`
+- `.env` files containing secrets
+- `/System`, `/Library` (write operations)
+- Application bundles in `/Applications`
+
+### Batch Gate
+
+If a single request triggers **3 or more tool calls**, the router presents the full execution plan before starting.
+
+### Audit Log
+
+Every tool call is recorded with:
+- Timestamp, tool name, security tier
+- Input summary, output summary
+- Duration (milliseconds)
+- Approval status (approved / rejected / escalated / error)
+
+---
+
+## Transport Configuration
+
+### stdio (default)
+
+Used by local clients (Claude Code, Cursor). The server reads JSON-RPC from stdin and writes responses to stdout.
+
+```bash
+swift run KeeprServer
+```
+
+### SSE (:9700)
+
+Used by remote agents (Notion). Server-Sent Events on port 9700.
+
+> **Note:** SSE transport requires NIO HTTP adapter (in development). Current v1 ships with stdio. Remote connectivity is provided through the Python bridge SSE layer during transition.
+
+---
+
+## Project Structure
+
+```
+keepr-bridge/
+├── Keepr/
+│   ├── App/                    # SwiftUI app, lifecycle, menu bar
+│   │   ├── KeeprApp.swift
+│   │   ├── AppDelegate.swift
+│   │   └── StatusBarController.swift
+│   ├── Modules/                # 6 v1 tool modules
+│   │   ├── ShellModule.swift       # 2 tools
+│   │   ├── FileModule.swift        # 12 tools
+│   │   ├── MessagesModule.swift    # 6 tools
+│   │   ├── SystemModule.swift      # 3 tools
+│   │   ├── NotionModule.swift      # 3 tools
+│   │   └── SessionModule.swift     # 3 tools
+│   ├── Security/               # Gate, audit, permissions
+│   │   ├── SecurityGate.swift
+│   │   ├── AuditLog.swift
+│   │   └── PermissionManager.swift
+│   ├── Server/                 # MCP server + router
+│   │   ├── main.swift
+│   │   └── ToolRouter.swift
+│   ├── Notion/                 # REST API client
+│   │   ├── NotionClient.swift
+│   │   └── NotionModels.swift
+│   └── UI/                     # Dashboard views
+│       ├── DashboardView.swift
+│       └── PermissionView.swift
+├── KeeprTests/
+│   ├── main.swift              # Test runner (unit + integration)
+│   ├── ShellModuleTests.swift
+│   ├── FileModuleTests.swift
+│   ├── MessagesModuleTests.swift
+│   ├── SystemModuleTests.swift
+│   ├── NotionModuleTests.swift
+│   ├── SessionModuleTests.swift
+│   ├── PermissionManagerTests.swift
+│   └── IntegrationTests/
+│       └── EndToEndTests.swift
+├── Package.swift               # SPM (MCP Swift SDK v0.11.0)
+├── Makefile                    # build, test, sign, notarize, dmg
+├── README.md
+└── .github/workflows/ci.yml   # GitHub Actions pipeline
+```
+
+---
+
+## Dependencies
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) | 0.11.0 | MCP protocol, stdio transport |
+
+All other functionality uses Apple frameworks only (Foundation, AppKit, SwiftUI, ServiceManagement).
+
+---
+
+## Known Limitations
+
+### V1 Scope Boundaries
+
+- **SSE transport** is provided through the Python bridge SSE layer; native Swift SSE server is planned for expansion
+- **Streamable HTTP** (:9701) deferred to expansion phase
+- **Confirmation UI** for 🟠/🔴 tiers is deferred — V1 allows with audit logging only
+- **Notion API key** must be configured manually (no Settings UI in v1)
+
+### Deferred Tools (remain on Python bridge)
+
+| Tool | Reason |
+|------|--------|
+| `log_parse` (was `interpret_logs`) | Requires Ollama/Llama integration — lower priority |
+| `contacts_search` | Requires CNContactStore framework — higher complexity |
+| `run_shortcut` | Requires Shortcuts framework integration |
+
+### Expansion Modules (not in v1)
+
+- **AccessibilityModule** (5 tools) — AXUIElement steering
+- **ScreenModule** (4 tools) — ScreenCaptureKit + Vision OCR
+- **BrowserModule** (7 tools) — WKWebView automation
+- Full NotionModule (4 additional tools)
+- Full SystemModule (3 additional tools)
+
+---
+
+## Development
+
+### Running Tests
+
+```bash
+# All tests (unit + integration + E2E)
+make test
+
+# Or directly
+swift run KeeprTests
+```
+
+### Release Pipeline
+
+```bash
+# Full pipeline: build → test → sign → notarize → DMG
+make release
+
+# Individual steps
+make build       # Release build with strict concurrency
+make sign        # Developer ID code signing
+make notarize    # Apple notarization submission
+make dmg         # Create distributable DMG
+make verify      # Gatekeeper assessment
+```
+
+### CI/CD
+
+GitHub Actions runs on push to `main` and pull requests:
+- **Build** with strict concurrency
+- **Test** full suite (unit + integration)
+- **Sign** (conditional on certificate availability)
+- **Notarize** (conditional on credentials)
+- **Artifact** DMG uploaded
+
+---
+
+## License
+
+Copyright © 2026 KUP Solutions. All rights reserved.

@@ -1,5 +1,7 @@
-// main.swift – V1-03 Test Runner
+// main.swift – V1-06 Test Runner
 // KeeprBridge · Tests (standalone executable — no XCTest needed)
+//
+// Runs: SecurityGate, ToolRouter, AuditLog, Module tests, Integration/E2E tests
 
 import Foundation
 import MCP
@@ -344,7 +346,7 @@ await test("AuditEntry is Codable (JSON round-trip)") {
 }
 
 // ============================================================
-// MARK: - V1-04 Module Tests
+// MARK: - V1-04/V1-05 Module Tests
 // ============================================================
 
 await runPermissionManagerTests()
@@ -354,6 +356,12 @@ await runSessionModuleTests()
 await runMessagesModuleTests()
 await runSystemModuleTests()
 await runNotionModuleTests()
+
+// ============================================================
+// MARK: - V1-06 Integration / End-to-End Tests
+// ============================================================
+
+await runEndToEndTests()
 
 // ============================================================
 // MARK: - Summary

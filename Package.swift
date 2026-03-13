@@ -19,7 +19,7 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk")
             ],
             path: "Keepr",
-            exclude: ["Server/main.swift", "App/KeeprApp.swift"]
+            exclude: ["Server/main.swift", "App/KeeprApp.swift", "App/Resources"]
         ),
         .executableTarget(
             name: "KeeprServer",
@@ -33,7 +33,8 @@ let package = Package(
             name: "KeeprApp",
             dependencies: ["KeeprLib"],
             path: "Keepr/App",
-            sources: ["KeeprApp.swift"]
+            sources: ["KeeprApp.swift"],
+            resources: [.process("Resources")]
         ),
         .executableTarget(
             name: "KeeprTests",
