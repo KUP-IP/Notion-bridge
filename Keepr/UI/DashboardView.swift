@@ -1,5 +1,5 @@
 // DashboardView.swift — Minimal Status Popover
-// V1-02: Shows active connections, registered tool count, and server uptime
+// Notion Bridge v1: Shows active connections, registered tool count, and server uptime
 // Reflects real status from observable state, not hardcoded placeholders.
 
 import SwiftUI
@@ -35,7 +35,7 @@ public struct DashboardView: View {
         HStack {
             Image(systemName: "bridge.fill")
                 .foregroundStyle(.purple)
-            Text("Keepr · Mac Bridge")
+            Text("Notion Bridge")
                 .font(.headline)
             Spacer()
             Text("v1.0.0")
@@ -106,7 +106,7 @@ public struct DashboardView: View {
 
     private var footerSection: some View {
         HStack {
-            Button("Quit Keepr") {
+            Button("Quit Notion Bridge") {
                 NSApplication.shared.terminate(nil)
             }
             .buttonStyle(.plain)

@@ -1,5 +1,5 @@
 // AppDelegate.swift — App Lifecycle + SMAppService Auto-Launch
-// V1-02: Lifecycle wiring for menu bar app
+// Notion Bridge v1: Lifecycle wiring for menu bar app
 
 import AppKit
 import ServiceManagement
@@ -30,10 +30,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Send
         let service = SMAppService.mainApp
         do {
             try service.register()
-            print("[Keepr] Auto-launch registered via SMAppService (\(service.status.rawValue))")
+            print("[Notion Bridge] Auto-launch registered via SMAppService (\(service.status.rawValue))")
         } catch {
-            print("[Keepr] SMAppService registration failed: \(error.localizedDescription)")
-            print("[Keepr] To enable: System Settings > General > Login Items > toggle Keepr on")
+            print("[Notion Bridge] SMAppService registration failed: \(error.localizedDescription)")
+            print("[Notion Bridge] To enable: System Settings > General > Login Items > toggle Notion Bridge on")
         }
     }
 }

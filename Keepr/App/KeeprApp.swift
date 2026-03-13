@@ -1,9 +1,21 @@
 // KeeprApp.swift — @main App Entry Point
-// V1-02: Menu bar app shell with MenuBarExtra
+// Notion Bridge v1: Menu bar app shell with MenuBarExtra + icon loading
 // No Dock icon — pure menu bar app via MenuBarExtra pattern
 
 import SwiftUI
 import KeeprLib
+
+/// Load menu bar icon from SPM-processed resources (loose PNG, not asset catalog).
+/// Uses the Golden Gate Bridge logo as a template image for the menu bar.
+private func loadMenuBarIcon() -> NSImage? {
+    guard let nsImage = Bundle.module.image(forResource: "notionbridge-menubar") else {
+        return nil
+    }
+    let copy = nsImage.copy() as! NSImage
+    copy.size = NSSize(width: 18, height: 18)
+    copy.isTemplate = true
+    return copy
+}
 
 @main
 struct KeeprApp: App {
@@ -19,7 +31,11 @@ struct KeeprApp: App {
                     permissionManager.checkAll()
                 }
         } label: {
-            Image("keepr-menubar", bundle: .module)
+            if let icon = loadMenuBarIcon() {
+                Image(nsImage: icon)
+            } else {
+                Image(systemName: "sparkle")
+            }
         }
         .menuBarExtraStyle(.window)
     }
