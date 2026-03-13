@@ -1,83 +1,111 @@
-// KeeprServer — Minimal MCP Server with Echo Tool
-// PKT-306: Native Spine + Transport Decision
-// Proves: stdio transport + SSE/HTTP transport via official MCP Swift SDK v0.11.0
+// main.swift – V1-04 KeeprServer Entry Point
+// KeeprBridge · Server
+//
+// Pipeline: Transport -> ToolRouter -> SecurityGate -> Handler -> AuditLog -> Response
 
 import Foundation
 import MCP
+import KeeprLib
 
-// MARK: - Echo Tool
+// MARK: - Bootstrap
 
-let echoInputSchema: Value = .object([
-    "type": .string("object"),
-    "properties": .object([
-        "message": .object([
-            "type": .string("string"),
-            "description": .string("The message to echo back")
-        ])
-    ]),
-    "required": .array([.string("message")])
-])
+// 1. Create core components
+let securityGate = SecurityGate()
+let auditLog = AuditLog(logFilePath: nil) // In-memory for now; file path configurable later
+let router = ToolRouter(securityGate: securityGate, auditLog: auditLog, batchThreshold: 3)
 
-let echoTool = Tool(
+// 2. Register modules (V1-04: Shell + File + Session complete)
+await ShellModule.register(on: router)
+await FileModule.register(on: router)
+await SessionModule.register(on: router, auditLog: auditLog)
+await MessagesModule.register(on: router)
+await SystemModule.register(on: router)
+await NotionModule.register(on: router)
+
+// 3. Register the V1-01 echo tool (preserved for backward compatibility)
+await router.register(ToolRegistration(
     name: "echo",
-    description: "Echoes back the input message. Proof tool for transport validation.",
-    inputSchema: echoInputSchema
-)
+    module: "builtin",
+    tier: .green,
+    description: "Echoes back the input message. Useful for connectivity testing.",
+    inputSchema: .object([
+        "type": .string("object"),
+        "properties": .object([
+            "message": .object([
+                "type": .string("string"),
+                "description": .string("The message to echo back")
+            ])
+        ]),
+        "required": .array([.string("message")])
+    ]),
+    handler: { arguments in
+        if case .object(let args) = arguments,
+           case .string(let message) = args["message"] {
+            return .object(["echo": .string(message)])
+        }
+        return .object(["error": .string("Missing 'message' parameter")])
+    }
+))
 
-// MARK: - Server Setup & Launch
-
-let useSSE = CommandLine.arguments.contains("--sse")
-let port = 9700
-
+// 4. Build MCP Server with tool handlers wired through the router pipeline
 let server = Server(
-    name: "KeeprBridge",
-    version: "0.1.0",
-    capabilities: Server.Capabilities(
-        tools: .init(listChanged: true)
-    )
+    name: "KeeprServer",
+    version: "0.5.0",
+    capabilities: .init(tools: .init())
 )
 
-// Register handlers inside actor context
+// ListTools handler: expose all registered tools as MCP Tool definitions
 await server.withMethodHandler(ListTools.self) { _ in
-    ListTools.Result(tools: [echoTool])
+    let registrations = await router.allRegistrations()
+    let tools = registrations.map { reg in
+        Tool(
+            name: reg.name,
+            description: reg.description,
+            inputSchema: reg.inputSchema
+        )
+    }
+    return .init(tools: tools)
 }
 
+// CallTool handler: dispatch through ToolRouter pipeline
 await server.withMethodHandler(CallTool.self) { params in
-    switch params.name {
-    case "echo":
-        let message: String
-        if let args = params.arguments, let val = args["message"]?.stringValue {
-            message = val
+    let toolName = params.name
+    let arguments: Value = {
+        if let args = params.arguments {
+            return .object(args)
         } else {
-            message = "(no message)"
+            return .object([:])
         }
-        return CallTool.Result(content: [.text("Echo: \(message)")])
-    default:
-        throw MCPError.methodNotFound("Unknown tool: \(params.name)")
+    }()
+
+    do {
+        let result = try await router.dispatch(toolName: toolName, arguments: arguments)
+
+        // Convert result Value to CallTool response content
+        let text: String
+        switch result {
+        case .string(let s):
+            text = s
+        default:
+            // Serialize to JSON for structured results
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            if let data = try? encoder.encode(result),
+               let json = String(data: data, encoding: .utf8) {
+                text = json
+            } else {
+                text = String(describing: result)
+            }
+        }
+
+        return .init(content: [.text(.init(text))])
+    } catch let error as ToolRouterError {
+        return .init(content: [.text(.init("Error: \(error.localizedDescription)"))], isError: true)
+    } catch {
+        return .init(content: [.text(.init("Error: \(error.localizedDescription)"))], isError: true)
     }
 }
 
-if useSSE {
-    fputs("[KeeprBridge] Starting HTTP/SSE transport on port \(port)...\n", stderr)
-
-    // StatefulHTTPServerTransport is framework-agnostic.
-    // It requires an HTTP framework (e.g. swift-nio) to accept connections
-    // and delegate request handling via transport.handleRequest(httpRequest).
-    // This proves the SDK has native SSE server support.
-    let transport = StatefulHTTPServerTransport()
-    try await server.start(transport: transport)
-    fputs("[KeeprBridge] SSE transport initialized (framework-agnostic mode).\n", stderr)
-    fputs("[KeeprBridge] Use an HTTP framework adapter to serve on :\(port).\n", stderr)
-
-    // For a full proof, a NIO HTTP handler would call:
-    //   let response = await transport.handleRequest(HTTPRequest(method: "POST", headers: [...], body: data))
-    // Then stream the response back to the client.
-
-    await server.waitUntilCompleted()
-} else {
-    fputs("[KeeprBridge] Starting stdio transport...\n", stderr)
-    let transport = StdioTransport()
-    try await server.start(transport: transport)
-    fputs("[KeeprBridge] stdio server running. Send JSON-RPC on stdin.\n", stderr)
-    await server.waitUntilCompleted()
-}
+// 5. Start transport (stdio mode; SSE/HTTP requires NIO adapter, deferred)
+let transport = StdioTransport()
+try await server.start(transport: transport)
