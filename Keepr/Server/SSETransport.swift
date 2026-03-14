@@ -6,6 +6,8 @@
 // PKT-318: V1-10 SSE Transport Implementation
 // PKT-332: Added graceful bind-failure handling — SSE is optional, stdio continues
 // PKT-336: Added legacy SSE transport (GET /sse + POST /messages) for Notion compatibility
+// PKT-338: V1-SSE-FIX — Fixed NIO ChannelPipeline precondition crash by removing actor
+//          reference from SSEHTTPHandler. Handler now stores non-actor references only.
 
 import Foundation
 import MCP
@@ -114,12 +116,35 @@ public actor SSEServer {
     public func start() async throws {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
+        // PKT-338 V1-SSE-FIX: Capture non-actor references BEFORE the bootstrap closure.
+        // SSEHTTPHandler must not store a reference to SSEServer (actor) because NIO's
+        // childChannelInitializer runs on the channel's event loop, and crossing the actor
+        // boundary there triggers NIOCore/ChannelPipeline.swift:159 precondition failure.
+        let bridge = self.legacy  // LegacySSEBridge is a plain class, safe to pass
+        let endpointPath = self.endpoint  // nonisolated let, safe to capture
+
+        let rpcHandler: @Sendable (Data) async -> Data? = { [weak self] data in
+            await self?.processLegacyRPC(data)
+        }
+
+        let httpRequestHandler: @Sendable (HTTPRequest) async -> HTTPResponse = { [weak self] request in
+            guard let self else {
+                return .error(statusCode: 503, .internalError("Server unavailable"))
+            }
+            return await self.handleHTTPRequest(request)
+        }
+
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 256)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 channel.pipeline.configureHTTPServerPipeline().flatMap {
-                    channel.pipeline.addHandler(SSEHTTPHandler(sseServer: self))
+                    channel.pipeline.addHandler(SSEHTTPHandler(
+                        legacyBridge: bridge,
+                        endpoint: endpointPath,
+                        rpcHandler: rpcHandler,
+                        httpRequestHandler: httpRequestHandler
+                    ))
                 }
             }
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
@@ -419,11 +444,21 @@ public actor SSEServer {
 
 // MARK: - NIO HTTP Handler
 
+/// PKT-338 V1-SSE-FIX: SSEHTTPHandler no longer stores a reference to SSEServer (actor).
+/// Instead it stores non-actor references:
+/// - legacyBridge: LegacySSEBridge (plain class with NSLock — safe for NIO event loop)
+/// - endpoint: String (nonisolated value)
+/// - rpcHandler: closure that calls back into the actor via Task
+/// - httpRequestHandler: closure that calls back into the actor via Task
+/// This avoids the actor isolation crossing that caused the NIO pipeline precondition failure.
 private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
 
-    private let sseServer: SSEServer
+    private let legacyBridge: LegacySSEBridge
+    private let endpoint: String
+    private let rpcHandler: @Sendable (Data) async -> Data?
+    private let httpRequestHandler: @Sendable (HTTPRequest) async -> HTTPResponse
 
     private struct PendingRequest {
         var head: HTTPRequestHead
@@ -435,8 +470,16 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     /// PKT-336: Track if this channel is a legacy SSE stream for cleanup on disconnect.
     private var legacySessionID: String?
 
-    init(sseServer: SSEServer) {
-        self.sseServer = sseServer
+    init(
+        legacyBridge: LegacySSEBridge,
+        endpoint: String,
+        rpcHandler: @escaping @Sendable (Data) async -> Data?,
+        httpRequestHandler: @escaping @Sendable (HTTPRequest) async -> HTTPResponse
+    ) {
+        self.legacyBridge = legacyBridge
+        self.endpoint = endpoint
+        self.rpcHandler = rpcHandler
+        self.httpRequestHandler = httpRequestHandler
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -462,7 +505,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     /// PKT-336: Clean up legacy SSE session when channel closes.
     func channelInactive(context: ChannelHandlerContext) {
         if let sessionID = legacySessionID {
-            sseServer.legacy.remove(sessionID: sessionID)
+            legacyBridge.remove(sessionID: sessionID)
         }
         context.fireChannelInactive()
     }
@@ -490,7 +533,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }
 
         // Streamable HTTP (POST /mcp) — existing behavior
-        guard path == sseServer.endpoint else {
+        guard path == endpoint else {
             await writeResponse(
                 .error(statusCode: 404, .invalidRequest("Not Found")),
                 version: req.head.version,
@@ -517,7 +560,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }
 
         let httpRequest = HTTPRequest(method: req.head.method.rawValue, headers: headers, body: body)
-        let response = await sseServer.handleHTTPRequest(httpRequest)
+        let response = await httpRequestHandler(httpRequest)
         await writeResponse(response, version: req.head.version, context: context)
     }
 
@@ -525,11 +568,13 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
 
     /// Handle GET /sse — establish SSE stream, send endpoint event, keep channel alive.
     private func handleLegacySSE(_ req: PendingRequest, context: ChannelHandlerContext) async {
-        let sessionID = sseServer.legacy.register(channel: context.channel)
-        self.legacySessionID = sessionID
-
+        // PKT-339: All context.channel access must happen on the event loop.
+        // context.channel triggers assertInEventLoop() — accessing it from a Task crashes.
         nonisolated(unsafe) let ctx = context
         ctx.eventLoop.execute {
+            let sessionID = self.legacyBridge.register(channel: ctx.channel)
+            self.legacySessionID = sessionID
+
             var head = HTTPResponseHead(version: req.head.version, status: .ok)
             head.headers.add(name: "Content-Type", value: "text/event-stream")
             head.headers.add(name: "Cache-Control", value: "no-cache")
@@ -574,10 +619,10 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }
         let body = Data(bytes)
 
-        // Process JSON-RPC through SSEServer's ToolRouter
-        if let responseData = await sseServer.processLegacyRPC(body),
+        // PKT-338: Process JSON-RPC through closure (avoids actor reference)
+        if let responseData = await rpcHandler(body),
            let responseString = String(data: responseData, encoding: .utf8) {
-            sseServer.legacy.sendEvent(sessionID: sessionID, event: "message", data: responseString)
+            legacyBridge.sendEvent(sessionID: sessionID, event: "message", data: responseString)
         }
 
         // Return 202 Accepted on the POST channel
