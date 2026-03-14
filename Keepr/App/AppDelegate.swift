@@ -4,6 +4,7 @@
 // PKT-318: Added SSE transport startup on :9700
 // PKT-329: SSE port now configurable via NOTION_BRIDGE_PORT env var
 // PKT-320: Added Notion API token validation on startup
+// PKT-332: Added single-instance guard to prevent duplicate processes at boot
 
 import AppKit
 import ServiceManagement
@@ -26,6 +27,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        // PKT-332: Single-instance guard — prevent duplicate processes from
+        // SMAppService login item + Terminal session restore + manual launch
+        guard ensureSingleInstance() else {
+            print("[Notion Bridge] Another instance is already running — exiting")
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
         registerAutoLaunch()
         startMCPServer()
         validateNotionToken()
@@ -40,6 +49,26 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         statusBar.markServerStopped()
         print("[Notion Bridge] Server stopped.")
+    }
+
+    // MARK: - Single-Instance Guard
+
+    /// PKT-332: Detect if another instance of this app is already running.
+    /// Uses NSRunningApplication to check by bundle identifier.
+    /// Returns true if this is the only instance, false if a duplicate exists.
+    private func ensureSingleInstance() -> Bool {
+        let bundleID = Bundle.main.bundleIdentifier ?? "solutions.kup.keepr"
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        let myPID = ProcessInfo.processInfo.processIdentifier
+
+        let others = running.filter { $0.processIdentifier != myPID }
+        if let existing = others.first {
+            print("[Notion Bridge] Duplicate instance detected — PID \(existing.processIdentifier) is already running (my PID: \(myPID))")
+            return false
+        }
+
+        print("[Notion Bridge] Single-instance check passed (PID: \(myPID))")
+        return true
     }
 
     // MARK: - MCP Server
@@ -74,6 +103,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
 
                 // SSE transport (configurable port via NOTION_BRIDGE_PORT)
+                // PKT-332: SSEServer.start() now handles bind failures gracefully —
+                // if port is in use, it logs and returns without crashing
                 group.addTask {
                     do {
                         try await manager.runSSE()

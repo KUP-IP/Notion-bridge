@@ -1,4 +1,4 @@
-// NotionClient.swift – V1-05 → V1-12 Notion REST API Client
+// NotionClient.swift – V1-05 → V1-12 → V1-FIX Notion REST API Client
 // KeeprBridge · Notion
 //
 // Actor-based HTTP client with:
@@ -8,6 +8,7 @@
 // - Token resolution: NOTION_API_TOKEN env var → config file fallback
 // PKT-320: Updated env var to NOTION_API_TOKEN, added config file fallback,
 //          added validate() method for startup health check
+// PKT-332: Added verbose diagnostic logging to token resolver for cold-boot debugging
 
 import Foundation
 
@@ -26,28 +27,39 @@ public enum NotionTokenResolver {
     /// Config file path: ~/.config/notion-bridge/config.json
     public static let configFilePath: String = {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.config/notion-bridge/config.json"
+        let path = "\(home)/.config/notion-bridge/config.json"
+        print("[TokenResolver] Config file path resolved: \(path)")
+        return path
     }()
 
     /// Resolve the API token from all sources.
     /// Priority: NOTION_API_TOKEN env → NOTION_API_KEY env (legacy) → config file
     public static func resolve() -> (token: String, source: String)? {
+        print("[TokenResolver] Starting token resolution...")
+
         // 1. NOTION_API_TOKEN environment variable (primary)
         if let token = ProcessInfo.processInfo.environment["NOTION_API_TOKEN"],
            !token.isEmpty {
+            print("[TokenResolver] ✅ Found token via env:NOTION_API_TOKEN")
             return (token, "env:NOTION_API_TOKEN")
         }
+        print("[TokenResolver] env:NOTION_API_TOKEN — not set or empty")
 
         // 2. NOTION_API_KEY environment variable (legacy/backward compat)
         if let token = ProcessInfo.processInfo.environment["NOTION_API_KEY"],
            !token.isEmpty {
+            print("[TokenResolver] ✅ Found token via env:NOTION_API_KEY (legacy)")
             return (token, "env:NOTION_API_KEY")
         }
+        print("[TokenResolver] env:NOTION_API_KEY — not set or empty")
 
         // 3. Config file fallback: ~/.config/notion-bridge/config.json
+        print("[TokenResolver] Trying config file fallback...")
         if let token = readFromConfigFile() {
+            print("[TokenResolver] ✅ Found token via config file")
             return (token, "config:\(configFilePath)")
         }
+        print("[TokenResolver] ❌ All 3 sources exhausted — token not found")
 
         return nil
     }
@@ -64,20 +76,40 @@ public enum NotionTokenResolver {
     /// Expected format: { "notion_api_token": "ntn_..." }
     private static func readFromConfigFile() -> String? {
         let path = configFilePath
-        guard FileManager.default.fileExists(atPath: path),
-              let data = FileManager.default.contents(atPath: path),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+
+        // Step 1: Check file exists
+        guard FileManager.default.fileExists(atPath: path) else {
+            print("[TokenResolver] Config file does not exist at: \(path)")
             return nil
         }
+        print("[TokenResolver] Config file exists at: \(path)")
 
-        // Check both key names
+        // Step 2: Read file contents
+        guard let data = FileManager.default.contents(atPath: path) else {
+            print("[TokenResolver] Config file exists but FileManager.contents() returned nil — possible permission issue")
+            return nil
+        }
+        print("[TokenResolver] Config file read: \(data.count) bytes")
+
+        // Step 3: Parse JSON
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            let rawContent = String(data: data, encoding: .utf8) ?? "<non-UTF8>"
+            print("[TokenResolver] Config file JSON parse failed. Raw content: \(rawContent.prefix(200))")
+            return nil
+        }
+        print("[TokenResolver] Config file parsed — keys: \(json.keys.sorted())")
+
+        // Step 4: Check both key names
         if let token = json["notion_api_token"] as? String, !token.isEmpty {
+            print("[TokenResolver] Key 'notion_api_token' found — token length: \(token.count)")
             return token
         }
         if let token = json["notion_api_key"] as? String, !token.isEmpty {
+            print("[TokenResolver] Key 'notion_api_key' found (legacy) — token length: \(token.count)")
             return token
         }
 
+        print("[TokenResolver] Config file has no 'notion_api_token' or 'notion_api_key' key, or value is empty. Available keys: \(json.keys.sorted())")
         return nil
     }
 }
@@ -112,6 +144,7 @@ public actor NotionClient {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
         self.session = URLSession(configuration: config)
+        print("[NotionClient] Initialized — token source: \(tokenSource)")
     }
 
     /// Returns the source of the resolved token (for diagnostics).

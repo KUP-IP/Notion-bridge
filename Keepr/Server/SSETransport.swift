@@ -4,6 +4,7 @@
 // Built-in SSE support via MCP Swift SDK v0.11.0 StatefulHTTPServerTransport.
 // NIO HTTP server with per-session MCP Server instances sharing one ToolRouter.
 // PKT-318: V1-10 SSE Transport Implementation
+// PKT-332: Added graceful bind-failure handling — SSE is optional, stdio continues
 
 import Foundation
 import MCP
@@ -49,6 +50,8 @@ public actor SSEServer {
     // MARK: - Lifecycle
 
     /// Start accepting SSE connections. Blocks until the channel is closed.
+    /// PKT-332: Graceful bind-failure handling — if the port is in use or bind fails,
+    /// logs a clear message and returns without crashing. stdio transport continues.
     public func start() async throws {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
@@ -63,13 +66,20 @@ public actor SSEServer {
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelOption(ChannelOptions.maxMessagesPerRead, value: 1)
 
-        let channel = try await bootstrap.bind(host: host, port: port).get()
-        self.channel = channel
-        print("[SSE] Listening on \(host):\(port)\(endpoint)")
+        do {
+            let channel = try await bootstrap.bind(host: host, port: port).get()
+            self.channel = channel
+            print("[SSE] Listening on \(host):\(port)\(endpoint)")
 
-        Task { await sessionCleanupLoop() }
+            Task { await sessionCleanupLoop() }
 
-        try await channel.closeFuture.get()
+            try await channel.closeFuture.get()
+        } catch {
+            // PKT-332: Graceful degradation — SSE is optional, stdio still works
+            print("[SSE] Port \(port) in use — SSE transport disabled, stdio still active")
+            print("[SSE] Bind error detail: \(error) (\(error.localizedDescription))")
+            // Return normally instead of throwing — caller continues without SSE
+        }
     }
 
     /// Stop the SSE server gracefully.
@@ -126,10 +136,6 @@ public actor SSEServer {
     private func createSession(_ request: HTTPRequest) async -> HTTPResponse {
         let sessionID = UUID().uuidString
 
-        // Use a permissive validation pipeline for localhost:
-        // - OriginValidator.localhost() with wildcard port (curl doesn't send Origin — that's OK,
-        //   OriginValidator only rejects if Origin IS present and doesn't match)
-        // - AcceptHeaderValidator, ContentTypeValidator, ProtocolVersionValidator, SessionValidator
         let validationPipeline = StandardValidationPipeline(validators: [
             OriginValidator.localhost(),
             AcceptHeaderValidator(mode: .sseRequired),
@@ -143,7 +149,6 @@ public actor SSEServer {
             validationPipeline: validationPipeline
         )
 
-        // Create a new MCP Server for this session, wired to the shared ToolRouter
         let server = Server(
             name: "KeeprSSE",
             version: "0.6.0",
@@ -239,7 +244,6 @@ public actor SSEServer {
 
     // MARK: - Helpers
 
-    /// Detect JSON-RPC initialize request without using package-internal JSONRPCMessageKind.
     private func isInitializeRequest(_ body: Data) -> Bool {
         guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
               let method = json["method"] as? String else { return false }
@@ -254,8 +258,6 @@ public actor SSEServer {
 
 // MARK: - NIO HTTP Handler
 
-/// Thin NIO adapter: converts between NIO HTTP types and MCP SDK HTTPRequest/HTTPResponse.
-/// Delegates all logic to SSEServer actor.
 private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
@@ -305,7 +307,6 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             return
         }
 
-        // Convert NIO request → MCP HTTPRequest
         var headers: [String: String] = [:]
         for (name, value) in req.head.headers {
             if let existing = headers[name] {
@@ -338,7 +339,6 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
 
         switch response {
         case .stream(let stream, _):
-            // SSE streaming response — send head, then pipe chunks as they arrive
             eventLoop.execute {
                 var head = HTTPResponseHead(
                     version: version,
@@ -368,7 +368,6 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             }
 
         default:
-            // Non-streaming response (accepted, ok, data, error)
             let bodyData = response.bodyData
             eventLoop.execute {
                 var head = HTTPResponseHead(
