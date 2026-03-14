@@ -1,14 +1,15 @@
 // StatusBarController.swift — Observable State for Menu Bar + Popover
 // V1-02: Manages connection count, tool count, uptime, and tool call count
 // PKT-317: Added totalToolCalls counter for live server status in DashboardView
+// PKT-320: Added notionTokenStatus for Notion API token health indicator
 
 import Foundation
 import Observation
 
 /// Observable state controller for the menu bar app.
 /// Provides live connection count, registered tool count, total tool calls,
-/// and server uptime to the DashboardView popover. All state updates are
-/// main-actor-isolated for safe SwiftUI binding.
+/// Notion token status, and server uptime to the DashboardView popover.
+/// All state updates are main-actor-isolated for safe SwiftUI binding.
 @MainActor
 @Observable
 public final class StatusBarController {
@@ -28,6 +29,12 @@ public final class StatusBarController {
 
     /// Server start time (nil if server not running)
     public var serverStartTime: Date? = nil
+
+    /// Notion API token status: "connected", "disconnected", or "missing"
+    public var notionTokenStatus: String = "missing"
+
+    /// Detail message for Notion token status (e.g., source or error)
+    public var notionTokenDetail: String = ""
 
     /// Formatted uptime string
     public var uptimeString: String {
@@ -73,5 +80,11 @@ public final class StatusBarController {
     /// Increment the tool call counter. Called by ServerManager after each dispatch.
     public func incrementToolCalls() {
         totalToolCalls += 1
+    }
+
+    /// Update Notion token status.
+    public func updateNotionTokenStatus(_ status: String, detail: String = "") {
+        notionTokenStatus = status
+        notionTokenDetail = detail
     }
 }

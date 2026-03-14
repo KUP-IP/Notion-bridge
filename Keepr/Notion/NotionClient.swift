@@ -1,12 +1,86 @@
-// NotionClient.swift – V1-05 Notion REST API Client
+// NotionClient.swift – V1-05 → V1-12 Notion REST API Client
 // KeeprBridge · Notion
 //
 // Actor-based HTTP client with:
 // - Rate limiting at 3 req/sec (token bucket)
 // - Exponential backoff on 429 / transient errors
 // - Max 3 retries per request
+// - Token resolution: NOTION_API_TOKEN env var → config file fallback
+// PKT-320: Updated env var to NOTION_API_TOKEN, added config file fallback,
+//          added validate() method for startup health check
 
 import Foundation
+
+// MARK: - Token Resolution
+
+/// Resolves the Notion API token from environment or config file.
+/// Priority: NOTION_API_TOKEN env var → NOTION_API_KEY env var (legacy) → config file
+public enum NotionTokenResolver {
+
+    /// Status of the Notion API token.
+    public enum TokenStatus: Sendable {
+        case available(source: String)
+        case missing
+    }
+
+    /// Config file path: ~/.config/notion-bridge/config.json
+    public static let configFilePath: String = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/.config/notion-bridge/config.json"
+    }()
+
+    /// Resolve the API token from all sources.
+    /// Priority: NOTION_API_TOKEN env → NOTION_API_KEY env (legacy) → config file
+    public static func resolve() -> (token: String, source: String)? {
+        // 1. NOTION_API_TOKEN environment variable (primary)
+        if let token = ProcessInfo.processInfo.environment["NOTION_API_TOKEN"],
+           !token.isEmpty {
+            return (token, "env:NOTION_API_TOKEN")
+        }
+
+        // 2. NOTION_API_KEY environment variable (legacy/backward compat)
+        if let token = ProcessInfo.processInfo.environment["NOTION_API_KEY"],
+           !token.isEmpty {
+            return (token, "env:NOTION_API_KEY")
+        }
+
+        // 3. Config file fallback: ~/.config/notion-bridge/config.json
+        if let token = readFromConfigFile() {
+            return (token, "config:\(configFilePath)")
+        }
+
+        return nil
+    }
+
+    /// Check token availability without resolving the full token.
+    public static func checkStatus() -> TokenStatus {
+        if let result = resolve() {
+            return .available(source: result.source)
+        }
+        return .missing
+    }
+
+    /// Read token from config file.
+    /// Expected format: { "notion_api_token": "ntn_..." }
+    private static func readFromConfigFile() -> String? {
+        let path = configFilePath
+        guard FileManager.default.fileExists(atPath: path),
+              let data = FileManager.default.contents(atPath: path),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        // Check both key names
+        if let token = json["notion_api_token"] as? String, !token.isEmpty {
+            return token
+        }
+        if let token = json["notion_api_key"] as? String, !token.isEmpty {
+            return token
+        }
+
+        return nil
+    }
+}
 
 // MARK: - NotionClient Actor
 
@@ -14,6 +88,7 @@ import Foundation
 public actor NotionClient {
 
     private let apiKey: String
+    private let tokenSource: String
     private let baseURL = "https://api.notion.com/v1"
     private let notionVersion = "2022-06-28"
     private let maxRequestsPerSecond: Double = 3.0
@@ -22,12 +97,14 @@ public actor NotionClient {
     private let session: URLSession
 
     /// Initialize with a Notion integration API key.
-    /// Reads from NOTION_API_KEY environment variable if not provided.
+    /// Resolution order: explicit parameter → NOTION_API_TOKEN env → NOTION_API_KEY env → config file
     public init(apiKey: String? = nil) throws {
-        if let key = apiKey {
+        if let key = apiKey, !key.isEmpty {
             self.apiKey = key
-        } else if let envKey = ProcessInfo.processInfo.environment["NOTION_API_KEY"] {
-            self.apiKey = envKey
+            self.tokenSource = "explicit"
+        } else if let resolved = NotionTokenResolver.resolve() {
+            self.apiKey = resolved.token
+            self.tokenSource = resolved.source
         } else {
             throw NotionClientError.missingAPIKey
         }
@@ -35,6 +112,30 @@ public actor NotionClient {
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 60
         self.session = URLSession(configuration: config)
+    }
+
+    /// Returns the source of the resolved token (for diagnostics).
+    public func getTokenSource() -> String {
+        return tokenSource
+    }
+
+    // MARK: - Validation
+
+    /// Validate the token by making a lightweight API call (search with empty query, 1 result).
+    /// Returns true if the API responds with 200, false otherwise.
+    public func validate() async -> (success: Bool, message: String) {
+        do {
+            let body: [String: Any] = ["query": "", "page_size": 1]
+            let bodyData = try JSONSerialization.data(withJSONObject: body)
+            let (_, response) = try await request(method: "POST", path: "/search", body: bodyData)
+            if (200...299).contains(response.statusCode) {
+                return (true, "Connected (token source: \(tokenSource))")
+            } else {
+                return (false, "HTTP \(response.statusCode)")
+            }
+        } catch {
+            return (false, error.localizedDescription)
+        }
     }
 
     // MARK: - Rate Limiting

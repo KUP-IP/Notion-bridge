@@ -1,9 +1,11 @@
-// NotionModule.swift – V1-05 Notion Integration Tools
+// NotionModule.swift – V1-05 → V1-12 Notion Integration Tools
 // KeeprBridge · Modules
 //
 // Three tools: notion_search (green), notion_page_read (green),
 // notion_page_update (orange).
 // Uses NotionClient actor for rate-limited API access.
+// PKT-320: Updated references from NOTION_API_KEY to NOTION_API_TOKEN,
+//          token resolution now supports env var + config file fallback
 
 import Foundation
 import MCP
@@ -11,7 +13,7 @@ import MCP
 // MARK: - NotionModule
 
 /// Provides Notion workspace integration tools.
-/// Requires NOTION_API_KEY environment variable to be set.
+/// Requires NOTION_API_TOKEN environment variable or config file token.
 public enum NotionModule {
 
     public static let moduleName = "notion"
@@ -28,7 +30,7 @@ public enum NotionModule {
             name: "notion_search",
             module: moduleName,
             tier: .green,
-            description: "Search the Notion workspace for pages and databases by query. Returns matching results with titles and URLs. Requires NOTION_API_KEY.",
+            description: "Search the Notion workspace for pages and databases by query. Returns matching results with titles and URLs. Requires NOTION_API_TOKEN.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

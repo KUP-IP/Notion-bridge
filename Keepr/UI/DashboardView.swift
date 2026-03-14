@@ -2,13 +2,14 @@
 // Notion Bridge v1: Shows active connections, tool calls, registered tool count, and server uptime
 // PKT-317: Added tool calls row for live server status from unified binary
 // PKT-329: Added connection setup section with tunnel provider selection
+// PKT-320: Added Notion API token status indicator (connected/disconnected/missing)
 
 import SwiftUI
 
 /// Minimal status popover for the menu bar app.
-/// Displays live server status, connection setup, permission states, and provides
-/// quit/refresh actions. Data flows from StatusBarController and
-/// PermissionManager observable objects.
+/// Displays live server status, Notion token status, connection setup,
+/// permission states, and provides quit/refresh actions.
+/// Data flows from StatusBarController and PermissionManager observable objects.
 public struct DashboardView: View {
     let statusBar: StatusBarController
     let permissionManager: PermissionManager
@@ -23,6 +24,8 @@ public struct DashboardView: View {
             headerSection
             Divider()
             serverStatusSection
+            Divider()
+            notionTokenSection
             Divider()
             connectionSection
             Divider()
@@ -93,6 +96,62 @@ public struct DashboardView: View {
             Text(value)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    // MARK: - Notion Token Status
+
+    private var notionTokenSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("NOTION API")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 4)
+
+            HStack(spacing: 8) {
+                Image(systemName: notionTokenIcon)
+                    .foregroundStyle(notionTokenColor)
+                    .frame(width: 12)
+                Text("Token")
+                    .font(.callout)
+                Spacer()
+                Text(notionTokenLabel)
+                    .font(.callout)
+                    .foregroundStyle(notionTokenColor)
+            }
+
+            if !statusBar.notionTokenDetail.isEmpty {
+                Text(statusBar.notionTokenDetail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 20)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private var notionTokenIcon: String {
+        switch statusBar.notionTokenStatus {
+        case "connected": return "checkmark.circle.fill"
+        case "disconnected": return "exclamationmark.circle.fill"
+        default: return "minus.circle.fill"
+        }
+    }
+
+    private var notionTokenColor: Color {
+        switch statusBar.notionTokenStatus {
+        case "connected": return .green
+        case "disconnected": return .orange
+        default: return .gray
+        }
+    }
+
+    private var notionTokenLabel: String {
+        switch statusBar.notionTokenStatus {
+        case "connected": return "Connected"
+        case "disconnected": return "Disconnected"
+        default: return "Missing"
         }
     }
 

@@ -3,6 +3,7 @@
 // PKT-317: Merged KeeprServer runtime into KeeprApp via ServerManager
 // PKT-318: Added SSE transport startup on :9700
 // PKT-329: SSE port now configurable via NOTION_BRIDGE_PORT env var
+// PKT-320: Added Notion API token validation on startup
 
 import AppKit
 import ServiceManagement
@@ -10,7 +11,7 @@ import ServiceManagement
 /// Manages app lifecycle, auto-launch registration, and MCP server lifecycle.
 /// The server starts in a detached Task on launch (Nudge Server pattern) so the
 /// SwiftUI main thread is never blocked. StatusBarController receives live updates
-/// for connections, tool calls, and uptime.
+/// for connections, tool calls, Notion token status, and uptime.
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var serverTask: Task<Void, Never>?
@@ -27,6 +28,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
         registerAutoLaunch()
         startMCPServer()
+        validateNotionToken()
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
@@ -85,6 +87,53 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
             await MainActor.run {
                 statusBar.markServerStopped()
+            }
+        }
+    }
+
+    // MARK: - Notion Token Validation
+
+    /// Validate Notion API token on startup. Updates StatusBarController with result.
+    private func validateNotionToken() {
+        let statusBar = self.statusBar
+
+        Task.detached {
+            // Check if token is available at all
+            let tokenStatus = NotionTokenResolver.checkStatus()
+
+            switch tokenStatus {
+            case .missing:
+                await MainActor.run {
+                    statusBar.updateNotionTokenStatus("missing", detail: "Set NOTION_API_TOKEN or add to ~/.config/notion-bridge/config.json")
+                }
+                print("[Notion Bridge] Notion API token not found")
+
+            case .available(let source):
+                // Token found — validate with a test API call
+                await MainActor.run {
+                    statusBar.updateNotionTokenStatus("disconnected", detail: "Validating...")
+                }
+                print("[Notion Bridge] Notion API token found (source: \(source)), validating...")
+
+                do {
+                    let client = try NotionClient()
+                    let result = await client.validate()
+
+                    await MainActor.run {
+                        if result.success {
+                            statusBar.updateNotionTokenStatus("connected", detail: result.message)
+                            print("[Notion Bridge] Notion API token validated ✅ (\(result.message))")
+                        } else {
+                            statusBar.updateNotionTokenStatus("disconnected", detail: result.message)
+                            print("[Notion Bridge] Notion API token validation failed: \(result.message)")
+                        }
+                    }
+                } catch {
+                    await MainActor.run {
+                        statusBar.updateNotionTokenStatus("disconnected", detail: error.localizedDescription)
+                    }
+                    print("[Notion Bridge] Notion client init failed: \(error.localizedDescription)")
+                }
             }
         }
     }

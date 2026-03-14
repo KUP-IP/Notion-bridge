@@ -1,8 +1,9 @@
-// NotionModels.swift – V1-05 Notion API Type Definitions
+// NotionModels.swift – V1-05 → V1-12 Notion API Type Definitions
 // KeeprBridge · Notion
 //
 // Minimal models for Notion REST API integration.
 // Covers Page and Block types needed by NotionModule.
+// PKT-320: Updated error messages to reference NOTION_API_TOKEN
 
 import Foundation
 
@@ -19,7 +20,7 @@ public enum NotionClientError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "NOTION_API_KEY environment variable not set"
+            return "Notion API token not found. Set NOTION_API_TOKEN environment variable or add token to ~/.config/notion-bridge/config.json"
         case .invalidResponse:
             return "Invalid HTTP response"
         case .maxRetriesExceeded:
