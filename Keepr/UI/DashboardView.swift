@@ -1,11 +1,12 @@
 // DashboardView.swift — Minimal Status Popover
 // Notion Bridge v1: Shows active connections, tool calls, registered tool count, and server uptime
 // PKT-317: Added tool calls row for live server status from unified binary
+// PKT-329: Added connection setup section with tunnel provider selection
 
 import SwiftUI
 
 /// Minimal status popover for the menu bar app.
-/// Displays live server status, permission states, and provides
+/// Displays live server status, connection setup, permission states, and provides
 /// quit/refresh actions. Data flows from StatusBarController and
 /// PermissionManager observable objects.
 public struct DashboardView: View {
@@ -22,6 +23,8 @@ public struct DashboardView: View {
             headerSection
             Divider()
             serverStatusSection
+            Divider()
+            connectionSection
             Divider()
             permissionSection
             Divider()
@@ -91,6 +94,14 @@ public struct DashboardView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    // MARK: - Connection Setup
+
+    private var connectionSection: some View {
+        ConnectionSetupView()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
     }
 
     // MARK: - Permissions

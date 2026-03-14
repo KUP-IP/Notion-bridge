@@ -1,6 +1,8 @@
 // ServerManager.swift — Unified MCP Server Lifecycle
 // Notion Bridge v1: Manages server setup, module registration, and transport
 // Created by PKT-317: Merge KeeprApp + KeeprServer into single binary
+// Updated by PKT-318: Added SSE transport on :9700
+// Updated by PKT-329: Configurable port via NOTION_BRIDGE_PORT env var
 
 import Foundation
 import MCP
@@ -14,7 +16,11 @@ import MCP
 public actor ServerManager {
     private var server: Server?
     private var router: ToolRouter?
+    private var sseServer: SSEServer?
     private var auditLog: AuditLog?
+
+    /// The configured SSE port (from NOTION_BRIDGE_PORT env var, default 9700).
+    public nonisolated let ssePort: Int
 
     /// Callback invoked on the main actor after each successful tool dispatch.
     private let onToolCall: @MainActor @Sendable () -> Void
@@ -23,6 +29,7 @@ public actor ServerManager {
     ///   Use this to increment StatusBarController.totalToolCalls.
     public init(onToolCall: @escaping @MainActor @Sendable () -> Void) {
         self.onToolCall = onToolCall
+        self.ssePort = Int(ProcessInfo.processInfo.environment["NOTION_BRIDGE_PORT"] ?? "") ?? 9700
     }
 
     // MARK: - Setup
@@ -70,7 +77,7 @@ public actor ServerManager {
             }
         ))
 
-        // 4. Build MCP Server
+        // 4. Build MCP Server (stdio transport)
         let server = Server(
             name: "NotionBridge",
             version: "0.6.0",
@@ -131,6 +138,14 @@ public actor ServerManager {
             }
         }
 
+        // 7. Create SSE server (configurable port via NOTION_BRIDGE_PORT)
+        self.sseServer = SSEServer(
+            host: "127.0.0.1",
+            port: ssePort,
+            router: router,
+            onToolCall: onToolCall
+        )
+
         return await router.allRegistrations().count
     }
 
@@ -143,6 +158,19 @@ public actor ServerManager {
         }
         let transport = StdioTransport()
         try await server.start(transport: transport)
+    }
+
+    /// Start the SSE transport. Blocks until the server stops or the task is cancelled.
+    public func runSSE() async throws {
+        guard let sseServer = self.sseServer else {
+            throw ServerManagerError.notSetUp
+        }
+        try await sseServer.start()
+    }
+
+    /// Stop the SSE server gracefully.
+    public func stopSSE() async {
+        await sseServer?.stop()
     }
 }
 
