@@ -3,11 +3,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "NotionGate",
+    name: "NotionBridge",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "NotionGate", targets: ["NotionGate"]),
-        .executable(name: "NotionGateTests", targets: ["NotionGateTests"]),
+        .executable(name: "NotionBridge", targets: ["NotionBridge"]),
+        .executable(name: "NotionBridgeTests", targets: ["NotionBridgeTests"]),
     ],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
@@ -15,29 +15,29 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "NotionGateLib",
+            name: "NotionBridgeLib",
             dependencies: [
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
             ],
-            path: "NotionGate",
-            exclude: ["Server/main.swift", "App/NotionGateApp.swift", "App/Resources"]
+            path: "NotionBridge",
+            exclude: ["Server/main.swift", "App/NotionBridgeApp.swift", "App/Resources"]
         ),
         .executableTarget(
-            name: "NotionGate",
-            dependencies: ["NotionGateLib"],
-            path: "NotionGate/App",
-            sources: ["NotionGateApp.swift"],
+            name: "NotionBridge",
+            dependencies: ["NotionBridgeLib"],
+            path: "NotionBridge/App",
+            sources: ["NotionBridgeApp.swift"],
             resources: [.process("Resources")]
         ),
         .executableTarget(
-            name: "NotionGateTests",
-            dependencies: ["NotionGateLib",
+            name: "NotionBridgeTests",
+            dependencies: ["NotionBridgeLib",
                 .product(name: "MCP", package: "swift-sdk")
             ],
-            path: "NotionGateTests"
+            path: "NotionBridgeTests"
         ),
     ]
 )

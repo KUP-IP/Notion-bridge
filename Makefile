@@ -1,4 +1,4 @@
-# Makefile – Notion Gate
+# Makefile – Notion Bridge
 # PKT-329: V1-14b Build System + Connection Setup
 # PKT-346: V1-QUALITY-POLISH — Added install and clean-tcc targets
 #
@@ -6,20 +6,20 @@
 # Debug workflow:    make debug
 # Dev app bundle:    make app (unsigned, for local testing)
 
-APP_NAME       = Notion Gate
-BUNDLE_ID      = kup.solutions.notion-gate
-BINARY_NAME    = NotionGate
+APP_NAME       = Notion Bridge
+BUNDLE_ID      = kup.solutions.notion-bridge
+BINARY_NAME    = NotionBridge
 BUILD_DIR      = .build
 RELEASE_DIR    = $(BUILD_DIR)/release
 DEBUG_DIR      = $(BUILD_DIR)/debug
-APP_BUNDLE     = $(BUILD_DIR)/NotionGate.app
-DMG_NAME       = NotionGate-v1.1.0.dmg
+APP_BUNDLE     = $(BUILD_DIR)/NotionBridge.app
+DMG_NAME       = NotionBridge-v1.0.0.dmg
 DMG_STAGING    = $(BUILD_DIR)/dmg-staging
 SIGNING_ID    ?= Developer ID Application: KUP Solutions LLC
-NOTARIZE_PROFILE ?= notiongate-notarize
+NOTARIZE_PROFILE ?= notionbridge-notarize
 
 INFO_PLIST     = Info.plist
-RESOURCES_DIR  = NotionGate/App/Resources
+RESOURCES_DIR  = NotionBridge/App/Resources
 
 .PHONY: debug build test app dmg sign notarize verify release clean install clean-tcc
 
@@ -40,7 +40,7 @@ build:
 test:
 	@echo "🧪 Running test suite..."
 	swift build -c debug
-	$(DEBUG_DIR)/NotionGateTests
+	$(DEBUG_DIR)/NotionBridgeTests
 	@echo "✅ Tests complete"
 
 # ── App Bundle (.app) ──────────────────────────────────────────
@@ -51,8 +51,8 @@ app: build
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@cp $(RELEASE_DIR)/$(BINARY_NAME) "$(APP_BUNDLE)/Contents/MacOS/$(BINARY_NAME)"
 	@cp $(INFO_PLIST) $(APP_BUNDLE)/Contents/Info.plist
-	@test -f $(RESOURCES_DIR)/NotionGate.icns && \
-		cp $(RESOURCES_DIR)/NotionGate.icns $(APP_BUNDLE)/Contents/Resources/ || true
+	@test -f $(RESOURCES_DIR)/NotionBridge.icns && \
+		cp $(RESOURCES_DIR)/NotionBridge.icns $(APP_BUNDLE)/Contents/Resources/ || true
 	@for f in $(RESOURCES_DIR)/*.png; do \
 		test -f "$$f" && cp "$$f" $(APP_BUNDLE)/Contents/Resources/ || true; \
 	done
@@ -61,22 +61,20 @@ app: build
 # ── Install ────────────────────────────────────────────────────────────
 install: app
 	@echo "📲 Installing to /Applications..."
-	@rm -rf /Applications/NotionGate.app
+	@rm -rf /Applications/NotionBridge.app
 	@cp -R $(APP_BUNDLE) /Applications/
 	@echo "🧹 Clearing old TCC cache..."
 	-tccutil reset All solutions.kup.keepr
-	-tccutil reset All kup.solutions.notion-bridge
 	@echo "🔄 Refreshing icon caches..."
 	@killall Dock 2>/dev/null || true
-	@echo "✅ Installed: /Applications/NotionGate.app"
+	@echo "✅ Installed: /Applications/NotionBridge.app"
 
 # ── Clean TCC ──────────────────────────────────────────────────────────
 clean-tcc:
 	@echo "🧹 Resetting TCC for old bundle ID..."
 	-tccutil reset All solutions.kup.keepr
-	-tccutil reset All kup.solutions.notion-bridge
 	@echo "🧹 Resetting TCC for current bundle ID..."
-	-tccutil reset All kup.solutions.notion-gate
+	-tccutil reset All kup.solutions.notion-bridge
 	@echo "✅ TCC reset complete — permissions will be re-requested on next launch"
 
 # ── DMG (disk image) ──────────────────────────────────────────
@@ -105,8 +103,8 @@ sign: app
 # ── Notarize ───────────────────────────────────────────────────
 notarize: sign
 	@echo "📤 Submitting for notarization..."
-	ditto -c -k --keepParent $(APP_BUNDLE) $(BUILD_DIR)/NotionGate.zip
-	xcrun notarytool submit $(BUILD_DIR)/NotionGate.zip \
+	ditto -c -k --keepParent $(APP_BUNDLE) $(BUILD_DIR)/NotionBridge.zip
+	xcrun notarytool submit $(BUILD_DIR)/NotionBridge.zip \
 		--keychain-profile "$(NOTARIZE_PROFILE)" \
 		--wait
 	xcrun stapler staple $(APP_BUNDLE)
