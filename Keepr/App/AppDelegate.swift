@@ -6,6 +6,8 @@
 // PKT-320: Added Notion API token validation on startup
 // PKT-332: Added single-instance guard to prevent duplicate processes at boot
 // PKT-341: Login item guard, TCC early check, LogManager + signal handlers
+// V1-QUALITY-C2: OnboardingWindowController on first launch, SettingsWindowController
+//   for gear icon / Cmd+, access. Client identification callbacks from SSE server.
 
 import AppKit
 import ServiceManagement
@@ -38,6 +40,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// PKT-341: Permission manager owned by AppDelegate for early TCC check
     /// on applicationDidFinishLaunching (not just on popover open).
     public let permissionManager = PermissionManager()
+
+    /// V1-QUALITY-C2: Onboarding window controller for first-launch experience.
+    private lazy var onboardingController = OnboardingWindowController(
+        permissionManager: permissionManager
+    )
+
+    /// V1-QUALITY-C2: Settings window controller for gear icon / Cmd+, access.
+    private lazy var settingsController = SettingsWindowController(
+        statusBar: statusBar,
+        permissionManager: permissionManager
+    )
 
     public override init() {
         super.init()
@@ -74,6 +87,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         startMCPServer()
         validateNotionToken()
+
+        // V1-QUALITY-C2: Show first-launch onboarding window
+        onboardingController.showIfNeeded()
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
@@ -92,6 +108,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusBar.markServerStopped()
         print("[Notion Bridge] Server stopped.")
+    }
+
+    // MARK: - Public API (V1-QUALITY-C2)
+
+    /// Open the Settings window. Called from DashboardView gear icon.
+    public func openSettings() {
+        settingsController.show()
     }
 
     // MARK: - Signal Handlers
@@ -128,9 +151,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startMCPServer() {
         let statusBar = self.statusBar
-        let manager = ServerManager(onToolCall: {
-            statusBar.incrementToolCalls()
-        })
+
+        // V1-QUALITY-C2: Client identification callback — updates StatusBarController
+        let onClientConnected: @MainActor @Sendable (String, String) -> Void = { name, version in
+            statusBar.addClient(name: name, version: version)
+        }
+
+        let manager = ServerManager(
+            onToolCall: {
+                statusBar.incrementToolCalls()
+            },
+            onClientConnected: onClientConnected
+        )
         self.serverManager = manager
 
         serverTask = Task.detached {

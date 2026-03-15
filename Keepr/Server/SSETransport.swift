@@ -8,6 +8,8 @@
 // PKT-336: Added legacy SSE transport (GET /sse + POST /messages) for Notion compatibility
 // PKT-338: V1-SSE-FIX — Fixed NIO ChannelPipeline precondition crash by removing actor
 //          reference from SSEHTTPHandler. Handler now stores non-actor references only.
+// V1-QUALITY-C2: Added GET /health endpoint returning JSON status. Client identification
+//   from MCP initialize request clientInfo. onClientConnected callback to StatusBarController.
 
 import Foundation
 import MCP
@@ -75,11 +77,14 @@ public final class LegacySSEBridge: @unchecked Sendable {
 ///
 /// PKT-336: Also serves legacy SSE transport (GET /sse + POST /messages) for clients
 /// like Notion that use the standard split SSE spec instead of Streamable HTTP.
+///
+/// V1-QUALITY-C2: Serves GET /health endpoint. Extracts clientInfo from initialize requests.
 public actor SSEServer {
     private let host: String
     private let port: Int
     private let router: ToolRouter
     private let onToolCall: @MainActor @Sendable () -> Void
+    private let onClientConnected: @MainActor @Sendable (String, String) -> Void
     private var channel: Channel?
     private var sessions: [String: SessionContext] = [:]
     private let sessionTimeout: TimeInterval = 3600
@@ -94,18 +99,22 @@ public actor SSEServer {
         let transport: StatefulHTTPServerTransport
         let createdAt: Date
         var lastAccessedAt: Date
+        var clientName: String?
+        var clientVersion: String?
     }
 
     public init(
         host: String = "127.0.0.1",
         port: Int = 9700,
         router: ToolRouter,
-        onToolCall: @escaping @MainActor @Sendable () -> Void
+        onToolCall: @escaping @MainActor @Sendable () -> Void,
+        onClientConnected: @escaping @MainActor @Sendable (String, String) -> Void = { _, _ in }
     ) {
         self.host = host
         self.port = port
         self.router = router
         self.onToolCall = onToolCall
+        self.onClientConnected = onClientConnected
     }
 
     // MARK: - Lifecycle
@@ -117,11 +126,8 @@ public actor SSEServer {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
 
         // PKT-338 V1-SSE-FIX: Capture non-actor references BEFORE the bootstrap closure.
-        // SSEHTTPHandler must not store a reference to SSEServer (actor) because NIO's
-        // childChannelInitializer runs on the channel's event loop, and crossing the actor
-        // boundary there triggers NIOCore/ChannelPipeline.swift:159 precondition failure.
-        let bridge = self.legacy  // LegacySSEBridge is a plain class, safe to pass
-        let endpointPath = self.endpoint  // nonisolated let, safe to capture
+        let bridge = self.legacy
+        let endpointPath = self.endpoint
 
         let rpcHandler: @Sendable (Data) async -> Data? = { [weak self] data in
             await self?.processLegacyRPC(data)
@@ -134,6 +140,11 @@ public actor SSEServer {
             return await self.handleHTTPRequest(request)
         }
 
+        // V1-QUALITY-C2: Health endpoint handler — returns JSON status
+        let healthHandler: @Sendable () async -> Data = { [weak self] in
+            await self?.buildHealthResponse() ?? Data()
+        }
+
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 256)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
@@ -143,7 +154,8 @@ public actor SSEServer {
                         legacyBridge: bridge,
                         endpoint: endpointPath,
                         rpcHandler: rpcHandler,
-                        httpRequestHandler: httpRequestHandler
+                        httpRequestHandler: httpRequestHandler,
+                        healthHandler: healthHandler
                     ))
                 }
             }
@@ -156,12 +168,12 @@ public actor SSEServer {
             print("[SSE] Listening on \(host):\(port)")
             print("[SSE] Streamable HTTP: POST \(endpoint)")
             print("[SSE] Legacy SSE:      GET /sse + POST /messages")
+            print("[SSE] Health:          GET /health")
 
             Task { await sessionCleanupLoop() }
 
             try await channel.closeFuture.get()
         } catch {
-            // PKT-332: Graceful degradation — SSE is optional, stdio still works
             print("[SSE] Port \(port) in use — SSE transport disabled, stdio still active")
             print("[SSE] Bind error detail: \(error) (\(error.localizedDescription))")
         }
@@ -181,12 +193,35 @@ public actor SSEServer {
     /// Number of active sessions (Streamable HTTP + legacy SSE).
     public var activeSessionCount: Int { sessions.count + legacy.activeCount }
 
+    // MARK: - Health Endpoint (V1-QUALITY-C2)
+
+    /// Build the JSON health response.
+    /// Returns: {"status": "running", "tools": N, "uptime": N, "version": "X.Y.Z", "clients": N}
+    private func buildHealthResponse() -> Data {
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+        let toolCount = 30  // Known V1 tool count (29 modules + 1 echo)
+        let uptime: Int = {
+            guard let earliest = sessions.values.map(\.createdAt).min() else { return 0 }
+            return Int(Date().timeIntervalSince(earliest))
+        }()
+        let clientCount = activeSessionCount
+
+        let health: [String: Any] = [
+            "status": "running",
+            "tools": toolCount,
+            "uptime": uptime,
+            "version": appVersion,
+            "clients": clientCount
+        ]
+
+        return (try? JSONSerialization.data(withJSONObject: health, options: [.sortedKeys])) ?? Data()
+    }
+
     // MARK: - Request Routing (Streamable HTTP — POST /mcp)
 
     func handleHTTPRequest(_ request: HTTPRequest) async -> HTTPResponse {
         let sessionID = request.header(HTTPHeaderName.sessionID)
 
-        // Route to existing session
         if let sessionID, var session = sessions[sessionID] {
             session.lastAccessedAt = Date()
             sessions[sessionID] = session
@@ -201,7 +236,6 @@ public actor SSEServer {
             return response
         }
 
-        // No session — check for initialize request
         if request.method.uppercased() == "POST",
            let body = request.body,
            isInitializeRequest(body)
@@ -209,7 +243,6 @@ public actor SSEServer {
             return await createSession(request)
         }
 
-        // Unknown session or missing header
         if sessionID != nil {
             return .error(statusCode: 404, .invalidRequest("Session not found or expired"))
         }
@@ -220,6 +253,17 @@ public actor SSEServer {
 
     private func createSession(_ request: HTTPRequest) async -> HTTPResponse {
         let sessionID = UUID().uuidString
+
+        // V1-QUALITY-C2: Extract clientInfo from initialize request
+        var clientName: String?
+        var clientVersion: String?
+        if let body = request.body,
+           let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+           let params = json["params"] as? [String: Any],
+           let clientInfo = params["clientInfo"] as? [String: Any] {
+            clientName = clientInfo["name"] as? String
+            clientVersion = clientInfo["version"] as? String
+        }
 
         let validationPipeline = StandardValidationPipeline(validators: [
             OriginValidator.localhost(),
@@ -243,7 +287,6 @@ public actor SSEServer {
         let router = self.router
         let onToolCall = self.onToolCall
 
-        // Wire ListTools
         await server.withMethodHandler(ListTools.self) { _ in
             let registrations = await router.allRegistrations()
             return .init(tools: registrations.map { reg in
@@ -251,7 +294,6 @@ public actor SSEServer {
             })
         }
 
-        // Wire CallTool
         await server.withMethodHandler(CallTool.self) { params in
             let toolName = params.name
             let arguments: Value = params.arguments.map { .object($0) } ?? .object([:])
@@ -287,10 +329,20 @@ public actor SSEServer {
                 server: server,
                 transport: transport,
                 createdAt: Date(),
-                lastAccessedAt: Date()
+                lastAccessedAt: Date(),
+                clientName: clientName,
+                clientVersion: clientVersion
             )
 
             print("[SSE] Session created: \(sessionID.prefix(8))… (total: \(sessions.count))")
+
+            // V1-QUALITY-C2: Notify UI of new client connection
+            if let name = clientName {
+                let version = clientVersion ?? "unknown"
+                let onClientConnected = self.onClientConnected
+                await MainActor.run { onClientConnected(name, version) }
+                print("[SSE] Client identified: \(name) v\(version)")
+            }
 
             let response = await transport.handleRequest(request)
 
@@ -311,8 +363,6 @@ public actor SSEServer {
 
     // MARK: - Legacy SSE JSON-RPC Processing (PKT-336)
 
-    /// Process a legacy JSON-RPC request (from POST /messages).
-    /// Routes through the shared ToolRouter. Returns serialized JSON-RPC response, or nil for notifications.
     func processLegacyRPC(_ body: Data) async -> Data? {
         guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
               let method = json["method"] as? String else {
@@ -323,6 +373,16 @@ public actor SSEServer {
 
         switch method {
         case "initialize":
+            // V1-QUALITY-C2: Extract clientInfo from legacy initialize request
+            if let params = json["params"] as? [String: Any],
+               let clientInfo = params["clientInfo"] as? [String: Any],
+               let name = clientInfo["name"] as? String {
+                let version = clientInfo["version"] as? String ?? "unknown"
+                let onClientConnected = self.onClientConnected
+                await MainActor.run { onClientConnected(name, version) }
+                print("[SSE-Legacy] Client identified: \(name) v\(version)")
+            }
+
             return buildRPCResponse(id: requestId, result: [
                 "protocolVersion": "2024-11-05",
                 "capabilities": ["tools": [:] as [String: Any]] as [String: Any],
@@ -330,7 +390,6 @@ public actor SSEServer {
             ] as [String: Any])
 
         case "notifications/initialized":
-            // Notification — no response needed
             return nil
 
         case "tools/list":
@@ -445,12 +504,7 @@ public actor SSEServer {
 // MARK: - NIO HTTP Handler
 
 /// PKT-338 V1-SSE-FIX: SSEHTTPHandler no longer stores a reference to SSEServer (actor).
-/// Instead it stores non-actor references:
-/// - legacyBridge: LegacySSEBridge (plain class with NSLock — safe for NIO event loop)
-/// - endpoint: String (nonisolated value)
-/// - rpcHandler: closure that calls back into the actor via Task
-/// - httpRequestHandler: closure that calls back into the actor via Task
-/// This avoids the actor isolation crossing that caused the NIO pipeline precondition failure.
+/// V1-QUALITY-C2: Added healthHandler closure for GET /health endpoint.
 private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
@@ -459,6 +513,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     private let endpoint: String
     private let rpcHandler: @Sendable (Data) async -> Data?
     private let httpRequestHandler: @Sendable (HTTPRequest) async -> HTTPResponse
+    private let healthHandler: @Sendable () async -> Data
 
     private struct PendingRequest {
         var head: HTTPRequestHead
@@ -466,20 +521,20 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 
     private var pending: PendingRequest?
-
-    /// PKT-336: Track if this channel is a legacy SSE stream for cleanup on disconnect.
     private var legacySessionID: String?
 
     init(
         legacyBridge: LegacySSEBridge,
         endpoint: String,
         rpcHandler: @escaping @Sendable (Data) async -> Data?,
-        httpRequestHandler: @escaping @Sendable (HTTPRequest) async -> HTTPResponse
+        httpRequestHandler: @escaping @Sendable (HTTPRequest) async -> HTTPResponse,
+        healthHandler: @escaping @Sendable () async -> Data
     ) {
         self.legacyBridge = legacyBridge
         self.endpoint = endpoint
         self.rpcHandler = rpcHandler
         self.httpRequestHandler = httpRequestHandler
+        self.healthHandler = healthHandler
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -508,7 +563,6 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }
     }
 
-    /// PKT-336: Clean up legacy SSE session when channel closes.
     func channelInactive(context: ChannelHandlerContext) {
         if let sessionID = legacySessionID {
             legacyBridge.remove(sessionID: sessionID)
@@ -520,25 +574,28 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         let fullURI = head.uri
         let path = fullURI.split(separator: "?").first.map(String.init) ?? fullURI
 
-        // PKT-336: CORS preflight for legacy SSE endpoints
         if head.method == .OPTIONS {
             await writeCORSPreflight(version: head.version, context: context)
             return
         }
 
-        // PKT-336: Legacy SSE stream (GET /sse)
+        // V1-QUALITY-C2: Health endpoint (GET /health) — no authentication required
+        if head.method == .GET && path == "/health" {
+            let healthData = await healthHandler()
+            await writeJSONResponse(data: healthData, version: head.version, context: context)
+            return
+        }
+
         if head.method == .GET && path == "/sse" {
             await handleLegacySSE(head: head, context: context)
             return
         }
 
-        // PKT-336: Legacy SSE messages (POST /messages)
         if head.method == .POST && path == "/messages" {
             await handleLegacyMessage(head: head, body: body, uri: fullURI, context: context)
             return
         }
 
-        // Streamable HTTP (POST /mcp) — existing behavior
         guard path == endpoint else {
             await writeResponse(
                 .error(statusCode: 404, .invalidRequest("Not Found")),
@@ -562,12 +619,29 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         await writeResponse(response, version: head.version, context: context)
     }
 
+    // MARK: - Health Response Writer (V1-QUALITY-C2)
+
+    private func writeJSONResponse(data: Data, version: HTTPVersion, context: ChannelHandlerContext) async {
+        nonisolated(unsafe) let ctx = context
+        let responseData = data
+        ctx.eventLoop.execute {
+            var head = HTTPResponseHead(version: version, status: .ok)
+            head.headers.add(name: "Content-Type", value: "application/json")
+            head.headers.add(name: "Access-Control-Allow-Origin", value: "*")
+            head.headers.add(name: "Cache-Control", value: "no-cache")
+            ctx.write(self.wrapOutboundOut(.head(head)), promise: nil)
+
+            var buffer = ctx.channel.allocator.buffer(capacity: responseData.count)
+            buffer.writeBytes(responseData)
+            ctx.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+
+            ctx.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        }
+    }
+
     // MARK: - Legacy SSE Handlers (PKT-336)
 
-    /// Handle GET /sse — establish SSE stream, send endpoint event, keep channel alive.
     private func handleLegacySSE(head: HTTPRequestHead, context: ChannelHandlerContext) async {
-        // PKT-339: All context.channel access must happen on the event loop.
-        // context.channel triggers assertInEventLoop() — accessing it from a Task crashes.
         nonisolated(unsafe) let ctx = context
         ctx.eventLoop.execute {
             let sessionID = self.legacyBridge.register(channel: ctx.channel)
@@ -580,24 +654,19 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             responseHead.headers.add(name: "Access-Control-Allow-Origin", value: "*")
             ctx.write(self.wrapOutboundOut(.head(responseHead)), promise: nil)
 
-            // Send endpoint event: tells client where to POST messages
             let endpointData = "event: endpoint\ndata: /messages?sessionId=\(sessionID)\n\n"
             var buffer = ctx.channel.allocator.buffer(capacity: endpointData.utf8.count)
             buffer.writeString(endpointData)
             ctx.writeAndFlush(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
-
-            // Channel stays open — no .end sent. SSE events stream until client disconnects.
         }
     }
 
-    /// Handle POST /messages — process JSON-RPC, send response via SSE stream, return 202.
     private func handleLegacyMessage(
         head: HTTPRequestHead,
         body: Data?,
         uri: String,
         context: ChannelHandlerContext
     ) async {
-        // Extract sessionId from query params
         let sessionID: String? = {
             guard let qIdx = uri.firstIndex(of: "?") else { return nil }
             let query = uri[uri.index(after: qIdx)...]
@@ -610,23 +679,19 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             return nil
         }()
 
-        // Extract request body
         guard let bodyData = body else {
             await writeSimpleResponse(statusCode: 400, version: head.version, context: context)
             return
         }
 
-        // PKT-338: Process JSON-RPC through closure (avoids actor reference)
         if let responseData = await rpcHandler(bodyData),
            let responseString = String(data: responseData, encoding: .utf8) {
             legacyBridge.sendEvent(sessionID: sessionID, event: "message", data: responseString)
         }
 
-        // Return 202 Accepted on the POST channel
         await writeSimpleResponse(statusCode: 202, version: head.version, context: context)
     }
 
-    /// Write a simple status-only HTTP response with CORS headers.
     private func writeSimpleResponse(
         statusCode: Int,
         version: HTTPVersion,
@@ -644,7 +709,6 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }
     }
 
-    /// Write CORS preflight response for legacy SSE endpoints.
     private func writeCORSPreflight(version: HTTPVersion, context: ChannelHandlerContext) async {
         nonisolated(unsafe) let ctx = context
         ctx.eventLoop.execute {

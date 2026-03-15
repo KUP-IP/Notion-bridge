@@ -3,6 +3,8 @@
 // PKT-317: StatusBarController now owned by AppDelegate (server wires it on launch)
 // PKT-341: PermissionManager now owned by AppDelegate (TCC check on launch)
 // PKT-342: Menu bar icon now loaded from Assets.xcassets (Asset Catalog)
+// V1-QUALITY-C2: Slim popover (~200px), gear icon opens SettingsWindow,
+//   first-launch onboarding window, Cmd+, shortcut for Settings.
 // No Dock icon — pure menu bar app via MenuBarExtra pattern
 
 import SwiftUI
@@ -29,12 +31,13 @@ struct KeeprApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            DashboardView(statusBar: appDelegate.statusBar, permissionManager: appDelegate.permissionManager)
-                .frame(width: 320, height: 460)
-                .onAppear {
-                    // Secondary refresh on popover open (primary check is on launch)
-                    appDelegate.permissionManager.checkAll()
+            DashboardView(
+                statusBar: appDelegate.statusBar,
+                onOpenSettings: {
+                    appDelegate.openSettings()
                 }
+            )
+            .frame(width: 280, height: 220)
         } label: {
             if let icon = menuBarIcon {
                 Image(nsImage: icon)
@@ -43,5 +46,13 @@ struct KeeprApp: App {
             }
         }
         .menuBarExtraStyle(.window)
+
+        // V1-QUALITY-C2: Cmd+, keyboard shortcut opens Settings window
+        Settings {
+            SettingsView(
+                statusBar: appDelegate.statusBar,
+                permissionManager: appDelegate.permissionManager
+            )
+        }
     }
 }

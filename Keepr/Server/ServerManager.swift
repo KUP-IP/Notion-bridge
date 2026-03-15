@@ -4,6 +4,8 @@
 // Updated by PKT-318: Added SSE transport on :9700
 // Updated by PKT-329: Configurable port via NOTION_BRIDGE_PORT env var
 // Updated by PKT-341: Version from Bundle (single source of truth), AuditLog simplified
+// V1-QUALITY-C2: Added onClientConnected callback for client identification.
+//   SSEServer and legacy RPC now extract clientInfo from initialize requests.
 
 import Foundation
 import MCP
@@ -26,10 +28,20 @@ public actor ServerManager {
     /// Callback invoked on the main actor after each successful tool dispatch.
     private let onToolCall: @MainActor @Sendable () -> Void
 
+    /// V1-QUALITY-C2: Callback invoked on the main actor when a client connects.
+    /// Parameters: (clientName: String, clientVersion: String)
+    private let onClientConnected: @MainActor @Sendable (String, String) -> Void
+
     /// - Parameter onToolCall: Closure called on MainActor after each tool call completes.
     ///   Use this to increment StatusBarController.totalToolCalls.
-    public init(onToolCall: @escaping @MainActor @Sendable () -> Void) {
+    /// - Parameter onClientConnected: Closure called on MainActor when an MCP client connects.
+    ///   Use this to update StatusBarController.connectedClients.
+    public init(
+        onToolCall: @escaping @MainActor @Sendable () -> Void,
+        onClientConnected: @escaping @MainActor @Sendable (String, String) -> Void = { _, _ in }
+    ) {
         self.onToolCall = onToolCall
+        self.onClientConnected = onClientConnected
         self.ssePort = Int(ProcessInfo.processInfo.environment["NOTION_BRIDGE_PORT"] ?? "") ?? 9700
     }
 
@@ -141,11 +153,13 @@ public actor ServerManager {
         }
 
         // 7. Create SSE server (configurable port via NOTION_BRIDGE_PORT)
+        // V1-QUALITY-C2: Pass onClientConnected callback for client identification
         self.sseServer = SSEServer(
             host: "127.0.0.1",
             port: ssePort,
             router: router,
-            onToolCall: onToolCall
+            onToolCall: onToolCall,
+            onClientConnected: onClientConnected
         )
 
         return await router.allRegistrations().count

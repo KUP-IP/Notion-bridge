@@ -2,13 +2,28 @@
 // V1-02: Manages connection count, tool count, uptime, and tool call count
 // PKT-317: Added totalToolCalls counter for live server status in DashboardView
 // PKT-320: Added notionTokenStatus for Notion API token health indicator
+// V1-QUALITY-C2: Added connectedClients array for client identification.
+//   Stores client name, version, and connection time from MCP initialize clientInfo.
 
 import Foundation
 import Observation
 
+/// Connected client info parsed from MCP initialize request's clientInfo field.
+public struct ConnectedClient: Sendable, Equatable {
+    public let name: String
+    public let version: String
+    public let connectedAt: Date
+
+    public init(name: String, version: String, connectedAt: Date = Date()) {
+        self.name = name
+        self.version = version
+        self.connectedAt = connectedAt
+    }
+}
+
 /// Observable state controller for the menu bar app.
 /// Provides live connection count, registered tool count, total tool calls,
-/// Notion token status, and server uptime to the DashboardView popover.
+/// Notion token status, connected client info, and server uptime to the DashboardView popover.
 /// All state updates are main-actor-isolated for safe SwiftUI binding.
 @MainActor
 @Observable
@@ -35,6 +50,12 @@ public final class StatusBarController {
 
     /// Detail message for Notion token status (e.g., source or error)
     public var notionTokenDetail: String = ""
+
+    // MARK: - Client Identification (V1-QUALITY-C2)
+
+    /// Connected clients with name, version, and connection time.
+    /// Populated from MCP initialize request's clientInfo field.
+    public var connectedClients: [ConnectedClient] = []
 
     /// Formatted uptime string
     public var uptimeString: String {
@@ -64,12 +85,14 @@ public final class StatusBarController {
         serverStartTime = Date()
         registeredToolCount = toolCount
         totalToolCalls = 0
+        connectedClients = []
     }
 
     /// Mark the server as stopped. Resets connections and uptime.
     public func markServerStopped() {
         serverStartTime = nil
         activeConnections = 0
+        connectedClients = []
     }
 
     /// Update the active connection count.
@@ -86,5 +109,34 @@ public final class StatusBarController {
     public func updateNotionTokenStatus(_ status: String, detail: String = "") {
         notionTokenStatus = status
         notionTokenDetail = detail
+    }
+
+    // MARK: - Client Identification (V1-QUALITY-C2)
+
+    /// Add a connected client. Called when MCP initialize request contains clientInfo.
+    public func addClient(name: String, version: String) {
+        let client = ConnectedClient(name: name, version: version)
+        // Replace existing entry with same name (reconnection)
+        connectedClients.removeAll { $0.name == name }
+        connectedClients.append(client)
+        activeConnections = connectedClients.count
+        print("[StatusBar] Client connected: \(name) v\(version) (total: \(connectedClients.count))")
+    }
+
+    /// Remove a disconnected client by name.
+    public func removeClient(name: String) {
+        connectedClients.removeAll { $0.name == name }
+        activeConnections = connectedClients.count
+        print("[StatusBar] Client disconnected: \(name) (remaining: \(connectedClients.count))")
+    }
+
+    /// Remove a disconnected client by session ID (best-effort match by index).
+    /// Used when we don't have the client name at disconnect time.
+    public func removeLastClient() {
+        if !connectedClients.isEmpty {
+            let removed = connectedClients.removeLast()
+            activeConnections = connectedClients.count
+            print("[StatusBar] Client disconnected: \(removed.name) (remaining: \(connectedClients.count))")
+        }
     }
 }

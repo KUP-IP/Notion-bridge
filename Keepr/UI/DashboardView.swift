@@ -1,23 +1,21 @@
-// DashboardView.swift — Minimal Status Popover
-// Notion Bridge v1: Shows active connections, tool calls, registered tool count, and server uptime
-// PKT-317: Added tool calls row for live server status from unified binary
-// PKT-329: Added connection setup section with tunnel provider selection
-// PKT-320: Added Notion API token status indicator (connected/disconnected/missing)
-// PKT-341: Version string now reads from Bundle (single source of truth)
+// DashboardView.swift — Slim Status Popover
+// Notion Bridge v1: Shows server status, connected clients, and gear icon
+// V1-QUALITY-C2: Reduced popover to essentials — status + connected clients + gear icon
+// Removed: permissions section, connection setup, Notion token details, footer actions
+// Previous history: PKT-317, PKT-329, PKT-320, PKT-341, PKT-342
 
 import SwiftUI
 
-/// Minimal status popover for the menu bar app.
-/// Displays live server status, Notion token status, connection setup,
-/// permission states, and provides quit/refresh actions.
-/// Data flows from StatusBarController and PermissionManager observable objects.
+/// Slim status popover for the menu bar app.
+/// Shows server status, connected client names, and a gear icon to open Settings.
+/// All detailed configuration moved to SettingsWindow (V1-QUALITY-C2).
 public struct DashboardView: View {
     let statusBar: StatusBarController
-    let permissionManager: PermissionManager
+    let onOpenSettings: () -> Void
 
-    public init(statusBar: StatusBarController, permissionManager: PermissionManager) {
+    public init(statusBar: StatusBarController, onOpenSettings: @escaping () -> Void) {
         self.statusBar = statusBar
-        self.permissionManager = permissionManager
+        self.onOpenSettings = onOpenSettings
     }
 
     /// PKT-341: Version from Bundle (single source of truth — Info.plist)
@@ -29,13 +27,9 @@ public struct DashboardView: View {
         VStack(alignment: .leading, spacing: 0) {
             headerSection
             Divider()
-            serverStatusSection
+            statusSection
             Divider()
-            notionTokenSection
-            Divider()
-            connectionSection
-            Divider()
-            permissionSection
+            clientsSection
             Divider()
             footerSection
         }
@@ -53,26 +47,35 @@ public struct DashboardView: View {
             Text("v\(appVersion)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Button {
+                onOpenSettings()
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Open Settings (⌘,)")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
     }
 
-    // MARK: - Server Status
+    // MARK: - Status
 
-    private var serverStatusSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    private var statusSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
             statusRow(
                 icon: "circle.fill",
                 iconColor: statusBar.isServerRunning ? .green : .gray,
-                label: "Connections",
-                value: "\(statusBar.activeConnections)"
+                label: "Server",
+                value: statusBar.isServerRunning ? "Running" : "Stopped"
             )
             statusRow(
                 icon: "wrench.and.screwdriver",
                 iconColor: .blue,
                 label: "Tools",
-                value: "\(statusBar.registeredToolCount) registered"
+                value: "\(statusBar.registeredToolCount)"
             )
             statusRow(
                 icon: "hammer",
@@ -88,7 +91,7 @@ public struct DashboardView: View {
             )
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
     }
 
     private func statusRow(icon: String, iconColor: Color, label: String, value: String) -> some View {
@@ -105,105 +108,50 @@ public struct DashboardView: View {
         }
     }
 
-    // MARK: - Notion Token Status
+    // MARK: - Connected Clients
 
-    private var notionTokenSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("NOTION API")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 4)
+    private var clientsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("CONNECTED CLIENTS")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
 
-            HStack(spacing: 8) {
-                Image(systemName: notionTokenIcon)
-                    .foregroundStyle(notionTokenColor)
-                    .frame(width: 12)
-                Text("Token")
-                    .font(.callout)
-                Spacer()
-                Text(notionTokenLabel)
-                    .font(.callout)
-                    .foregroundStyle(notionTokenColor)
-            }
-
-            if !statusBar.notionTokenDetail.isEmpty {
-                Text(statusBar.notionTokenDetail)
-                    .font(.caption2)
+            if statusBar.connectedClients.isEmpty {
+                Text("No clients connected")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, 20)
+                    .padding(.vertical, 2)
+            } else {
+                ForEach(statusBar.connectedClients, id: \.name) { client in
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 6, height: 6)
+                        Text("\(client.name) \(client.version)")
+                            .font(.caption)
+                        Spacer()
+                    }
+                }
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-    }
-
-    private var notionTokenIcon: String {
-        switch statusBar.notionTokenStatus {
-        case "connected": return "checkmark.circle.fill"
-        case "disconnected": return "exclamationmark.circle.fill"
-        default: return "minus.circle.fill"
-        }
-    }
-
-    private var notionTokenColor: Color {
-        switch statusBar.notionTokenStatus {
-        case "connected": return .green
-        case "disconnected": return .orange
-        default: return .gray
-        }
-    }
-
-    private var notionTokenLabel: String {
-        switch statusBar.notionTokenStatus {
-        case "connected": return "Connected"
-        case "disconnected": return "Disconnected"
-        default: return "Missing"
-        }
-    }
-
-    // MARK: - Connection Setup
-
-    private var connectionSection: some View {
-        ConnectionSetupView()
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-    }
-
-    // MARK: - Permissions
-
-    private var permissionSection: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("PERMISSIONS")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 4)
-
-            PermissionView(permissionManager: permissionManager)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
     }
 
     // MARK: - Footer
 
     private var footerSection: some View {
         HStack {
-            Button("Quit Notion Bridge") {
+            Button("Quit") {
                 NSApplication.shared.terminate(nil)
             }
             .buttonStyle(.plain)
+            .font(.caption)
             .foregroundStyle(.red)
 
             Spacer()
-
-            Button("Refresh") {
-                permissionManager.checkAll()
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.blue)
         }
-        .font(.caption)
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
+        .padding(.vertical, 10)
     }
 }
