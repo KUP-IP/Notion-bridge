@@ -145,7 +145,7 @@ struct OnboardingView: View {
                 .font(.title)
                 .fontWeight(.semibold)
 
-            Text("Notion Bridge connects your AI assistants to your Mac through a local MCP server. Claude, Cursor, and other AI tools can read files, run commands, and interact with your system — with your permission.")
+            Text("Notion Bridge connects your Notion agents to your Mac through a secure, local MCP server. Your agents can manage files, run command-line interface commands, steer your Mac, control your browser, and automate workflows — all with your permission.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
