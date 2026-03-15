@@ -99,9 +99,10 @@ public actor ServerManager {
         )
         self.server = server
 
-        // 5. Wire ListTools handler
+        // 5. Wire ListTools handler — PKT-350: filter disabled tools
         await server.withMethodHandler(ListTools.self) { [router] _ in
-            let registrations = await router.allRegistrations()
+            let disabledNames = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
+            let registrations = await router.enabledRegistrations(disabledNames: disabledNames)
             let tools = registrations.map { reg in
                 Tool(
                     name: reg.name,
@@ -163,6 +164,16 @@ public actor ServerManager {
         )
 
         return await router.allRegistrations().count
+    }
+
+    // MARK: - Tool Info (PKT-350: F2)
+
+    /// Get all tool metadata for UI display.
+    public func allToolInfo() async -> [ToolInfo] {
+        guard let router = self.router else { return [] }
+        return await router.allRegistrations().map { reg in
+            ToolInfo(name: reg.name, module: reg.module, tier: reg.tier.rawValue, description: reg.description)
+        }
     }
 
     // MARK: - Run

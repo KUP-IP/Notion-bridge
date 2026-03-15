@@ -82,6 +82,11 @@ public actor ToolRouter {
         registry.values.filter { $0.module == module }
     }
 
+    /// Enabled registrations excluding disabled tools (PKT-350: F2).
+    public func enabledRegistrations(disabledNames: Set<String>) -> [ToolRegistration] {
+        registry.values.filter { !disabledNames.contains($0.name) }
+    }
+
     // MARK: Dispatch
 
     /// Dispatch a single tool call through the security -> execute -> audit pipeline.

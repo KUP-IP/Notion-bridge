@@ -61,10 +61,17 @@ public struct SettingsView: View {
 
     @State private var selectedTab: SettingsTab = .general
 
+    // PKT-350 F1: Token editing state
+    @State private var isEditingToken = false
+    @State private var newTokenValue = ""
+    @State private var tokenError: String?
+    @State private var tokenSaveSuccess = false
+
     enum SettingsTab: String, CaseIterable {
         case general = "General"
         case permissions = "Permissions"
         case connections = "Connections"
+        case tools = "Tools"
         case jobs = "Jobs"
         case advanced = "Advanced"
 
@@ -73,6 +80,7 @@ public struct SettingsView: View {
             case .general: return "gearshape"
             case .permissions: return "lock.shield"
             case .connections: return "network"
+            case .tools: return "hammer"
             case .jobs: return "clock.arrow.2.circlepath"
             case .advanced: return "wrench.and.screwdriver"
             }
@@ -103,6 +111,12 @@ public struct SettingsView: View {
                     Label(SettingsTab.connections.rawValue, systemImage: SettingsTab.connections.icon)
                 }
                 .tag(SettingsTab.connections)
+
+            toolsTab
+                .tabItem {
+                    Label(SettingsTab.tools.rawValue, systemImage: SettingsTab.tools.icon)
+                }
+                .tag(SettingsTab.tools)
 
             jobsTab
                 .tabItem {
@@ -137,11 +151,53 @@ public struct SettingsView: View {
             }
 
             Section("Notion API") {
-                LabeledContent("Token", value: notionTokenLabel)
-                if !statusBar.notionTokenDetail.isEmpty {
-                    Text(statusBar.notionTokenDetail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if isEditingToken {
+                    SecureField("Paste new token", text: $newTokenValue)
+                        .textFieldStyle(.roundedBorder)
+
+                    if let error = tokenError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+
+                    if tokenSaveSuccess {
+                        Text("Token saved successfully!")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+
+                    HStack {
+                        Button("Save") {
+                            saveToken()
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button("Cancel") {
+                            isEditingToken = false
+                            newTokenValue = ""
+                            tokenError = nil
+                            tokenSaveSuccess = false
+                        }
+                    }
+                } else {
+                    HStack {
+                        LabeledContent("Token", value: maskedTokenLabel)
+                        Button {
+                            isEditingToken = true
+                            tokenSaveSuccess = false
+                            tokenError = nil
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    if !statusBar.notionTokenDetail.isEmpty {
+                        Text(statusBar.notionTokenDetail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -163,12 +219,43 @@ public struct SettingsView: View {
         Int(ProcessInfo.processInfo.environment["NOTION_BRIDGE_PORT"] ?? "") ?? 9700
     }
 
-    private var notionTokenLabel: String {
-        switch statusBar.notionTokenStatus {
-        case "connected": return "Connected ✅"
-        case "disconnected": return "Disconnected ⚠️"
-        default: return "Missing"
+    private var maskedTokenLabel: String {
+        let masked = NotionTokenResolver.maskedToken()
+        if masked == "Not configured" {
+            return "Not configured ⚠️"
         }
+        return masked
+    }
+
+    /// Save token with validation and error handling (PKT-350: F1).
+    private func saveToken() {
+        let validation = NotionTokenResolver.validateTokenFormat(newTokenValue)
+        guard validation.valid else {
+            tokenError = validation.error
+            return
+        }
+        do {
+            try NotionTokenResolver.writeToken(newTokenValue)
+            tokenError = nil
+            tokenSaveSuccess = true
+            isEditingToken = false
+            newTokenValue = ""
+            NotificationCenter.default.post(name: .notionTokenDidChange, object: nil)
+        } catch {
+            tokenError = "Save failed: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Tools Tab (PKT-350: F2)
+
+    private var toolsTab: some View {
+        ToolRegistryView(
+            tools: statusBar.toolInfoList,
+            onToggle: { _, _ in
+                let disabled = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
+                statusBar.registeredToolCount = statusBar.toolInfoList.count - disabled.count
+            }
+        )
     }
 
     // MARK: - Permissions Tab

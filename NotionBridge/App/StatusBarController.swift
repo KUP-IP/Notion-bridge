@@ -8,6 +8,22 @@
 import Foundation
 import Observation
 
+/// Lightweight tool metadata for UI display (PKT-350: F2).
+public struct ToolInfo: Sendable, Identifiable {
+    public let name: String
+    public let module: String
+    public let tier: String
+    public let description: String
+    public var id: String { name }
+
+    public init(name: String, module: String, tier: String, description: String) {
+        self.name = name
+        self.module = module
+        self.tier = tier
+        self.description = description
+    }
+}
+
 /// Connected client info parsed from MCP initialize request's clientInfo field.
 public struct ConnectedClient: Sendable, Equatable {
     public let name: String
@@ -50,6 +66,9 @@ public final class StatusBarController {
 
     /// Detail message for Notion token status (e.g., source or error)
     public var notionTokenDetail: String = ""
+
+    /// Full tool list for ToolRegistryView (PKT-350: F2).
+    public var toolInfoList: [ToolInfo] = []
 
     // MARK: - Client Identification (V1-QUALITY-C2)
 

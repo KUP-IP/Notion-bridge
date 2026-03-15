@@ -88,6 +88,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         startMCPServer()
         validateNotionToken()
 
+        // PKT-350 F1: Re-validate token when changed from Settings
+        NotificationCenter.default.addObserver(forName: .notionTokenDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                self?.validateNotionToken()
+            }
+        }
+
         // PKT-349 B2: Observe reset onboarding notification from Settings.
         // Dispatch to MainActor to satisfy Swift 6 strict concurrency.
         NotificationCenter.default.addObserver(forName: .resetOnboarding, object: nil, queue: .main) { [weak self] _ in
@@ -177,8 +184,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             let toolCount = await manager.setup()
             let port = manager.ssePort
 
+            // PKT-350 F2: Populate tool info for ToolRegistryView
+            let toolInfos = await manager.allToolInfo()
             await MainActor.run {
                 statusBar.markServerStarted(toolCount: toolCount)
+                statusBar.toolInfoList = toolInfos
             }
             print("[Notion Bridge] MCP server started with \(toolCount) tools (stdio + SSE :\(port))")
 

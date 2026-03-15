@@ -12,6 +12,13 @@
 
 import Foundation
 
+// MARK: - Token Change Notification (PKT-350)
+
+extension Notification.Name {
+    /// Posted when the Notion API token is updated via Settings.
+    static let notionTokenDidChange = Notification.Name("com.notionbridge.notionTokenDidChange")
+}
+
 // MARK: - Token Resolution
 
 /// Resolves the Notion API token from environment or config file.
@@ -111,6 +118,50 @@ public enum NotionTokenResolver {
 
         print("[TokenResolver] Config file has no 'notion_api_token' or 'notion_api_key' key, or value is empty. Available keys: \(json.keys.sorted())")
         return nil
+    }
+
+    // MARK: - Token Management (PKT-350: F1)
+
+    /// Read the current raw token value.
+    public static func readCurrentToken() -> String? {
+        return resolve()?.token
+    }
+
+    /// Masked token for UI display: ntn_•••••••1234
+    public static func maskedToken() -> String {
+        guard let token = readCurrentToken(), token.count >= 8 else {
+            return "Not configured"
+        }
+        let prefix = String(token.prefix(4))
+        let suffix = String(token.suffix(4))
+        return "\(prefix)•••••••\(suffix)"
+    }
+
+    /// Validate token format before saving.
+    public static func validateTokenFormat(_ token: String) -> (valid: Bool, error: String?) {
+        guard token.count >= 20 else {
+            return (false, "Token must be at least 20 characters")
+        }
+        guard token.hasPrefix("ntn_") || token.hasPrefix("secret_") else {
+            return (false, "Token must start with 'ntn_' or 'secret_'")
+        }
+        return (true, nil)
+    }
+
+    /// Write token to config file, preserving other keys.
+    public static func writeToken(_ newToken: String) throws {
+        let path = configFilePath
+        let dir = (path as NSString).deletingLastPathComponent
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
+        var config: [String: Any] = [:]
+        if let data = FileManager.default.contents(atPath: path),
+           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            config = existing
+        }
+        config["notion_api_token"] = newToken
+        let jsonData = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
+        try jsonData.write(to: URL(fileURLWithPath: path))
+        print("[TokenResolver] Token written to config file at: \(path)")
     }
 }
 
