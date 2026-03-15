@@ -1,5 +1,6 @@
 # Makefile – Notion Bridge
 # PKT-329: V1-14b Build System + Connection Setup
+# PKT-346: V1-QUALITY-POLISH — Added install and clean-tcc targets
 #
 # Standard workflow: make clean → make test → make app → make dmg → make release
 # Debug workflow:    make debug
@@ -20,7 +21,7 @@ NOTARIZE_PROFILE ?= notionbridge-notarize
 INFO_PLIST     = Info.plist
 RESOURCES_DIR  = NotionBridge/App/Resources
 
-.PHONY: debug build test app dmg sign notarize verify release clean
+.PHONY: debug build test app dmg sign notarize verify release clean install clean-tcc
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -56,6 +57,25 @@ app: build
 		test -f "$$f" && cp "$$f" $(APP_BUNDLE)/Contents/Resources/ || true; \
 	done
 	@echo "✅ App bundle: $(APP_BUNDLE)"
+
+# ── Install ────────────────────────────────────────────────────────────
+install: app
+	@echo "📲 Installing to /Applications..."
+	@rm -rf /Applications/NotionBridge.app
+	@cp -R $(APP_BUNDLE) /Applications/
+	@echo "🧹 Clearing old TCC cache..."
+	-tccutil reset All solutions.kup.keepr
+	@echo "🔄 Refreshing icon caches..."
+	@killall Dock 2>/dev/null || true
+	@echo "✅ Installed: /Applications/NotionBridge.app"
+
+# ── Clean TCC ──────────────────────────────────────────────────────────
+clean-tcc:
+	@echo "🧹 Resetting TCC for old bundle ID..."
+	-tccutil reset All solutions.kup.keepr
+	@echo "🧹 Resetting TCC for current bundle ID..."
+	-tccutil reset All kup.solutions.notion-bridge
+	@echo "✅ TCC reset complete — permissions will be re-requested on next launch"
 
 # ── DMG (disk image) ──────────────────────────────────────────
 dmg: app

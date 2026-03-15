@@ -1,5 +1,6 @@
 // PermissionManager.swift — TCC Grant Detection Logic
 // V1-02: Detects grant status for all 5 required TCC permissions
+// V1-QUALITY-POLISH (PKT-346 D2): Added requestContactsAccess()
 //
 // Detection methods per grant:
 //   - Accessibility: AXIsProcessTrusted() — direct API
@@ -155,6 +156,21 @@ public final class PermissionManager {
             contactsStatus = .unknown
         @unknown default:
             contactsStatus = .unknown
+        }
+    }
+
+    /// Contacts: Request access — triggers the macOS system prompt.
+    /// Call before opening System Settings so the app appears in the Contacts panel.
+    /// PKT-346 D2: Added to support permission triggering on Grant tap.
+    public func requestContactsAccess() async -> Bool {
+        let store = CNContactStore()
+        do {
+            let granted = try await store.requestAccess(for: .contacts)
+            contactsStatus = granted ? .granted : .denied
+            return granted
+        } catch {
+            contactsStatus = .denied
+            return false
         }
     }
 }

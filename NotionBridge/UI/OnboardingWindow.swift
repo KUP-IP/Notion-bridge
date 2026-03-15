@@ -1,11 +1,15 @@
 // OnboardingWindow.swift — First-Launch Onboarding Window
-// V1-QUALITY-C2: NSWindow shown once on first launch with permission wizard,
+// V1-QUALITY-C2 + V1-QUALITY-POLISH (PKT-346):
+// NSWindow shown once on first launch with permission wizard,
 // connection setup, and health check test. Sets hasCompletedOnboarding = true on completion.
-// Notification permission already requested in AppDelegate (V1-QUALITY-C1) —
-// onboarding shows status, does not re-request.
+// D1: Welcome text fix — removed "all"
+// D2: Permission triggering — probe before opening Settings for Automation/Contacts
+// D3: Connection page rewrite — transport-oriented cards
+// D6: Dynamic notification status on welcome page
 
 import SwiftUI
 import AppKit
+import UserNotifications
 
 /// Manages the first-launch onboarding NSWindow.
 /// Shows a multi-step wizard: Welcome → Permissions → Connection → Test Connection.
@@ -72,6 +76,8 @@ struct OnboardingView: View {
 
     @State private var currentStep: OnboardingStep = .welcome
     @State private var healthCheckStatus: HealthCheckStatus = .idle
+    @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
+    @State private var showLegacySSE: Bool = false
 
     enum OnboardingStep: Int, CaseIterable {
         case welcome = 0
@@ -133,7 +139,7 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Welcome Step
+    // MARK: - Welcome Step (D1 + D6)
 
     private var welcomeStep: some View {
         VStack(spacing: 16) {
@@ -145,21 +151,78 @@ struct OnboardingView: View {
                 .font(.title)
                 .fontWeight(.semibold)
 
-            Text("Notion Bridge connects your Notion agents to your Mac through a secure, local MCP server. Your agents can manage files, run command-line interface commands, steer your Mac, control your browser, and automate workflows — all with your permission.")
+            // D1: Removed "all" — was "— all with your permission."
+            Text("Notion Bridge connects your Notion agents to your Mac through a secure, local MCP server. Your agents can manage files, run command-line interface commands, steer your Mac, control your browser, and automate workflows — with your permission.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 
-            // Notification permission status (already granted via AppDelegate — C1)
+            // D6: Dynamic notification status (replaces hardcoded text)
+            notificationStatusView
+                .padding(.top, 8)
+        }
+        .task {
+            await checkNotificationStatus()
+        }
+    }
+
+    // MARK: - Notification Status (D6)
+
+    @ViewBuilder
+    private var notificationStatusView: some View {
+        switch notificationStatus {
+        case .authorized:
             HStack(spacing: 8) {
-                Image(systemName: "bell.badge.fill")
-                    .foregroundStyle(.blue)
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
                 Text("Notification permission granted — used for security approvals")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .padding(.top, 8)
+        case .notDetermined:
+            HStack(spacing: 8) {
+                Image(systemName: "bell.badge.fill")
+                    .foregroundStyle(.orange)
+                Text("Notification permission needed for security approvals")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Grant") {
+                    Task { await requestNotificationPermission() }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        case .denied:
+            HStack(spacing: 8) {
+                Image(systemName: "bell.slash.fill")
+                    .foregroundStyle(.red)
+                Text("Notifications disabled — security approvals will use dialog prompts instead")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        default:
+            HStack(spacing: 8) {
+                Image(systemName: "bell.slash.fill")
+                    .foregroundStyle(.red)
+                Text("Notifications disabled — security approvals will use dialog prompts instead")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func checkNotificationStatus() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        notificationStatus = settings.authorizationStatus
+    }
+
+    private func requestNotificationPermission() async {
+        do {
+            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+            notificationStatus = granted ? .authorized : .denied
+        } catch {
+            notificationStatus = .denied
         }
     }
 
@@ -236,6 +299,7 @@ struct OnboardingView: View {
         }
     }
 
+    // D2: Modified to trigger permission probes before opening System Settings
     private func openSystemSettings(for grant: PermissionManager.Grant) {
         let urlString: String
         switch grant {
@@ -246,46 +310,54 @@ struct OnboardingView: View {
         case .fullDiskAccess:
             urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
         case .automation:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+            // D2: Fire the NSAppleScript probe first to trigger the macOS Automation
+            // permission prompt, then open Settings after a short delay so the app
+            // appears in the Automation panel.
+            permissionManager.checkAutomation()
+            Task {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            return
         case .contacts:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts"
+            // D2: Request contacts access first to trigger the macOS "NotionBridge
+            // would like to access your contacts" prompt, then open Settings so the
+            // app appears in the Contacts panel.
+            Task {
+                _ = await permissionManager.requestContactsAccess()
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            return
         }
         if let url = URL(string: urlString) {
             NSWorkspace.shared.open(url)
         }
     }
 
-    // MARK: - Connection Step
+    // MARK: - Connection Step (D3)
 
     private var connectionStep: some View {
         VStack(spacing: 16) {
-            Text("Connect Your AI Client")
+            Text("Connect to Notion Bridge")
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            Text("Add this configuration to your AI client to connect to Notion Bridge.")
+            Text("Copy the connection config and paste it into your AI client\u{2019}s MCP settings.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
             VStack(spacing: 12) {
-                clientConfigCard(
-                    name: "Claude Desktop",
-                    icon: "sparkle",
-                    config: """
-                    {
-                      "mcpServers": {
-                        "notion-bridge": {
-                          "url": "http://localhost:9700/sse"
-                        }
-                      }
-                    }
-                    """
-                )
-
-                clientConfigCard(
-                    name: "Cursor / Other",
-                    icon: "cursorarrow.rays",
+                // Card 1 — Streamable HTTP (Recommended)
+                transportConfigCard(
+                    transport: "Streamable HTTP",
+                    badge: "Recommended",
+                    badgeColor: .green,
+                    helperText: "Works with Cursor, Claude Code, and most modern MCP clients. Paste into your client\u{2019}s MCP server configuration.",
                     config: """
                     {
                       "mcpServers": {
@@ -296,26 +368,66 @@ struct OnboardingView: View {
                     }
                     """
                 )
+
+                // Card 2 — Legacy SSE (collapsed by default)
+                DisclosureGroup(isExpanded: $showLegacySSE) {
+                    transportConfigCard(
+                        transport: "Legacy SSE",
+                        badge: nil,
+                        badgeColor: .clear,
+                        helperText: "For Claude Desktop and clients that use Server-Sent Events. Use this if Streamable HTTP doesn\u{2019}t work with your client.",
+                        config: """
+                        {
+                          "mcpServers": {
+                            "notion-bridge": {
+                              "url": "http://localhost:9700/sse"
+                            }
+                          }
+                        }
+                        """
+                    )
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .foregroundStyle(.secondary)
+                        Text("Legacy SSE Transport")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
     }
 
-    private func clientConfigCard(name: String, icon: String, config: String) -> some View {
+    // D3: Transport-oriented config card (replaces client-named clientConfigCard)
+    private func transportConfigCard(transport: String, badge: String?, badgeColor: Color, helperText: String, config: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .foregroundStyle(.purple)
-                Text(name)
+                Text(transport)
                     .font(.callout)
                     .fontWeight(.medium)
+                if let badge = badge {
+                    Text(badge)
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(badgeColor)
+                        .cornerRadius(4)
+                }
                 Spacer()
-                Button("Copy") {
+                Button("Copy Config") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(config, forType: .string)
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
+
+            Text(helperText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Text(config)
                 .font(.system(.caption, design: .monospaced))
@@ -378,7 +490,7 @@ struct OnboardingView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 case .success:
-                    Text("Notion Bridge is running and responding! You're all set.")
+                    Text("Notion Bridge is running and responding! You\u{2019}re all set.")
                         .font(.caption)
                         .foregroundStyle(.green)
                 case .failed(let reason):
@@ -404,7 +516,7 @@ struct OnboardingView: View {
             if healthCheckStatus.isSuccess {
                 VStack(alignment: .leading, spacing: 8) {
                     tipRow(icon: "menubar.arrow.up.rectangle", text: "Click the menu bar icon for quick status")
-                    tipRow(icon: "gearshape", text: "Press ⌘, for Settings")
+                    tipRow(icon: "gearshape", text: "Press \u{2318}, for Settings")
                     tipRow(icon: "shield.checkered", text: "Destructive actions require approval via notification")
                 }
                 .padding(.top, 4)
@@ -416,7 +528,7 @@ struct OnboardingView: View {
         switch healthCheckStatus {
         case .idle: return "Test Connection"
         case .checking: return "Checking..."
-        case .success: return "Connected ✓"
+        case .success: return "Connected \u{2713}"
         case .failed: return "Retry"
         }
     }
@@ -440,7 +552,7 @@ struct OnboardingView: View {
                     healthCheckStatus = .failed("Unexpected response format")
                 }
             } catch {
-                healthCheckStatus = .failed("Could not reach server — is it running?")
+                healthCheckStatus = .failed("Could not reach server \u{2014} is it running?")
             }
         }
     }
