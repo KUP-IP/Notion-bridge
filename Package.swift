@@ -3,11 +3,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "KeeprBridge",
+    name: "NotionBridge",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "KeeprApp", targets: ["KeeprApp"]),
-        .executable(name: "KeeprTests", targets: ["KeeprTests"]),
+        .executable(name: "NotionBridge", targets: ["NotionBridge"]),
+        .executable(name: "NotionBridgeTests", targets: ["NotionBridgeTests"]),
     ],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
@@ -15,29 +15,29 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "KeeprLib",
+            name: "NotionBridgeLib",
             dependencies: [
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
             ],
-            path: "Keepr",
-            exclude: ["Server/main.swift", "App/KeeprApp.swift", "App/Resources"]
+            path: "NotionBridge",
+            exclude: ["Server/main.swift", "App/NotionBridgeApp.swift", "App/Resources"]
         ),
         .executableTarget(
-            name: "KeeprApp",
-            dependencies: ["KeeprLib"],
-            path: "Keepr/App",
-            sources: ["KeeprApp.swift"],
+            name: "NotionBridge",
+            dependencies: ["NotionBridgeLib"],
+            path: "NotionBridge/App",
+            sources: ["NotionBridgeApp.swift"],
             resources: [.process("Resources")]
         ),
         .executableTarget(
-            name: "KeeprTests",
-            dependencies: ["KeeprLib",
+            name: "NotionBridgeTests",
+            dependencies: ["NotionBridgeLib",
                 .product(name: "MCP", package: "swift-sdk")
             ],
-            path: "KeeprTests"
+            path: "NotionBridgeTests"
         ),
     ]
 )

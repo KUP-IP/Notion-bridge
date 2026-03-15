@@ -1,4 +1,4 @@
-# 🌉 Keepr · Mac Bridge
+# 🌉 NotionBridge
 
 **A native macOS menu bar app that replaces the Python + ngrok MCP server, serving as the persistent bidirectional bridge between Notion agents and the local Mac.**
 
@@ -8,13 +8,13 @@ Version 1.0.0 · macOS 14+ · Apple Silicon · Swift 6
 
 ## Overview
 
-Keepr is a native SwiftUI menu bar app that exposes 29 tools across 6 modules over MCP (Model Context Protocol) transports. It replaces the previous Python + ngrok bridge with a single binary that auto-launches on login, routes every tool call through a 4-tier security gate, and logs every action to an append-only audit trail.
+NotionBridge is a native SwiftUI menu bar app that exposes 29 tools across 6 modules over MCP (Model Context Protocol) transports. It replaces the previous Python + ngrok bridge with a single binary that auto-launches on login, routes every tool call through a 4-tier security gate, and logs every action to an append-only audit trail.
 
 ### Architecture
 
 ```
 Remote Agent (Notion)  ──SSE :9700──►  ┌──────────────────────┐
-                                       │   Keepr.app          │
+                                       │   NotionBridge.app          │
 Local Client (Claude)  ──stdio──────►  │                      │
                                        │   Transport Layer    │
                                        │      ↓               │
@@ -46,7 +46,7 @@ Local Client (Claude)  ──stdio──────►  │                    
 
 ### TCC Permissions Required
 
-Keepr requires the following macOS permissions (granted interactively at first launch):
+NotionBridge requires the following macOS permissions (granted interactively at first launch):
 
 | Permission | Purpose | Tools Affected |
 |-----------|---------|----------------|
@@ -64,8 +64,8 @@ Keepr requires the following macOS permissions (granted interactively at first l
 
 ```bash
 # Clone and build
-git clone https://github.com/kup-solutions/keepr-bridge.git
-cd keepr-bridge
+git clone https://github.com/kup-solutions/notion-bridge.git
+cd notion-bridge
 swift build
 
 # Build release binary
@@ -76,10 +76,10 @@ swift build -c release -Xswiftc -strict-concurrency=complete
 
 ```bash
 # Start MCP server (stdio transport)
-swift run KeeprServer
+swift run NotionBridge
 
 # Run tests
-swift run KeeprTests
+swift run NotionBridgeTests
 
 # Or use Make targets
 make build
@@ -93,8 +93,8 @@ Add to your MCP client configuration:
 ```json
 {
   "mcpServers": {
-    "keepr": {
-      "command": "/path/to/keepr-bridge/.build/release/KeeprServer",
+    "notion-bridge": {
+      "command": "/path/to/notion-bridge/.build/release/KeeprServer",
       "args": []
     }
   }
@@ -220,7 +220,7 @@ Every tool call is recorded with:
 Used by local clients (Claude Code, Cursor). The server reads JSON-RPC from stdin and writes responses to stdout.
 
 ```bash
-swift run KeeprServer
+swift run NotionBridge
 ```
 
 ### SSE (:9700)
@@ -234,10 +234,10 @@ Used by remote agents (Notion). Server-Sent Events on port 9700.
 ## Project Structure
 
 ```
-keepr-bridge/
-├── Keepr/
+notion-bridge/
+├── NotionBridge/
 │   ├── App/                    # SwiftUI app, lifecycle, menu bar
-│   │   ├── KeeprApp.swift
+│   │   ├── NotionBridgeApp.swift
 │   │   ├── AppDelegate.swift
 │   │   └── StatusBarController.swift
 │   ├── Modules/                # 6 v1 tool modules
@@ -260,7 +260,7 @@ keepr-bridge/
 │   └── UI/                     # Dashboard views
 │       ├── DashboardView.swift
 │       └── PermissionView.swift
-├── KeeprTests/
+├── NotionBridgeTests/
 │   ├── main.swift              # Test runner (unit + integration)
 │   ├── ShellModuleTests.swift
 │   ├── FileModuleTests.swift
@@ -325,7 +325,7 @@ All other functionality uses Apple frameworks only (Foundation, AppKit, SwiftUI,
 make test
 
 # Or directly
-swift run KeeprTests
+swift run NotionBridgeTests
 ```
 
 ### Release Pipeline

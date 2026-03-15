@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>KeeprApp</string>
+    <string>NotionBridge</string>
     <key>CFBundleIdentifier</key>
-    <string>solutions.kup.keepr</string>
+    <string>kup.solutions.notion-bridge</string>
     <key>CFBundleName</key>
     <string>Notion Bridge</string>
     <key>CFBundleDisplayName</key>

@@ -6,8 +6,8 @@
 # Dev app bundle:    make app (unsigned, for local testing)
 
 APP_NAME       = Notion Bridge
-BUNDLE_ID      = solutions.kup.keepr
-BINARY_NAME    = KeeprApp
+BUNDLE_ID      = kup.solutions.notion-bridge
+BINARY_NAME    = NotionBridge
 BUILD_DIR      = .build
 RELEASE_DIR    = $(BUILD_DIR)/release
 DEBUG_DIR      = $(BUILD_DIR)/debug
@@ -15,10 +15,10 @@ APP_BUNDLE     = $(BUILD_DIR)/NotionBridge.app
 DMG_NAME       = NotionBridge-v1.0.0.dmg
 DMG_STAGING    = $(BUILD_DIR)/dmg-staging
 SIGNING_ID    ?= Developer ID Application: KUP Solutions LLC
-NOTARIZE_PROFILE ?= keepr-notarize
+NOTARIZE_PROFILE ?= notionbridge-notarize
 
 INFO_PLIST     = Info.plist
-RESOURCES_DIR  = Keepr/App/Resources
+RESOURCES_DIR  = NotionBridge/App/Resources
 
 .PHONY: debug build test app dmg sign notarize verify release clean
 
@@ -39,7 +39,7 @@ build:
 test:
 	@echo "🧪 Running test suite..."
 	swift build -c debug
-	$(DEBUG_DIR)/KeeprTests
+	$(DEBUG_DIR)/NotionBridgeTests
 	@echo "✅ Tests complete"
 
 # ── App Bundle (.app) ──────────────────────────────────────────
