@@ -3,6 +3,7 @@
 // Created by PKT-317: Merge KeeprApp + KeeprServer into single binary
 // Updated by PKT-318: Added SSE transport on :9700
 // Updated by PKT-329: Configurable port via NOTION_BRIDGE_PORT env var
+// Updated by PKT-341: Version from Bundle (single source of truth), AuditLog simplified
 
 import Foundation
 import MCP
@@ -39,7 +40,7 @@ public actor ServerManager {
     public func setup() async -> Int {
         // 1. Create core components
         let securityGate = SecurityGate()
-        let auditLog = AuditLog(logFilePath: nil)
+        let auditLog = AuditLog()
         self.auditLog = auditLog
         let router = ToolRouter(securityGate: securityGate, auditLog: auditLog, batchThreshold: 3)
         self.router = router
@@ -77,10 +78,11 @@ public actor ServerManager {
             }
         ))
 
-        // 4. Build MCP Server (stdio transport)
+        // 4. Build MCP Server — version from Bundle (single source of truth)
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
         let server = Server(
             name: "NotionBridge",
-            version: "0.6.0",
+            version: appVersion,
             capabilities: .init(tools: .init())
         )
         self.server = server

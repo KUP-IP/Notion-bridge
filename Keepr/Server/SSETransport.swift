@@ -495,9 +495,15 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         case .end:
             guard let req = pending else { return }
             pending = nil
+            
+            let head = req.head
+            let bodyData: Data? = req.bodyBuffer.readableBytes > 0 
+                ? req.bodyBuffer.getBytes(at: 0, length: req.bodyBuffer.readableBytes).map { Data($0) }
+                : nil
+            
             nonisolated(unsafe) let ctx = context
             Task {
-                await self.processRequest(req, context: ctx)
+                await self.processRequest(head: head, body: bodyData, context: ctx)
             }
         }
     }
@@ -510,25 +516,25 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         context.fireChannelInactive()
     }
 
-    private func processRequest(_ req: PendingRequest, context: ChannelHandlerContext) async {
-        let fullURI = req.head.uri
+    private func processRequest(head: HTTPRequestHead, body: Data?, context: ChannelHandlerContext) async {
+        let fullURI = head.uri
         let path = fullURI.split(separator: "?").first.map(String.init) ?? fullURI
 
         // PKT-336: CORS preflight for legacy SSE endpoints
-        if req.head.method == .OPTIONS {
-            await writeCORSPreflight(version: req.head.version, context: context)
+        if head.method == .OPTIONS {
+            await writeCORSPreflight(version: head.version, context: context)
             return
         }
 
         // PKT-336: Legacy SSE stream (GET /sse)
-        if req.head.method == .GET && path == "/sse" {
-            await handleLegacySSE(req, context: context)
+        if head.method == .GET && path == "/sse" {
+            await handleLegacySSE(head: head, context: context)
             return
         }
 
         // PKT-336: Legacy SSE messages (POST /messages)
-        if req.head.method == .POST && path == "/messages" {
-            await handleLegacyMessage(req, uri: fullURI, context: context)
+        if head.method == .POST && path == "/messages" {
+            await handleLegacyMessage(head: head, body: body, uri: fullURI, context: context)
             return
         }
 
@@ -536,14 +542,14 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         guard path == endpoint else {
             await writeResponse(
                 .error(statusCode: 404, .invalidRequest("Not Found")),
-                version: req.head.version,
+                version: head.version,
                 context: context
             )
             return
         }
 
         var headers: [String: String] = [:]
-        for (name, value) in req.head.headers {
+        for (name, value) in head.headers {
             if let existing = headers[name] {
                 headers[name] = existing + ", " + value
             } else {
@@ -551,23 +557,15 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             }
         }
 
-        let body: Data?
-        if req.bodyBuffer.readableBytes > 0,
-           let bytes = req.bodyBuffer.getBytes(at: 0, length: req.bodyBuffer.readableBytes) {
-            body = Data(bytes)
-        } else {
-            body = nil
-        }
-
-        let httpRequest = HTTPRequest(method: req.head.method.rawValue, headers: headers, body: body)
+        let httpRequest = HTTPRequest(method: head.method.rawValue, headers: headers, body: body)
         let response = await httpRequestHandler(httpRequest)
-        await writeResponse(response, version: req.head.version, context: context)
+        await writeResponse(response, version: head.version, context: context)
     }
 
     // MARK: - Legacy SSE Handlers (PKT-336)
 
     /// Handle GET /sse — establish SSE stream, send endpoint event, keep channel alive.
-    private func handleLegacySSE(_ req: PendingRequest, context: ChannelHandlerContext) async {
+    private func handleLegacySSE(head: HTTPRequestHead, context: ChannelHandlerContext) async {
         // PKT-339: All context.channel access must happen on the event loop.
         // context.channel triggers assertInEventLoop() — accessing it from a Task crashes.
         nonisolated(unsafe) let ctx = context
@@ -575,12 +573,12 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             let sessionID = self.legacyBridge.register(channel: ctx.channel)
             self.legacySessionID = sessionID
 
-            var head = HTTPResponseHead(version: req.head.version, status: .ok)
-            head.headers.add(name: "Content-Type", value: "text/event-stream")
-            head.headers.add(name: "Cache-Control", value: "no-cache")
-            head.headers.add(name: "Connection", value: "keep-alive")
-            head.headers.add(name: "Access-Control-Allow-Origin", value: "*")
-            ctx.write(self.wrapOutboundOut(.head(head)), promise: nil)
+            var responseHead = HTTPResponseHead(version: head.version, status: .ok)
+            responseHead.headers.add(name: "Content-Type", value: "text/event-stream")
+            responseHead.headers.add(name: "Cache-Control", value: "no-cache")
+            responseHead.headers.add(name: "Connection", value: "keep-alive")
+            responseHead.headers.add(name: "Access-Control-Allow-Origin", value: "*")
+            ctx.write(self.wrapOutboundOut(.head(responseHead)), promise: nil)
 
             // Send endpoint event: tells client where to POST messages
             let endpointData = "event: endpoint\ndata: /messages?sessionId=\(sessionID)\n\n"
@@ -594,7 +592,8 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
 
     /// Handle POST /messages — process JSON-RPC, send response via SSE stream, return 202.
     private func handleLegacyMessage(
-        _ req: PendingRequest,
+        head: HTTPRequestHead,
+        body: Data?,
         uri: String,
         context: ChannelHandlerContext
     ) async {
@@ -612,21 +611,19 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         }()
 
         // Extract request body
-        guard req.bodyBuffer.readableBytes > 0,
-              let bytes = req.bodyBuffer.getBytes(at: 0, length: req.bodyBuffer.readableBytes) else {
-            await writeSimpleResponse(statusCode: 400, version: req.head.version, context: context)
+        guard let bodyData = body else {
+            await writeSimpleResponse(statusCode: 400, version: head.version, context: context)
             return
         }
-        let body = Data(bytes)
 
         // PKT-338: Process JSON-RPC through closure (avoids actor reference)
-        if let responseData = await rpcHandler(body),
+        if let responseData = await rpcHandler(bodyData),
            let responseString = String(data: responseData, encoding: .utf8) {
             legacyBridge.sendEvent(sessionID: sessionID, event: "message", data: responseString)
         }
 
         // Return 202 Accepted on the POST channel
-        await writeSimpleResponse(statusCode: 202, version: req.head.version, context: context)
+        await writeSimpleResponse(statusCode: 202, version: head.version, context: context)
     }
 
     /// Write a simple status-only HTTP response with CORS headers.

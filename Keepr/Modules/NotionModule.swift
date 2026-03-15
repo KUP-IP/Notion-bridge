@@ -46,7 +46,7 @@ public enum NotionModule {
                 }
                 let pageSize: Int = { if case .int(let ps) = args["pageSize"] { return min(ps, 100) }; return 10 }()
 
-                let client = try await clientHolder.getClient()
+                let client = try clientHolder.getClient()
                 let data = try await client.search(query: query, pageSize: pageSize)
 
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -108,7 +108,7 @@ public enum NotionModule {
                     return true
                 }()
 
-                let client = try await clientHolder.getClient()
+                let client = try clientHolder.getClient()
 
                 // Fetch page properties
                 let pageData = try await client.getPage(pageId: pageId)
@@ -200,7 +200,7 @@ public enum NotionModule {
                 let envelope: [String: Any] = ["properties": propsObj]
                 let envelopeData = try JSONSerialization.data(withJSONObject: envelope)
 
-                let client = try await clientHolder.getClient()
+                let client = try clientHolder.getClient()
                 let resultData = try await client.updatePage(pageId: pageId, properties: envelopeData)
 
                 guard let resultJSON = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any] else {

@@ -1,5 +1,6 @@
 // AuditLog.swift – V1-03/V1-04 Append-Only Structured Audit Log
 // KeeprBridge · Security
+// PKT-341: Disk writes now routed through LogManager for crash resilience
 
 import Foundation
 
@@ -46,57 +47,21 @@ public struct AuditEntry: Sendable, Codable {
 // MARK: - AuditLog Actor
 
 /// Append-only structured log for every tool call.
-/// File writes are detached to avoid blocking the main request path.
+/// In-memory array for fast queries + disk persistence via LogManager.
 public actor AuditLog {
     private var entries: [AuditEntry] = []
-    private let logFileURL: URL?
-    private let encoder: JSONEncoder
 
-    /// Initialize with an optional file path for persistent storage.
-    /// If nil, entries are only kept in memory.
-    public init(logFilePath: String? = nil) {
-        if let path = logFilePath {
-            self.logFileURL = URL(fileURLWithPath: path)
-        } else {
-            self.logFileURL = nil
-        }
-        let enc = JSONEncoder()
-        enc.dateEncodingStrategy = .iso8601
-        enc.outputFormatting = [.sortedKeys]
-        self.encoder = enc
-    }
+    public init() {}
 
     // MARK: Append
 
-    /// Append an entry to the in-memory log and (async) to the file.
+    /// Append an entry to the in-memory log and persist to disk via LogManager.
     public func append(_ entry: AuditEntry) {
         entries.append(entry)
 
-        // Non-blocking file write
-        if let fileURL = logFileURL {
-            let enc = self.encoder
-            Task.detached {
-                do {
-                    let data = try enc.encode(entry)
-                    guard var line = String(data: data, encoding: .utf8) else { return }
-                    line += "\n"
-                    if let lineData = line.data(using: .utf8) {
-                        if FileManager.default.fileExists(atPath: fileURL.path) {
-                            let handle = try FileHandle(forWritingTo: fileURL)
-                            handle.seekToEndOfFile()
-                            handle.write(lineData)
-                            handle.closeFile()
-                        } else {
-                            try lineData.write(to: fileURL, options: .atomic)
-                        }
-                    }
-                } catch {
-                    // Audit log write failure is non-fatal — log to stderr
-                    FileHandle.standardError.write(
-                        Data("AuditLog write error: \(error)\n".utf8)
-                    )
-                }
-            }
+        // PKT-341: Persist to ~/Library/Logs/NotionBridge/ via LogManager
+        Task.detached {
+            await LogManager.shared.write(entry)
         }
     }
 
@@ -129,7 +94,7 @@ public actor AuditLog {
 
     // MARK: Clear (V1-04)
 
-    /// Clear all in-memory entries. Does not affect the persistent file log.
+    /// Clear all in-memory entries. Does not affect the persistent log file.
     public func clear() {
         entries.removeAll()
     }

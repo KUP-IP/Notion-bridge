@@ -3,6 +3,7 @@
 // PKT-317: Added tool calls row for live server status from unified binary
 // PKT-329: Added connection setup section with tunnel provider selection
 // PKT-320: Added Notion API token status indicator (connected/disconnected/missing)
+// PKT-341: Version string now reads from Bundle (single source of truth)
 
 import SwiftUI
 
@@ -17,6 +18,11 @@ public struct DashboardView: View {
     public init(statusBar: StatusBarController, permissionManager: PermissionManager) {
         self.statusBar = statusBar
         self.permissionManager = permissionManager
+    }
+
+    /// PKT-341: Version from Bundle (single source of truth — Info.plist)
+    private var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
     }
 
     public var body: some View {
@@ -44,7 +50,7 @@ public struct DashboardView: View {
             Text("Notion Bridge")
                 .font(.headline)
             Spacer()
-            Text("v1.0.0")
+            Text("v\(appVersion)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

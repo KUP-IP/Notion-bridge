@@ -15,7 +15,7 @@ func runEndToEndTests() async {
 
     // Shared infrastructure for all integration tests
     let securityGate = SecurityGate()
-    let auditLog = AuditLog(logFilePath: nil)
+    let auditLog = AuditLog()
     let router = ToolRouter(securityGate: securityGate, auditLog: auditLog, batchThreshold: 3)
 
     // Register all V1 modules (same as main.swift bootstrap)

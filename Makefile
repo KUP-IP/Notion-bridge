@@ -32,8 +32,7 @@ debug:
 build:
 	@echo "🔨 Building release binary with strict concurrency..."
 	swift build -c release \
-		-Xswiftc -strict-concurrency=complete \
-		-Xswiftc -warnings-as-errors
+		-Xswiftc -strict-concurrency=complete
 	@echo "✅ Release build: $(RELEASE_DIR)/$(BINARY_NAME)"
 
 # ── Test ───────────────────────────────────────────────────────

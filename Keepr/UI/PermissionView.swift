@@ -1,6 +1,7 @@
 // PermissionView.swift — TCC Grant Status Display
 // V1-02: Shows green/red status per grant with "Open System Settings" deep links
 // for all 5 required TCC grants.
+// PKT-341: Added rebuild note explaining TCC grant invalidation
 
 import SwiftUI
 
@@ -22,6 +23,12 @@ public struct PermissionView: View {
                     status: permissionManager.status(for: grant)
                 )
             }
+
+            // PKT-341: TCC rebuild note — grants are tied to code signature
+            Text("Note: Xcode rebuilds may invalidate TCC grants (tied to code signature). Re-grant in System Settings if indicators turn red after a rebuild.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
         }
     }
 

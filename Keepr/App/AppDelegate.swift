@@ -5,9 +5,22 @@
 // PKT-329: SSE port now configurable via NOTION_BRIDGE_PORT env var
 // PKT-320: Added Notion API token validation on startup
 // PKT-332: Added single-instance guard to prevent duplicate processes at boot
+// PKT-341: Login item guard, TCC early check, LogManager + signal handlers
 
 import AppKit
 import ServiceManagement
+
+/// PKT-341: Signal handler for crash resilience.
+/// Flushes log file descriptor, then re-raises with default handler.
+/// Only calls async-signal-safe functions (fsync, signal, raise).
+private func crashFlushHandler(_ sig: Int32) {
+    let fd = _logManagerFD
+    if fd >= 0 {
+        fsync(fd)
+    }
+    signal(sig, SIG_DFL)
+    raise(sig)
+}
 
 /// Manages app lifecycle, auto-launch registration, and MCP server lifecycle.
 /// The server starts in a detached Task on launch (Nudge Server pattern) so the
@@ -21,6 +34,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Observable state for the DashboardView popover.
     /// Owned here so it's available before the first SwiftUI render.
     public let statusBar = StatusBarController()
+
+    /// PKT-341: Permission manager owned by AppDelegate for early TCC check
+    /// on applicationDidFinishLaunching (not just on popover open).
+    public let permissionManager = PermissionManager()
 
     public override init() {
         super.init()
@@ -36,6 +53,19 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         registerAutoLaunch()
+
+        // PKT-341: Bootstrap LogManager for crash-resilient disk logging
+        Task {
+            await LogManager.shared.bootstrap()
+        }
+
+        // PKT-341: Install signal handlers for crash breadcrumbs
+        installSignalHandlers()
+
+        // PKT-341: Check TCC permissions on launch — indicators reflect
+        // actual System Settings state immediately, not just on popover open
+        permissionManager.checkAll()
+
         startMCPServer()
         validateNotionToken()
     }
@@ -47,8 +77,25 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         if let manager = serverManager {
             Task { await manager.stopSSE() }
         }
+
+        // PKT-341: Flush LogManager before exit
+        Task {
+            await LogManager.shared.flush()
+            await LogManager.shared.close()
+        }
+
         statusBar.markServerStopped()
         print("[Notion Bridge] Server stopped.")
+    }
+
+    // MARK: - Signal Handlers
+
+    /// PKT-341: Install signal handlers for SIGTERM and SIGABRT.
+    /// Ensures log data is flushed to disk before process exits.
+    private func installSignalHandlers() {
+        signal(SIGTERM, crashFlushHandler)
+        signal(SIGABRT, crashFlushHandler)
+        print("[Notion Bridge] Signal handlers installed (SIGTERM, SIGABRT)")
     }
 
     // MARK: - Single-Instance Guard
@@ -171,8 +218,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Auto-Launch
 
+    /// PKT-341: Only register if not already enabled — prevents duplicate
+    /// "added to login items" notifications on every launch.
     private func registerAutoLaunch() {
         let service = SMAppService.mainApp
+        if service.status == .enabled {
+            print("[Notion Bridge] Auto-launch already enabled (status: \(service.status.rawValue))")
+            return
+        }
         do {
             try service.register()
             print("[Notion Bridge] Auto-launch registered via SMAppService (\(service.status.rawValue))")
