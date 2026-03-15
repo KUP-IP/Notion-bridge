@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>NotionBridge</string>
+    <string>NotionGate</string>
     <key>CFBundleIdentifier</key>
-    <string>kup.solutions.notion-bridge</string>
+    <string>kup.solutions.notion-gate</string>
     <key>CFBundleName</key>
-    <string>Notion Bridge</string>
+    <string>Notion Gate</string>
     <key>CFBundleDisplayName</key>
-    <string>Notion Bridge</string>
+    <string>Notion Gate</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>
@@ -17,7 +17,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
-    <string>NotionBridge</string>
+    <string>NotionGate</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>LSMinimumSystemVersion</key>

@@ -3,11 +3,11 @@
 import PackageDescription
 
 let package = Package(
-    name: "NotionBridge",
+    name: "NotionGate",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "NotionBridge", targets: ["NotionBridge"]),
-        .executable(name: "NotionBridgeTests", targets: ["NotionBridgeTests"]),
+        .executable(name: "NotionGate", targets: ["NotionGate"]),
+        .executable(name: "NotionGateTests", targets: ["NotionGateTests"]),
     ],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
@@ -15,29 +15,29 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "NotionBridgeLib",
+            name: "NotionGateLib",
             dependencies: [
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
             ],
-            path: "NotionBridge",
-            exclude: ["Server/main.swift", "App/NotionBridgeApp.swift", "App/Resources"]
+            path: "NotionGate",
+            exclude: ["Server/main.swift", "App/NotionGateApp.swift", "App/Resources"]
         ),
         .executableTarget(
-            name: "NotionBridge",
-            dependencies: ["NotionBridgeLib"],
-            path: "NotionBridge/App",
-            sources: ["NotionBridgeApp.swift"],
+            name: "NotionGate",
+            dependencies: ["NotionGateLib"],
+            path: "NotionGate/App",
+            sources: ["NotionGateApp.swift"],
             resources: [.process("Resources")]
         ),
         .executableTarget(
-            name: "NotionBridgeTests",
-            dependencies: ["NotionBridgeLib",
+            name: "NotionGateTests",
+            dependencies: ["NotionGateLib",
                 .product(name: "MCP", package: "swift-sdk")
             ],
-            path: "NotionBridgeTests"
+            path: "NotionGateTests"
         ),
     ]
 )

@@ -1,0 +1,275 @@
+// AppDelegate.swift — App Lifecycle + MCP Server + SMAppService Auto-Launch
+// Notion Gate v1: Unified binary — starts MCP server on launch, stops on quit
+// PKT-317: Merged server runtime into NotionGate via ServerManager
+// PKT-318: Added SSE transport startup on :9700
+// PKT-329: SSE port now configurable via NOTION_BRIDGE_PORT env var
+// PKT-320: Added Notion API token validation on startup
+// PKT-332: Added single-instance guard to prevent duplicate processes at boot
+// PKT-341: Login item guard, TCC early check, LogManager + signal handlers
+// V1-QUALITY-C2: OnboardingWindowController on first launch, SettingsWindowController
+//   for gear icon / Cmd+, access. Client identification callbacks from SSE server.
+
+import AppKit
+import ServiceManagement
+
+/// PKT-341: Signal handler for crash resilience.
+/// Flushes log file descriptor, then re-raises with default handler.
+/// Only calls async-signal-safe functions (fsync, signal, raise).
+private func crashFlushHandler(_ sig: Int32) {
+    let fd = _logManagerFD
+    if fd >= 0 {
+        fsync(fd)
+    }
+    signal(sig, SIG_DFL)
+    raise(sig)
+}
+
+/// Manages app lifecycle, auto-launch registration, and MCP server lifecycle.
+/// The server starts in a detached Task on launch (Nudge Server pattern) so the
+/// SwiftUI main thread is never blocked. StatusBarController receives live updates
+/// for connections, tool calls, Notion token status, and uptime.
+@MainActor
+public final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var serverTask: Task<Void, Never>?
+    private var serverManager: ServerManager?
+
+    /// Observable state for the DashboardView popover.
+    /// Owned here so it's available before the first SwiftUI render.
+    public let statusBar = StatusBarController()
+
+    /// PKT-341: Permission manager owned by AppDelegate for early TCC check
+    /// on applicationDidFinishLaunching (not just on popover open).
+    public let permissionManager = PermissionManager()
+
+    /// V1-QUALITY-C2: Onboarding window controller for first-launch experience.
+    private lazy var onboardingController = OnboardingWindowController(
+        permissionManager: permissionManager
+    )
+
+    /// V1-QUALITY-C2: Settings window controller for gear icon / Cmd+, access.
+    private lazy var settingsController = SettingsWindowController(
+        statusBar: statusBar,
+        permissionManager: permissionManager
+    )
+
+    public override init() {
+        super.init()
+    }
+
+    public func applicationDidFinishLaunching(_ notification: Notification) {
+        // PKT-332: Single-instance guard — prevent duplicate processes from
+        // SMAppService login item + Terminal session restore + manual launch
+        guard ensureSingleInstance() else {
+            print("[Notion Gate] Another instance is already running — exiting")
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
+        registerAutoLaunch()
+
+        // PKT-341: Bootstrap LogManager for crash-resilient disk logging
+        Task {
+            await LogManager.shared.bootstrap()
+        }
+
+        // PKT-341: Install signal handlers for crash breadcrumbs
+        installSignalHandlers()
+
+        // PKT-341: Check TCC permissions on launch — indicators reflect
+        // actual System Settings state immediately, not just on popover open
+        permissionManager.checkAll()
+
+        // V1-QUALITY-C1: Request notification permission for security approval flow
+        Task {
+            let gate = SecurityGate()
+            await gate.requestNotificationPermission()
+        }
+
+        startMCPServer()
+        validateNotionToken()
+
+        // V1-QUALITY-C2: Show first-launch onboarding window
+        onboardingController.showIfNeeded()
+    }
+
+    public func applicationWillTerminate(_ notification: Notification) {
+        print("[Notion Gate] Shutting down MCP server...")
+        serverTask?.cancel()
+        serverTask = nil
+        if let manager = serverManager {
+            Task { await manager.stopSSE() }
+        }
+
+        // PKT-341: Flush LogManager before exit
+        Task {
+            await LogManager.shared.flush()
+            await LogManager.shared.close()
+        }
+
+        statusBar.markServerStopped()
+        print("[Notion Gate] Server stopped.")
+    }
+
+    // MARK: - Public API (V1-QUALITY-C2)
+
+    /// Open the Settings window. Called from DashboardView gear icon.
+    public func openSettings() {
+        settingsController.show()
+    }
+
+    // MARK: - Signal Handlers
+
+    /// PKT-341: Install signal handlers for SIGTERM and SIGABRT.
+    /// Ensures log data is flushed to disk before process exits.
+    private func installSignalHandlers() {
+        signal(SIGTERM, crashFlushHandler)
+        signal(SIGABRT, crashFlushHandler)
+        print("[Notion Gate] Signal handlers installed (SIGTERM, SIGABRT)")
+    }
+
+    // MARK: - Single-Instance Guard
+
+    /// PKT-332: Detect if another instance of this app is already running.
+    /// Uses NSRunningApplication to check by bundle identifier.
+    /// Returns true if this is the only instance, false if a duplicate exists.
+    private func ensureSingleInstance() -> Bool {
+        let bundleID = Bundle.main.bundleIdentifier ?? "kup.solutions.notion-gate"
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        let myPID = ProcessInfo.processInfo.processIdentifier
+
+        let others = running.filter { $0.processIdentifier != myPID }
+        if let existing = others.first {
+            print("[Notion Gate] Duplicate instance detected — PID \(existing.processIdentifier) is already running (my PID: \(myPID))")
+            return false
+        }
+
+        print("[Notion Gate] Single-instance check passed (PID: \(myPID))")
+        return true
+    }
+
+    // MARK: - MCP Server
+
+    private func startMCPServer() {
+        let statusBar = self.statusBar
+
+        // V1-QUALITY-C2: Client identification callback — updates StatusBarController
+        let onClientConnected: @MainActor @Sendable (String, String) -> Void = { name, version in
+            statusBar.addClient(name: name, version: version)
+        }
+
+        let manager = ServerManager(
+            onToolCall: {
+                statusBar.incrementToolCalls()
+            },
+            onClientConnected: onClientConnected
+        )
+        self.serverManager = manager
+
+        serverTask = Task.detached {
+            let toolCount = await manager.setup()
+            let port = manager.ssePort
+
+            await MainActor.run {
+                statusBar.markServerStarted(toolCount: toolCount)
+            }
+            print("[Notion Gate] MCP server started with \(toolCount) tools (stdio + SSE :\(port))")
+
+            // Run both transports concurrently
+            await withTaskGroup(of: Void.self) { group in
+                // stdio transport (existing)
+                group.addTask {
+                    do {
+                        try await manager.run()
+                    } catch is CancellationError {
+                        print("[Notion Gate] stdio transport cancelled")
+                    } catch {
+                        print("[Notion Gate] stdio error: \(error.localizedDescription)")
+                    }
+                }
+
+                // SSE transport (configurable port via NOTION_BRIDGE_PORT)
+                // PKT-332: SSEServer.start() now handles bind failures gracefully —
+                // if port is in use, it logs and returns without crashing
+                group.addTask {
+                    do {
+                        try await manager.runSSE()
+                    } catch is CancellationError {
+                        print("[SSE] Transport cancelled")
+                    } catch {
+                        print("[SSE] Transport error: \(error.localizedDescription)")
+                    }
+                }
+            }
+
+            await MainActor.run {
+                statusBar.markServerStopped()
+            }
+        }
+    }
+
+    // MARK: - Notion Token Validation
+
+    /// Validate Notion API token on startup. Updates StatusBarController with result.
+    private func validateNotionToken() {
+        let statusBar = self.statusBar
+
+        Task.detached {
+            // Check if token is available at all
+            let tokenStatus = NotionTokenResolver.checkStatus()
+
+            switch tokenStatus {
+            case .missing:
+                await MainActor.run {
+                    statusBar.updateNotionTokenStatus("missing", detail: "Set NOTION_API_TOKEN or add to ~/.config/notion-gate/config.json")
+                }
+                print("[Notion Gate] Notion API token not found")
+
+            case .available(let source):
+                // Token found — validate with a test API call
+                await MainActor.run {
+                    statusBar.updateNotionTokenStatus("disconnected", detail: "Validating...")
+                }
+                print("[Notion Gate] Notion API token found (source: \(source)), validating...")
+
+                do {
+                    let client = try NotionClient()
+                    let result = await client.validate()
+
+                    await MainActor.run {
+                        if result.success {
+                            statusBar.updateNotionTokenStatus("connected", detail: result.message)
+                            print("[Notion Gate] Notion API token validated ✅ (\(result.message))")
+                        } else {
+                            statusBar.updateNotionTokenStatus("disconnected", detail: result.message)
+                            print("[Notion Gate] Notion API token validation failed: \(result.message)")
+                        }
+                    }
+                } catch {
+                    await MainActor.run {
+                        statusBar.updateNotionTokenStatus("disconnected", detail: error.localizedDescription)
+                    }
+                    print("[Notion Gate] Notion client init failed: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Auto-Launch
+
+    /// PKT-341: Only register if not already enabled — prevents duplicate
+    /// "added to login items" notifications on every launch.
+    private func registerAutoLaunch() {
+        let service = SMAppService.mainApp
+        if service.status == .enabled {
+            print("[Notion Gate] Auto-launch already enabled (status: \(service.status.rawValue))")
+            return
+        }
+        do {
+            try service.register()
+            print("[Notion Gate] Auto-launch registered via SMAppService (\(service.status.rawValue))")
+        } catch {
+            print("[Notion Gate] SMAppService registration failed: \(error.localizedDescription)")
+            print("[Notion Gate] To enable: System Settings > General > Login Items > toggle Notion Gate on")
+        }
+    }
+}

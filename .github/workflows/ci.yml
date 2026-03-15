@@ -1,10 +1,10 @@
-# ci.yml – NotionBridge · Mac Bridge
+# ci.yml – NotionGate · Mac Bridge
 # V1-06 GitHub Actions Pipeline
 #
 # Triggers: push to main, pull requests
 # Pipeline: build → test → sign → notarize → artifact
 
-name: NotionBridge CI/CD
+name: NotionGate CI/CD
 
 on:
   push:
@@ -13,8 +13,8 @@ on:
     branches: [main]
 
 env:
-  SCHEME: NotionBridge
-  APP_NAME: Notion Bridge
+  SCHEME: NotionGate
+  APP_NAME: Notion Gate
   SWIFT_VERSION: "6.0"
 
 jobs:
@@ -39,7 +39,7 @@ jobs:
             -Xswiftc -strict-concurrency=complete
 
       - name: Run tests
-        run: swift run NotionBridgeTests
+        run: swift run NotionGateTests
 
   sign-and-notarize:
     name: Sign & Notarize
@@ -136,6 +136,6 @@ jobs:
       - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NotionBridge-v1.1.0.dmg
+          name: NotionGate-v1.1.0.dmg
           path: .build/Keepr-v1.0.0.dmg
           retention-days: 30
