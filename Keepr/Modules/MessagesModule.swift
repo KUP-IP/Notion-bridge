@@ -30,7 +30,7 @@ public enum MessagesModule {
         await router.register(ToolRegistration(
             name: "messages_search",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Search iMessage/SMS messages by keyword. Returns matching messages with sender, date, and chat context. Uses SQLite on chat.db (read-only).",
             inputSchema: .object([
                 "type": .string("object"),
@@ -65,7 +65,7 @@ public enum MessagesModule {
         await router.register(ToolRegistration(
             name: "messages_recent",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "List recent conversations with last message preview, ordered by recency.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -106,7 +106,7 @@ public enum MessagesModule {
         await router.register(ToolRegistration(
             name: "messages_chat",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Get message thread with a specific contact (phone number or email).",
             inputSchema: .object([
                 "type": .string("object"),
@@ -144,7 +144,7 @@ public enum MessagesModule {
         await router.register(ToolRegistration(
             name: "messages_content",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Get a single message by its ROWID with full metadata.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -176,7 +176,7 @@ public enum MessagesModule {
         await router.register(ToolRegistration(
             name: "messages_participants",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "List participants (handles) in a chat identified by chat_identifier.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -206,7 +206,7 @@ public enum MessagesModule {
         await router.register(ToolRegistration(
             name: "messages_send",
             module: moduleName,
-            tier: .red,
+            tier: .notify,
             description: "Send an iMessage via AppleScript. Requires explicit confirm='SEND' parameter. SecurityGate enforces red-tier confirmation.",
             inputSchema: .object([
                 "type": .string("object"),

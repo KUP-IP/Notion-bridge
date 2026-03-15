@@ -29,19 +29,19 @@ func runSystemModuleTests() async {
     await test("system_info tier is green") {
         let tools = await router.registrations(forModule: "system")
         let tool = tools.first(where: { $0.name == "system_info" })!
-        try expect(tool.tier == .green, "Expected green, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
     await test("process_list tier is green") {
         let tools = await router.registrations(forModule: "system")
         let tool = tools.first(where: { $0.name == "process_list" })!
-        try expect(tool.tier == .green, "Expected green, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
     await test("notify tier is yellow") {
         let tools = await router.registrations(forModule: "system")
         let tool = tools.first(where: { $0.name == "notify" })!
-        try expect(tool.tier == .yellow, "Expected yellow, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected yellow, got \(tool.tier.rawValue)")
     }
 
     // Functional tests — system_info

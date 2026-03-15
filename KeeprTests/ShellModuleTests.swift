@@ -28,13 +28,13 @@ func runShellModuleTests() async {
     await test("shell_exec tier is orange") {
         let tools = await router.registrations(forModule: "shell")
         let shellExec = tools.first(where: { $0.name == "shell_exec" })!
-        try expect(shellExec.tier == .orange, "Expected orange, got \(shellExec.tier.rawValue)")
+        try expect(shellExec.tier == .notify, "Expected orange, got \(shellExec.tier.rawValue)")
     }
 
     await test("run_script tier is green") {
         let tools = await router.registrations(forModule: "shell")
         let runScript = tools.first(where: { $0.name == "run_script" })!
-        try expect(runScript.tier == .green, "Expected green, got \(runScript.tier.rawValue)")
+        try expect(runScript.tier == .open, "Expected green, got \(runScript.tier.rawValue)")
     }
 
     // shell_exec: basic command
@@ -177,6 +177,6 @@ func runShellModuleTests() async {
     await test("shell_exec is registered at orange tier (auto-escalation eligible)") {
         let tools = await router.allRegistrations()
         let shellExec = tools.first(where: { $0.name == "shell_exec" })!
-        try expect(shellExec.tier == .orange, "shell_exec must be orange tier")
+        try expect(shellExec.tier == .notify, "shell_exec must be orange tier")
     }
 }

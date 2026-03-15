@@ -33,9 +33,9 @@ func runSessionModuleTests() async {
     await test("SessionModule tiers match spec") {
         let tools = await router.registrations(forModule: "session")
         let tierMap = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0.tier) })
-        try expect(tierMap["tools_list"] == .green, "tools_list should be green")
-        try expect(tierMap["session_info"] == .green, "session_info should be green")
-        try expect(tierMap["session_clear"] == .orange, "session_clear should be orange")
+        try expect(tierMap["tools_list"] == .open, "tools_list should be green")
+        try expect(tierMap["session_info"] == .open, "session_info should be green")
+        try expect(tierMap["session_clear"] == .notify, "session_clear should be orange")
     }
 
     // tools_list: returns all tools
@@ -55,7 +55,7 @@ func runSessionModuleTests() async {
     await test("tools_list filters by module") {
         // Register a tool from another module to test filtering
         await router.register(ToolRegistration(
-            name: "other_tool", module: "other", tier: .green,
+            name: "other_tool", module: "other", tier: .open,
             description: "A tool from another module",
             inputSchema: .object([:]),
             handler: { _ in .null }
@@ -174,7 +174,7 @@ func runSessionModuleTests() async {
     await test("session_clear clears audit log when confirmed") {
         // Add some entries first
         await log.append(AuditEntry(
-            timestamp: Date(), toolName: "test", tier: .green,
+            timestamp: Date(), toolName: "test", tier: .open,
             inputSummary: "", outputSummary: "",
             durationMs: 1.0, approvalStatus: .approved
         ))

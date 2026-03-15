@@ -32,37 +32,37 @@ func runMessagesModuleTests() async {
     await test("messages_search tier is green") {
         let tools = await router.registrations(forModule: "messages")
         let tool = tools.first(where: { $0.name == "messages_search" })!
-        try expect(tool.tier == .green, "Expected green, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
     await test("messages_recent tier is green") {
         let tools = await router.registrations(forModule: "messages")
         let tool = tools.first(where: { $0.name == "messages_recent" })!
-        try expect(tool.tier == .green, "Expected green, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
     await test("messages_chat tier is green") {
         let tools = await router.registrations(forModule: "messages")
         let tool = tools.first(where: { $0.name == "messages_chat" })!
-        try expect(tool.tier == .green, "Expected green, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
     await test("messages_content tier is green") {
         let tools = await router.registrations(forModule: "messages")
         let tool = tools.first(where: { $0.name == "messages_content" })!
-        try expect(tool.tier == .green, "Expected green, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
     await test("messages_participants tier is green") {
         let tools = await router.registrations(forModule: "messages")
         let tool = tools.first(where: { $0.name == "messages_participants" })!
-        try expect(tool.tier == .green, "Expected green, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
     await test("messages_send tier is red") {
         let tools = await router.registrations(forModule: "messages")
         let tool = tools.first(where: { $0.name == "messages_send" })!
-        try expect(tool.tier == .red, "Expected red, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .notify, "Expected red, got \(tool.tier.rawValue)")
     }
 
     // Functional tests — messages_search (requires chat.db access)

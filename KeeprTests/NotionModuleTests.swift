@@ -29,19 +29,19 @@ func runNotionModuleTests() async {
     await test("notion_search tier is green") {
         let tools = await router.registrations(forModule: "notion")
         let tool = tools.first(where: { $0.name == "notion_search" })!
-        try expect(tool.tier == .green, "Expected green, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
     await test("notion_page_read tier is green") {
         let tools = await router.registrations(forModule: "notion")
         let tool = tools.first(where: { $0.name == "notion_page_read" })!
-        try expect(tool.tier == .green, "Expected green, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
     await test("notion_page_update tier is orange") {
         let tools = await router.registrations(forModule: "notion")
         let tool = tools.first(where: { $0.name == "notion_page_update" })!
-        try expect(tool.tier == .orange, "Expected orange, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .notify, "Expected orange, got \(tool.tier.rawValue)")
     }
 
     // Functional tests — these require NOTION_API_KEY

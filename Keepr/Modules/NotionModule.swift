@@ -29,7 +29,7 @@ public enum NotionModule {
         await router.register(ToolRegistration(
             name: "notion_search",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Search the Notion workspace for pages and databases by query. Returns matching results with titles and URLs. Requires NOTION_API_TOKEN.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -88,7 +88,7 @@ public enum NotionModule {
         await router.register(ToolRegistration(
             name: "notion_page_read",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Read a Notion page's properties and child blocks by page ID. Returns page metadata and content blocks.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -173,7 +173,7 @@ public enum NotionModule {
         await router.register(ToolRegistration(
             name: "notion_page_update",
             module: moduleName,
-            tier: .orange,
+            tier: .notify,
             description: "Update a Notion page's properties. Accepts a JSON string of property updates. SecurityGate enforces orange-tier confirmation.",
             inputSchema: .object([
                 "type": .string("object"),

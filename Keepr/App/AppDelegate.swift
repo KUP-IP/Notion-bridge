@@ -66,6 +66,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // actual System Settings state immediately, not just on popover open
         permissionManager.checkAll()
 
+        // V1-QUALITY-C1: Request notification permission for security approval flow
+        Task {
+            let gate = SecurityGate()
+            await gate.requestNotificationPermission()
+        }
+
         startMCPServer()
         validateNotionToken()
     }

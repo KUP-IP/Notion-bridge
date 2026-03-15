@@ -23,7 +23,7 @@ public enum ShellModule {
         await router.register(ToolRegistration(
             name: "shell_exec",
             module: moduleName,
-            tier: .orange,
+            tier: .notify,
             description: "Execute a shell command with optional timeout and working directory. Returns stdout, stderr, exit code, and duration in seconds. SecurityGate enforces auto-escalation patterns and forbidden path restrictions.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -112,7 +112,7 @@ public enum ShellModule {
         await router.register(ToolRegistration(
             name: "run_script",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Execute a pre-approved script from the scripts directory. Only scripts listed in the approved scripts file can run. Returns stdout, stderr, and exit code.",
             inputSchema: .object([
                 "type": .string("object"),

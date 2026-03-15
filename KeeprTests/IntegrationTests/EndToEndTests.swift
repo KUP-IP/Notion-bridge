@@ -230,9 +230,9 @@ func runEndToEndTests() async {
 
     await test("E2E: Batch gate triggers on 3+ tool plan") {
         let plan = [
-            ExecutionPlanEntry(toolName: "file_read", tier: .green, inputSummary: "/tmp/a"),
-            ExecutionPlanEntry(toolName: "file_write", tier: .orange, inputSummary: "/tmp/b"),
-            ExecutionPlanEntry(toolName: "shell_exec", tier: .orange, inputSummary: "echo test"),
+            ExecutionPlanEntry(toolName: "file_read", tier: .open, inputSummary: "/tmp/a"),
+            ExecutionPlanEntry(toolName: "file_write", tier: .notify, inputSummary: "/tmp/b"),
+            ExecutionPlanEntry(toolName: "shell_exec", tier: .notify, inputSummary: "echo test"),
         ]
         let result = await router.batchGate(planned: plan)
         try expect(result != nil, "Batch gate should trigger at 3 tools")
@@ -241,8 +241,8 @@ func runEndToEndTests() async {
 
     await test("E2E: Batch gate does not trigger on 2-tool plan") {
         let plan = [
-            ExecutionPlanEntry(toolName: "file_read", tier: .green, inputSummary: "/tmp/a"),
-            ExecutionPlanEntry(toolName: "file_write", tier: .orange, inputSummary: "/tmp/b"),
+            ExecutionPlanEntry(toolName: "file_read", tier: .open, inputSummary: "/tmp/a"),
+            ExecutionPlanEntry(toolName: "file_write", tier: .notify, inputSummary: "/tmp/b"),
         ]
         let result = await router.batchGate(planned: plan)
         try expect(result == nil, "Batch gate should not trigger below threshold")
@@ -355,9 +355,9 @@ func runEndToEndTests() async {
     await test("E2E: All 4 security tiers represented in V1 tool registry") {
         let all = await router.allRegistrations()
         let tiers = Set(all.map { $0.tier })
-        try expect(tiers.contains(.green), "Missing green tier tools")
-        try expect(tiers.contains(.yellow), "Missing yellow tier tools")
-        try expect(tiers.contains(.orange), "Missing orange tier tools")
-        try expect(tiers.contains(.red), "Missing red tier tools")
+        try expect(tiers.contains(.open), "Missing green tier tools")
+        try expect(tiers.contains(.open), "Missing yellow tier tools")
+        try expect(tiers.contains(.notify), "Missing orange tier tools")
+        try expect(tiers.contains(.notify), "Missing red tier tools")
     }
 }

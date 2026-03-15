@@ -39,20 +39,20 @@ func runFileModuleTests() async {
         let tools = await router.registrations(forModule: "file")
         let tierMap = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0.tier) })
         // Green: file_list, file_search, file_metadata, file_read, clipboard_read
-        try expect(tierMap["file_list"] == .green, "file_list should be green")
-        try expect(tierMap["file_search"] == .green, "file_search should be green")
-        try expect(tierMap["file_metadata"] == .green, "file_metadata should be green")
-        try expect(tierMap["file_read"] == .green, "file_read should be green")
-        try expect(tierMap["clipboard_read"] == .green, "clipboard_read should be green")
+        try expect(tierMap["file_list"] == .open, "file_list should be green")
+        try expect(tierMap["file_search"] == .open, "file_search should be green")
+        try expect(tierMap["file_metadata"] == .open, "file_metadata should be green")
+        try expect(tierMap["file_read"] == .open, "file_read should be green")
+        try expect(tierMap["clipboard_read"] == .open, "clipboard_read should be green")
         // Yellow: clipboard_write, file_copy
-        try expect(tierMap["clipboard_write"] == .yellow, "clipboard_write should be yellow")
-        try expect(tierMap["file_copy"] == .yellow, "file_copy should be yellow")
+        try expect(tierMap["clipboard_write"] == .open, "clipboard_write should be yellow")
+        try expect(tierMap["file_copy"] == .open, "file_copy should be yellow")
         // Orange: file_write, file_append, file_move, file_rename, dir_create
-        try expect(tierMap["file_write"] == .orange, "file_write should be orange")
-        try expect(tierMap["file_append"] == .orange, "file_append should be orange")
-        try expect(tierMap["file_move"] == .orange, "file_move should be orange")
-        try expect(tierMap["file_rename"] == .orange, "file_rename should be orange")
-        try expect(tierMap["dir_create"] == .orange, "dir_create should be orange")
+        try expect(tierMap["file_write"] == .notify, "file_write should be orange")
+        try expect(tierMap["file_append"] == .notify, "file_append should be orange")
+        try expect(tierMap["file_move"] == .notify, "file_move should be orange")
+        try expect(tierMap["file_rename"] == .notify, "file_rename should be orange")
+        try expect(tierMap["dir_create"] == .notify, "dir_create should be orange")
     }
 
     // Create temp directory for file operation tests

@@ -1,5 +1,6 @@
 // ToolRouter.swift – V1-03 Tool Registration & Dispatch
 // KeeprBridge · Server
+// V1-QUALITY-C1: Updated for 2-tier security model + .handoff support
 
 import Foundation
 import MCP
@@ -83,8 +84,9 @@ public actor ToolRouter {
 
     // MARK: Dispatch
 
-    /// Dispatch a single tool call through the security → execute → audit pipeline.
+    /// Dispatch a single tool call through the security -> execute -> audit pipeline.
     /// Returns the tool result or throws on rejection / handler error.
+    /// For nuclear commands, returns a handoff response (not an error).
     public func dispatch(toolName: String, arguments: Value) async throws -> Value {
         let start = ContinuousClock.now
 
@@ -92,7 +94,7 @@ public actor ToolRouter {
             throw ToolRouterError.unknownTool(toolName)
         }
 
-        // SecurityGate enforcement
+        // SecurityGate enforcement (now async for notification approval)
         let decision = await securityGate.enforce(
             toolName: toolName,
             tier: tool.tier,
@@ -101,7 +103,8 @@ public actor ToolRouter {
 
         switch decision {
         case .allow:
-            break
+            break // proceed to execution
+
         case .reject(let reason):
             let duration = ContinuousClock.now - start
             let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
@@ -116,6 +119,28 @@ public actor ToolRouter {
                 approvalStatus: .rejected
             ))
             throw ToolRouterError.securityRejection(toolName: toolName, reason: reason)
+
+        case .handoff(let command, let explanation, let warning):
+            // Nuclear handoff: return a helpful response, NOT an error
+            let duration = ContinuousClock.now - start
+            let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
+                + Double(duration.components.seconds) * 1000.0
+            await auditLog.append(AuditEntry(
+                timestamp: Date(),
+                toolName: toolName,
+                tier: tool.tier,
+                inputSummary: stringifySummary(arguments),
+                outputSummary: "HANDOFF: \(command)",
+                durationMs: ms,
+                approvalStatus: .escalated
+            ))
+            return .object([
+                "status": .string("handoff"),
+                "command": .string(command),
+                "explanation": .string(explanation),
+                "warning": .string(warning),
+                "action_required": .string("Run this command manually in Terminal.app")
+            ])
         }
 
         // Execute handler

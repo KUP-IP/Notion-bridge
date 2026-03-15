@@ -20,7 +20,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "file_list",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "List contents of a directory. Supports recursive listing and showing hidden files.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -83,7 +83,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "file_search",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Search for files whose names contain the query string within a directory.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -127,7 +127,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "file_metadata",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Get metadata (size, created, modified, type) for a file or directory.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -162,7 +162,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "file_read",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Read text content from a file. Supports encoding and maxBytes parameters.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -211,7 +211,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "file_write",
             module: moduleName,
-            tier: .orange,
+            tier: .notify,
             description: "Write text content to a file. Supports createDirs for automatic parent directory creation.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -253,7 +253,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "file_append",
             module: moduleName,
-            tier: .orange,
+            tier: .notify,
             description: "Append text content to an existing file.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -287,7 +287,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "file_move",
             module: moduleName,
-            tier: .orange,
+            tier: .notify,
             description: "Move a file or directory to a new location.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -321,7 +321,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "file_rename",
             module: moduleName,
-            tier: .orange,
+            tier: .notify,
             description: "Rename a file or directory in place.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -354,7 +354,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "file_copy",
             module: moduleName,
-            tier: .yellow,
+            tier: .open,
             description: "Copy a file or directory to a new location.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -388,7 +388,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "dir_create",
             module: moduleName,
-            tier: .orange,
+            tier: .notify,
             description: "Create a new directory with intermediate directories.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -419,7 +419,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "clipboard_read",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Read text content from the system clipboard (pasteboard).",
             inputSchema: .object([
                 "type": .string("object"),
@@ -447,7 +447,7 @@ public enum FileModule {
         await router.register(ToolRegistration(
             name: "clipboard_write",
             module: moduleName,
-            tier: .yellow,
+            tier: .open,
             description: "Write text content to the system clipboard (pasteboard).",
             inputSchema: .object([
                 "type": .string("object"),

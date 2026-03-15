@@ -57,7 +57,7 @@ public actor ServerManager {
         await router.register(ToolRegistration(
             name: "echo",
             module: "builtin",
-            tier: .green,
+            tier: .open,
             description: "Echoes back the input message. Useful for connectivity testing.",
             inputSchema: .object([
                 "type": .string("object"),

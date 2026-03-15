@@ -21,7 +21,7 @@ public enum SystemModule {
         await router.register(ToolRegistration(
             name: "system_info",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Returns macOS system information: OS version, hardware model, CPU, memory, hostname, and uptime.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -87,7 +87,7 @@ public enum SystemModule {
         await router.register(ToolRegistration(
             name: "process_list",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "List running processes. Supports optional filter by name and limit on results. Returns PID, name, CPU%, MEM%, and user.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -179,7 +179,7 @@ public enum SystemModule {
         await router.register(ToolRegistration(
             name: "notify",
             module: moduleName,
-            tier: .yellow,
+            tier: .open,
             description: "Send a macOS notification via osascript. Displays a system notification with title and body text.",
             inputSchema: .object([
                 "type": .string("object"),

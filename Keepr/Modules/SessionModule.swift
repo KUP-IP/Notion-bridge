@@ -22,7 +22,7 @@ public enum SessionModule {
         await router.register(ToolRegistration(
             name: "tools_list",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Returns the live tool registry. Lists all registered tools with their name, module, tier, description, and input schema. Supports optional module filter.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -97,7 +97,7 @@ public enum SessionModule {
         await router.register(ToolRegistration(
             name: "session_info",
             module: moduleName,
-            tier: .green,
+            tier: .open,
             description: "Returns session information: uptime, connections, toolCalls (from audit log), activeClients, and auditLogSize.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -127,7 +127,7 @@ public enum SessionModule {
         await router.register(ToolRegistration(
             name: "session_clear",
             module: moduleName,
-            tier: .orange,
+            tier: .notify,
             description: "Clear session state (audit log entries). Requires confirm: true parameter. Returns previous uptime and audit log size before clearing.",
             inputSchema: .object([
                 "type": .string("object"),
