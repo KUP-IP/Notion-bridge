@@ -5,6 +5,11 @@
 import SwiftUI
 import AppKit
 
+// PKT-349 B2: Notification name for reset onboarding action
+extension Notification.Name {
+    static let resetOnboarding = Notification.Name("com.notionbridge.resetOnboarding")
+}
+
 /// Manages the Settings NSWindow. Opens via gear icon in popover or Cmd+,.
 @MainActor
 public final class SettingsWindowController {
@@ -145,6 +150,8 @@ public struct SettingsView: View {
 
                 Button("Reset Onboarding") {
                     UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
+                    // PKT-349 B2: Notify AppDelegate to re-present onboarding window
+                    NotificationCenter.default.post(name: .resetOnboarding, object: nil)
                 }
                 .font(.caption)
             }

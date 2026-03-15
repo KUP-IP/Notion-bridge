@@ -2,6 +2,8 @@
 // V1-02: Shows green/red status per grant with "Open System Settings" deep links
 // for all 5 required TCC grants.
 // PKT-341: Added rebuild note explaining TCC grant invalidation
+// PKT-349 B3: Added permission pre-triggers for Automation and Contacts grants
+//   (mirrors D2 pattern from OnboardingWindow.swift)
 
 import SwiftUI
 
@@ -75,23 +77,46 @@ public struct PermissionView: View {
 
     /// Opens the relevant System Settings pane for the given TCC grant.
     /// Uses x-apple.systempreferences URL scheme for macOS 13+.
+    /// PKT-349 B3: Automation and Contacts grants now pre-trigger the system
+    /// permission prompt before opening Settings (mirrors D2 pattern from
+    /// OnboardingWindow.swift) so the app appears in the System Settings list.
     private func openSystemSettings(for grant: PermissionManager.Grant) {
-        let urlString: String
         switch grant {
-        case .accessibility:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-        case .screenRecording:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-        case .fullDiskAccess:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
         case .automation:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+            // Pre-trigger Automation system prompt via NSAppleScript probe,
+            // then open Settings after a short delay for TCC registration
+            permissionManager.checkAutomation()
+            Task {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
         case .contacts:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts"
-        }
-
-        if let url = URL(string: urlString) {
-            NSWorkspace.shared.open(url)
+            // Pre-trigger Contacts system prompt via CNContactStore request,
+            // then open Settings once the prompt has registered with TCC
+            Task {
+                _ = await permissionManager.requestContactsAccess()
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        default:
+            // Accessibility, Screen Recording, Full Disk Access — open directly
+            let urlString: String
+            switch grant {
+            case .accessibility:
+                urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            case .screenRecording:
+                urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+            case .fullDiskAccess:
+                urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+            default:
+                return
+            }
+            if let url = URL(string: urlString) {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 }

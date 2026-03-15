@@ -88,6 +88,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         startMCPServer()
         validateNotionToken()
 
+        // PKT-349 B2: Observe reset onboarding notification from Settings.
+        // Dispatch to MainActor to satisfy Swift 6 strict concurrency.
+        NotificationCenter.default.addObserver(forName: .resetOnboarding, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                self?.onboardingController.show()
+            }
+        }
+
         // V1-QUALITY-C2: Show first-launch onboarding window
         onboardingController.showIfNeeded()
     }

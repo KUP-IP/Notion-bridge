@@ -289,6 +289,34 @@ All other functionality uses Apple frameworks only (Foundation, AppKit, SwiftUI,
 
 ---
 
+## Troubleshooting
+
+### Cleaning Stale TCC Entries
+
+If you previously ran the app under the old bundle ID (`solutions.kup.keepr`, from the Keepr era) or need to reset all TCC permission grants for a fresh start, use the `clean-tcc` make target:
+
+```bash
+make clean-tcc
+```
+
+This resets TCC entries for **both** the legacy bundle ID (`solutions.kup.keepr`) and the current bundle ID (`kup.solutions.notion-bridge`). After running this command, all permissions will be re-requested on the next app launch.
+
+**When to use:**
+- After migrating from Keepr to NotionBridge — stale TCC entries under the old bundle ID can cause macOS to silently deny permissions
+- After code signing identity changes that invalidate existing TCC grants
+- When permission indicators in Settings → Permissions show red despite granting access in System Settings
+- During development after frequent rebuilds that change the code signature
+
+**What it does:**
+```
+tccutil reset All solutions.kup.keepr       # Legacy Keepr bundle ID
+tccutil reset All kup.solutions.notion-bridge  # Current NotionBridge bundle ID
+```
+
+> **Note:** `tccutil reset All` removes all TCC grants for the specified bundle ID. The app will prompt for each permission again on next launch. This is safe — no data is lost, only permission state is cleared.
+
+---
+
 ## Known Limitations
 
 ### V1 Scope Boundaries
@@ -340,6 +368,14 @@ make sign        # Developer ID code signing
 make notarize    # Apple notarization submission
 make dmg         # Create distributable DMG
 make verify      # Gatekeeper assessment
+```
+
+### Maintenance
+
+```bash
+make install     # Build .app bundle and install to /Applications
+make clean-tcc   # Reset TCC permissions for old + current bundle IDs
+make clean       # Remove build artifacts
 ```
 
 ### CI/CD

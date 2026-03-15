@@ -13,10 +13,13 @@ import NotionBridgeLib
 /// Load menu bar icon from Asset Catalog (xcassets).
 /// Uses the Golden Gate Bridge logo as a template image for the menu bar.
 /// @2x variant is resolved automatically by the Asset Catalog at runtime.
+/// PKT-349 B1: Bundle.module can fail for SPM executable targets —
+/// try main bundle first (works in .app packaging), then module bundle.
 private func loadMenuBarIcon() -> NSImage? {
-    guard let nsImage = Bundle.module.image(forResource: "MenuBarIcon") else {
-        return nil
-    }
+    let nsImage: NSImage? =
+        Bundle.main.image(forResource: "MenuBarIcon")
+        ?? Bundle.module.image(forResource: "MenuBarIcon")
+    guard let nsImage else { return nil }
     nsImage.size = NSSize(width: 18, height: 18)
     nsImage.isTemplate = true
     return nsImage
