@@ -106,6 +106,8 @@ public enum ScreenModule {
             }
             let filter = SCContentFilter(desktopIndependentWindow: window)
             let config = SCStreamConfiguration()
+            config.width = Int(window.frame.width) * 2
+            config.height = Int(window.frame.height) * 2
             config.scalesToFit = false
             return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
 
@@ -130,6 +132,8 @@ public enum ScreenModule {
             }
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
+            config.width = display.width * 2
+            config.height = display.height * 2
             config.scalesToFit = false
             return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
         }

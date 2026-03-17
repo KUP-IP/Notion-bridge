@@ -42,6 +42,11 @@ public final class PermissionManager {
 
         public var id: String { rawValue }
 
+        /// V1 grants — Contacts is deferred to expansion (no V1 tool uses it)
+        public static var v1Cases: [Grant] {
+            allCases.filter { $0 != .contacts }
+        }
+
         public var displayName: String {
             switch self {
             case .accessibility: return "Accessibility"
@@ -275,6 +280,25 @@ public final class PermissionManager {
 
     /// Contacts: CNContactStore.authorizationStatus(for:) — direct API.
     /// Returns .granted, .denied, or .unknown based on authorization state.
+    /// Request Automation permission by clearing stale TCC entries and re-triggering
+    /// probes. After a binary rebuild, macOS may silently deny Automation without
+    /// re-prompting due to stale AppleEvents TCC entries. This method resets them
+    /// for this bundle, then re-runs probes to trigger fresh macOS permission prompts.
+    public func requestAutomationAccess() async {
+        // Reset stale AppleEvents TCC entries for this bundle ID
+        let resetProcess = Process()
+        resetProcess.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        resetProcess.arguments = ["reset", "AppleEvents", "kup.solutions.notion-bridge"]
+        try? resetProcess.run()
+        resetProcess.waitUntilExit()
+
+        // Brief pause for TCC database to propagate
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        // Re-run probes to trigger fresh macOS permission prompts
+        checkAutomation()
+    }
+
     public func checkContacts() {
         let authStatus = CNContactStore.authorizationStatus(for: .contacts)
         switch authStatus {

@@ -26,7 +26,7 @@ public struct PermissionView: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(PermissionManager.Grant.allCases) { grant in
+            ForEach(PermissionManager.Grant.v1Cases) { grant in
                 permissionRow(
                     grant: grant,
                     status: permissionManager.status(for: grant)
@@ -75,7 +75,7 @@ public struct PermissionView: View {
                     .foregroundStyle(status == .granted ? .green : .orange)
 
                 if status != .granted {
-                    Button("Grant / Fix") {
+                    Button(status == .partiallyGranted ? "Open Settings" : "Allow") {
                         openSystemSettings(for: grant)
                     }
                     .buttonStyle(.plain)
@@ -88,20 +88,24 @@ public struct PermissionView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-            if let detail = permissionManager.debugDetail(for: grant) {
-                Text(detail)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+            DisclosureGroup("Details") {
+                if let detail = permissionManager.debugDetail(for: grant) {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
 
-            if let evidence = permissionManager.evidence(for: grant) {
-                Text("Probe: \(evidence.source)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                Text("Observed: \(evidence.observed)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                if let evidence = permissionManager.evidence(for: grant) {
+                    Text("Probe: \(evidence.source)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text("Observed: \(evidence.observed)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
     }
 
@@ -136,9 +140,8 @@ public struct PermissionView: View {
         case .automation:
             // Pre-trigger Automation system prompt via NSAppleScript probe,
             // then open Settings after a short delay for TCC registration
-            permissionManager.checkAutomation()
             Task {
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                await permissionManager.requestAutomationAccess()
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
                     NSWorkspace.shared.open(url)
                 }

@@ -267,7 +267,7 @@ struct OnboardingView: View {
 
             // PKT-357 F10: Always show ALL grants, not just the first missing one
             VStack(spacing: 8) {
-                ForEach(PermissionManager.Grant.allCases) { grant in
+                ForEach(PermissionManager.Grant.v1Cases) { grant in
                     onboardingPermissionRow(grant: grant)
                 }
             }
@@ -304,7 +304,7 @@ struct OnboardingView: View {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(.green)
             } else {
-                Button("Grant") {
+                Button("Allow") {
                     openSystemSettings(for: grant)
                 }
                 .buttonStyle(.bordered)
@@ -354,9 +354,8 @@ struct OnboardingView: View {
             // D2: Fire the NSAppleScript probe first to trigger the macOS Automation
             // permission prompt, then open Settings after a short delay so the app
             // appears in the Automation panel.
-            permissionManager.checkAutomation()
             Task {
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                await permissionManager.requestAutomationAccess()
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
                     NSWorkspace.shared.open(url)
                 }
