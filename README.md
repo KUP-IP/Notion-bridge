@@ -8,7 +8,7 @@ Version 1.1.0 · macOS 26+ · Apple Silicon · Swift 6.2
 
 ## Overview
 
-Notion Bridge is a native SwiftUI menu bar app that exposes 40 tools across 10 modules over MCP (Model Context Protocol) transports, plus one built-in `echo` tool for connectivity checks. It replaces the previous Python + ngrok bridge with a single binary that auto-launches on login, routes every tool call through a 2-tier security gate, and logs every action to an append-only audit trail.
+Notion Bridge is a native SwiftUI menu bar app that exposes 40 tools across 10 modules over MCP (Model Context Protocol) transports. It replaces the previous Python + ngrok bridge with a single binary that auto-launches on login, routes every tool call through a 2-tier security gate, and logs every action to an append-only audit trail.
 
 ### Architecture
 
@@ -51,10 +51,10 @@ Notion Bridge requires the following macOS permissions (granted interactively at
 | Permission | Purpose | Tools Affected |
 |-----------|---------|----------------|
 | **Full Disk Access** | Messages chat.db, file operations | FileModule, MessagesModule |
-| **Accessibility** | AXUIElement tree inspection | Future: AccessibilityModule |
+| **Accessibility** | AXUIElement tree inspection | AccessibilityModule |
 | **Automation** | AppleScript → Messages, Shortcuts | MessagesModule (send) |
-| **Screen Recording** | Screen capture, OCR | Future: ScreenModule |
-| **Contacts** | Contact search | Future: contacts_search |
+| **Screen Recording** | Screen capture, OCR | ScreenModule |
+| **Contacts** | Contact search | Deferred: contacts_search |
 
 ---
 
@@ -105,7 +105,7 @@ Add to your MCP client configuration:
 
 ## Tool Reference
 
-### Current Surface: 41 tools total (40 modules + 1 built-in)
+### Current Surface: 40 tools across 10 modules
 
 #### ShellModule (2 tools)
 
@@ -191,6 +191,12 @@ Add to your MCP client configuration:
 |------|------|-------------|
 | `applescript_exec` | 🟠 Write-Confirm | Execute AppleScript in-process (stable TCC behavior) |
 
+#### BuiltinModule (1 tool)
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `echo` | 🟢 Read-Only | Echo input for connectivity testing |
+
 ---
 
 ## Security Model
@@ -269,27 +275,42 @@ notion-bridge/
 │   ├── App/                    # SwiftUI app, lifecycle, menu bar
 │   │   ├── NotionBridgeApp.swift
 │   │   ├── AppDelegate.swift
-│   │   └── StatusBarController.swift
-│   ├── Modules/                # 6 v1 tool modules
+│   │   ├── StatusBarController.swift
+│   │   └── Resources/
+│   │       ├── Assets.xcassets
+│   │       ├── NotionBridge.icns
+│   │       └── *.png (icon assets)
+│   ├── Modules/                # 10 tool modules (40 tools)
 │   │   ├── ShellModule.swift       # 2 tools
 │   │   ├── FileModule.swift        # 12 tools
 │   │   ├── MessagesModule.swift    # 6 tools
-│   │   ├── SystemModule.swift      # 3 tools
-│   │   ├── NotionModule.swift      # 3 tools
-│   │   └── SessionModule.swift     # 3 tools
+│   │   ├── SystemModule.swift      # 3 tools (partial)
+│   │   ├── NotionModule.swift      # 3 tools (narrow)
+│   │   ├── SessionModule.swift     # 3 tools
+│   │   ├── AppleScriptModule.swift # 1 tool
+│   │   ├── AccessibilityModule.swift # 5 tools
+│   │   ├── ScreenModule.swift      # 4 tools
+│   │   └── ScreenRecording.swift   # ScreenCaptureKit helper
 │   ├── Security/               # Gate, audit, permissions
 │   │   ├── SecurityGate.swift
 │   │   ├── AuditLog.swift
-│   │   └── PermissionManager.swift
-│   ├── Server/                 # MCP server + router
-│   │   ├── main.swift
-│   │   └── ToolRouter.swift
+│   │   ├── PermissionManager.swift
+│   │   └── LogManager.swift
+│   ├── Server/                 # MCP server + transports
+│   │   ├── SSETransport.swift      # Legacy SSE + Streamable HTTP on :9700
+│   │   ├── ToolRouter.swift        # Dispatch + security gating
+│   │   └── ServerManager.swift     # Server lifecycle + multi-client
 │   ├── Notion/                 # REST API client
 │   │   ├── NotionClient.swift
 │   │   └── NotionModels.swift
-│   └── UI/                     # Dashboard views
+│   └── UI/                     # Dashboard + settings views
 │       ├── DashboardView.swift
-│       └── PermissionView.swift
+│       ├── PermissionView.swift
+│       ├── SettingsWindow.swift
+│       ├── ConnectionSetupView.swift
+│       ├── OnboardingWindow.swift
+│       ├── BridgeTheme.swift
+│       └── ToolRegistryView.swift
 ├── NotionBridgeTests/
 │   ├── main.swift              # Test runner (unit + integration)
 │   ├── ShellModuleTests.swift
@@ -301,7 +322,7 @@ notion-bridge/
 │   ├── PermissionManagerTests.swift
 │   └── IntegrationTests/
 │       └── EndToEndTests.swift
-├── Package.swift               # SPM (MCP Swift SDK v0.11.0)
+├── Package.swift               # SPM (swift-tools-version 6.2, macOS 26)
 ├── Makefile                    # build, test, sign, notarize, dmg
 ├── README.md
 └── .github/workflows/ci.yml   # GitHub Actions pipeline
@@ -364,13 +385,11 @@ tccutil reset All kup.solutions.notion-bridge  # Current Notion Bridge bundle ID
 | `contacts_search` | Requires CNContactStore framework — higher complexity |
 | `run_shortcut` | Requires Shortcuts framework integration |
 
-### Expansion Modules (not in v1)
+### Expansion Modules (post-v1)
 
-- **AccessibilityModule** (5 tools) — AXUIElement steering
-- **ScreenModule** (4 tools) — ScreenCaptureKit + Vision OCR
 - **BrowserModule** (7 tools) — WKWebView automation
-- Full NotionModule (4 additional tools)
-- Full SystemModule (3 additional tools)
+- Remaining NotionModule (4 additional tools: `notion_page_create`, `notion_db_query`, `notion_block_append`, `notion_comment_add`)
+- Remaining SystemModule (3 additional tools: `log_parse`, `contacts_search`, `run_shortcut`)
 
 ---
 

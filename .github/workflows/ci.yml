@@ -15,7 +15,7 @@ on:
 env:
   SCHEME: NotionBridge
   APP_NAME: Notion Bridge
-  SWIFT_VERSION: "6.0"
+  SWIFT_VERSION: "6.2"
 
 jobs:
   build-and-test:
