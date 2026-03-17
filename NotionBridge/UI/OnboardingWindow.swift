@@ -329,9 +329,25 @@ struct OnboardingView: View {
         let urlString: String
         switch grant {
         case .accessibility:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            _ = permissionManager.requestAccessibilityAccess()
+            Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                    NSWorkspace.shared.open(url)
+                }
+                await permissionManager.recheckAllForTruth()
+            }
+            return
         case .screenRecording:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+            _ = permissionManager.requestScreenRecordingAccess()
+            Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                    NSWorkspace.shared.open(url)
+                }
+                await permissionManager.recheckAllForTruth()
+            }
+            return
         case .fullDiskAccess:
             urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
         case .automation:
@@ -344,6 +360,7 @@ struct OnboardingView: View {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
                     NSWorkspace.shared.open(url)
                 }
+                await permissionManager.recheckAllForTruth()
             }
             return
         case .contacts:
@@ -355,11 +372,15 @@ struct OnboardingView: View {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
                     NSWorkspace.shared.open(url)
                 }
+                await permissionManager.recheckAllForTruth()
             }
             return
         }
         if let url = URL(string: urlString) {
             NSWorkspace.shared.open(url)
+        }
+        Task {
+            await permissionManager.recheckAllForTruth()
         }
     }
 

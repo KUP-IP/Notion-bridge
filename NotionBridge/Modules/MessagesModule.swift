@@ -4,7 +4,7 @@
 // Six tools: messages_search, messages_recent, messages_chat,
 // messages_content, messages_participants, messages_send.
 // Read tools use native SQLite C API on ~/Library/Messages/chat.db.
-// Send uses AppleScript (osascript). Tier: notify (5 open, 1 notify).
+// Send uses in-process AppleScript (NSAppleScript). Tier: notify (5 open, 1 notify).
 //
 // V1-PATCH-001 changes:
 // - Replaced runSQLite CLI helper with SQLiteConnection (native sqlite3 C API)
@@ -127,7 +127,7 @@ enum SQLiteConnectionError: Error, LocalizedError {
 
 /// Provides iMessage/SMS read and send tools.
 /// Read operations query chat.db via native SQLite C API (read-only, WAL).
-/// Send uses AppleScript through osascript.
+/// Send uses in-process AppleScript through NSAppleScript.
 public enum MessagesModule {
 
     public static let moduleName = "messages"
@@ -467,35 +467,23 @@ public enum MessagesModule {
                     end tell
                     """
 
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-                process.arguments = ["-e", script]
+                let appleScript = NSAppleScript(source: script)
+                var errorInfo: NSDictionary?
+                _ = appleScript?.executeAndReturnError(&errorInfo)
 
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-
-                try process.run()
-
-                // Read pipe data BEFORE waitUntilExit to prevent buffer deadlock
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                _ = stdoutData // suppress unused warning
-                process.waitUntilExit()
-
-                let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-
-                if process.terminationStatus == 0 {
+                if errorInfo == nil {
                     return .object([
                         "sent": .bool(true),
                         "recipient": .string(recipient),
                         "bodyLength": .int(body.utf8.count)
                     ])
                 } else {
+                    let errorMessage = errorInfo?[NSAppleScript.errorMessage] as? String ?? "AppleScript execution failed"
+                    let errorNumber = errorInfo?[NSAppleScript.errorNumber] as? Int ?? -1
                     return .object([
                         "sent": .bool(false),
-                        "error": .string(stderr.isEmpty ? "AppleScript execution failed" : stderr)
+                        "error": .string(errorMessage),
+                        "errorNumber": .int(errorNumber)
                     ])
                 }
             }

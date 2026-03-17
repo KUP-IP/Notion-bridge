@@ -8,6 +8,7 @@
 
 import SwiftUI
 import Combine
+import AppKit
 
 /// Displays the 5-grant TCC permission status grid.
 /// Each row shows a colored indicator (green = granted, red = denied/unknown)
@@ -47,6 +48,9 @@ public struct PermissionView: View {
         .onReceive(refreshTimer) { _ in
             permissionManager.checkAll()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            permissionManager.checkAll()
+        }
     }
 
     // MARK: - Row
@@ -55,27 +59,48 @@ public struct PermissionView: View {
         grant: PermissionManager.Grant,
         status: PermissionManager.GrantStatus
     ) -> some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(statusColor(status))
-                .frame(width: 8, height: 8)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(statusColor(status))
+                    .frame(width: 8, height: 8)
 
-            Text(grant.displayName)
-                .font(.callout)
+                Text(grant.displayName)
+                    .font(.callout)
 
-            Spacer()
+                Spacer()
 
-            if status == .granted {
-                Text("Granted")
+                Text(permissionManager.statusLabel(for: grant))
                     .font(.caption)
-                    .foregroundStyle(.green)
-            } else {
-                Button("Open Settings") {
-                    openSystemSettings(for: grant)
+                    .foregroundStyle(status == .granted ? .green : .orange)
+
+                if status != .granted {
+                    Button("Grant / Fix") {
+                        openSystemSettings(for: grant)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.blue)
                 }
-                .buttonStyle(.plain)
-                .font(.caption)
-                .foregroundStyle(.blue)
+            }
+
+            Text(permissionManager.remediation(for: grant))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if let detail = permissionManager.debugDetail(for: grant) {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            if let evidence = permissionManager.evidence(for: grant) {
+                Text("Probe: \(evidence.source)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("Observed: \(evidence.observed)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -85,6 +110,8 @@ public struct PermissionView: View {
         case .granted: return .green
         case .denied: return .red
         case .unknown: return .orange
+        case .partiallyGranted: return .orange
+        case .restartRecommended: return .orange
         }
     }
 
@@ -97,6 +124,15 @@ public struct PermissionView: View {
     /// OnboardingWindow.swift) so the app appears in the System Settings list.
     private func openSystemSettings(for grant: PermissionManager.Grant) {
         switch grant {
+        case .accessibility:
+            _ = permissionManager.requestAccessibilityAccess()
+            Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                    NSWorkspace.shared.open(url)
+                }
+                await permissionManager.recheckAllForTruth()
+            }
         case .automation:
             // Pre-trigger Automation system prompt via NSAppleScript probe,
             // then open Settings after a short delay for TCC registration
@@ -106,6 +142,7 @@ public struct PermissionView: View {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
                     NSWorkspace.shared.open(url)
                 }
+                await permissionManager.recheckAllForTruth()
             }
         case .contacts:
             // Pre-trigger Contacts system prompt via CNContactStore request,
@@ -115,15 +152,21 @@ public struct PermissionView: View {
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
                     NSWorkspace.shared.open(url)
                 }
+                await permissionManager.recheckAllForTruth()
+            }
+        case .screenRecording:
+            _ = permissionManager.requestScreenRecordingAccess()
+            Task {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                    NSWorkspace.shared.open(url)
+                }
+                await permissionManager.recheckAllForTruth()
             }
         default:
-            // Accessibility, Screen Recording, Full Disk Access — open directly
+            // Full Disk Access — open directly
             let urlString: String
             switch grant {
-            case .accessibility:
-                urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-            case .screenRecording:
-                urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
             case .fullDiskAccess:
                 urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
             default:
@@ -131,6 +174,9 @@ public struct PermissionView: View {
             }
             if let url = URL(string: urlString) {
                 NSWorkspace.shared.open(url)
+            }
+            Task {
+                await permissionManager.recheckAllForTruth()
             }
         }
     }

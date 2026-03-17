@@ -1,4 +1,5 @@
 .DS_Store
+**/.DS_Store
 /.build
 /Packages
 Package.resolved
@@ -6,3 +7,6 @@ Package.resolved
 xcuserdata/
 DerivedData/
 .swiftpm/
+*.log
+*.pid
+.cursor/

@@ -114,6 +114,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Keep permission state fresh after returning from System Settings.
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                self?.permissionManager.checkAll()
+            }
+        }
+
         // V1-QUALITY-C2: Show first-launch onboarding window
         onboardingController.showIfNeeded()
     }

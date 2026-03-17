@@ -67,6 +67,9 @@ public struct SettingsView: View {
     @State private var tokenError: String?
     @State private var tokenSaveSuccess = false
     @State private var showResetConfirmation = false
+    @State private var isRecheckingPermissions = false
+    @State private var permissionActionMessage: String?
+    @State private var showTCCResetDialog = false
 
     enum SettingsTab: String, CaseIterable {
         case general = "General"
@@ -229,6 +232,24 @@ public struct SettingsView: View {
                 PermissionView(permissionManager: permissionManager)
             }
 
+            Section("App Identity") {
+                LabeledContent("Bundle ID", value: Bundle.main.bundleIdentifier ?? "unknown")
+                LabeledContent("App Path") {
+                    Text(Bundle.main.bundleURL.path)
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                        .textSelection(.enabled)
+                }
+                LabeledContent("Executable") {
+                    Text(Bundle.main.executableURL?.path ?? "unknown")
+                        .font(.system(.caption2, design: .monospaced))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                        .textSelection(.enabled)
+                }
+            }
+
             Section("Security Model") {
                 LabeledContent("Model", value: "2-Tier (Open / Notify)")
                 Text("Open tier: read operations execute immediately. Notify tier: destructive operations require approval via notification.")
@@ -254,8 +275,51 @@ public struct SettingsView: View {
             }
 
             Section {
-                Button("Re-check All Permissions") {
-                    permissionManager.checkAll()
+                Button(isRecheckingPermissions ? "Re-checking…" : "Re-check All Permissions") {
+                    isRecheckingPermissions = true
+                    permissionActionMessage = nil
+                    Task {
+                        await permissionManager.recheckAllForTruth()
+                        await MainActor.run {
+                            isRecheckingPermissions = false
+                            permissionActionMessage = "Permission state refreshed at \(Date().formatted(date: .omitted, time: .standard))."
+                        }
+                    }
+                }
+                .disabled(isRecheckingPermissions)
+
+                if let lastCheckedAt = permissionManager.lastCheckedAt {
+                    Text("Last truth refresh: \(lastCheckedAt.formatted(date: .abbreviated, time: .standard))")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Button("Reset TCC for Notion Bridge (Developer)") {
+                    showTCCResetDialog = true
+                }
+                .foregroundStyle(.red)
+                .confirmationDialog(
+                    "Reset all Notion Bridge TCC permissions?",
+                    isPresented: $showTCCResetDialog,
+                    titleVisibility: .visible
+                ) {
+                    Button("Reset", role: .destructive) {
+                        Task {
+                            let resetResult = await resetTCCPermissions()
+                            await MainActor.run {
+                                permissionActionMessage = resetResult
+                            }
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This runs tccutil reset All for both current and legacy bundle IDs. macOS will prompt for permissions again.")
+                }
+
+                if let permissionActionMessage {
+                    Text(permissionActionMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -496,5 +560,33 @@ public struct SettingsView: View {
         ].joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(lines, forType: .string)
+    }
+
+    // MARK: - Permissions Helpers
+
+    private func resetTCCPermissions() async -> String {
+        let ids = ["kup.solutions.notion-bridge", "solutions.kup.keepr"]
+        var failures: [String] = []
+
+        for id in ids {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            process.arguments = ["reset", "All", id]
+            do {
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus != 0 {
+                    failures.append(id)
+                }
+            } catch {
+                failures.append(id)
+            }
+        }
+
+        await permissionManager.recheckAllForTruth()
+        if failures.isEmpty {
+            return "TCC reset complete. Relaunch Notion Bridge and grant permissions again."
+        }
+        return "TCC reset partially failed for: \(failures.joined(separator: ", ")). You may need to run tccutil manually."
     }
 }

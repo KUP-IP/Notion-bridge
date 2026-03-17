@@ -1,4 +1,4 @@
-# 🌉 NotionBridge
+# 🌉 Notion Bridge
 
 **A native macOS menu bar app that replaces the Python + ngrok MCP server, serving as the persistent bidirectional bridge between Notion agents and the local Mac.**
 
@@ -8,7 +8,7 @@ Version 1.1.0 · macOS 26+ · Apple Silicon · Swift 6.2
 
 ## Overview
 
-NotionBridge is a native SwiftUI menu bar app that exposes 40 tools across 10 modules over MCP (Model Context Protocol) transports, plus one built-in `echo` tool for connectivity checks. It replaces the previous Python + ngrok bridge with a single binary that auto-launches on login, routes every tool call through a 2-tier security gate, and logs every action to an append-only audit trail.
+Notion Bridge is a native SwiftUI menu bar app that exposes 40 tools across 10 modules over MCP (Model Context Protocol) transports, plus one built-in `echo` tool for connectivity checks. It replaces the previous Python + ngrok bridge with a single binary that auto-launches on login, routes every tool call through a 2-tier security gate, and logs every action to an append-only audit trail.
 
 ### Architecture
 
@@ -46,7 +46,7 @@ Local Client (Claude)  ──stdio──────►  │                    
 
 ### TCC Permissions Required
 
-NotionBridge requires the following macOS permissions (granted interactively at first launch):
+Notion Bridge requires the following macOS permissions (granted interactively at first launch):
 
 | Permission | Purpose | Tools Affected |
 |-----------|---------|----------------|
@@ -64,7 +64,7 @@ NotionBridge requires the following macOS permissions (granted interactively at 
 
 ```bash
 # Clone and build
-git clone https://github.com/kup-solutions/notion-bridge.git
+git clone https://github.com/KUP-IP/notion-bridge.git
 cd notion-bridge
 swift build
 
@@ -94,7 +94,7 @@ Add to your MCP client configuration:
 {
   "mcpServers": {
     "notion-bridge": {
-      "command": "/path/to/notion-bridge/.build/release/KeeprServer",
+      "command": "/path/to/notion-bridge/.build/release/NotionBridge",
       "args": []
     }
   }
@@ -333,7 +333,7 @@ This resets TCC entries for **both** the legacy bundle ID (`solutions.kup.keepr`
 
 **When to use:**
 
-- After migrating from Keepr to NotionBridge — stale TCC entries under the old bundle ID can cause macOS to silently deny permissions
+- After migrating from Keepr to Notion Bridge — stale TCC entries under the old bundle ID can cause macOS to silently deny permissions
 - After code signing identity changes that invalidate existing TCC grants
 - When permission indicators in Settings → Permissions show red despite granting access in System Settings
 - During development after frequent rebuilds that change the code signature
@@ -342,7 +342,7 @@ This resets TCC entries for **both** the legacy bundle ID (`solutions.kup.keepr`
 
 ```bash
 tccutil reset All solutions.kup.keepr       # Legacy Keepr bundle ID
-tccutil reset All kup.solutions.notion-bridge  # Current NotionBridge bundle ID
+tccutil reset All kup.solutions.notion-bridge  # Current Notion Bridge bundle ID
 ```
 
 > **Note:** `tccutil reset All` removes all TCC grants for the specified bundle ID. The app will prompt for each permission again on next launch. This is safe — no data is lost, only permission state is cleared.

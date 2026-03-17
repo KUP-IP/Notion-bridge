@@ -2,10 +2,11 @@
 // NotionBridge · Modules
 //
 // Three tools: system_info (open), process_list (open), notify (open).
-// Uses sw_vers, sysctl, ps, and osascript for macOS integration.
+// Uses sw_vers, sysctl, ps, and UserNotifications for macOS integration.
 
 import Foundation
 import MCP
+import UserNotifications
 
 // MARK: - SystemModule
 
@@ -180,7 +181,7 @@ public enum SystemModule {
             name: "notify",
             module: moduleName,
             tier: .open,
-            description: "Send a macOS notification via osascript. Displays a system notification with title and body text.",
+            description: "Send a local macOS notification via UNUserNotificationCenter. Displays a system notification with title and body text.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -197,56 +198,132 @@ public enum SystemModule {
                     throw ToolRouterError.invalidArguments(toolName: "notify", reason: "missing 'title' or 'body'")
                 }
 
-                let sound: String? = {
+                let soundName: String? = {
                     if case .string(let s) = args["sound"] { return s }
                     return nil
                 }()
 
-                // Sanitize for AppleScript
-                let safeTitle = title
-                    .replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "\"", with: "\\\"")
-                let safeBody = body
-                    .replacingOccurrences(of: "\\", with: "\\\\")
-                    .replacingOccurrences(of: "\"", with: "\\\"")
-
-                var script = "display notification \"\(safeBody)\" with title \"\(safeTitle)\""
-                if let sound = sound {
-                    let safeSound = sound
-                        .replacingOccurrences(of: "\\", with: "\\\\")
-                        .replacingOccurrences(of: "\"", with: "\\\"")
-                    script += " sound name \"\(safeSound)\""
-                }
-
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-                process.arguments = ["-e", script]
-
-                let stderrPipe = Pipe()
-                process.standardOutput = Pipe() // suppress stdout
-                process.standardError = stderrPipe
-
-                try process.run()
-
-                // Read pipe data BEFORE waitUntilExit to prevent buffer deadlock
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-
-                if process.terminationStatus == 0 {
+                do {
+                    try await sendLocalNotification(title: title, body: body, soundName: soundName)
                     return .object([
                         "sent": .bool(true),
                         "title": .string(title),
                         "bodyLength": .int(body.utf8.count)
                     ])
-                } else {
+                } catch let error as NotificationError {
                     return .object([
                         "sent": .bool(false),
-                        "error": .string(stderr.isEmpty ? "osascript failed" : stderr)
+                        "error": .string(error.localizedDescription)
+                    ])
+                } catch {
+                    return .object([
+                        "sent": .bool(false),
+                        "error": .string("Notification delivery failed: \(error.localizedDescription)")
                     ])
                 }
             }
         ))
+    }
+
+    // MARK: - Notification Helper
+
+    private enum NotificationError: LocalizedError {
+        case permissionDenied
+        case authRequestFailed(String)
+        case deliveryFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .permissionDenied:
+                return "Notifications are denied for Notion Bridge. Enable them in System Settings > Notifications."
+            case .authRequestFailed(let msg):
+                return "Notification authorization failed: \(msg)"
+            case .deliveryFailed(let msg):
+                return "Notification delivery failed: \(msg)"
+            }
+        }
+    }
+
+    private static func sendLocalNotification(title: String, body: String, soundName: String?) async throws {
+        // Standalone test executables crash on UNUserNotificationCenter.currentNotificationCenter
+        // outside an .app bundle. Fallback keeps tests stable while production app uses native API.
+        if Bundle.main.bundleURL.pathExtension != "app" {
+            try sendFallbackNotification(title: title, body: body, soundName: soundName)
+            return
+        }
+
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+
+        switch settings.authorizationStatus {
+        case .denied:
+            throw NotificationError.permissionDenied
+        case .notDetermined:
+            do {
+                let granted = try await center.requestAuthorization(options: [.alert, .sound])
+                guard granted else { throw NotificationError.permissionDenied }
+            } catch {
+                throw NotificationError.authRequestFailed(error.localizedDescription)
+            }
+        default:
+            break
+        }
+
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        if soundName != nil {
+            content.sound = .default
+        }
+
+        let request = UNNotificationRequest(
+            identifier: "notionbridge-notify-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            center.add(request) { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
+    }
+
+    private static func sendFallbackNotification(title: String, body: String, soundName: String?) throws {
+        let safeTitle = title
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let safeBody = body
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+
+        var script = "display notification \"\(safeBody)\" with title \"\(safeTitle)\""
+        if let soundName {
+            let safeSound = soundName
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+            script += " sound name \"\(safeSound)\""
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+
+        let stderrPipe = Pipe()
+        process.standardOutput = Pipe()
+        process.standardError = stderrPipe
+        try process.run()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        if process.terminationStatus != 0 {
+            let stderr = String(data: stderrData, encoding: .utf8) ?? "osascript failed"
+            throw NotificationError.deliveryFailed(stderr)
+        }
     }
 
     // MARK: - Shell Helper

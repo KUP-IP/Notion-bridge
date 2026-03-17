@@ -53,6 +53,8 @@ func runPermissionManagerTests() async {
         try expect(PermissionManager.GrantStatus.granted == .granted)
         try expect(PermissionManager.GrantStatus.denied == .denied)
         try expect(PermissionManager.GrantStatus.unknown == .unknown)
+        try expect(PermissionManager.GrantStatus.partiallyGranted == .partiallyGranted)
+        try expect(PermissionManager.GrantStatus.restartRecommended == .restartRecommended)
         try expect(PermissionManager.GrantStatus.granted != .denied)
         try expect(PermissionManager.GrantStatus.granted != .unknown)
         try expect(PermissionManager.GrantStatus.denied != .unknown)
@@ -102,6 +104,16 @@ func runPermissionManagerTests() async {
                    "Expected valid status, got \(status)")
     }
 
+    await test("Automation check returns valid status with partial support") {
+        let manager = await PermissionManager()
+        await manager.checkAutomation()
+        let status = await manager.automationStatus
+        try expect(
+            status == .granted || status == .denied || status == .partiallyGranted,
+            "Expected granted/denied/partiallyGranted, got \(status)"
+        )
+    }
+
     await test("status(for:) returns correct property for each grant") {
         let manager = await PermissionManager()
         await manager.checkAll()
@@ -110,5 +122,27 @@ func runPermissionManagerTests() async {
         try expect(await manager.status(for: .fullDiskAccess) == manager.fullDiskAccessStatus)
         try expect(await manager.status(for: .automation) == manager.automationStatus)
         try expect(await manager.status(for: .contacts) == manager.contactsStatus)
+    }
+
+    await test("checkAll populates lastCheckedAt and probe evidence") {
+        let manager = await PermissionManager()
+        await manager.checkAll()
+        try expect(await manager.lastCheckedAt != nil, "Expected lastCheckedAt to be set after checkAll")
+        for grant in PermissionManager.Grant.allCases {
+            try expect(await manager.evidence(for: grant) != nil, "Expected evidence for \(grant.displayName)")
+        }
+    }
+
+    await test("recheckAllForTruth performs deterministic refresh pass") {
+        let manager = await PermissionManager()
+        await manager.checkAll()
+        let before = await manager.lastCheckedAt
+        try? await Task.sleep(nanoseconds: 5_000_000) // 5ms to ensure monotonic timestamp movement
+        await manager.recheckAllForTruth()
+        let after = await manager.lastCheckedAt
+        try expect(after != nil, "Expected lastCheckedAt after recheckAllForTruth")
+        if let before, let after {
+            try expect(after >= before, "Expected recheckAllForTruth to refresh timestamp")
+        }
     }
 }
