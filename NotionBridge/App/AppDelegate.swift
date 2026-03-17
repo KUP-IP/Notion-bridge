@@ -299,20 +299,33 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Auto-Launch
 
-    /// PKT-341: Only register if not already enabled — prevents duplicate
-    /// "added to login items" notifications on every launch.
+    /// Syncs SMAppService login-item registration with the user's launchAtLogin preference.
+    /// - launchAtLogin false (default): unregisters any existing entry — no login item.
+    /// - launchAtLogin true: unregisters stale entries from previous builds first (binary
+    ///   swap leaves orphaned entries), then re-registers cleanly.
+    /// BUG-FIX: Was called unconditionally on every launch, ignoring user preference,
+    /// causing duplicates after each binary swap and phantom re-registration after TCC restarts.
     private func registerAutoLaunch() {
         let service = SMAppService.mainApp
-        if service.status == .enabled {
-            print("[Notion Bridge] Auto-launch already enabled (status: \(service.status.rawValue))")
-            return
-        }
-        do {
-            try service.register()
-            print("[Notion Bridge] Auto-launch registered via SMAppService (\(service.status.rawValue))")
-        } catch {
-            print("[Notion Bridge] SMAppService registration failed: \(error.localizedDescription)")
-            print("[Notion Bridge] To enable: System Settings > General > Login Items > toggle Notion Bridge on")
+        let launchAtLogin = UserDefaults.standard.object(forKey: "launchAtLogin") as? Bool ?? false
+
+        if launchAtLogin {
+            // Clean up stale entries from previous builds before re-registering
+            try? service.unregister()
+            do {
+                try service.register()
+                print("[Notion Bridge] Auto-launch registered via SMAppService (\(service.status.rawValue))")
+            } catch {
+                print("[Notion Bridge] SMAppService registration failed: \(error.localizedDescription)")
+            }
+        } else {
+            // User preference is off — ensure no login item exists
+            if service.status != .notRegistered {
+                try? service.unregister()
+                print("[Notion Bridge] Auto-launch unregistered (launchAtLogin = false)")
+            } else {
+                print("[Notion Bridge] Auto-launch not active (launchAtLogin = false)")
+            }
         }
     }
 }

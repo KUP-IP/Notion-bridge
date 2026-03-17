@@ -12,6 +12,7 @@
 //   Build Target uses runtime version, "Since now" timestamp fixed.
 
 import SwiftUI
+import ServiceManagement
 import AppKit
 
 // PKT-349 B2: Notification name for reset onboarding action
@@ -134,7 +135,7 @@ public struct SettingsView: View {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.0"
     }
 
-    @AppStorage("launchAtLogin") private var launchAtLogin: Bool = true
+    @AppStorage("launchAtLogin") private var launchAtLogin: Bool = false
     @AppStorage("com.notionbridge.security.trustedMode") private var trustedMode: Bool = false
 
     private var ssePort: Int {
@@ -186,6 +187,15 @@ public struct SettingsView: View {
 
             Section("Startup") {
                 Toggle("Launch at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, enabled in
+                        let service = SMAppService.mainApp
+                        if enabled {
+                            try? service.unregister() // remove stale entries first
+                            try? service.register()
+                        } else {
+                            try? service.unregister()
+                        }
+                    }
             }
         }
         .formStyle(.grouped)

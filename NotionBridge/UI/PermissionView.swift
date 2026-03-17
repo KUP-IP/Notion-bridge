@@ -122,61 +122,48 @@ public struct PermissionView: View {
     // MARK: - Deep Links
 
     /// Opens the relevant System Settings pane for the given TCC grant.
-    /// Uses x-apple.systempreferences URL scheme for macOS 13+.
-    /// PKT-349 B3: Automation and Contacts grants now pre-trigger the system
-    /// permission prompt before opening Settings (mirrors D2 pattern from
-    /// OnboardingWindow.swift) so the app appears in the System Settings list.
+    /// BUG-FIX: Removed NSWorkspace.open() for grants that already trigger a native
+    /// macOS system prompt (Accessibility, Screen Recording, Automation, Contacts).
+    /// Opening System Settings simultaneously with the system prompt is redundant and
+    /// disorienting. The prompt itself guides the user. Only Full Disk Access opens
+    /// Settings directly since macOS provides no prompt for it.
     private func openSystemSettings(for grant: PermissionManager.Grant) {
         switch grant {
         case .accessibility:
+            // Trigger the native macOS prompt only — do NOT also open System Settings.
             _ = permissionManager.requestAccessibilityAccess()
             Task {
                 try? await Task.sleep(nanoseconds: 300_000_000)
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
-                }
                 await permissionManager.recheckAllForTruth()
             }
         case .automation:
-            // Pre-trigger Automation system prompt via NSAppleScript probe,
-            // then open Settings after a short delay for TCC registration
+            // Trigger the native Automation prompt only.
             Task {
                 await permissionManager.requestAutomationAccess()
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
-                    NSWorkspace.shared.open(url)
-                }
                 await permissionManager.recheckAllForTruth()
             }
         case .contacts:
-            // Pre-trigger Contacts system prompt via CNContactStore request,
-            // then open Settings once the prompt has registered with TCC
+            // Trigger the native Contacts prompt only.
             Task {
                 _ = await permissionManager.requestContactsAccess()
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
-                    NSWorkspace.shared.open(url)
-                }
                 await permissionManager.recheckAllForTruth()
             }
         case .screenRecording:
+            // Trigger the native Screen Recording prompt only — do NOT also open System Settings.
             _ = permissionManager.requestScreenRecordingAccess()
             Task {
                 try? await Task.sleep(nanoseconds: 300_000_000)
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                    NSWorkspace.shared.open(url)
-                }
                 await permissionManager.recheckAllForTruth()
             }
         default:
-            // Full Disk Access — open directly
-            let urlString: String
+            // Full Disk Access: no native prompt exists — must open System Settings directly.
             switch grant {
             case .fullDiskAccess:
-                urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                    NSWorkspace.shared.open(url)
+                }
             default:
                 return
-            }
-            if let url = URL(string: urlString) {
-                NSWorkspace.shared.open(url)
             }
             Task {
                 await permissionManager.recheckAllForTruth()
