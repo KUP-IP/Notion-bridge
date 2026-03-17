@@ -400,6 +400,11 @@ await runSessionModuleTests()
 await runMessagesModuleTests()
 await runSystemModuleTests()
 await runNotionModuleTests()
+await runAccessibilityModuleTests()
+await runScreenModuleTests()
+await runAppleScriptModuleTests()
+await runBuiltinModuleTests()
+
 
 // ============================================================
 // MARK: - V1-06 Integration / End-to-End Tests
