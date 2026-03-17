@@ -49,8 +49,8 @@ public final class SettingsWindowController {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Notion Bridge Settings"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 660, height: 540))
-        window.minSize = NSSize(width: 580, height: 440)
+        window.setContentSize(NSSize(width: 723, height: 873))
+        window.minSize = NSSize(width: 620, height: 700)
         window.center()
         window.isReleasedWhenClosed = false
 
