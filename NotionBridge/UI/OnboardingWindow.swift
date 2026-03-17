@@ -6,6 +6,8 @@
 // D2: Permission triggering — probe before opening Settings for Automation/Contacts
 // D3: Connection page rewrite — transport-oriented cards
 // D6: Dynamic notification status on welcome page
+// PKT-357: F6 welcome header opacity, F7 brand icon, F8 power copy,
+//   F9 test connection text, F10 all permissions listed, F11 notification test
 
 import SwiftUI
 import AppKit
@@ -102,7 +104,7 @@ struct OnboardingView: View {
 
             Spacer()
 
-            // Step content
+            // Step content — PKT-357 F6: no implicit animation on step transitions
             Group {
                 switch currentStep {
                 case .welcome:
@@ -139,20 +141,23 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Welcome Step (D1 + D6)
+    // MARK: - Welcome Step (PKT-357: F6, F7, F8)
 
     private var welcomeStep: some View {
         VStack(spacing: 16) {
+            // PKT-357 F7: Larger brand icon for visual impact
             Image(systemName: "bridge.fill")
-                .font(.system(size: 48))
+                .font(.system(size: 56))
                 .foregroundStyle(.purple)
 
+            // PKT-357 F6: Explicit opacity to prevent animation fade-in
             Text("Welcome to Notion Bridge")
                 .font(.title)
                 .fontWeight(.semibold)
+                .opacity(1)
 
-            // D1: Removed "all" — was "— all with your permission."
-            Text("Notion Bridge connects your Notion agents to your Mac through a secure, local MCP server. Your agents can manage files, run command-line interface commands, steer your Mac, control your browser, and automate workflows — with your permission.")
+            // PKT-357 F8: Power language — direct, confident, concise
+            Text("Your Mac, fully connected to Notion AI. Manage files, execute commands, control apps, and automate workflows through a secure local MCP server. Every action requires your explicit permission.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -167,7 +172,7 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Notification Status (D6)
+    // MARK: - Notification Status (D6 + PKT-357 F11)
 
     @ViewBuilder
     private var notificationStatusView: some View {
@@ -217,16 +222,35 @@ struct OnboardingView: View {
         notificationStatus = settings.authorizationStatus
     }
 
+    // PKT-357 F11: Request authorization + send test notification on grant
     private func requestNotificationPermission() async {
         do {
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
             notificationStatus = granted ? .authorized : .denied
+            // PKT-357 F11: Send a test notification to confirm delivery
+            if granted {
+                await sendTestNotification()
+            }
         } catch {
             notificationStatus = .denied
         }
     }
 
-    // MARK: - Permissions Step
+    // PKT-357 F11: Deliver a visible test notification after grant
+    private func sendTestNotification() async {
+        let content = UNMutableNotificationContent()
+        content.title = "Notion Bridge"
+        content.body = "Notifications are working! Security approvals will appear here."
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "notionbridge-test-notification",
+            content: content,
+            trigger: nil
+        )
+        try? await UNUserNotificationCenter.current().add(request)
+    }
+
+    // MARK: - Permissions Step (PKT-357 F10: All permissions always listed)
 
     private var permissionsStep: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -241,6 +265,7 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
 
+            // PKT-357 F10: Always show ALL grants, not just the first missing one
             VStack(spacing: 8) {
                 ForEach(PermissionManager.Grant.allCases) { grant in
                     onboardingPermissionRow(grant: grant)
@@ -442,7 +467,7 @@ struct OnboardingView: View {
         .cornerRadius(8)
     }
 
-    // MARK: - Test Connection Step
+    // MARK: - Test Connection Step (PKT-357 F9: Cleaned up idle text)
 
     private var testConnectionStep: some View {
         VStack(spacing: 20) {
@@ -478,11 +503,11 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 
-            // Health check result
+            // Health check result — PKT-357 F9: Removed misleading "options" text
             Group {
                 switch healthCheckStatus {
                 case .idle:
-                    Text("Press the button below to test the connection.")
+                    Text("Verify that the MCP server is running and reachable.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 case .checking:
@@ -568,15 +593,14 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Navigation
+    // MARK: - Navigation (PKT-357 F6: Removed withAnimation to prevent header fade)
 
     private var navigationButtons: some View {
         HStack {
             if currentStep != .welcome {
                 Button("Back") {
-                    withAnimation {
-                        currentStep = OnboardingStep(rawValue: currentStep.rawValue - 1) ?? .welcome
-                    }
+                    // PKT-357 F6: No animation — prevents welcome header opacity fade
+                    currentStep = OnboardingStep(rawValue: currentStep.rawValue - 1) ?? .welcome
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -592,9 +616,8 @@ struct OnboardingView: View {
                 .tint(.purple)
             } else {
                 Button("Continue") {
-                    withAnimation {
-                        currentStep = OnboardingStep(rawValue: currentStep.rawValue + 1) ?? .testConnection
-                    }
+                    // PKT-357 F6: No animation — prevents welcome header opacity fade
+                    currentStep = OnboardingStep(rawValue: currentStep.rawValue + 1) ?? .testConnection
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.purple)

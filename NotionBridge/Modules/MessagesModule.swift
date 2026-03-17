@@ -1,18 +1,132 @@
-// MessagesModule.swift – V1-05 iMessage Tools
+// MessagesModule.swift – V1-PATCH-001 iMessage Tools
 // NotionBridge · Modules
 //
 // Six tools: messages_search, messages_recent, messages_chat,
 // messages_content, messages_participants, messages_send.
-// Read tools use SQLite on ~/Library/Messages/chat.db.
-// Send uses AppleScript (osascript). Tier: 🔴 Red.
+// Read tools use native SQLite C API on ~/Library/Messages/chat.db.
+// Send uses AppleScript (osascript). Tier: notify (5 open, 1 notify).
+//
+// V1-PATCH-001 changes:
+// - Replaced runSQLite CLI helper with SQLiteConnection (native sqlite3 C API)
+// - Single persistent read-only connection with WAL journal mode
+// - Added extractText() fallback: text → NSKeyedUnarchiver(attributedBody) → nil
+// - All 4 read queries now SELECT m.attributedBody for decoding
+// - messages_search WHERE clause includes attributedBody CAST fallback
 
 import Foundation
+import SQLite3
 import MCP
+
+// MARK: - SQLiteConnection
+
+/// Persistent read-only SQLite connection using native C API.
+/// Replaces per-query sqlite3 CLI process spawning to eliminate
+/// "database is locked" errors from concurrent tool calls.
+/// Thread-safe: uses SQLite's default serialized threading mode.
+final class SQLiteConnection {
+    private var db: OpaquePointer?
+
+    /// Open a read-only SQLite connection with WAL journal mode.
+    /// - Parameter path: Absolute path to the database file.
+    /// - Throws: `SQLiteConnectionError.openFailed` if the database cannot be opened.
+    init(path: String) throws {
+        let flags = SQLITE_OPEN_READONLY
+        let result = sqlite3_open_v2(path, &db, flags, nil)
+        guard result == SQLITE_OK, db != nil else {
+            let msg = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "Unknown error"
+            throw SQLiteConnectionError.openFailed(msg)
+        }
+        // Enable WAL journal mode for concurrent read access
+        executeRaw("PRAGMA journal_mode=WAL")
+    }
+
+    deinit {
+        if let db = db {
+            sqlite3_close(db)
+        }
+    }
+
+    /// Execute a raw SQL statement (no results expected).
+    private func executeRaw(_ sql: String) {
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_step(stmt)
+            sqlite3_finalize(stmt)
+        }
+    }
+
+    /// Execute a read-only query with positional string parameters (?1, ?2, ...).
+    /// Returns an array of dictionaries mapping column names to values.
+    /// BLOB columns are returned as `Data`. NULL columns are returned as `NSNull`.
+    func query(_ sql: String, params: [String] = []) throws -> [[String: Any]] {
+        var stmt: OpaquePointer?
+        let prepResult = sqlite3_prepare_v2(db, sql, -1, &stmt, nil)
+        guard prepResult == SQLITE_OK, let statement = stmt else {
+            let msg = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "Prepare failed"
+            throw SQLiteConnectionError.queryFailed(msg)
+        }
+        defer { sqlite3_finalize(statement) }
+
+        // Bind string parameters (1-indexed)
+        let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        for (index, param) in params.enumerated() {
+            sqlite3_bind_text(statement, Int32(index + 1), param, -1, SQLITE_TRANSIENT)
+        }
+
+        var rows: [[String: Any]] = []
+        let colCount = sqlite3_column_count(statement)
+
+        while sqlite3_step(statement) == SQLITE_ROW {
+            var row: [String: Any] = [:]
+            for i in 0..<colCount {
+                let name = String(cString: sqlite3_column_name(statement, i))
+                switch sqlite3_column_type(statement, i) {
+                case SQLITE_INTEGER:
+                    row[name] = Int(sqlite3_column_int64(statement, i))
+                case SQLITE_FLOAT:
+                    row[name] = sqlite3_column_double(statement, i)
+                case SQLITE_TEXT:
+                    if let cStr = sqlite3_column_text(statement, i) {
+                        row[name] = String(cString: cStr)
+                    } else {
+                        row[name] = NSNull()
+                    }
+                case SQLITE_BLOB:
+                    if let bytes = sqlite3_column_blob(statement, i) {
+                        let length = Int(sqlite3_column_bytes(statement, i))
+                        row[name] = Data(bytes: bytes, count: length)
+                    } else {
+                        row[name] = NSNull()
+                    }
+                case SQLITE_NULL:
+                    row[name] = NSNull()
+                default:
+                    row[name] = NSNull()
+                }
+            }
+            rows.append(row)
+        }
+
+        return rows
+    }
+}
+
+enum SQLiteConnectionError: Error, LocalizedError {
+    case openFailed(String)
+    case queryFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .openFailed(let msg): return "SQLite open failed: \(msg)"
+        case .queryFailed(let msg): return "SQLite query failed: \(msg)"
+        }
+    }
+}
 
 // MARK: - MessagesModule
 
 /// Provides iMessage/SMS read and send tools.
-/// Read operations query chat.db via sqlite3 CLI (read-only).
+/// Read operations query chat.db via native SQLite C API (read-only, WAL).
 /// Send uses AppleScript through osascript.
 public enum MessagesModule {
 
@@ -23,15 +137,107 @@ public enum MessagesModule {
             .appendingPathComponent("Library/Messages/chat.db").path
     }()
 
+    /// Shared persistent SQLite connection for all read queries.
+    /// Lazy initialization; reconnects if needed via getConnection().
+    nonisolated(unsafe) private static var connection: SQLiteConnection? = {
+        try? SQLiteConnection(path: chatDBPath)
+    }()
+
+    /// Get or re-establish the shared SQLite connection.
+    private static func getConnection() throws -> SQLiteConnection {
+        if let conn = connection { return conn }
+        let conn = try SQLiteConnection(path: chatDBPath)
+        connection = conn
+        return conn
+    }
+
+    // MARK: - Text Extraction
+
+    /// Decode an `attributedBody` NSKeyedArchiver blob to plain text.
+    /// Returns nil on any decoding failure (graceful fallback via try?).
+    private static func decodeAttributedBody(_ data: Data) -> String? {
+        guard let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) else { return nil }
+        unarchiver.requiresSecureCoding = false
+        defer { unarchiver.finishDecoding() }
+        guard let attrStr = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? NSAttributedString else { return nil }
+        let text = attrStr.string
+        return text.isEmpty ? nil : text
+    }
+
+    /// Extract text from a query result row with attributedBody fallback.
+    /// Priority: text column → decoded attributedBody → nil.
+    private static func extractText(row: [String: Any], textKey: String = "text") -> String? {
+        // 1. Try text column
+        if let str = row[textKey] as? String, !str.isEmpty {
+            return str
+        }
+        // 2. Try attributedBody decode
+        if let data = row["attributedBody"] as? Data {
+            return decodeAttributedBody(data)
+        }
+        return nil
+    }
+
+    // MARK: - Result Conversion
+
+    /// Convert query result rows to MCP Value, applying extractText fallback on the text column.
+    /// The raw `attributedBody` blob is excluded from output.
+    private static func rowsToValue(_ rows: [[String: Any]], textKey: String = "text") -> Value {
+        let valueRows: [Value] = rows.map { row in
+            var result: [String: Value] = [:]
+            for (key, val) in row {
+                // Never expose raw attributedBody blob to caller
+                if key == "attributedBody" { continue }
+                if key == textKey {
+                    // Apply text extraction with attributedBody fallback
+                    let extracted = extractText(row: row, textKey: textKey)
+                    result[key] = extracted.map { .string($0) } ?? .null
+                } else if let s = val as? String {
+                    result[key] = .string(s)
+                } else if let i = val as? Int {
+                    result[key] = .int(i)
+                } else if let d = val as? Double {
+                    result[key] = .double(d)
+                } else {
+                    result[key] = .null
+                }
+            }
+            return .object(result)
+        }
+        return .object(["rows": .array(valueRows), "count": .int(valueRows.count)])
+    }
+
+    /// Convert query result rows to MCP Value without text extraction (for non-message queries).
+    private static func rawRowsToValue(_ rows: [[String: Any]]) -> Value {
+        let valueRows: [Value] = rows.map { row in
+            var result: [String: Value] = [:]
+            for (key, val) in row {
+                if let s = val as? String {
+                    result[key] = .string(s)
+                } else if let i = val as? Int {
+                    result[key] = .int(i)
+                } else if let d = val as? Double {
+                    result[key] = .double(d)
+                } else {
+                    result[key] = .null
+                }
+            }
+            return .object(result)
+        }
+        return .object(["rows": .array(valueRows), "count": .int(valueRows.count)])
+    }
+
+    // MARK: - Tool Registration
+
     /// Register all MessagesModule tools on the given router.
     public static func register(on router: ToolRouter) async {
 
-        // MARK: 1. messages_search – 🟢 Green
+        // MARK: 1. messages_search – open
         await router.register(ToolRegistration(
             name: "messages_search",
             module: moduleName,
             tier: .open,
-            description: "Search iMessage/SMS messages by keyword. Returns matching messages with sender, date, and chat context. Uses SQLite on chat.db (read-only).",
+            description: "Search iMessage/SMS messages by keyword. Returns matching messages with sender, date, and chat context. Uses native SQLite on chat.db (read-only).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -43,25 +249,30 @@ public enum MessagesModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let query) = args["query"] else {
-                    throw ToolRouterError.unknownTool("messages_search: missing 'query'")
+                    throw ToolRouterError.invalidArguments(toolName: "messages_search", reason: "missing 'query'")
                 }
                 let limit: Int = { if case .int(let l) = args["limit"] { return l }; return 50 }()
 
+                let conn = try getConnection()
+                // Search text column directly + attributedBody fallback via CAST for blob keyword match
                 let sql = """
-                    SELECT m.ROWID, m.text, m.is_from_me,
+                    SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me,
                            h.id AS handle_id,
                            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS date_str
                     FROM message m
                     LEFT JOIN handle h ON m.handle_id = h.ROWID
                     WHERE m.text LIKE '%' || ?1 || '%'
+                       OR (m.text IS NULL AND m.attributedBody IS NOT NULL
+                           AND CAST(m.attributedBody AS TEXT) LIKE '%' || ?1 || '%')
                     ORDER BY m.date DESC
                     LIMIT ?2
                     """
-                return try runSQLite(db: chatDBPath, sql: sql, params: [query, String(limit)])
+                let rows = try conn.query(sql, params: [query, String(limit)])
+                return rowsToValue(rows)
             }
         ))
 
-        // MARK: 2. messages_recent – 🟢 Green
+        // MARK: 2. messages_recent – open
         await router.register(ToolRegistration(
             name: "messages_recent",
             module: moduleName,
@@ -81,9 +292,10 @@ public enum MessagesModule {
                     return 20
                 }()
 
+                let conn = try getConnection()
                 let sql = """
                     SELECT c.ROWID, c.chat_identifier, c.display_name,
-                           m.text AS last_message,
+                           m.text AS last_message, m.attributedBody,
                            m.is_from_me,
                            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS date_str
                     FROM chat c
@@ -98,11 +310,12 @@ public enum MessagesModule {
                     ORDER BY m.date DESC
                     LIMIT ?1
                     """
-                return try runSQLite(db: chatDBPath, sql: sql, params: [String(limit)])
+                let rows = try conn.query(sql, params: [String(limit)])
+                return rowsToValue(rows, textKey: "last_message")
             }
         ))
 
-        // MARK: 3. messages_chat – 🟢 Green
+        // MARK: 3. messages_chat – open
         await router.register(ToolRegistration(
             name: "messages_chat",
             module: moduleName,
@@ -119,12 +332,13 @@ public enum MessagesModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let contact) = args["contact"] else {
-                    throw ToolRouterError.unknownTool("messages_chat: missing 'contact'")
+                    throw ToolRouterError.invalidArguments(toolName: "messages_chat", reason: "missing 'contact'")
                 }
                 let limit: Int = { if case .int(let l) = args["limit"] { return l }; return 50 }()
 
+                let conn = try getConnection()
                 let sql = """
-                    SELECT m.ROWID, m.text, m.is_from_me,
+                    SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me,
                            h.id AS handle_id,
                            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS date_str
                     FROM message m
@@ -136,11 +350,12 @@ public enum MessagesModule {
                     ORDER BY m.date DESC
                     LIMIT ?2
                     """
-                return try runSQLite(db: chatDBPath, sql: sql, params: [contact, String(limit)])
+                let rows = try conn.query(sql, params: [contact, String(limit)])
+                return rowsToValue(rows)
             }
         ))
 
-        // MARK: 4. messages_content – 🟢 Green
+        // MARK: 4. messages_content – open
         await router.register(ToolRegistration(
             name: "messages_content",
             module: moduleName,
@@ -156,11 +371,12 @@ public enum MessagesModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .int(let msgId) = args["messageId"] else {
-                    throw ToolRouterError.unknownTool("messages_content: missing 'messageId'")
+                    throw ToolRouterError.invalidArguments(toolName: "messages_content", reason: "missing 'messageId'")
                 }
 
+                let conn = try getConnection()
                 let sql = """
-                    SELECT m.ROWID, m.text, m.is_from_me, m.service,
+                    SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me, m.service,
                            m.cache_has_attachments,
                            h.id AS handle_id,
                            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS date_str
@@ -168,11 +384,12 @@ public enum MessagesModule {
                     LEFT JOIN handle h ON m.handle_id = h.ROWID
                     WHERE m.ROWID = ?1
                     """
-                return try runSQLite(db: chatDBPath, sql: sql, params: [String(msgId)])
+                let rows = try conn.query(sql, params: [String(msgId)])
+                return rowsToValue(rows)
             }
         ))
 
-        // MARK: 5. messages_participants – 🟢 Green
+        // MARK: 5. messages_participants – open
         await router.register(ToolRegistration(
             name: "messages_participants",
             module: moduleName,
@@ -188,9 +405,10 @@ public enum MessagesModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let chatId) = args["chatIdentifier"] else {
-                    throw ToolRouterError.unknownTool("messages_participants: missing 'chatIdentifier'")
+                    throw ToolRouterError.invalidArguments(toolName: "messages_participants", reason: "missing 'chatIdentifier'")
                 }
 
+                let conn = try getConnection()
                 let sql = """
                     SELECT h.ROWID, h.id AS handle_id, h.service
                     FROM handle h
@@ -198,11 +416,12 @@ public enum MessagesModule {
                     JOIN chat c ON c.ROWID = chj.chat_id
                     WHERE c.chat_identifier LIKE '%' || ?1 || '%'
                     """
-                return try runSQLite(db: chatDBPath, sql: sql, params: [chatId])
+                let rows = try conn.query(sql, params: [chatId])
+                return rawRowsToValue(rows)
             }
         ))
 
-        // MARK: 6. messages_send – 🔴 Red (Destructive-Confirm)
+        // MARK: 6. messages_send – notify
         await router.register(ToolRegistration(
             name: "messages_send",
             module: moduleName,
@@ -222,7 +441,7 @@ public enum MessagesModule {
                       case .string(let recipient) = args["recipient"],
                       case .string(let body) = args["body"],
                       case .string(let confirm) = args["confirm"] else {
-                    throw ToolRouterError.unknownTool("messages_send: missing required parameters")
+                    throw ToolRouterError.invalidArguments(toolName: "messages_send", reason: "missing required parameters")
                 }
 
                 guard confirm == "SEND" else {
@@ -258,9 +477,13 @@ public enum MessagesModule {
                 process.standardError = stderrPipe
 
                 try process.run()
+
+                // Read pipe data BEFORE waitUntilExit to prevent buffer deadlock
+                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                _ = stdoutData // suppress unused warning
                 process.waitUntilExit()
 
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
                 let stderr = String(data: stderrData, encoding: .utf8) ?? ""
 
                 if process.terminationStatus == 0 {
@@ -277,79 +500,5 @@ public enum MessagesModule {
                 }
             }
         ))
-    }
-
-    // MARK: - SQLite Helper
-
-    /// Run a read-only SQLite query via sqlite3 CLI and return structured results.
-    /// Parameters use positional placeholders (?1, ?2, etc.) expanded before execution.
-    private static func runSQLite(db: String, sql: String, params: [String]) throws -> Value {
-        var expandedSQL = sql
-        for (index, param) in params.enumerated() {
-            let placeholder = "?\(index + 1)"
-            let escaped = param.replacingOccurrences(of: "'", with: "''")
-            expandedSQL = expandedSQL.replacingOccurrences(of: placeholder, with: "'\(escaped)'")
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
-        process.arguments = ["-json", "-readonly", db, expandedSQL]
-
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-
-        if process.terminationStatus != 0 {
-            return .object(["error": .string(stderr.isEmpty ? "SQLite query failed" : stderr)])
-        }
-
-        let trimmed = (String(data: stdoutData, encoding: .utf8) ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            return .object(["rows": .array([]), "count": .int(0)])
-        }
-
-        guard let parsed = try? JSONSerialization.jsonObject(with: stdoutData) else {
-            return .object(["rows": .string(trimmed), "count": .int(0)])
-        }
-
-        let rows = jsonToValue(parsed)
-        let count: Int
-        if case .array(let arr) = rows { count = arr.count } else { count = 1 }
-
-        return .object(["rows": rows, "count": .int(count)])
-    }
-
-    /// Convert a JSONSerialization result into an MCP Value tree.
-    private static func jsonToValue(_ obj: Any) -> Value {
-        if let dict = obj as? [String: Any] {
-            var result: [String: Value] = [:]
-            for (k, v) in dict { result[k] = jsonToValue(v) }
-            return .object(result)
-        }
-        if let arr = obj as? [Any] {
-            return .array(arr.map { jsonToValue($0) })
-        }
-        if let str = obj as? String {
-            return .string(str)
-        }
-        if obj is NSNull {
-            return .null
-        }
-        if let num = obj as? Int {
-            return .int(num)
-        }
-        if let num = obj as? Double {
-            return .double(num)
-        }
-        return .string(String(describing: obj))
     }
 }

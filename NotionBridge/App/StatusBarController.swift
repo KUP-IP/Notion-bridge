@@ -4,8 +4,10 @@
 // PKT-320: Added notionTokenStatus for Notion API token health indicator
 // V1-QUALITY-C2: Added connectedClients array for client identification.
 //   Stores client name, version, and connection time from MCP initialize clientInfo.
+// PKT-353: Added right-click context menu for Quit action (relocated from DashboardView footer).
 
 import Foundation
+import AppKit
 import Observation
 
 /// Lightweight tool metadata for UI display (PKT-350: F2).
@@ -95,6 +97,48 @@ public final class StatusBarController {
     /// Whether the MCP server is currently running
     public var isServerRunning: Bool {
         serverStartTime != nil
+    }
+
+    // MARK: - Right-Click Context Menu (PKT-353)
+
+    /// Event monitor for right-click on the status bar area.
+    /// Retained to allow cleanup if needed.
+    private var eventMonitor: Any?
+
+    /// Set up a right-click context menu with "Quit Notion Bridge" action.
+    /// Uses a local event monitor to detect right-clicks on any NSStatusBarButton,
+    /// then presents the context menu at the click location.
+    /// Call once from AppDelegate.applicationDidFinishLaunching after a short delay
+    /// to ensure MenuBarExtra has created its status item.
+    public func setupContextMenu() {
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseUp) { [weak self] event in
+            // Only trigger on clicks targeting a status bar button
+            guard event.window?.className.contains("NSStatusBar") == true
+                  || event.window is NSPanel else {
+                return event
+            }
+            self?.showContextMenu(at: event)
+            return nil  // Consume the event
+        }
+    }
+
+    /// Build and display the context menu at the event location.
+    private func showContextMenu(at event: NSEvent) {
+        let menu = NSMenu()
+
+        let quitItem = NSMenuItem(
+            title: "Quit Notion Bridge",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        quitItem.keyEquivalentModifierMask = .command
+        menu.addItem(quitItem)
+
+        // Position menu below the status item
+        if let window = event.window {
+            let location = NSPoint(x: event.locationInWindow.x, y: 0)
+            menu.popUp(positioning: nil, at: location, in: window.contentView)
+        }
     }
 
     // MARK: - Server Lifecycle

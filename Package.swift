@@ -1,10 +1,12 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 // PKT-318: Added swift-nio for SSE transport on :9700
+// PKT-353: Platform bumped to macOS 26 (Tahoe) for Liquid Glass adoption.
+//   swift-tools-version bumped 6.0 → 6.2 (required for .macOS(.v26)).
 import PackageDescription
 
 let package = Package(
     name: "NotionBridge",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     products: [
         .executable(name: "NotionBridge", targets: ["NotionBridge"]),
         .executable(name: "NotionBridgeTests", targets: ["NotionBridgeTests"]),
@@ -23,15 +25,18 @@ let package = Package(
                 .product(name: "NIOHTTP1", package: "swift-nio"),
             ],
             path: "NotionBridge",
-            exclude: ["Server/main.swift", "App/NotionBridgeApp.swift", "App/Resources"]
+            exclude: ["App/NotionBridgeApp.swift", "App/Resources", "App/Info.plist"]
         ),
         .executableTarget(
             name: "NotionBridge",
             dependencies: ["NotionBridgeLib"],
             path: "NotionBridge/App",
+            exclude: ["AppDelegate.swift", "StatusBarController.swift", "Info.plist"],
             sources: ["NotionBridgeApp.swift"],
             resources: [.process("Resources")]
         ),
+        // Standalone test executable (not .testTarget) — uses custom test harness
+        // in main.swift instead of XCTest. Run via: swift run NotionBridgeTests
         .executableTarget(
             name: "NotionBridgeTests",
             dependencies: ["NotionBridgeLib",

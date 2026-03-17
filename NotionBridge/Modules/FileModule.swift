@@ -16,7 +16,7 @@ public enum FileModule {
     /// Register all file module tools on the given router.
     public static func register(on router: ToolRouter) async {
 
-        // 1. file_list – 🟢 Green
+        // 1. file_list – open
         await router.register(ToolRegistration(
             name: "file_list",
             module: moduleName,
@@ -34,7 +34,7 @@ public enum FileModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let path) = args["path"] else {
-                    throw ToolRouterError.unknownTool("file_list: missing 'path'")
+                    throw ToolRouterError.invalidArguments(toolName: "file_list", reason: "missing 'path'")
                 }
                 let recursive: Bool = { if case .bool(let b) = args["recursive"] { return b }; return false }()
                 let showHidden: Bool = { if case .bool(let b) = args["showHidden"] { return b }; return false }()
@@ -79,7 +79,7 @@ public enum FileModule {
             }
         ))
 
-        // 2. file_search – 🟢 Green
+        // 2. file_search – open
         await router.register(ToolRegistration(
             name: "file_search",
             module: moduleName,
@@ -97,7 +97,7 @@ public enum FileModule {
                 guard case .object(let args) = arguments,
                       case .string(let directory) = args["directory"],
                       case .string(let query) = args["query"] else {
-                    throw ToolRouterError.unknownTool("file_search: missing 'directory' or 'query'")
+                    throw ToolRouterError.invalidArguments(toolName: "file_search", reason: "missing 'directory' or 'query'")
                 }
 
                 let url = URL(fileURLWithPath: directory)
@@ -123,7 +123,7 @@ public enum FileModule {
             }
         ))
 
-        // 3. file_metadata – 🟢 Green
+        // 3. file_metadata – open
         await router.register(ToolRegistration(
             name: "file_metadata",
             module: moduleName,
@@ -139,7 +139,7 @@ public enum FileModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let path) = args["path"] else {
-                    throw ToolRouterError.unknownTool("file_metadata: missing 'path'")
+                    throw ToolRouterError.invalidArguments(toolName: "file_metadata", reason: "missing 'path'")
                 }
 
                 let attrs = try FileManager.default.attributesOfItem(atPath: path)
@@ -158,7 +158,7 @@ public enum FileModule {
             }
         ))
 
-        // 4. file_read – 🟢 Green
+        // 4. file_read – open
         await router.register(ToolRegistration(
             name: "file_read",
             module: moduleName,
@@ -176,7 +176,7 @@ public enum FileModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let path) = args["path"] else {
-                    throw ToolRouterError.unknownTool("file_read: missing 'path'")
+                    throw ToolRouterError.invalidArguments(toolName: "file_read", reason: "missing 'path'")
                 }
 
                 let encoding: String.Encoding = {
@@ -207,7 +207,7 @@ public enum FileModule {
             }
         ))
 
-        // 5. file_write – 🟠 Orange
+        // 5. file_write – notify
         await router.register(ToolRegistration(
             name: "file_write",
             module: moduleName,
@@ -226,7 +226,7 @@ public enum FileModule {
                 guard case .object(let args) = arguments,
                       case .string(let path) = args["path"],
                       case .string(let content) = args["content"] else {
-                    throw ToolRouterError.unknownTool("file_write: missing 'path' or 'content'")
+                    throw ToolRouterError.invalidArguments(toolName: "file_write", reason: "missing 'path' or 'content'")
                 }
 
                 let createDirs: Bool = { if case .bool(let b) = args["createDirs"] { return b }; return false }()
@@ -249,7 +249,7 @@ public enum FileModule {
             }
         ))
 
-        // 6. file_append – 🟠 Orange
+        // 6. file_append – notify
         await router.register(ToolRegistration(
             name: "file_append",
             module: moduleName,
@@ -267,7 +267,7 @@ public enum FileModule {
                 guard case .object(let args) = arguments,
                       case .string(let path) = args["path"],
                       case .string(let content) = args["content"] else {
-                    throw ToolRouterError.unknownTool("file_append: missing 'path' or 'content'")
+                    throw ToolRouterError.invalidArguments(toolName: "file_append", reason: "missing 'path' or 'content'")
                 }
 
                 let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
@@ -283,7 +283,7 @@ public enum FileModule {
             }
         ))
 
-        // 7. file_move – 🟠 Orange
+        // 7. file_move – notify
         await router.register(ToolRegistration(
             name: "file_move",
             module: moduleName,
@@ -301,7 +301,7 @@ public enum FileModule {
                 guard case .object(let args) = arguments,
                       case .string(let src) = args["sourcePath"],
                       case .string(let dst) = args["destinationPath"] else {
-                    throw ToolRouterError.unknownTool("file_move: missing 'sourcePath' or 'destinationPath'")
+                    throw ToolRouterError.invalidArguments(toolName: "file_move", reason: "missing 'sourcePath' or 'destinationPath'")
                 }
 
                 try FileManager.default.moveItem(
@@ -317,7 +317,7 @@ public enum FileModule {
             }
         ))
 
-        // 8. file_rename – 🟠 Orange
+        // 8. file_rename – notify
         await router.register(ToolRegistration(
             name: "file_rename",
             module: moduleName,
@@ -335,7 +335,7 @@ public enum FileModule {
                 guard case .object(let args) = arguments,
                       case .string(let path) = args["path"],
                       case .string(let newName) = args["newName"] else {
-                    throw ToolRouterError.unknownTool("file_rename: missing 'path' or 'newName'")
+                    throw ToolRouterError.invalidArguments(toolName: "file_rename", reason: "missing 'path' or 'newName'")
                 }
 
                 let url = URL(fileURLWithPath: path)
@@ -350,7 +350,7 @@ public enum FileModule {
             }
         ))
 
-        // 9. file_copy – 🟡 Yellow
+        // 9. file_copy – open
         await router.register(ToolRegistration(
             name: "file_copy",
             module: moduleName,
@@ -368,7 +368,7 @@ public enum FileModule {
                 guard case .object(let args) = arguments,
                       case .string(let src) = args["sourcePath"],
                       case .string(let dst) = args["destinationPath"] else {
-                    throw ToolRouterError.unknownTool("file_copy: missing 'sourcePath' or 'destinationPath'")
+                    throw ToolRouterError.invalidArguments(toolName: "file_copy", reason: "missing 'sourcePath' or 'destinationPath'")
                 }
 
                 try FileManager.default.copyItem(
@@ -384,7 +384,7 @@ public enum FileModule {
             }
         ))
 
-        // 10. dir_create – 🟠 Orange
+        // 10. dir_create – notify
         await router.register(ToolRegistration(
             name: "dir_create",
             module: moduleName,
@@ -400,7 +400,7 @@ public enum FileModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let path) = args["path"] else {
-                    throw ToolRouterError.unknownTool("dir_create: missing 'path'")
+                    throw ToolRouterError.invalidArguments(toolName: "dir_create", reason: "missing 'path'")
                 }
 
                 try FileManager.default.createDirectory(
@@ -415,7 +415,7 @@ public enum FileModule {
             }
         ))
 
-        // 11. clipboard_read – 🟢 Green
+        // 11. clipboard_read – open
         await router.register(ToolRegistration(
             name: "clipboard_read",
             module: moduleName,
@@ -432,8 +432,9 @@ public enum FileModule {
                 let pipe = Pipe()
                 process.standardOutput = pipe
                 try process.run()
-                process.waitUntilExit()
+                // Read pipe data BEFORE waitUntilExit to prevent buffer deadlock
                 let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
                 let content = String(data: data, encoding: .utf8) ?? ""
 
                 return .object([
@@ -443,7 +444,7 @@ public enum FileModule {
             }
         ))
 
-        // 12. clipboard_write – 🟡 Yellow
+        // 12. clipboard_write – open
         await router.register(ToolRegistration(
             name: "clipboard_write",
             module: moduleName,
@@ -459,7 +460,7 @@ public enum FileModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let content) = args["content"] else {
-                    throw ToolRouterError.unknownTool("clipboard_write: missing 'content'")
+                    throw ToolRouterError.invalidArguments(toolName: "clipboard_write", reason: "missing 'content'")
                 }
 
                 let process = Process()

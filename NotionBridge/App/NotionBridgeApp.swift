@@ -1,24 +1,21 @@
 // NotionBridgeApp.swift — @main App Entry Point
-// Notion Bridge v1: Unified menu bar app + MCP server in a single binary
-// PKT-317: StatusBarController now owned by AppDelegate (server wires it on launch)
-// PKT-341: PermissionManager now owned by AppDelegate (TCC check on launch)
-// PKT-342: Menu bar icon now loaded from Assets.xcassets (Asset Catalog)
-// V1-QUALITY-C2: Slim popover (~200px), gear icon opens SettingsWindow,
-//   first-launch onboarding window, Cmd+, shortcut for Settings.
+// Notion Bridge v2: macOS Tahoe 26 — Liquid Glass
+// PKT-353: Removed sparkle fallback, content-adaptive popover, Liquid Glass adoption.
+// Previous history: PKT-317, PKT-341, PKT-342, V1-QUALITY-C2, PKT-349 B1
 // No Dock icon — pure menu bar app via MenuBarExtra pattern
 
 import SwiftUI
 import NotionBridgeLib
 
 /// Load menu bar icon from Asset Catalog (xcassets).
-/// Uses the Golden Gate Bridge logo as a template image for the menu bar.
+/// Uses the bridge logo as a template image for the menu bar.
 /// @2x variant is resolved automatically by the Asset Catalog at runtime.
-/// PKT-349 B1: Bundle.module can fail for SPM executable targets —
-/// try main bundle first (works in .app packaging), then module bundle.
+/// PKT-353: Unified to Bundle.module (SPM executable target with processed resources).
+/// Bundle.main kept as secondary lookup for .app packaging scenarios.
 private func loadMenuBarIcon() -> NSImage? {
     let nsImage: NSImage? =
-        Bundle.main.image(forResource: "MenuBarIcon")
-        ?? Bundle.module.image(forResource: "MenuBarIcon")
+        Bundle.module.image(forResource: "MenuBarIcon")
+        ?? Bundle.main.image(forResource: "MenuBarIcon")
     guard let nsImage else { return nil }
     nsImage.size = NSSize(width: 18, height: 18)
     nsImage.isTemplate = true
@@ -40,17 +37,19 @@ struct NotionBridgeApp: App {
                     appDelegate.openSettings()
                 }
             )
-            .frame(width: 280, height: 220)
         } label: {
             if let icon = menuBarIcon {
                 Image(nsImage: icon)
             } else {
-                Image(systemName: "sparkle")
+                // Fallback: text label if icon resource unavailable
+                Text("NB")
+                    .font(.caption2)
+                    .fontWeight(.bold)
             }
         }
         .menuBarExtraStyle(.window)
 
-        // V1-QUALITY-C2: Cmd+, keyboard shortcut opens Settings window
+        // Cmd+, keyboard shortcut opens Settings window
         Settings {
             SettingsView(
                 statusBar: appDelegate.statusBar,

@@ -25,7 +25,7 @@ public enum NotionModule {
         // Lazy client — initialized once on first use
         let clientHolder = NotionClientHolder()
 
-        // MARK: 1. notion_search – 🟢 Green
+        // MARK: 1. notion_search – open
         await router.register(ToolRegistration(
             name: "notion_search",
             module: moduleName,
@@ -42,7 +42,7 @@ public enum NotionModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let query) = args["query"] else {
-                    throw ToolRouterError.unknownTool("notion_search: missing 'query'")
+                    throw ToolRouterError.invalidArguments(toolName: "notion_search", reason: "missing 'query'")
                 }
                 let pageSize: Int = { if case .int(let ps) = args["pageSize"] { return min(ps, 100) }; return 10 }()
 
@@ -84,7 +84,7 @@ public enum NotionModule {
             }
         ))
 
-        // MARK: 2. notion_page_read – 🟢 Green
+        // MARK: 2. notion_page_read – open
         await router.register(ToolRegistration(
             name: "notion_page_read",
             module: moduleName,
@@ -101,7 +101,7 @@ public enum NotionModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let pageId) = args["pageId"] else {
-                    throw ToolRouterError.unknownTool("notion_page_read: missing 'pageId'")
+                    throw ToolRouterError.invalidArguments(toolName: "notion_page_read", reason: "missing 'pageId'")
                 }
                 let includeBlocks: Bool = {
                     if case .bool(let b) = args["includeBlocks"] { return b }
@@ -169,7 +169,7 @@ public enum NotionModule {
             }
         ))
 
-        // MARK: 3. notion_page_update – 🟠 Orange (Write-Confirm)
+        // MARK: 3. notion_page_update – notify
         await router.register(ToolRegistration(
             name: "notion_page_update",
             module: moduleName,
@@ -187,7 +187,7 @@ public enum NotionModule {
                 guard case .object(let args) = arguments,
                       case .string(let pageId) = args["pageId"],
                       case .string(let propsJSON) = args["properties"] else {
-                    throw ToolRouterError.unknownTool("notion_page_update: missing 'pageId' or 'properties'")
+                    throw ToolRouterError.invalidArguments(toolName: "notion_page_update", reason: "missing 'pageId' or 'properties'")
                 }
 
                 // Validate JSON

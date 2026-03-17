@@ -1,0 +1,505 @@
+// AccessibilityModule.swift
+// NotionBridge · Modules
+//
+// 5 AX tools for native Mac UI steering via ApplicationServices framework.
+// Tools: ax_focused_app (open), ax_tree (open), ax_find_element (open),
+//        ax_element_info (open), ax_perform_action (notify).
+// PKT-356: Mac Steering Sprint — AccessibilityModule.
+
+import Foundation
+import MCP
+import ApplicationServices
+import AppKit
+
+public enum AccessibilityModule {
+
+    public static let moduleName = "accessibility"
+
+    // MARK: - Errors
+
+    private enum AXModuleError: Error {
+        case notTrusted
+        case noFocusedApp
+        case appNotFound(pid: Int32)
+        case elementNotFound(query: String)
+        case actionFailed(action: String, detail: String)
+        case invalidInput(String)
+
+        func toResponse() -> Value {
+            let msg: String
+            switch self {
+            case .notTrusted:
+                msg = "Accessibility permission not granted. Enable in System Settings > Privacy & Security > Accessibility."
+            case .noFocusedApp:
+                msg = "No focused application found."
+            case .appNotFound(let pid):
+                msg = "Application with PID \(pid) not found or not running."
+            case .elementNotFound(let query):
+                msg = "Element not found matching: \(query)"
+            case .actionFailed(let action, let detail):
+                msg = "Action '\(action)' failed: \(detail)"
+            case .invalidInput(let detail):
+                msg = "Invalid input: \(detail)"
+            }
+            return .object(["error": .string(msg)])
+        }
+    }
+
+    // MARK: - AX Helpers
+
+    private static func ensureTrusted() throws {
+        guard AXIsProcessTrusted() else { throw AXModuleError.notTrusted }
+    }
+
+    private static func focusedApp() throws -> (AXUIElement, NSRunningApplication) {
+        try ensureTrusted()
+        let sys = AXUIElementCreateSystemWide()
+        var ref: AnyObject?
+        guard AXUIElementCopyAttributeValue(sys, kAXFocusedApplicationAttribute as CFString, &ref) == .success,
+              let appEl = ref as! AXUIElement? else {
+            throw AXModuleError.noFocusedApp
+        }
+        var pid: pid_t = 0
+        AXUIElementGetPid(appEl, &pid)
+        guard let app = NSRunningApplication(processIdentifier: pid) else {
+            throw AXModuleError.appNotFound(pid: pid)
+        }
+        return (appEl, app)
+    }
+
+    // MARK: - Parameter Helpers
+
+    private static func resolvePid(_ params: [String: Value]) throws -> pid_t {
+        if let p = params["pid"] {
+            switch p {
+            case .int(let v):    return pid_t(v)
+            case .double(let v): return pid_t(v)
+            default: throw AXModuleError.invalidInput("pid must be an integer")
+            }
+        }
+        let (_, app) = try focusedApp()
+        return app.processIdentifier
+    }
+
+    private static func intParam(_ params: [String: Value], _ key: String, default fallback: Int) -> Int {
+        guard let v = params[key] else { return fallback }
+        switch v {
+        case .int(let i):    return i
+        case .double(let d): return Int(d)
+        default:             return fallback
+        }
+    }
+
+    private static func stringParam(_ params: [String: Value], _ key: String) -> String? {
+        if case .string(let s) = params[key] { return s }
+        return nil
+    }
+
+    private static func boolParam(_ params: [String: Value], _ key: String, default fallback: Bool) -> Bool {
+        guard let v = params[key] else { return fallback }
+        if case .bool(let b) = v { return b }
+        return fallback
+    }
+
+    private static func unwrap(_ arguments: Value) -> [String: Value] {
+        if case .object(let a) = arguments { return a }
+        return [:]
+    }
+
+    // MARK: - Element Attribute Readers
+
+    private static func attr(_ el: AXUIElement, _ name: String) -> AnyObject? {
+        var val: AnyObject?
+        return AXUIElementCopyAttributeValue(el, name as CFString, &val) == .success ? val : nil
+    }
+
+    private static func strAttr(_ el: AXUIElement, _ name: String) -> String? {
+        attr(el, name) as? String
+    }
+
+    private static func role(_ el: AXUIElement) -> String {
+        strAttr(el, kAXRoleAttribute as String) ?? "Unknown"
+    }
+
+    private static func title(_ el: AXUIElement) -> String? {
+        strAttr(el, kAXTitleAttribute as String)
+    }
+
+    private static func desc(_ el: AXUIElement) -> String? {
+        strAttr(el, kAXDescriptionAttribute as String)
+    }
+
+    private static func label(_ el: AXUIElement) -> String? {
+        title(el) ?? desc(el) ?? strAttr(el, kAXValueAttribute as String)
+    }
+
+    private static func children(_ el: AXUIElement) -> [AXUIElement] {
+        (attr(el, kAXChildrenAttribute as String) as? [AXUIElement]) ?? []
+    }
+
+    private static func position(_ el: AXUIElement) -> (x: Double, y: Double)? {
+        guard let val = attr(el, kAXPositionAttribute as String) else { return nil }
+        var pt = CGPoint.zero
+        AXValueGetValue(val as! AXValue, .cgPoint, &pt)
+        return (Double(pt.x), Double(pt.y))
+    }
+
+    private static func size(_ el: AXUIElement) -> (w: Double, h: Double)? {
+        guard let val = attr(el, kAXSizeAttribute as String) else { return nil }
+        var sz = CGSize.zero
+        AXValueGetValue(val as! AXValue, .cgSize, &sz)
+        return (Double(sz.width), Double(sz.height))
+    }
+
+    // MARK: - Tree Walking
+
+    private static func elementDict(_ el: AXUIElement, depth: Int, maxDepth: Int,
+                                     flat: Bool, path: String,
+                                     results: inout [Value]) -> Value {
+        let r = role(el)
+        let t = title(el)
+        let curPath = path.isEmpty ? "/\(r):\(t ?? "")" : "\(path)/\(r):\(t ?? "")"
+
+        var d: [String: Value] = ["role": .string(r), "path": .string(curPath)]
+        if let t = t          { d["title"] = .string(t) }
+        if let ds = desc(el)  { d["description"] = .string(ds) }
+        if let p = position(el) { d["x"] = .double(p.x); d["y"] = .double(p.y) }
+        if let s = size(el)     { d["width"] = .double(s.w); d["height"] = .double(s.h) }
+
+        if flat {
+            results.append(.object(d))
+            if depth < maxDepth {
+                for child in children(el) {
+                    _ = elementDict(child, depth: depth + 1, maxDepth: maxDepth,
+                                    flat: true, path: curPath, results: &results)
+                }
+            }
+            return .null
+        } else {
+            if depth < maxDepth {
+                let kids = children(el)
+                if !kids.isEmpty {
+                    d["children"] = .array(kids.map {
+                        elementDict($0, depth: depth + 1, maxDepth: maxDepth,
+                                    flat: false, path: curPath, results: &results)
+                    })
+                }
+            }
+            return .object(d)
+        }
+    }
+
+    // MARK: - Search
+
+    private static func findElements(in el: AXUIElement, role r: String?, title t: String?,
+                                      label l: String?, depth: Int, maxDepth: Int,
+                                      path: String = "") -> [(AXUIElement, String)] {
+        let er = role(el)
+        let et = title(el)
+        let elLabel = label(el)
+        let cur = path.isEmpty ? "/\(er):\(et ?? "")" : "\(path)/\(er):\(et ?? "")"
+
+        var out: [(AXUIElement, String)] = []
+
+        var match = true
+        if let r = r, er.lowercased() != r.lowercased() { match = false }
+        if let t = t, !(et?.localizedCaseInsensitiveContains(t) ?? false) { match = false }
+        if let l = l, !(elLabel?.localizedCaseInsensitiveContains(l) ?? false) { match = false }
+        if match && (r != nil || t != nil || l != nil) { out.append((el, cur)) }
+
+        if depth < maxDepth {
+            for child in children(el) {
+                out.append(contentsOf: findElements(in: child, role: r, title: t, label: l,
+                                                     depth: depth + 1, maxDepth: maxDepth, path: cur))
+            }
+        }
+        return out
+    }
+
+    // MARK: - Path Navigation
+
+    private static func navigateToPath(_ root: AXUIElement, path: String) throws -> AXUIElement {
+        let parts = path.split(separator: "/").filter { !$0.isEmpty }
+        var current = root
+        for (i, seg) in parts.enumerated() {
+            if i == 0 { continue } // skip root app component
+            let pieces = seg.split(separator: ":", maxSplits: 1)
+            let wantRole = String(pieces[0])
+            let wantTitle: String? = pieces.count > 1 ? String(pieces[1]) : nil
+
+            var found = false
+            for child in children(current) {
+                if role(child) == wantRole && (wantTitle == nil || title(child) == wantTitle) {
+                    current = child; found = true; break
+                }
+            }
+            if !found { throw AXModuleError.elementNotFound(query: String(seg)) }
+        }
+        return current
+    }
+
+    // MARK: - Deep Inspect
+
+    private static func detailedInfo(_ el: AXUIElement) -> Value {
+        var d: [String: Value] = ["role": .string(role(el))]
+        if let t = title(el)  { d["title"] = .string(t) }
+        if let ds = desc(el)  { d["description"] = .string(ds) }
+        if let v = strAttr(el, kAXValueAttribute as String) { d["value"] = .string(v) }
+        if let p = position(el) { d["x"] = .double(p.x); d["y"] = .double(p.y) }
+        if let s = size(el)     { d["width"] = .double(s.w); d["height"] = .double(s.h) }
+
+        if let en = attr(el, kAXEnabledAttribute as String) as? Bool { d["enabled"] = .bool(en) }
+        if let fo = attr(el, kAXFocusedAttribute as String) as? Bool { d["focused"] = .bool(fo) }
+        if let se = attr(el, kAXSelectedAttribute as String) as? Bool { d["selected"] = .bool(se) }
+        if let rv = strAttr(el, kAXRoleDescriptionAttribute as String) { d["roleDescription"] = .string(rv) }
+        if let hp = strAttr(el, kAXHelpAttribute as String) { d["help"] = .string(hp) }
+        if let id = strAttr(el, kAXIdentifierAttribute as String) { d["identifier"] = .string(id) }
+        if let sub = strAttr(el, kAXSubroleAttribute as String) { d["subrole"] = .string(sub) }
+
+        var actRef: CFArray?
+        if AXUIElementCopyActionNames(el, &actRef) == .success, let acts = actRef as? [String] {
+            d["actions"] = .array(acts.map { .string($0) })
+        }
+
+        var nameRef: CFArray?
+        if AXUIElementCopyAttributeNames(el, &nameRef) == .success, let names = nameRef as? [String] {
+            d["attributes"] = .array(names.map { .string($0) })
+        }
+
+        return .object(d)
+    }
+
+    // MARK: - Resolve Target Element
+
+    private static func resolveTarget(_ params: [String: Value], appElement: AXUIElement) throws -> AXUIElement {
+        if let path = stringParam(params, "path") {
+            return try navigateToPath(appElement, path: path)
+        }
+        let r = stringParam(params, "role")
+        let t = stringParam(params, "title")
+        guard r != nil || t != nil else {
+            throw AXModuleError.invalidInput("Provide 'path' or at least one of 'role'/'title'")
+        }
+        let matches = findElements(in: appElement, role: r, title: t, label: nil,
+                                    depth: 0, maxDepth: 10)
+        guard let (el, _) = matches.first else {
+            throw AXModuleError.elementNotFound(query: "\(r ?? ""):\(t ?? "")")
+        }
+        return el
+    }
+
+    // MARK: - Tool Registration
+
+    public static func register(on router: ToolRouter) async {
+
+        // ── 1. ax_focused_app (open) ──────────────────────────────────────
+        await router.register(ToolRegistration(
+            name: "ax_focused_app",
+            module: moduleName,
+            tier: .open,
+            description: "Return the frontmost application's name, bundleId, PID, and focused UI element.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([:])
+            ]),
+            handler: { _ in
+                do {
+                    let (appEl, app) = try focusedApp()
+                    var result: [String: Value] = [
+                        "name":     .string(app.localizedName ?? "Unknown"),
+                        "bundleId": .string(app.bundleIdentifier ?? "Unknown"),
+                        "pid":      .int(Int(app.processIdentifier))
+                    ]
+                    if let fe = attr(appEl, kAXFocusedUIElementAttribute as String) as! AXUIElement? {
+                        result["focusedElement"] = .object([
+                            "role":  .string(role(fe)),
+                            "title": .string(title(fe) ?? ""),
+                            "description": .string(desc(fe) ?? "")
+                        ])
+                    }
+                    return .object(result)
+                } catch let e as AXModuleError { return e.toResponse() }
+            }
+        ))
+
+        // ── 2. ax_tree (open) ─────────────────────────────────────────────
+        await router.register(ToolRegistration(
+            name: "ax_tree",
+            module: moduleName,
+            tier: .open,
+            description: "Dump the AX element hierarchy for an app. Specify PID or omit for frontmost. Configurable depth (default 5) and format (tree or flat).",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "pid":      .object(["type": .string("integer"), "description": .string("Process ID. Omit for frontmost app.")]),
+                    "maxDepth": .object(["type": .string("integer"), "description": .string("Max traversal depth (default: 5)")]),
+                    "flat":     .object(["type": .string("boolean"), "description": .string("Return flat array instead of tree (default: false)")])
+                ])
+            ]),
+            handler: { arguments in
+                let params = unwrap(arguments)
+                do {
+                    let pid = try resolvePid(params)
+                    let maxD = intParam(params, "maxDepth", default: 5)
+                    let flat = boolParam(params, "flat", default: false)
+                    let appEl = AXUIElementCreateApplication(pid)
+                    guard let appName = NSRunningApplication(processIdentifier: pid)?.localizedName else {
+                        throw AXModuleError.appNotFound(pid: pid)
+                    }
+
+                    var flatResults: [Value] = []
+                    let tree = elementDict(appEl, depth: 0, maxDepth: maxD,
+                                           flat: flat, path: "", results: &flatResults)
+
+                    var out: [String: Value] = ["app": .string(appName), "pid": .int(Int(pid))]
+                    if flat {
+                        out["elements"] = .array(flatResults)
+                        out["count"]    = .int(flatResults.count)
+                    } else {
+                        out["tree"] = tree
+                    }
+                    return .object(out)
+                } catch let e as AXModuleError { return e.toResponse() }
+            }
+        ))
+
+        // ── 3. ax_find_element (open) ─────────────────────────────────────
+        await router.register(ToolRegistration(
+            name: "ax_find_element",
+            module: moduleName,
+            tier: .open,
+            description: "Search the AX tree for elements matching role, title, and/or label. Returns matching elements with paths, positions, and sizes.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "pid":      .object(["type": .string("integer"), "description": .string("Process ID. Omit for frontmost app.")]),
+                    "role":     .object(["type": .string("string"),  "description": .string("AX role to match (e.g. AXButton, AXTextField)")]),
+                    "title":    .object(["type": .string("string"),  "description": .string("Title substring to match (case-insensitive)")]),
+                    "label":    .object(["type": .string("string"),  "description": .string("Label/description substring to match (case-insensitive)")]),
+                    "maxDepth": .object(["type": .string("integer"), "description": .string("Max search depth (default: 10)")])
+                ])
+            ]),
+            handler: { arguments in
+                let params = unwrap(arguments)
+                do {
+                    let pid = try resolvePid(params)
+                    let r = stringParam(params, "role")
+                    let t = stringParam(params, "title")
+                    let l = stringParam(params, "label")
+                    let maxD = intParam(params, "maxDepth", default: 10)
+
+                    guard r != nil || t != nil || l != nil else {
+                        throw AXModuleError.invalidInput("At least one of role, title, or label is required")
+                    }
+
+                    let appEl = AXUIElementCreateApplication(pid)
+                    let matches = findElements(in: appEl, role: r, title: t, label: l,
+                                                depth: 0, maxDepth: maxD)
+                    let elements: [Value] = matches.map { (el, path) in
+                        var d: [String: Value] = ["role": .string(role(el)), "path": .string(path)]
+                        if let t = title(el)    { d["title"] = .string(t) }
+                        if let ds = desc(el)    { d["description"] = .string(ds) }
+                        if let p = position(el) { d["x"] = .double(p.x); d["y"] = .double(p.y) }
+                        if let s = size(el)     { d["width"] = .double(s.w); d["height"] = .double(s.h) }
+                        return .object(d)
+                    }
+                    return .object(["matches": .array(elements), "count": .int(elements.count)])
+                } catch let e as AXModuleError { return e.toResponse() }
+            }
+        ))
+
+        // ── 4. ax_element_info (open) ─────────────────────────────────────
+        await router.register(ToolRegistration(
+            name: "ax_element_info",
+            module: moduleName,
+            tier: .open,
+            description: "Deep inspect a single AX element. Find by path, or by role/title. Returns all attributes, actions, position, size, and state.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "pid":   .object(["type": .string("integer"), "description": .string("Process ID. Omit for frontmost app.")]),
+                    "path":  .object(["type": .string("string"),  "description": .string("Element path (e.g. /AXApplication:Finder/AXWindow:Downloads/AXButton:Close)")]),
+                    "role":  .object(["type": .string("string"),  "description": .string("Role to find (alternative to path)")]),
+                    "title": .object(["type": .string("string"),  "description": .string("Title to find (alternative to path)")])
+                ])
+            ]),
+            handler: { arguments in
+                let params = unwrap(arguments)
+                do {
+                    let pid = try resolvePid(params)
+                    let appEl = AXUIElementCreateApplication(pid)
+                    let target = try resolveTarget(params, appElement: appEl)
+                    return detailedInfo(target)
+                } catch let e as AXModuleError { return e.toResponse() }
+            }
+        ))
+
+        // ── 5. ax_perform_action (notify) ─────────────────────────────────
+        await router.register(ToolRegistration(
+            name: "ax_perform_action",
+            module: moduleName,
+            tier: .notify,
+            description: "Perform an action on an AX element: press a button, set a value, focus, confirm, cancel, increment, or decrement. Accepts friendly names or raw AX action strings.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "pid":    .object(["type": .string("integer"), "description": .string("Process ID. Omit for frontmost app.")]),
+                    "path":   .object(["type": .string("string"),  "description": .string("Element path to act on")]),
+                    "role":   .object(["type": .string("string"),  "description": .string("Role to find (alternative to path)")]),
+                    "title":  .object(["type": .string("string"),  "description": .string("Title to find (alternative to path)")]),
+                    "action": .object(["type": .string("string"),  "description": .string("Action: press, focus, setValue, confirm, cancel, increment, decrement, or raw AX action name")]),
+                    "value":  .object(["type": .string("string"),  "description": .string("Value to set (required for setValue action)")])
+                ]),
+                "required": .array([.string("action")])
+            ]),
+            handler: { arguments in
+                let params = unwrap(arguments)
+                do {
+                    try ensureTrusted()
+                    let pid = try resolvePid(params)
+                    guard let action = stringParam(params, "action") else {
+                        throw AXModuleError.invalidInput("action is required")
+                    }
+
+                    let appEl = AXUIElementCreateApplication(pid)
+                    let target = try resolveTarget(params, appElement: appEl)
+
+                    // Map friendly names to AX constants
+                    switch action.lowercased() {
+                    case "setvalue":
+                        guard let newVal = stringParam(params, "value") else {
+                            throw AXModuleError.invalidInput("value is required for setValue action")
+                        }
+                        let res = AXUIElementSetAttributeValue(target, kAXValueAttribute as CFString, newVal as CFTypeRef)
+                        guard res == .success else {
+                            throw AXModuleError.actionFailed(action: "setValue", detail: "AXError code \(res.rawValue)")
+                        }
+                        return .object(["success": .bool(true), "action": .string("setValue"), "value": .string(newVal)])
+
+                    default:
+                        let axAction: String
+                        switch action.lowercased() {
+                        case "press":     axAction = kAXPressAction as String
+                        case "focus":     axAction = kAXRaiseAction as String
+                        case "confirm":   axAction = kAXConfirmAction as String
+                        case "cancel":    axAction = kAXCancelAction as String
+                        case "increment": axAction = kAXIncrementAction as String
+                        case "decrement": axAction = kAXDecrementAction as String
+                        default:          axAction = action
+                        }
+
+                        let res = AXUIElementPerformAction(target, axAction as CFString)
+                        guard res == .success else {
+                            throw AXModuleError.actionFailed(action: action, detail: "AXError code \(res.rawValue)")
+                        }
+                        return .object([
+                            "success": .bool(true),
+                            "action":  .string(action),
+                            "element": .string("\(role(target)):\(title(target) ?? "")")
+                        ])
+                    }
+                } catch let e as AXModuleError { return e.toResponse() }
+            }
+        ))
+    }
+}

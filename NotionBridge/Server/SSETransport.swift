@@ -197,9 +197,9 @@ public actor SSEServer {
 
     /// Build the JSON health response.
     /// Returns: {"status": "running", "tools": N, "uptime": N, "version": "X.Y.Z", "clients": N}
-    private func buildHealthResponse() -> Data {
+    private func buildHealthResponse() async -> Data {
         let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
-        let toolCount = 30  // Known V1 tool count (29 modules + 1 echo)
+        let toolCount = await router.allRegistrations().count
         let uptime: Int = {
             guard let earliest = sessions.values.map(\.createdAt).min() else { return 0 }
             return Int(Date().timeIntervalSince(earliest))
@@ -278,9 +278,10 @@ public actor SSEServer {
             validationPipeline: validationPipeline
         )
 
+        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
         let server = Server(
             name: "NotionBridgeSSE",
-            version: "0.6.0",
+            version: appVersion,
             capabilities: .init(tools: .init())
         )
 
@@ -288,38 +289,18 @@ public actor SSEServer {
         let onToolCall = self.onToolCall
 
         await server.withMethodHandler(ListTools.self) { _ in
-            let registrations = await router.allRegistrations()
+            let disabledNames = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
+            let registrations = await router.enabledRegistrations(disabledNames: disabledNames)
             return .init(tools: registrations.map { reg in
                 Tool(name: reg.name, description: reg.description, inputSchema: reg.inputSchema)
             })
         }
 
         await server.withMethodHandler(CallTool.self) { params in
-            let toolName = params.name
             let arguments: Value = params.arguments.map { .object($0) } ?? .object([:])
-
-            do {
-                let result = try await router.dispatch(toolName: toolName, arguments: arguments)
-                await MainActor.run { onToolCall() }
-
-                let text: String
-                switch result {
-                case .string(let s):
-                    text = s
-                default:
-                    let encoder = JSONEncoder()
-                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                    if let data = try? encoder.encode(result),
-                       let json = String(data: data, encoding: .utf8) {
-                        text = json
-                    } else {
-                        text = String(describing: result)
-                    }
-                }
-                return .init(content: [.text(.init(text))])
-            } catch {
-                return .init(content: [.text(.init("Error: \(error.localizedDescription)"))], isError: true)
-            }
+            let (text, isError) = await router.dispatchFormatted(toolName: params.name, arguments: arguments)
+            if !isError { await MainActor.run { onToolCall() } }
+            return .init(content: [.text(.init(text))], isError: isError)
         }
 
         do {
@@ -383,17 +364,19 @@ public actor SSEServer {
                 print("[SSE-Legacy] Client identified: \(name) v\(version)")
             }
 
+            let legacyVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
             return buildRPCResponse(id: requestId, result: [
                 "protocolVersion": "2024-11-05",
                 "capabilities": ["tools": [:] as [String: Any]] as [String: Any],
-                "serverInfo": ["name": "NotionBridge", "version": "1.1.0"] as [String: Any]
+                "serverInfo": ["name": "NotionBridge", "version": legacyVersion] as [String: Any]
             ] as [String: Any])
 
         case "notifications/initialized":
             return nil
 
         case "tools/list":
-            let regs = await router.allRegistrations()
+            let disabledNames = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
+            let regs = await router.enabledRegistrations(disabledNames: disabledNames)
             let tools: [[String: Any]] = regs.map { reg in
                 var t: [String: Any] = [
                     "name": reg.name,
@@ -420,31 +403,12 @@ public actor SSEServer {
                 argsValue = .object([:])
             }
 
-            do {
-                let result = try await router.dispatch(toolName: name, arguments: argsValue)
-                await MainActor.run { onToolCall() }
-
-                let text: String
-                switch result {
-                case .string(let s):
-                    text = s
-                default:
-                    let enc = JSONEncoder()
-                    enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-                    text = (try? enc.encode(result))
-                        .flatMap { String(data: $0, encoding: .utf8) }
-                        ?? String(describing: result)
-                }
-                return buildRPCResponse(id: requestId, result: [
-                    "content": [["type": "text", "text": text] as [String: Any]],
-                    "isError": false
-                ] as [String: Any])
-            } catch {
-                return buildRPCResponse(id: requestId, result: [
-                    "content": [["type": "text", "text": "Error: \(error.localizedDescription)"] as [String: Any]],
-                    "isError": true
-                ] as [String: Any])
-            }
+            let (text, isError) = await router.dispatchFormatted(toolName: name, arguments: argsValue)
+            if !isError { await MainActor.run { onToolCall() } }
+            return buildRPCResponse(id: requestId, result: [
+                "content": [["type": "text", "text": text] as [String: Any]],
+                "isError": isError
+            ] as [String: Any])
 
         case "ping":
             return buildRPCResponse(id: requestId, result: [:] as [String: Any])

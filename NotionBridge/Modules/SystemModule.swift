@@ -1,7 +1,7 @@
 // SystemModule.swift – V1-05 System Tools
 // NotionBridge · Modules
 //
-// Three tools: system_info (green), process_list (green), notify (yellow).
+// Three tools: system_info (open), process_list (open), notify (open).
 // Uses sw_vers, sysctl, ps, and osascript for macOS integration.
 
 import Foundation
@@ -17,7 +17,7 @@ public enum SystemModule {
     /// Register all SystemModule tools on the given router.
     public static func register(on router: ToolRouter) async {
 
-        // MARK: 1. system_info – 🟢 Green
+        // MARK: 1. system_info – open
         await router.register(ToolRegistration(
             name: "system_info",
             module: moduleName,
@@ -83,7 +83,7 @@ public enum SystemModule {
             }
         ))
 
-        // MARK: 2. process_list – 🟢 Green
+        // MARK: 2. process_list – open
         await router.register(ToolRegistration(
             name: "process_list",
             module: moduleName,
@@ -175,7 +175,7 @@ public enum SystemModule {
             }
         ))
 
-        // MARK: 3. notify – 🟡 Yellow (Write-Auto)
+        // MARK: 3. notify – open
         await router.register(ToolRegistration(
             name: "notify",
             module: moduleName,
@@ -194,7 +194,7 @@ public enum SystemModule {
                 guard case .object(let args) = arguments,
                       case .string(let title) = args["title"],
                       case .string(let body) = args["body"] else {
-                    throw ToolRouterError.unknownTool("notify: missing 'title' or 'body'")
+                    throw ToolRouterError.invalidArguments(toolName: "notify", reason: "missing 'title' or 'body'")
                 }
 
                 let sound: String? = {
@@ -227,9 +227,10 @@ public enum SystemModule {
                 process.standardError = stderrPipe
 
                 try process.run()
-                process.waitUntilExit()
 
+                // Read pipe data BEFORE waitUntilExit to prevent buffer deadlock
                 let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
                 let stderr = String(data: stderrData, encoding: .utf8) ?? ""
 
                 if process.terminationStatus == 0 {

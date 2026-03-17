@@ -4,14 +4,20 @@
 // PKT-341: Added rebuild note explaining TCC grant invalidation
 // PKT-349 B3: Added permission pre-triggers for Automation and Contacts grants
 //   (mirrors D2 pattern from OnboardingWindow.swift)
+// PKT-357 F14: Auto-refresh permission status every 2s while view is visible
 
 import SwiftUI
+import Combine
 
 /// Displays the 5-grant TCC permission status grid.
 /// Each row shows a colored indicator (green = granted, red = denied/unknown)
 /// and a deep link button to the relevant System Settings pane for denied grants.
+/// PKT-357 F14: Polls PermissionManager.checkAll() every 2 seconds while visible.
 public struct PermissionView: View {
     let permissionManager: PermissionManager
+
+    // PKT-357 F14: Timer publisher for auto-refresh
+    private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     public init(permissionManager: PermissionManager) {
         self.permissionManager = permissionManager
@@ -31,6 +37,15 @@ public struct PermissionView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
+        }
+        // PKT-357 F14: Check permissions on appear
+        .onAppear {
+            permissionManager.checkAll()
+        }
+        // PKT-357 F14: Auto-refresh every 2s so status updates after user
+        // grants permission in System Settings and switches back
+        .onReceive(refreshTimer) { _ in
+            permissionManager.checkAll()
         }
     }
 

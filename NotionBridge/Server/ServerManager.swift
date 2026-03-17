@@ -6,6 +6,9 @@
 // Updated by PKT-341: Version from Bundle (single source of truth), AuditLog simplified
 // V1-QUALITY-C2: Added onClientConnected callback for client identification.
 //   SSEServer and legacy RPC now extract clientInfo from initialize requests.
+// PKT-354: Added ScreenModule registration (screen_capture + screen_ocr). 32 tools across 8 modules.
+// PKT-356: Added AccessibilityModule (5 AX tools) + screen recording (2 tools). 39 tools across 9 modules.
+// PKT-356-hotfix: Added AppleScriptModule (1 tool) for in-process AppleScript — fixes TCC prompt storm. 40 tools across 10 modules.
 
 import Foundation
 import MCP
@@ -21,6 +24,7 @@ public actor ServerManager {
     private var router: ToolRouter?
     private var sseServer: SSEServer?
     private var auditLog: AuditLog?
+    private var securityGate: SecurityGate?
 
     /// The configured SSE port (from NOTION_BRIDGE_PORT env var, default 9700).
     public nonisolated let ssePort: Int
@@ -47,23 +51,28 @@ public actor ServerManager {
 
     // MARK: - Setup
 
-    /// Set up server components, register all V1 modules, wire MCP handlers.
+    /// Set up server components, register all modules, wire MCP handlers.
     /// Returns the number of registered tools.
     public func setup() async -> Int {
         // 1. Create core components
         let securityGate = SecurityGate()
+        self.securityGate = securityGate
         let auditLog = AuditLog()
         self.auditLog = auditLog
         let router = ToolRouter(securityGate: securityGate, auditLog: auditLog, batchThreshold: 3)
         self.router = router
 
-        // 2. Register V1 modules (29 tools across 6 modules)
+        // 2. Register modules (40 tools across 10 modules)
         await ShellModule.register(on: router)
         await FileModule.register(on: router)
         await SessionModule.register(on: router, auditLog: auditLog)
         await MessagesModule.register(on: router)
         await SystemModule.register(on: router)
         await NotionModule.register(on: router)
+        await ScreenModule.register(on: router)
+        await ScreenModule.registerRecording(on: router)
+        await AccessibilityModule.register(on: router)
+        await AppleScriptModule.register(on: router)
 
         // 3. Register echo tool (backward compatibility from V1-01)
         await router.register(ToolRegistration(
@@ -113,44 +122,13 @@ public actor ServerManager {
             return .init(tools: tools)
         }
 
-        // 6. Wire CallTool handler with tool-call notification
+        // 6. Wire CallTool handler with tool-call notification (uses dispatchFormatted)
         let onToolCall = self.onToolCall
         await server.withMethodHandler(CallTool.self) { [router] params in
-            let toolName = params.name
-            let arguments: Value = {
-                if let args = params.arguments {
-                    return .object(args)
-                } else {
-                    return .object([:])
-                }
-            }()
-
-            do {
-                let result = try await router.dispatch(toolName: toolName, arguments: arguments)
-
-                // Notify UI of successful tool call
-                await MainActor.run { onToolCall() }
-
-                let text: String
-                switch result {
-                case .string(let s):
-                    text = s
-                default:
-                    let encoder = JSONEncoder()
-                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-                    if let data = try? encoder.encode(result),
-                       let json = String(data: data, encoding: .utf8) {
-                        text = json
-                    } else {
-                        text = String(describing: result)
-                    }
-                }
-                return .init(content: [.text(.init(text))])
-            } catch let error as ToolRouterError {
-                return .init(content: [.text(.init("Error: \(error.localizedDescription)"))], isError: true)
-            } catch {
-                return .init(content: [.text(.init("Error: \(error.localizedDescription)"))], isError: true)
-            }
+            let arguments: Value = params.arguments.map { .object($0) } ?? .object([:])
+            let (text, isError) = await router.dispatchFormatted(toolName: params.name, arguments: arguments)
+            if !isError { await MainActor.run { onToolCall() } }
+            return .init(content: [.text(.init(text))], isError: isError)
         }
 
         // 7. Create SSE server (configurable port via NOTION_BRIDGE_PORT)
@@ -193,6 +171,11 @@ public actor ServerManager {
             throw ServerManagerError.notSetUp
         }
         try await sseServer.start()
+    }
+
+    /// Request notification permission for the same SecurityGate used by ToolRouter.
+    public func requestSecurityNotificationPermission() async {
+        await securityGate?.requestNotificationPermission()
     }
 
     /// Stop the SSE server gracefully.

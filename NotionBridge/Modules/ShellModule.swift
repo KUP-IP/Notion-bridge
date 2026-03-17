@@ -1,7 +1,7 @@
 // ShellModule.swift – V1-04 Shell Command Execution
 // NotionBridge · Modules
 //
-// Two tools: shell_exec (orange), run_script (green).
+// Two tools: shell_exec (notify), run_script (open).
 // Auto-escalation and forbidden path enforcement handled by SecurityGate.
 
 import Foundation
@@ -19,7 +19,7 @@ public enum ShellModule {
     /// Register all ShellModule tools on the given router.
     public static func register(on router: ToolRouter) async {
 
-        // MARK: shell_exec – 🟠 Orange (Write-Confirm)
+        // MARK: shell_exec – notify
         await router.register(ToolRegistration(
             name: "shell_exec",
             module: moduleName,
@@ -46,7 +46,7 @@ public enum ShellModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let command) = args["command"] else {
-                    throw ToolRouterError.unknownTool("shell_exec: missing required 'command' parameter")
+                    throw ToolRouterError.invalidArguments(toolName: "shell_exec", reason: "missing required 'command' parameter")
                 }
 
                 let timeout: Int = {
@@ -87,15 +87,16 @@ public enum ShellModule {
                     execute: timeoutItem
                 )
 
+                // Read pipe data BEFORE waitUntilExit to prevent buffer deadlock
+                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+
                 process.waitUntilExit()
                 timeoutItem.cancel()
 
                 let elapsed = ContinuousClock.now - startTime
                 let durationSec = Double(elapsed.components.seconds)
                     + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000_000.0
-
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
                 let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
                 let stderr = String(data: stderrData, encoding: .utf8) ?? ""
 
@@ -108,7 +109,7 @@ public enum ShellModule {
             }
         ))
 
-        // MARK: run_script – 🟢 Green (Read-Only)
+        // MARK: run_script – open
         await router.register(ToolRegistration(
             name: "run_script",
             module: moduleName,
@@ -132,7 +133,7 @@ public enum ShellModule {
             handler: { arguments in
                 guard case .object(let args) = arguments,
                       case .string(let scriptName) = args["scriptName"] else {
-                    throw ToolRouterError.unknownTool("run_script: missing required 'scriptName' parameter")
+                    throw ToolRouterError.invalidArguments(toolName: "run_script", reason: "missing required 'scriptName' parameter")
                 }
 
                 // Validate scripts directory exists

@@ -8,6 +8,8 @@
 // PKT-341: Login item guard, TCC early check, LogManager + signal handlers
 // V1-QUALITY-C2: OnboardingWindowController on first launch, SettingsWindowController
 //   for gear icon / Cmd+, access. Client identification callbacks from SSE server.
+// PKT-353: Right-click context menu setup for Quit action
+// PKT-357 F15: App Nap prevention via NSProcessInfo activity assertion
 
 import AppKit
 import ServiceManagement
@@ -32,6 +34,9 @@ private func crashFlushHandler(_ sig: Int32) {
 public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var serverTask: Task<Void, Never>?
     private var serverManager: ServerManager?
+
+    // PKT-357 F15: Activity token to prevent App Nap
+    private var activityToken: NSObjectProtocol?
 
     /// Observable state for the DashboardView popover.
     /// Owned here so it's available before the first SwiftUI render.
@@ -67,6 +72,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         registerAutoLaunch()
 
+        // PKT-357 F15: Prevent App Nap — keep MCP server alive during idle.
+        // Menu bar apps with .menuBarExtraStyle(.window) can be suspended by macOS.
+        // This activity assertion tells the system the app is doing meaningful work.
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.idleSystemSleepDisabled, .suddenTerminationDisabled],
+            reason: "MCP server must remain active for client connections"
+        )
+        print("[Notion Bridge] App Nap prevention activity started")
+
         // PKT-341: Bootstrap LogManager for crash-resilient disk logging
         Task {
             await LogManager.shared.bootstrap()
@@ -79,14 +93,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // actual System Settings state immediately, not just on popover open
         permissionManager.checkAll()
 
-        // V1-QUALITY-C1: Request notification permission for security approval flow
-        Task {
-            let gate = SecurityGate()
-            await gate.requestNotificationPermission()
-        }
-
         startMCPServer()
         validateNotionToken()
+
+        // PKT-353: Set up right-click context menu for Quit action on status item
+        statusBar.setupContextMenu()
 
         // PKT-350 F1: Re-validate token when changed from Settings
         NotificationCenter.default.addObserver(forName: .notionTokenDidChange, object: nil, queue: .main) { [weak self] _ in
@@ -113,6 +124,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         serverTask = nil
         if let manager = serverManager {
             Task { await manager.stopSSE() }
+        }
+
+        // PKT-357 F15: End activity assertion
+        if let token = activityToken {
+            ProcessInfo.processInfo.endActivity(token)
+            activityToken = nil
         }
 
         // PKT-341: Flush LogManager before exit
@@ -182,6 +199,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         serverTask = Task.detached {
             let toolCount = await manager.setup()
+            await manager.requestSecurityNotificationPermission()
             let port = manager.ssePort
 
             // PKT-350 F2: Populate tool info for ToolRegistryView

@@ -18,7 +18,7 @@ public enum SessionModule {
     /// V1-04: now accepts auditLog for session_info and session_clear.
     public static func register(on router: ToolRouter, auditLog: AuditLog) async {
 
-        // tools_list – 🟢 Green (V1-03, preserved)
+        // tools_list – open (V1-03, preserved)
         await router.register(ToolRegistration(
             name: "tools_list",
             module: moduleName,
@@ -93,7 +93,7 @@ public enum SessionModule {
             }
         ))
 
-        // session_info – 🟢 Green (V1-04)
+        // session_info – open (V1-04)
         await router.register(ToolRegistration(
             name: "session_info",
             module: moduleName,
@@ -123,7 +123,7 @@ public enum SessionModule {
             }
         ))
 
-        // session_clear – 🟠 Orange (V1-04)
+        // session_clear – notify (V1-04)
         await router.register(ToolRegistration(
             name: "session_clear",
             module: moduleName,

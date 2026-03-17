@@ -192,6 +192,35 @@ public actor ToolRouter {
         return nil
     }
 
+    // MARK: CallTool Dispatch Helper
+
+    /// Dispatch a tool call and format the result as a CallTool-compatible tuple.
+    /// Centralizes the dispatch → JSON encode → text conversion pipeline
+    /// used by ServerManager (stdio), SSEServer (Streamable HTTP), and legacy RPC.
+    /// Returns: (text: String, isError: Bool)
+    public func dispatchFormatted(toolName: String, arguments: Value) async -> (text: String, isError: Bool) {
+        do {
+            let result = try await dispatch(toolName: toolName, arguments: arguments)
+            let text: String
+            switch result {
+            case .string(let s):
+                text = s
+            default:
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                if let data = try? encoder.encode(result),
+                   let json = String(data: data, encoding: .utf8) {
+                    text = json
+                } else {
+                    text = String(describing: result)
+                }
+            }
+            return (text: text, isError: false)
+        } catch {
+            return (text: "Error: \(error.localizedDescription)", isError: true)
+        }
+    }
+
     // MARK: Helpers
 
     private func stringifySummary(_ value: Value) -> String {
@@ -221,12 +250,15 @@ public actor ToolRouter {
 
 public enum ToolRouterError: Error, LocalizedError {
     case unknownTool(String)
+    case invalidArguments(toolName: String, reason: String)
     case securityRejection(toolName: String, reason: String)
 
     public var errorDescription: String? {
         switch self {
         case .unknownTool(let name):
             return "Unknown tool: \(name)"
+        case .invalidArguments(let name, let reason):
+            return "\(name): \(reason)"
         case .securityRejection(let name, let reason):
             return "Security gate rejected \(name): \(reason)"
         }

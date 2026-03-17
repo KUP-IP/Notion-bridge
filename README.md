@@ -2,17 +2,17 @@
 
 **A native macOS menu bar app that replaces the Python + ngrok MCP server, serving as the persistent bidirectional bridge between Notion agents and the local Mac.**
 
-Version 1.0.0 · macOS 14+ · Apple Silicon · Swift 6
+Version 1.1.0 · macOS 26+ · Apple Silicon · Swift 6.2
 
 ---
 
 ## Overview
 
-NotionBridge is a native SwiftUI menu bar app that exposes 29 tools across 6 modules over MCP (Model Context Protocol) transports. It replaces the previous Python + ngrok bridge with a single binary that auto-launches on login, routes every tool call through a 4-tier security gate, and logs every action to an append-only audit trail.
+NotionBridge is a native SwiftUI menu bar app that exposes 40 tools across 10 modules over MCP (Model Context Protocol) transports, plus one built-in `echo` tool for connectivity checks. It replaces the previous Python + ngrok bridge with a single binary that auto-launches on login, routes every tool call through a 2-tier security gate, and logs every action to an append-only audit trail.
 
 ### Architecture
 
-```
+```text
 Remote Agent (Notion)  ──SSE :9700──►  ┌──────────────────────┐
                                        │   NotionBridge.app          │
 Local Client (Claude)  ──stdio──────►  │                      │
@@ -38,9 +38,9 @@ Local Client (Claude)  ──stdio──────►  │                    
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| **macOS** | 14.0+ (Sonoma) | Required for SMAppService, ScreenCaptureKit |
-| **Xcode** | 16.0+ | Swift 6.0 toolchain |
-| **Swift** | 6.0+ | Strict concurrency enforced |
+| **macOS** | 26.0+ (Tahoe) | Required for current UI/runtime target |
+| **Xcode** | 26.0+ | Swift 6.2 toolchain |
+| **Swift** | 6.2+ | Strict concurrency enforced |
 | **Hardware** | Apple Silicon (M1+) | ARM64 only |
 | **Git** | 2.39+ | Trunk-based development |
 
@@ -105,7 +105,7 @@ Add to your MCP client configuration:
 
 ## Tool Reference
 
-### V1 Surface: 29 tools across 6 modules
+### Current Surface: 41 tools total (40 modules + 1 built-in)
 
 #### ShellModule (2 tools)
 
@@ -142,7 +142,7 @@ Add to your MCP client configuration:
 | `messages_participants` | 🟢 Read-Only | List chat participants |
 | `messages_send` | 🔴 Destructive | Send iMessage/SMS (requires confirm='SEND') |
 
-#### SystemModule (3 tools — v1 partial)
+#### SystemModule (3 tools)
 
 | Tool | Tier | Description |
 |------|------|-------------|
@@ -150,7 +150,7 @@ Add to your MCP client configuration:
 | `process_list` | 🟢 Read-Only | Running processes sorted by CPU/memory |
 | `notify` | 🟡 Write-Auto | Send macOS notification |
 
-#### NotionModule (3 tools — v1 narrow)
+#### NotionModule (3 tools)
 
 | Tool | Tier | Description |
 |------|------|-------------|
@@ -166,24 +166,48 @@ Add to your MCP client configuration:
 | `session_info` | 🟢 Read-Only | Uptime, connections, tool call count |
 | `session_clear` | 🟠 Write-Confirm | Clear session state (requires confirm) |
 
+#### ScreenModule (4 tools)
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `screen_capture` | 🟢 Read-Only | Capture display/window/region screenshots |
+| `screen_ocr` | 🟢 Read-Only | OCR text extraction from captured screen |
+| `screen_record_start` | 🟠 Write-Confirm | Start screen recording session |
+| `screen_record_stop` | 🟠 Write-Confirm | Stop recording and finalize output |
+
+#### AccessibilityModule (5 tools)
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `ax_focused_app` | 🟢 Read-Only | Inspect focused app and focused element |
+| `ax_tree` | 🟢 Read-Only | Dump accessibility element tree |
+| `ax_find_element` | 🟢 Read-Only | Find AX elements by role/title/label |
+| `ax_element_info` | 🟢 Read-Only | Inspect attributes/actions for one AX element |
+| `ax_perform_action` | 🟠 Write-Confirm | Execute AX actions (press/focus/setValue/etc.) |
+
+#### AppleScriptModule (1 tool)
+
+| Tool | Tier | Description |
+|------|------|-------------|
+| `applescript_exec` | 🟠 Write-Confirm | Execute AppleScript in-process (stable TCC behavior) |
+
 ---
 
 ## Security Model
 
-### 4-Tier Security Gate
+### 2-Tier Security Gate
 
 Every tool call passes through the Security Gate before execution. No exceptions.
 
 | Tier | Name | Behavior |
 |------|------|----------|
-| 🟢 | **Read-Only** | Execute immediately. Zero side effects. |
-| 🟡 | **Write-Auto** | Execute immediately. Post-confirmation in audit log. |
-| 🟠 | **Write-Confirm** | Pause and present to calling agent for approval. |
-| 🔴 | **Destructive** | Hard stop. Impact assessment required before execution. |
+| 🟢 | **open** | Execute immediately after policy checks. |
+| 🟠 | **notify** | Requires approval flow unless trusted mode is enabled. |
 
 ### Auto-Escalation Patterns
 
-Commands containing these patterns are automatically escalated to 🔴 red tier:
+Commands containing these patterns are escalated to manual handoff:
+
 - `rm` (file deletion)
 - `kill` (process termination)
 - `chmod 777` (open permissions)
@@ -194,6 +218,7 @@ Commands containing these patterns are automatically escalated to 🔴 red tier:
 ### Forbidden Paths
 
 These paths are blocked across all tiers:
+
 - `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config/gcloud`
 - `.env` files containing secrets
 - `/System`, `/Library` (write operations)
@@ -206,6 +231,7 @@ If a single request triggers **3 or more tool calls**, the router presents the f
 ### Audit Log
 
 Every tool call is recorded with:
+
 - Timestamp, tool name, security tier
 - Input summary, output summary
 - Duration (milliseconds)
@@ -223,17 +249,21 @@ Used by local clients (Claude Code, Cursor). The server reads JSON-RPC from stdi
 swift run NotionBridge
 ```
 
-### SSE (:9700)
+### SSE / HTTP (:9700)
 
 Used by remote agents (Notion). Server-Sent Events on port 9700.
 
-> **Note:** SSE transport requires NIO HTTP adapter (in development). Current v1 ships with stdio. Remote connectivity is provided through the Python bridge SSE layer during transition.
+Native SSE is implemented in Swift and supports both:
+
+- Streamable HTTP on `POST /mcp` (session-aware MCP transport)
+- Legacy SSE compatibility (`GET /sse` + `POST /messages`)
+- Health endpoint: `GET /health`
 
 ---
 
 ## Project Structure
 
-```
+```text
 notion-bridge/
 ├── NotionBridge/
 │   ├── App/                    # SwiftUI app, lifecycle, menu bar
@@ -302,13 +332,15 @@ make clean-tcc
 This resets TCC entries for **both** the legacy bundle ID (`solutions.kup.keepr`) and the current bundle ID (`kup.solutions.notion-bridge`). After running this command, all permissions will be re-requested on the next app launch.
 
 **When to use:**
+
 - After migrating from Keepr to NotionBridge — stale TCC entries under the old bundle ID can cause macOS to silently deny permissions
 - After code signing identity changes that invalidate existing TCC grants
 - When permission indicators in Settings → Permissions show red despite granting access in System Settings
 - During development after frequent rebuilds that change the code signature
 
 **What it does:**
-```
+
+```bash
 tccutil reset All solutions.kup.keepr       # Legacy Keepr bundle ID
 tccutil reset All kup.solutions.notion-bridge  # Current NotionBridge bundle ID
 ```
@@ -319,12 +351,10 @@ tccutil reset All kup.solutions.notion-bridge  # Current NotionBridge bundle ID
 
 ## Known Limitations
 
-### V1 Scope Boundaries
+### Current Scope Boundaries
 
-- **SSE transport** is provided through the Python bridge SSE layer; native Swift SSE server is planned for expansion
-- **Streamable HTTP** (:9701) deferred to expansion phase
-- **Confirmation UI** for 🟠/🔴 tiers is deferred — V1 allows with audit logging only
-- **Notion API key** must be configured manually (no Settings UI in v1)
+- Confirmation handling uses notification/alert flow and trusted-mode policy; no advanced multi-step approval UI yet
+- Notion API token must be present via env (`NOTION_API_TOKEN`) or config file
 
 ### Deferred Tools (remain on Python bridge)
 
@@ -381,6 +411,7 @@ make clean       # Remove build artifacts
 ### CI/CD
 
 GitHub Actions runs on push to `main` and pull requests:
+
 - **Build** with strict concurrency
 - **Test** full suite (unit + integration)
 - **Sign** (conditional on certificate availability)

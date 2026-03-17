@@ -66,6 +66,7 @@ public struct SettingsView: View {
     @State private var newTokenValue = ""
     @State private var tokenError: String?
     @State private var tokenSaveSuccess = false
+    @State private var showResetConfirmation = false
 
     enum SettingsTab: String, CaseIterable {
         case general = "General"
@@ -140,76 +141,38 @@ public struct SettingsView: View {
     }
 
     @AppStorage("launchAtLogin") private var launchAtLogin: Bool = true
+    @AppStorage("com.notionbridge.security.trustedMode") private var trustedMode: Bool = false
 
     private var generalTab: some View {
         Form {
             Section("Server") {
                 LabeledContent("Status", value: statusBar.isServerRunning ? "Running" : "Stopped")
-                LabeledContent("Port", value: "\(ssePort)")
+                LabeledContent("Port", value: String(ssePort))
                 LabeledContent("Tools", value: "\(statusBar.registeredToolCount) registered")
                 LabeledContent("Uptime", value: statusBar.uptimeString)
             }
 
-            Section("Notion API") {
-                if isEditingToken {
-                    SecureField("Paste new token", text: $newTokenValue)
-                        .textFieldStyle(.roundedBorder)
-
-                    if let error = tokenError {
-                        Text(error)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-
-                    if tokenSaveSuccess {
-                        Text("Token saved successfully!")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    }
-
-                    HStack {
-                        Button("Save") {
-                            saveToken()
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button("Cancel") {
-                            isEditingToken = false
-                            newTokenValue = ""
-                            tokenError = nil
-                            tokenSaveSuccess = false
-                        }
-                    }
-                } else {
-                    HStack {
-                        LabeledContent("Token", value: maskedTokenLabel)
-                        Button {
-                            isEditingToken = true
-                            tokenSaveSuccess = false
-                            tokenError = nil
-                        } label: {
-                            Image(systemName: "pencil")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.borderless)
-                    }
-                    if !statusBar.notionTokenDetail.isEmpty {
-                        Text(statusBar.notionTokenDetail)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
 
             Section("Startup") {
                 Toggle("Launch at login", isOn: $launchAtLogin)
 
                 Button("Reset Onboarding") {
-                    UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
-                    // PKT-349 B2: Notify AppDelegate to re-present onboarding window
-                    NotificationCenter.default.post(name: .resetOnboarding, object: nil)
+                    showResetConfirmation = true
                 }
                 .font(.caption)
+                .confirmationDialog(
+                    "Reset Onboarding?",
+                    isPresented: $showResetConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Reset", role: .destructive) {
+                        UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
+                        NotificationCenter.default.post(name: .resetOnboarding, object: nil)
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This will restart the setup wizard. Your settings and data will not be affected.")
+                }
             }
         }
         .formStyle(.grouped)
@@ -321,6 +284,69 @@ public struct SettingsView: View {
                 }
             }
 
+            Section("Notion API") {
+                if isEditingToken {
+                    SecureField("Paste new token", text: $newTokenValue)
+                        .textFieldStyle(.roundedBorder)
+
+                    if let error = tokenError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+
+                    if tokenSaveSuccess {
+                        Text("Token saved successfully!")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+
+                    HStack {
+                        Button("Save") {
+                            saveToken()
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Button("Cancel") {
+                            isEditingToken = false
+                            newTokenValue = ""
+                            tokenError = nil
+                            tokenSaveSuccess = false
+                        }
+                    }
+                } else {
+                    HStack {
+                        LabeledContent("Token", value: maskedTokenLabel)
+                        Button {
+                            isEditingToken = true
+                            tokenSaveSuccess = false
+                            tokenError = nil
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .frame(minWidth: 28, minHeight: 28)
+                        .contentShape(Rectangle())
+                    }
+                    if !statusBar.notionTokenDetail.isEmpty {
+                        Text(statusBar.notionTokenDetail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            Section("Setup Instructions") {
+                Link(destination: URL(string: "https://www.notion.so/profile/integrations")!) {
+                    HStack {
+                        Image(systemName: "globe")
+                        Text("Create an internal integration at notion.so/profile/integrations")
+                            .font(.caption)
+                    }
+                }
+            }
+
             Section("Connected Clients") {
                 if statusBar.connectedClients.isEmpty {
                     Text("No clients connected")
@@ -384,21 +410,39 @@ public struct SettingsView: View {
 
             Section("Logging") {
                 LabeledContent("Log Directory") {
-                    Text("~/Library/Logs/NotionBridge/")
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
+                    Button {
+                        let logPath = NSString("~/Library/Logs/NotionBridge").expandingTildeInPath
+                        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: logPath)
+                    } label: {
+                        Text("~/Library/Logs/NotionBridge/")
+                            .font(.system(.caption, design: .monospaced))
+                            .underline()
+                    }
+                    .buttonStyle(.plain)
                 }
-                Button("Open in Finder") {
-                    let logPath = NSString("~/Library/Logs/NotionBridge").expandingTildeInPath
-                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: logPath)
-                }
-                .font(.caption)
+            }
+
+            Section("Security") {
+                Toggle("Trusted Mode", isOn: $trustedMode)
+                Text("When enabled, Notify-tier commands execute without approval prompts. Use with caution.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Nuclear Handoff") {
-                Text("System-critical commands (e.g., diskutil eraseDisk, csrutil disable) are never executed. Instead, the exact terminal command is returned for you to run manually.")
+                Text("System-critical commands (such as disk formatting or SIP configuration) are never executed directly. The exact terminal command is returned for you to run manually.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Diagnostics") {
+                Button("Export Diagnostics to Clipboard") {
+                    exportDiagnostics()
+                }
+                .font(.caption)
+                Text("Copies system info, tool list, and permission status for bug reports.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
 
             Section("About") {
@@ -412,11 +456,45 @@ public struct SettingsView: View {
                 }
                 .font(.callout)
 
+                Link(destination: URL(string: "https://kup.solutions")!) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "globe")
+                            .font(.caption)
+                        Text("kup.solutions")
+                            .font(.caption)
+                    }
+                }
+
                 Text("© 2026 KUP Solutions. All rights reserved.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
         }
         .formStyle(.grouped)
+    }
+
+    // MARK: - Diagnostics (F16)
+
+    private func exportDiagnostics() {
+        let lines = [
+            "Notion Bridge Diagnostics",
+            "========================",
+            "App Version: v\(appVersion)",
+            "MCP Protocol: 2024-11-05",
+            "Port: \(ssePort)",
+            "Server Running: \(statusBar.isServerRunning)",
+            "Tools Registered: \(statusBar.registeredToolCount)",
+            "Uptime: \(statusBar.uptimeString)",
+            "Trusted Mode: \(trustedMode)",
+            "",
+            "Permissions:",
+            "  Accessibility: \(permissionManager.accessibilityStatus)",
+            "  Screen Recording: \(permissionManager.screenRecordingStatus)",
+            "  Full Disk Access: \(permissionManager.fullDiskAccessStatus)",
+            "  Automation: \(permissionManager.automationStatus)",
+            "  Contacts: \(permissionManager.contactsStatus)",
+        ].joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lines, forType: .string)
     }
 }
