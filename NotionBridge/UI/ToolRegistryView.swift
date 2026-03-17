@@ -1,11 +1,16 @@
-// ToolRegistryView.swift — PKT-350: F2 Tool Registry Tab
+// ToolRegistryView.swift — Tool Registry Tab
 // NotionBridge · UI
 // Displays all registered MCP tools grouped by module with enable/disable toggles.
+// V1.2.0: Added search filter, fixed module display names (AppleScript capitalization).
+//
+// History:
+// PKT-350 F2: Original tool registry with grouped modules and toggles.
+// V1.2.0: Search bar, moduleDisplayNames dictionary, filteredGroups.
 
 import SwiftUI
 
 /// Tool Registry tab for Settings window.
-/// Shows all MCP tools grouped by module with toggle controls.
+/// Shows all MCP tools grouped by module with toggle controls and search filter.
 struct ToolRegistryView: View {
     let tools: [ToolInfo]
     let onToggle: (String, Bool) -> Void
@@ -13,12 +18,39 @@ struct ToolRegistryView: View {
     @State private var disabledTools: Set<String> = Set(
         UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? []
     )
+    @State private var searchText = ""
 
     private static let coreTools: Set<String> = ["echo", "session_info", "tools_list"]
+
+    /// Brand-correct display names for modules whose `.capitalized` form is wrong.
+    /// Modules not in this dictionary fall through to `.capitalized`.
+    private static let moduleDisplayNames: [String: String] = [
+        "applescript": "AppleScript",
+        "builtin": "Built-in",
+    ]
+
+    /// Returns the display-safe name for a module key.
+    private func displayName(for module: String) -> String {
+        Self.moduleDisplayNames[module] ?? module.capitalized
+    }
 
     private var groupedTools: [(module: String, tools: [ToolInfo])] {
         let dict = Dictionary(grouping: tools, by: { $0.module })
         return dict.keys.sorted().map { ($0, dict[$0]!.sorted(by: { $0.name < $1.name })) }
+    }
+
+    /// Grouped tools filtered by search query. Matches tool name, description, or module.
+    private var filteredGroups: [(module: String, tools: [ToolInfo])] {
+        guard !searchText.isEmpty else { return groupedTools }
+        let query = searchText.lowercased()
+        return groupedTools.compactMap { group in
+            let matching = group.tools.filter {
+                $0.name.lowercased().contains(query) ||
+                $0.description.lowercased().contains(query) ||
+                displayName(for: group.module).lowercased().contains(query)
+            }
+            return matching.isEmpty ? nil : (group.module, matching)
+        }
     }
 
     var body: some View {
@@ -39,19 +71,35 @@ struct ToolRegistryView: View {
             }
         } else {
             Form {
-                ForEach(groupedTools, id: \.module) { group in
+                Section {
+                    HStack(spacing: BridgeSpacing.xs) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(BridgeColors.muted)
+                        TextField("Search tools…", text: $searchText)
+                            .textFieldStyle(.plain)
+                    }
+                }
+
+                if filteredGroups.isEmpty {
                     Section {
-                        ForEach(group.tools) { tool in
-                            toolRow(tool)
-                        }
-                    } header: {
-                        HStack {
-                            Text(group.module.capitalized)
-                                .font(.headline)
-                            Spacer()
-                            Text("\(enabledCount(in: group.tools))/\(group.tools.count)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                        Text("No tools matching \"\(searchText)\"")
+                            .foregroundStyle(BridgeColors.secondary)
+                    }
+                } else {
+                    ForEach(filteredGroups, id: \.module) { group in
+                        Section {
+                            ForEach(group.tools) { tool in
+                                toolRow(tool)
+                            }
+                        } header: {
+                            HStack {
+                                Text(displayName(for: group.module))
+                                    .font(.headline)
+                                Spacer()
+                                Text("\(enabledCount(in: group.tools))/\(group.tools.count)")
+                                    .font(.caption)
+                                    .foregroundStyle(BridgeColors.secondary)
+                            }
                         }
                     }
                 }
@@ -105,13 +153,13 @@ struct ToolRegistryView: View {
                     if isCoreProtected {
                         Image(systemName: "lock.fill")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(BridgeColors.secondary)
                     }
                 }
 
                 Text(tool.description)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(BridgeColors.secondary)
                     .lineLimit(2)
             }
         }
