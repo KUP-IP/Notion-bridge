@@ -25,17 +25,22 @@ import MCP
 public final class LegacySSEBridge: @unchecked Sendable {
     private let lock = NSLock()
     private var channels: [String: Channel] = [:]
+    
+    public init() {}
 
     /// Register a new SSE stream connection. Returns the assigned session ID.
-    func register(channel: Channel) -> String {
+    public func register(channel: Channel) -> String {
         let id = UUID().uuidString
-        lock.withLock { channels[id] = channel }
-        print("[SSE-Legacy] Client connected — session \(id.prefix(8))… (total: \(channels.count))")
+        let total: Int = lock.withLock {
+            channels[id] = channel
+            return channels.count
+        }
+        print("[SSE-Legacy] Client connected — session \(id.prefix(8))… (total: \(total))")
         return id
     }
 
     /// Remove a disconnected SSE session.
-    func remove(sessionID: String) {
+    public func remove(sessionID: String) {
         let remaining: Int = lock.withLock {
             channels.removeValue(forKey: sessionID)
             return channels.count
@@ -45,13 +50,21 @@ public final class LegacySSEBridge: @unchecked Sendable {
 
     /// Send an SSE event to the client's stream.
     /// If sessionID is nil and only one client is connected, sends to that client (V1 fallback).
-    func sendEvent(sessionID: String?, event: String, data: String) {
-        let channel: Channel? = lock.withLock {
-            if let id = sessionID, let ch = channels[id] { return ch }
-            return channels.count == 1 ? channels.values.first : nil
+    public func sendEvent(sessionID: String?, event: String, data: String) {
+        let resolved: (channel: Channel?, reason: String, activeCount: Int) = lock.withLock {
+            if let id = sessionID, let ch = channels[id] {
+                return (ch, "direct:\(id.prefix(8))", channels.count)
+            }
+            if sessionID != nil {
+                return (nil, "missing-session", channels.count)
+            }
+            if channels.count == 1 {
+                return (channels.values.first, "single-client-fallback", channels.count)
+            }
+            return (nil, "ambiguous-fallback", channels.count)
         }
-        guard let channel = channel else {
-            print("[SSE-Legacy] No channel for session — event dropped")
+        guard let channel = resolved.channel else {
+            print("[SSE-Legacy] No channel for session — event dropped (\(resolved.reason), active: \(resolved.activeCount))")
             return
         }
         let payload = "event: \(event)\ndata: \(data)\n\n"
@@ -64,7 +77,7 @@ public final class LegacySSEBridge: @unchecked Sendable {
     }
 
     /// Number of active legacy SSE connections.
-    var activeCount: Int {
+    public var activeCount: Int {
         lock.withLock { channels.count }
     }
 }

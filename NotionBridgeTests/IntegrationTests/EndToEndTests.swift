@@ -7,6 +7,7 @@
 import Foundation
 import MCP
 import NotionBridgeLib
+import NIOEmbedded
 
 // MARK: - Integration Test Runner
 
@@ -227,6 +228,58 @@ func runEndToEndTests() async {
         ]
         let result = await router.batchGate(planned: plan)
         try expect(result == nil, "Batch gate should not trigger below threshold")
+    }
+
+    // ============================================================
+    // E2E-5b: Legacy SSE bridge concurrency regression coverage
+    // ============================================================
+
+    await test("E2E: LegacySSEBridge register/remove keeps active count accurate") {
+        let bridge = LegacySSEBridge()
+        let channelA = EmbeddedChannel()
+        let channelB = EmbeddedChannel()
+
+        let idA = bridge.register(channel: channelA)
+        try expect(!idA.isEmpty, "Expected session ID for channel A")
+        try expect(bridge.activeCount == 1, "Expected activeCount == 1 after first register")
+
+        let idB = bridge.register(channel: channelB)
+        try expect(!idB.isEmpty, "Expected session ID for channel B")
+        try expect(bridge.activeCount == 2, "Expected activeCount == 2 after second register")
+
+        bridge.remove(sessionID: idA)
+        try expect(bridge.activeCount == 1, "Expected activeCount == 1 after removing first session")
+
+        bridge.remove(sessionID: idB)
+        try expect(bridge.activeCount == 0, "Expected activeCount == 0 after removing all sessions")
+
+        _ = try channelA.finish()
+        _ = try channelB.finish()
+    }
+
+    await test("E2E: LegacySSEBridge concurrent register/remove/send drains to zero") {
+        let bridge = LegacySSEBridge()
+        let iterations = 200
+
+        await withTaskGroup(of: Void.self) { group in
+            for idx in 0..<iterations {
+                group.addTask {
+                    let channel = EmbeddedChannel()
+                    let sessionID = bridge.register(channel: channel)
+
+                    // Exercise both direct and fallback event routing under concurrent churn.
+                    bridge.sendEvent(sessionID: sessionID, event: "message", data: "{\"i\":\(idx)}")
+                    bridge.sendEvent(sessionID: nil, event: "heartbeat", data: "{\"i\":\(idx)}")
+                    bridge.sendEvent(sessionID: UUID().uuidString, event: "message", data: "{\"i\":\(idx)}")
+
+                    bridge.remove(sessionID: sessionID)
+                    _ = try? channel.finish()
+                }
+            }
+            await group.waitForAll()
+        }
+
+        try expect(bridge.activeCount == 0, "Expected bridge to drain all sessions after concurrent churn")
     }
 
     // ============================================================

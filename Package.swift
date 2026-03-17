@@ -40,7 +40,8 @@ let package = Package(
         .executableTarget(
             name: "NotionBridgeTests",
             dependencies: ["NotionBridgeLib",
-                .product(name: "MCP", package: "swift-sdk")
+                .product(name: "MCP", package: "swift-sdk"),
+                .product(name: "NIOEmbedded", package: "swift-nio")
             ],
             path: "NotionBridgeTests"
         ),
