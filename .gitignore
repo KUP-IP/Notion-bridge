@@ -10,3 +10,4 @@ DerivedData/
 *.log
 *.pid
 .cursor/
+.DS_Store
