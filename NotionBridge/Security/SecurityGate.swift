@@ -584,6 +584,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             return false
         }
         let alert = NSAlert()
+        alert.icon = NSApp.applicationIconImage
         alert.messageText = title
         alert.informativeText = body
         alert.alertStyle = .warning

@@ -9,6 +9,10 @@
 //   Previous approach (tccutil reset + silent re-probe) is unreliable on
 //   macOS Sequoia — prompts are suppressed and the button appeared to do nothing.
 //   Now consistently opens the Automation settings pane for manual grant.
+// PKT-362 D1: Stripped DisclosureGroup verbosity — name + status icon only.
+//   Remediation text conditional on non-granted state.
+// PKT-362 D3: Animated per-row re-check feedback via grantCheckingState.
+// PKT-362 D6: Batched restart banner when needsRestart flag is set.
 
 import SwiftUI
 import Combine
@@ -17,10 +21,10 @@ import os.log
 
 private let permLog = Logger(subsystem: "kup.solutions.notion-bridge", category: "PermissionView")
 
-/// Displays the 5-grant TCC permission status grid.
-/// Each row shows a colored indicator (green = granted, red = denied/unknown)
-/// and a deep link button to the relevant System Settings pane for denied grants.
-/// PKT-357 F14: Polls PermissionManager.checkAll() every 2 seconds while visible.
+/// Displays the V1 TCC permission status grid.
+/// PKT-362 D1: Clean rows — name + status icon only, no DisclosureGroup.
+/// PKT-362 D3: Per-row animated "Checking…" state from grantCheckingState.
+/// PKT-362 D6: Restart banner when needsRestart is true.
 public struct PermissionView: View {
     let permissionManager: PermissionManager
 
@@ -38,6 +42,12 @@ public struct PermissionView: View {
                     grant: grant,
                     status: permissionManager.status(for: grant)
                 )
+            }
+
+            // PKT-362 D6: Batched restart banner
+            if permissionManager.needsRestart {
+                restartBanner
+                    .padding(.top, 4)
             }
 
             // PKT-341: TCC rebuild note — grants are tied to code signature
@@ -62,14 +72,20 @@ public struct PermissionView: View {
 
     // MARK: - Row
 
+    /// PKT-362 D1: Clean row — grant name + status icon only. No DisclosureGroup.
+    /// Remediation text shown only for non-granted states.
+    /// PKT-362 D3: Yellow "Checking…" indicator when grantCheckingState is active.
     private func permissionRow(
         grant: PermissionManager.Grant,
         status: PermissionManager.GrantStatus
     ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let isChecking = permissionManager.grantCheckingState[grant] ?? false
+
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
+                // D3: Yellow circle during check, normal status color otherwise
                 Circle()
-                    .fill(statusColor(status))
+                    .fill(isChecking ? .yellow : statusColor(status))
                     .frame(width: 8, height: 8)
 
                 Text(grant.displayName)
@@ -77,11 +93,19 @@ public struct PermissionView: View {
 
                 Spacer()
 
-                Text(permissionManager.statusLabel(for: grant))
-                    .font(.caption)
-                    .foregroundStyle(status == .granted ? .green : .orange)
+                // D3: "Checking…" label during animated recheck
+                if isChecking {
+                    Text("Checking\u{2026}")
+                        .font(.caption)
+                        .foregroundStyle(.yellow)
+                } else {
+                    Text(permissionManager.statusLabel(for: grant))
+                        .font(.caption)
+                        .foregroundStyle(status == .granted ? .green : .orange)
+                }
 
-                if status != .granted {
+                // D1: Action button only for non-granted, non-checking states
+                if status != .granted && !isChecking {
                     Button(grant == .automation || grant == .fullDiskAccess
                            ? "Open Settings" : "Allow") {
                         permLog.notice("Button tapped for grant: \(grant.displayName)")
@@ -93,30 +117,60 @@ public struct PermissionView: View {
                 }
             }
 
-            Text(permissionManager.remediation(for: grant))
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-            DisclosureGroup("Details") {
-                if let detail = permissionManager.debugDetail(for: grant) {
-                    Text(detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let evidence = permissionManager.evidence(for: grant) {
-                    Text("Probe: \(evidence.source)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text("Observed: \(evidence.observed)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+            // D1: Remediation text — conditional, only for non-granted states
+            if status != .granted && !isChecking {
+                Text(permissionManager.remediation(for: grant))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
+
+            // D1: DisclosureGroup REMOVED — probe/evidence data available via
+            // Diagnostics export in Advanced settings or debugDetail(for:) API.
         }
+        // D3: Animate row transitions (checking ↔ result) with 0.3s fade
+        .animation(.easeInOut(duration: 0.3), value: isChecking)
     }
+
+    // MARK: - D6 Restart Banner
+
+    /// PKT-362 D6: Shows grant progress + single "Restart NotionBridge" prompt.
+    /// Displays progress state when partial grants, confirmation when all granted.
+    @ViewBuilder
+    private var restartBanner: some View {
+        let grantedCount = PermissionManager.Grant.v1Cases.filter {
+            permissionManager.status(for: $0) == .granted
+        }.count
+        let totalCount = PermissionManager.Grant.v1Cases.count
+        let allGranted = grantedCount == totalCount
+
+        VStack(spacing: 6) {
+            if allGranted {
+                Label("All permissions granted \u{2014} restart to apply changes.",
+                      systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            } else {
+                Label("\(grantedCount) of \(totalCount) granted \u{2014} grant remaining permissions, then restart.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            Button("Restart NotionBridge") {
+                restartApp()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(allGranted ? Color.green.opacity(0.1) : Color.yellow.opacity(0.1))
+        )
+    }
+
+    // MARK: - Helpers
 
     private func statusColor(_ status: PermissionManager.GrantStatus) -> Color {
         switch status {
@@ -125,6 +179,18 @@ public struct PermissionView: View {
         case .unknown: return .orange
         case .partiallyGranted: return .orange
         case .restartRecommended: return .orange
+        }
+    }
+
+    /// PKT-362 D6: Restart the app by launching a new instance and terminating current.
+    private func restartApp() {
+        let bundleURL = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
+            DispatchQueue.main.async {
+                NSApp.terminate(nil)
+            }
         }
     }
 
@@ -164,6 +230,17 @@ public struct PermissionView: View {
                 permLog.error("[AUTOMATION] Failed to create URL from string: \(urlString)")
             }
             Task {
+                await permissionManager.recheckAllForTruth()
+            }
+        case .notifications:
+            // PKT-364 D3: Probe-then-deep-link for notification permission.
+            Task {
+                let granted = await permissionManager.requestNotificationAccess()
+                if !granted {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
                 await permissionManager.recheckAllForTruth()
             }
         case .contacts:

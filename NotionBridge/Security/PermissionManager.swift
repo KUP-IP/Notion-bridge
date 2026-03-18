@@ -1,12 +1,19 @@
 // PermissionManager.swift — TCC Grant Detection Logic
 // V1-02: Detects grant status for all 5 required TCC permissions
 // V1-QUALITY-POLISH (PKT-346 D2): Added requestContactsAccess()
+// V1-03 (BUG-FIX): Dynamic Automation target probing — Chrome, Contacts,
+//   and future targets are probed alongside System Events and Messages.
+//   Fixes: NotionBridge invisible in Automation prefs when Chrome was the
+//   first Apple Event target (TCC prompt silently suppressed on Sequoia).
+// PKT-362 D3: Added grantCheckingState and animatedRecheckAll() for animated re-check.
+// PKT-362 D5: Added systemSettingsURL to Grant for deep links in post-reset sheet.
+// PKT-362 D6: Added needsRestart flag and restart transition tracking.
 //
 // Detection methods per grant:
 //   - Accessibility: AXIsProcessTrusted() — direct API
 //   - Screen Recording: CGPreflightScreenCaptureAccess() — direct API
 //   - Full Disk Access: Probe Messages chat.db readability — no direct API
-//   - Automation: Probe via NSAppleScript to System Events — no direct API
+//   - Automation: Probe via NSAppleScript to each target app — no direct API
 //   - Contacts: CNContactStore.authorizationStatus(for:) — direct API
 //
 // Warning: macOS 15+ (Sequoia): Screen Recording permission expires weekly.
@@ -21,6 +28,7 @@ import Foundation
 import Observation
 import AppKit
 import Contacts
+import UserNotifications
 
 /// Detects TCC (Transparency, Consent, and Control) grant status
 /// for all 5 required macOS permissions.
@@ -38,6 +46,7 @@ public final class PermissionManager {
         case screenRecording
         case fullDiskAccess
         case automation
+        case notifications
         case contacts
 
         public var id: String { rawValue }
@@ -53,7 +62,27 @@ public final class PermissionManager {
             case .screenRecording: return "Screen Recording"
             case .fullDiskAccess: return "Full Disk Access"
             case .automation: return "Automation"
+            case .notifications: return "Notifications"
             case .contacts: return "Contacts"
+            }
+        }
+
+        /// PKT-362 D5: System Settings deep link URL per grant.
+        /// Used by PostResetSheet to offer one-tap navigation to the correct pane.
+        public var systemSettingsURL: URL? {
+            switch self {
+            case .accessibility:
+                return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            case .screenRecording:
+                return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            case .fullDiskAccess:
+                return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+            case .automation:
+                return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")
+            case .notifications:
+                return URL(string: "x-apple.systempreferences:com.apple.preference.notifications")
+            case .contacts:
+                return URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts")
             }
         }
     }
@@ -75,6 +104,61 @@ public final class PermissionManager {
         public let checkedAt: Date
     }
 
+    // MARK: - Automation Target Registry
+
+    /// Defines an application that NotionBridge may send Apple Events to.
+    /// Each target is probed during `checkAutomation()`. On first probe,
+    /// macOS will show the TCC consent prompt for that target, registering
+    /// NotionBridge in the Automation preferences pane.
+    public struct AutomationTarget: Sendable, Identifiable {
+        public let bundleID: String
+        public let name: String
+        public let probe: String
+        public var id: String { bundleID }
+    }
+
+    /// All known Automation targets. Add new entries here when NotionBridge
+    /// needs to control additional applications via Apple Events.
+    /// Order: most critical first (System Events, Messages, Chrome, Contacts).
+    public static let automationTargets: [AutomationTarget] = [
+        AutomationTarget(
+            bundleID: "com.apple.systemevents",
+            name: "System Events",
+            probe: """
+                tell application "System Events"
+                    return name of first process whose frontmost is true
+                end tell
+            """
+        ),
+        AutomationTarget(
+            bundleID: "com.apple.MobileSMS",
+            name: "Messages",
+            probe: """
+                tell application "Messages"
+                    return name
+                end tell
+            """
+        ),
+        AutomationTarget(
+            bundleID: "com.google.Chrome",
+            name: "Google Chrome",
+            probe: """
+                tell application "Google Chrome"
+                    return name
+                end tell
+            """
+        ),
+        AutomationTarget(
+            bundleID: "com.apple.AddressBook",
+            name: "Contacts",
+            probe: """
+                tell application "Contacts"
+                    return name
+                end tell
+            """
+        ),
+    ]
+
     // MARK: - State
 
     public private(set) var accessibilityStatus: GrantStatus = .unknown
@@ -82,14 +166,44 @@ public final class PermissionManager {
     public private(set) var fullDiskAccessStatus: GrantStatus = .unknown
     public private(set) var automationStatus: GrantStatus = .unknown
     public private(set) var contactsStatus: GrantStatus = .unknown
-    public private(set) var automationSystemEventsGranted: Bool = false
-    public private(set) var automationMessagesGranted: Bool = false
+    public private(set) var notificationStatus: GrantStatus = .unknown
+
+    /// Per-target Automation grant results. Key = bundleID.
+    public private(set) var automationTargetGrants: [String: Bool] = [:]
+
+    /// Backward-compatible accessors for existing code.
+    public var automationSystemEventsGranted: Bool {
+        automationTargetGrants["com.apple.systemevents"] ?? false
+    }
+    public var automationMessagesGranted: Bool {
+        automationTargetGrants["com.apple.MobileSMS"] ?? false
+    }
+    public var automationChromeGranted: Bool {
+        automationTargetGrants["com.google.Chrome"] ?? false
+    }
+    public var automationContactsGranted: Bool {
+        automationTargetGrants["com.apple.AddressBook"] ?? false
+    }
+
     public private(set) var lastCheckedAt: Date?
     public private(set) var accessibilityEvidence: GrantEvidence?
     public private(set) var screenRecordingEvidence: GrantEvidence?
     public private(set) var fullDiskAccessEvidence: GrantEvidence?
     public private(set) var automationEvidence: GrantEvidence?
     public private(set) var contactsEvidence: GrantEvidence?
+    public private(set) var notificationEvidence: GrantEvidence?
+
+    /// PKT-362 D3: Per-grant checking state for animated re-check feedback.
+    /// Key = grant, value = true while that row is in "Checking…" state.
+    public private(set) var grantCheckingState: [Grant: Bool] = [:]
+
+    /// PKT-362 D6: Batched restart flag. Set when a restart-required grant
+    /// (Screen Recording, Full Disk Access) transitions to .granted.
+    /// Reset on app launch (init default = false).
+    public private(set) var needsRestart: Bool = false
+
+    /// PKT-362 D6: Grants that require an app restart to take full effect.
+    public static let restartRequiredGrants: Set<Grant> = [.screenRecording, .fullDiskAccess]
 
     // MARK: - Public API
 
@@ -100,13 +214,16 @@ public final class PermissionManager {
         case .screenRecording: return screenRecordingStatus
         case .fullDiskAccess: return fullDiskAccessStatus
         case .automation: return automationStatus
+        case .notifications: return notificationStatus
         case .contacts: return contactsStatus
         }
     }
 
-    /// Check all 5 TCC grants. Safe to call from main thread —
+    /// Check synchronous TCC grants. Safe to call from main thread —
     /// individual checks are fast (<100ms total).
     /// Call on popover open and periodically to detect re-grant needs.
+    /// Note: Notifications check is async and NOT included here.
+    /// Use recheckAllForTruth() or checkNotifications() for notification status.
     public func checkAll() {
         checkAccessibility()
         checkScreenRecording()
@@ -120,13 +237,39 @@ public final class PermissionManager {
     /// Re-runs all probes and briefly waits for TCC state propagation.
     public func recheckAllForTruth() async {
         checkAll()
+        await checkNotifications()
         try? await Task.sleep(nanoseconds: 300_000_000)
         checkAccessibility()
         checkScreenRecording()
         checkFullDiskAccess()
         checkAutomation()
         checkContacts()
+        await checkNotifications()
         lastCheckedAt = Date()
+    }
+
+    /// PKT-362 D3: Animated recheck — sets per-row "Checking…" state,
+    /// performs recheck, then clears state with staggered timing (0.1s per row).
+    /// PermissionView observes grantCheckingState and animates transitions.
+    public func animatedRecheckAll() async {
+        // Set all v1 grants to "checking"
+        for grant in Grant.v1Cases {
+            grantCheckingState[grant] = true
+        }
+
+        // Perform actual recheck
+        await recheckAllForTruth()
+
+        // Stagger clear per-row for visual effect
+        for grant in Grant.v1Cases {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            grantCheckingState[grant] = false
+        }
+    }
+
+    /// PKT-362 D6: Reset the needsRestart flag (e.g., after user restarts).
+    public func resetNeedsRestart() {
+        needsRestart = false
     }
 
     // MARK: - Detection Methods
@@ -167,9 +310,16 @@ public final class PermissionManager {
     /// a weekly re-authorization prompt. There is no API to detect the
     /// remaining time on the grant — only whether it is currently active.
     /// When expired, this will return .denied until the user re-authorizes.
+    ///
+    /// PKT-362 D6: Tracks transitions to .granted for restart batching.
     public func checkScreenRecording() {
+        let previousStatus = screenRecordingStatus
         let granted = CGPreflightScreenCaptureAccess()
         screenRecordingStatus = granted ? .granted : .denied
+        // PKT-362 D6: Detect transition to .granted for restart-required grant
+        if previousStatus != .granted && screenRecordingStatus == .granted {
+            needsRestart = true
+        }
         screenRecordingEvidence = .init(
             source: "CGPreflightScreenCaptureAccess()",
             observed: granted ? "granted=true" : "granted=false",
@@ -186,8 +336,13 @@ public final class PermissionManager {
         if #available(macOS 11.0, *) {
             _ = CGRequestScreenCaptureAccess()
         }
+        let previousStatus = screenRecordingStatus
         let granted = CGPreflightScreenCaptureAccess()
         screenRecordingStatus = granted ? .granted : .restartRecommended
+        // PKT-362 D6: Detect transition to .granted for restart-required grant
+        if previousStatus != .granted && screenRecordingStatus == .granted {
+            needsRestart = true
+        }
         screenRecordingEvidence = .init(
             source: "CGRequestScreenCaptureAccess() + CGPreflightScreenCaptureAccess()",
             observed: granted ? "granted=true" : "granted=false",
@@ -203,7 +358,10 @@ public final class PermissionManager {
     /// Probes the Messages database readability as a TCC-protected sentinel file.
     /// This file requires Full Disk Access. If readable, FDA is granted.
     /// Uses FileManager.urls(for:in:) to locate the user domain path.
+    ///
+    /// PKT-362 D6: Tracks transitions to .granted for restart batching.
     public func checkFullDiskAccess() {
+        let previousStatus = fullDiskAccessStatus
         guard let libURL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first else {
             fullDiskAccessStatus = .unknown
             return
@@ -243,62 +401,74 @@ public final class PermissionManager {
                 checkedAt: Date()
             )
         }
+        // PKT-362 D6: Detect transition to .granted for restart-required grant
+        if previousStatus != .granted && fullDiskAccessStatus == .granted {
+            needsRestart = true
+        }
     }
 
     /// Automation: No direct API available.
-    /// Probes by executing a minimal NSAppleScript targeting System Events.
-    /// If the script runs without error, Automation permission is granted.
-    /// Note: This checks Automation for System Events specifically.
-    /// Messages automation is a separate grant checked at send time.
+    /// Probes all registered automation targets by executing a minimal
+    /// NSAppleScript against each. On first probe to a new target, macOS
+    /// will show the TCC consent prompt for that target, registering
+    /// NotionBridge in the Automation preferences pane.
+    ///
+    /// V1-03: Dynamic target probing. Previously only checked System Events
+    /// and Messages. Now probes all targets in `automationTargets`, including
+    /// Chrome and Contacts. This fixes the bug where Chrome Apple Events
+    /// were silently denied because no probe ever triggered the TCC prompt.
     public func checkAutomation() {
-        automationSystemEventsGranted = runAppleScriptProbe("""
-            tell application "System Events"
-                return name of first process whose frontmost is true
-            end tell
-        """)
-        automationMessagesGranted = runAppleScriptProbe("""
-            tell application "Messages"
-                return name
-            end tell
-        """)
-
-        switch (automationSystemEventsGranted, automationMessagesGranted) {
-        case (true, true):
-            automationStatus = .granted
-        case (true, false), (false, true):
-            automationStatus = .partiallyGranted
-        case (false, false):
-            automationStatus = .denied
+        var results: [String: Bool] = [:]
+        for target in Self.automationTargets {
+            results[target.bundleID] = runAppleScriptProbe(target.probe)
         }
+        automationTargetGrants = results
+
+        let grantedCount = results.values.filter { $0 }.count
+        let totalCount = results.count
+
+        switch grantedCount {
+        case totalCount:
+            automationStatus = .granted
+        case 0:
+            automationStatus = .denied
+        default:
+            automationStatus = .partiallyGranted
+        }
+
+        // Build per-target status string for evidence
+        let targetDetails = Self.automationTargets.map { target in
+            let granted = results[target.bundleID] ?? false
+            return "\(target.name)=\(granted ? "granted" : "denied")"
+        }.joined(separator: ", ")
+
         automationEvidence = .init(
-            source: "NSAppleScript probe (System Events + Messages)",
-            observed: "systemEvents=\(automationSystemEventsGranted), messages=\(automationMessagesGranted)",
-            detail: "Automation is target-specific; both targets should be allowed for full functionality.",
+            source: "NSAppleScript probe (\(totalCount) targets)",
+            observed: "\(grantedCount)/\(totalCount) granted: \(targetDetails)",
+            detail: "Automation is target-specific; each target app requires its own TCC consent. "
+                + "Probing a target for the first time triggers the macOS permission prompt.",
             checkedAt: Date()
         )
     }
 
-    /// Contacts: CNContactStore.authorizationStatus(for:) — direct API.
-    /// Returns .granted, .denied, or .unknown based on authorization state.
-    /// Request Automation permission by clearing stale TCC entries and re-triggering
-    /// probes. After a binary rebuild, macOS may silently deny Automation without
-    /// re-prompting due to stale AppleEvents TCC entries. This method resets them
-    /// for this bundle, then re-runs probes to trigger fresh macOS permission prompts.
+    /// Request Automation permission by re-probing all targets.
+    /// On macOS Sequoia, fresh probes to un-granted targets will trigger
+    /// the TCC consent prompt. This is non-destructive — it does NOT
+    /// reset existing grants via tccutil.
+    ///
+    /// V1-03: Replaced destructive tccutil reset approach. The old method
+    /// (`tccutil reset AppleEvents kup.solutions.notion-bridge`) wiped ALL
+    /// existing Automation grants (Messages, System Events, etc.), which
+    /// broke working functionality. Now we simply re-probe, which is safe.
     public func requestAutomationAccess() async {
-        // Reset stale AppleEvents TCC entries for this bundle ID
-        let resetProcess = Process()
-        resetProcess.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-        resetProcess.arguments = ["reset", "AppleEvents", "kup.solutions.notion-bridge"]
-        try? resetProcess.run()
-        resetProcess.waitUntilExit()
-
-        // Brief pause for TCC database to propagate
-        try? await Task.sleep(nanoseconds: 500_000_000)
-
-        // Re-run probes to trigger fresh macOS permission prompts
+        // Brief pause then re-probe all targets to trigger any missing prompts.
+        // Each un-granted target will show a macOS TCC consent dialog.
+        try? await Task.sleep(nanoseconds: 300_000_000)
         checkAutomation()
     }
 
+    /// Contacts: CNContactStore.authorizationStatus(for:) — direct API.
+    /// Returns .granted, .denied, or .unknown based on authorization state.
     public func checkContacts() {
         let authStatus = CNContactStore.authorizationStatus(for: .contacts)
         switch authStatus {
@@ -346,6 +516,55 @@ public final class PermissionManager {
         }
     }
 
+    /// Notifications: UNUserNotificationCenter — async API.
+    /// Unlike synchronous TCC checks, notification status requires async.
+    /// Called from recheckAllForTruth() and animatedRecheckAll().
+    /// checkAll() remains synchronous and skips this check.
+    public func checkNotifications() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            notificationStatus = .granted
+        case .denied:
+            notificationStatus = .denied
+        case .notDetermined:
+            notificationStatus = .unknown
+        @unknown default:
+            notificationStatus = .unknown
+        }
+        notificationEvidence = .init(
+            source: "UNUserNotificationCenter.notificationSettings()",
+            observed: "authorizationStatus=\(settings.authorizationStatus.rawValue)",
+            detail: "Notification authorization status from UserNotifications framework.",
+            checkedAt: Date()
+        )
+    }
+
+    /// Request notification authorization. Triggers system prompt if .notDetermined.
+    /// If already denied, returns false — caller should deep link to System Settings.
+    public func requestNotificationAccess() async -> Bool {
+        do {
+            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+            notificationStatus = granted ? .granted : .denied
+            notificationEvidence = .init(
+                source: "UNUserNotificationCenter.requestAuthorization(options: [.alert, .sound])",
+                observed: granted ? "granted=true" : "granted=false",
+                detail: "Notification authorization request result.",
+                checkedAt: Date()
+            )
+            return granted
+        } catch {
+            notificationStatus = .denied
+            notificationEvidence = .init(
+                source: "UNUserNotificationCenter.requestAuthorization(options: [.alert, .sound])",
+                observed: "error",
+                detail: "Notification authorization threw error: \(error.localizedDescription)",
+                checkedAt: Date()
+            )
+            return false
+        }
+    }
+
     // MARK: - UX helpers
 
     public func statusLabel(for grant: Grant) -> String {
@@ -372,7 +591,15 @@ public final class PermissionManager {
         case .fullDiskAccess:
             return "Enable in Full Disk Access. Relaunch Notion Bridge to ensure new entitlement is observed."
         case .automation:
-            return "Enable Automation targets used by tools (at minimum System Events and Messages)."
+            if automationStatus == .partiallyGranted {
+                let denied = Self.automationTargets.filter {
+                    !(automationTargetGrants[$0.bundleID] ?? false)
+                }.map(\.name)
+                return "Grant Automation access for: \(denied.joined(separator: ", ")). Open System Settings > Privacy & Security > Automation."
+            }
+            return "Enable Automation targets used by tools (System Events, Messages, Chrome, Contacts)."
+        case .notifications:
+            return "Allow Notifications when prompted or enable in System Settings > Notifications."
         case .contacts:
             return "Allow Contacts access when prompted or in System Settings > Privacy & Security > Contacts."
         }
@@ -381,7 +608,11 @@ public final class PermissionManager {
     public func debugDetail(for grant: Grant) -> String? {
         switch grant {
         case .automation:
-            return "System Events: \(automationSystemEventsGranted ? "granted" : "not granted") · Messages: \(automationMessagesGranted ? "granted" : "not granted")"
+            let details = Self.automationTargets.map { target in
+                let granted = automationTargetGrants[target.bundleID] ?? false
+                return "\(target.name): \(granted ? "granted" : "not granted")"
+            }.joined(separator: " · ")
+            return details
         case .fullDiskAccess where fullDiskAccessStatus == .unknown:
             return "No protected sentinel files found to infer Full Disk Access."
         default:
@@ -395,7 +626,23 @@ public final class PermissionManager {
         case .screenRecording: return screenRecordingEvidence
         case .fullDiskAccess: return fullDiskAccessEvidence
         case .automation: return automationEvidence
+        case .notifications: return notificationEvidence
         case .contacts: return contactsEvidence
+        }
+    }
+
+    // MARK: - Public Target Query
+
+    /// Check if a specific application has Automation permission.
+    /// Useful for pre-flight checks before sending Apple Events.
+    public func isAutomationGranted(forBundleID bundleID: String) -> Bool {
+        automationTargetGrants[bundleID] ?? false
+    }
+
+    /// Returns the list of automation targets that are currently denied.
+    public var deniedAutomationTargets: [AutomationTarget] {
+        Self.automationTargets.filter {
+            !(automationTargetGrants[$0.bundleID] ?? false)
         }
     }
 

@@ -11,7 +11,6 @@
 
 import SwiftUI
 import AppKit
-import UserNotifications
 
 /// Manages the first-launch onboarding NSWindow.
 /// Shows a multi-step wizard: Welcome → Permissions → Connection → Test Connection.
@@ -78,7 +77,6 @@ struct OnboardingView: View {
 
     @State private var currentStep: OnboardingStep = .welcome
     @State private var healthCheckStatus: HealthCheckStatus = .idle
-    @State private var notificationStatus: UNAuthorizationStatus = .notDetermined
     @State private var showLegacySSE: Bool = false
 
     enum OnboardingStep: Int, CaseIterable {
@@ -163,91 +161,7 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 
-            // D6: Dynamic notification status (replaces hardcoded text)
-            notificationStatusView
-                .padding(.top, 8)
         }
-        .task {
-            await checkNotificationStatus()
-        }
-    }
-
-    // MARK: - Notification Status (D6 + PKT-357 F11)
-
-    @ViewBuilder
-    private var notificationStatusView: some View {
-        switch notificationStatus {
-        case .authorized:
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                Text("Notification permission granted — used for security approvals")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        case .notDetermined:
-            HStack(spacing: 8) {
-                Image(systemName: "bell.badge.fill")
-                    .foregroundStyle(.orange)
-                Text("Notification permission needed for security approvals")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button("Grant") {
-                    Task { await requestNotificationPermission() }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        case .denied:
-            HStack(spacing: 8) {
-                Image(systemName: "bell.slash.fill")
-                    .foregroundStyle(.red)
-                Text("Notifications disabled — security approvals will use dialog prompts instead")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        default:
-            HStack(spacing: 8) {
-                Image(systemName: "bell.slash.fill")
-                    .foregroundStyle(.red)
-                Text("Notifications disabled — security approvals will use dialog prompts instead")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func checkNotificationStatus() async {
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
-        notificationStatus = settings.authorizationStatus
-    }
-
-    // PKT-357 F11: Request authorization + send test notification on grant
-    private func requestNotificationPermission() async {
-        do {
-            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
-            notificationStatus = granted ? .authorized : .denied
-            // PKT-357 F11: Send a test notification to confirm delivery
-            if granted {
-                await sendTestNotification()
-            }
-        } catch {
-            notificationStatus = .denied
-        }
-    }
-
-    // PKT-357 F11: Deliver a visible test notification after grant
-    private func sendTestNotification() async {
-        let content = UNMutableNotificationContent()
-        content.title = "Notion Bridge"
-        content.body = "Notifications are working! Security approvals will appear here."
-        content.sound = .default
-        let request = UNNotificationRequest(
-            identifier: "notionbridge-test-notification",
-            content: content,
-            trigger: nil
-        )
-        try? await UNUserNotificationCenter.current().add(request)
     }
 
     // MARK: - Permissions Step (PKT-357 F10: All permissions always listed)
@@ -275,6 +189,7 @@ struct OnboardingView: View {
 
             Button("Refresh Status") {
                 permissionManager.checkAll()
+                Task { await permissionManager.checkNotifications() }
             }
             .buttonStyle(.plain)
             .font(.caption)
@@ -319,7 +234,8 @@ struct OnboardingView: View {
         case .accessibility: return "Control UI elements and simulate input"
         case .screenRecording: return "Capture screen content for AI context"
         case .fullDiskAccess: return "Read files outside the sandbox"
-        case .automation: return "Script other apps via AppleScript"
+        case .automation: return "Script other apps via AppleScript (System Events, Messages, Chrome)"
+        case .notifications: return "Security approvals appear as notification banners"
         case .contacts: return "Search and read your contacts"
         }
     }
@@ -358,6 +274,20 @@ struct OnboardingView: View {
                 await permissionManager.requestAutomationAccess()
                 if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
                     NSWorkspace.shared.open(url)
+                }
+                await permissionManager.recheckAllForTruth()
+            }
+            return
+        case .notifications:
+            // PKT-364 D3: Probe-then-deep-link for notification permission.
+            // requestAuthorization triggers system prompt if .notDetermined.
+            // If denied, deep link to System Settings > Notifications.
+            Task {
+                let granted = await permissionManager.requestNotificationAccess()
+                if !granted {
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
                 await permissionManager.recheckAllForTruth()
             }
