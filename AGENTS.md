@@ -130,3 +130,32 @@ The project enforces Swift 6 strict concurrency (`-strict-concurrency=complete`)
 ### TCC Permissions
 
 The app requires Full Disk Access, Automation, and optionally Screen Recording and Accessibility. During development, after frequent rebuilds that change the code signature, run `make clean-tcc` to clear stale TCC grants for both the current (`kup.solutions.notion-bridge`) and legacy (`solutions.kup.keepr`) bundle IDs.
+
+## Cursor Cloud specific instructions
+
+### Platform constraint
+
+NotionBridge is **macOS-only**. The Cloud Agent VM runs Ubuntu 24.04 x86_64, so building, testing, and running the app are not possible in this environment. Sixteen source files import macOS-exclusive frameworks (AppKit, SwiftUI, ScreenCaptureKit, ApplicationServices, Vision, ServiceManagement, CoreGraphics, UserNotifications). There are no `#if os(Linux)` guards.
+
+### What works on Linux
+
+- **Swift 6.2.4** is installed at `/opt/swift-6.2.4-RELEASE-ubuntu24.04/usr/bin/swift` (added to `PATH` via `~/.bashrc`).
+- **`swift package resolve`** succeeds — all SPM dependencies (MCP Swift SDK, swift-nio, swift-log, swift-collections, swift-async-algorithms, etc.) download and resolve.
+- **Dependency compilation** succeeds — all third-party targets compile on Linux. The build only fails when compiling the project's own source files that import macOS frameworks.
+- **`swift package dump-package`** and other SPM introspection commands work for validating `Package.swift`.
+
+### What does not work on Linux
+
+| Command | Failure reason |
+|---------|---------------|
+| `make debug` / `swift build` | `no such module 'AppKit'` (and other macOS frameworks) |
+| `make test` / `swift run NotionBridgeTests` | Depends on NotionBridgeLib which cannot compile |
+| `make build` (release) | Same framework errors |
+| `make app` / `make install` | Requires successful build + macOS bundle tooling |
+
+### Recommended workflow for Cloud Agents
+
+1. **Code review and static analysis** — read/edit Swift source files, validate `Package.swift`, resolve dependencies.
+2. **Dependency validation** — run `swift package resolve` after modifying `Package.swift`.
+3. **Build/test verification** — defer to CI (GitHub Actions on `macos-14` runners). See `.github/workflows/ci.yml`.
+4. For build/test commands, refer to the Commands section at the top of this file.
