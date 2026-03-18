@@ -1,4 +1,4 @@
-// MessagesModule.swift – V1-PATCH-001 iMessage Tools
+// MessagesModule.swift – V1-PATCH-002 iMessage Tools
 // NotionBridge · Modules
 //
 // Six tools: messages_search, messages_recent, messages_chat,
@@ -12,6 +12,15 @@
 // - Added extractText() fallback: text → NSKeyedUnarchiver(attributedBody) → nil
 // - All 4 read queries now SELECT m.attributedBody for decoding
 // - messages_search WHERE clause includes attributedBody CAST fallback
+//
+// V1-PATCH-002 changes (crash fix + decode improvement):
+// - BUGFIX: Added NSLock serialization around shared SQLiteConnection to prevent
+//   EXC_BAD_ACCESS (SIGSEGV) from concurrent sqlite3_prepare_v2 calls on shared
+//   db handle from Swift cooperative thread pool (5 crashes on 2026-03-17)
+// - BUGFIX: Improved attributedBody decoding with Messages framework class
+//   substitution + raw blob text extraction fallback for null text gap
+// - Added performQuery() serialized query method
+// - Removed direct getConnection().query() calls from all handler closures
 
 import Foundation
 import SQLite3
@@ -22,7 +31,8 @@ import MCP
 /// Persistent read-only SQLite connection using native C API.
 /// Replaces per-query sqlite3 CLI process spawning to eliminate
 /// "database is locked" errors from concurrent tool calls.
-/// Thread-safe: uses SQLite's default serialized threading mode.
+/// Thread safety: Callers MUST serialize access externally (see MessagesModule.dbLock).
+/// The underlying sqlite3 handle is NOT safe for concurrent access from multiple threads.
 final class SQLiteConnection {
     private var db: OpaquePointer?
 
@@ -151,17 +161,104 @@ public enum MessagesModule {
         return conn
     }
 
+    // MARK: - Thread-Safe Query Access
+
+    /// Lock serializing all SQLite access from concurrent async tool handlers.
+    /// Prevents EXC_BAD_ACCESS (SIGSEGV) from concurrent sqlite3_prepare_v2
+    /// on the shared db handle from Swift's cooperative thread pool.
+    /// Root cause: nonisolated(unsafe) static var + concurrent async dispatch.
+    private static let dbLock = NSLock()
+
+    /// Execute a query with serialized access to the shared connection.
+    /// All read tool handlers MUST use this instead of getConnection().query().
+    private static func performQuery(_ sql: String, params: [String] = []) throws -> [[String: Any]] {
+        dbLock.lock()
+        defer { dbLock.unlock() }
+        let conn = try getConnection()
+        return try conn.query(sql, params: params)
+    }
+
     // MARK: - Text Extraction
 
-    /// Decode an `attributedBody` NSKeyedArchiver blob to plain text.
-    /// Returns nil on any decoding failure (graceful fallback via try?).
+    /// Decode an `attributedBody` blob to plain text.
+    /// V1-PATCH-002: Two-stage decode — NSKeyedUnarchiver with class substitution,
+    /// then raw blob scan fallback for typedstream/unknown formats.
     private static func decodeAttributedBody(_ data: Data) -> String? {
-        guard let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) else { return nil }
-        unarchiver.requiresSecureCoding = false
-        defer { unarchiver.finishDecoding() }
-        guard let attrStr = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? NSAttributedString else { return nil }
-        let text = attrStr.string
-        return text.isEmpty ? nil : text
+        // Stage 1: NSKeyedUnarchiver with Messages framework class substitution
+        if let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) {
+            unarchiver.requiresSecureCoding = false
+            // Substitute Messages.framework private classes -> Foundation equivalents
+            unarchiver.setClass(
+                NSAttributedString.self,
+                forClassName: "MessageAttributedString"
+            )
+            unarchiver.setClass(
+                NSMutableAttributedString.self,
+                forClassName: "MessageMutableAttributedString"
+            )
+            defer { unarchiver.finishDecoding() }
+            if let attrStr = unarchiver.decodeObject(
+                forKey: NSKeyedArchiveRootObjectKey
+            ) as? NSAttributedString {
+                let text = attrStr.string
+                if !text.isEmpty { return text }
+            }
+        }
+
+        // Stage 2: Raw blob text extraction fallback
+        return extractTextFromBlob(data)
+    }
+
+    /// Scan raw blob bytes for the longest contiguous printable UTF-8 run.
+    /// Filters out known binary artifact strings (class names, format markers).
+    /// Used as last-resort fallback when NSKeyedUnarchiver cannot decode.
+    private static func extractTextFromBlob(_ data: Data) -> String? {
+        guard data.count > 10 else { return nil }
+        let bytes = [UInt8](data)
+        var runs: [String] = []
+        var current: [UInt8] = []
+
+        for byte in bytes {
+            if byte >= 0x20 && byte <= 0x7E {
+                // Printable ASCII
+                current.append(byte)
+            } else if byte >= 0xC2 && byte <= 0xF4 {
+                // UTF-8 lead byte (start of multi-byte sequence)
+                current.append(byte)
+            } else if byte >= 0x80 && byte <= 0xBF && !current.isEmpty {
+                // UTF-8 continuation byte
+                current.append(byte)
+            } else {
+                if let run = String(bytes: current, encoding: .utf8), run.count >= 4 {
+                    runs.append(run)
+                }
+                current = []
+            }
+        }
+        if let run = String(bytes: current, encoding: .utf8), run.count >= 4 {
+            runs.append(run)
+        }
+
+        // Filter known noise (class names, format markers)
+        let noise: Set<String> = [
+            "streamtyped", "NSString", "NSMutableString", "NSObject",
+            "NSAttributedString", "NSMutableAttributedString",
+            "NSDictionary", "NSMutableDictionary", "bplist00",
+            "NSValue", "NSNumber", "NSDate", "NSURL",
+            "NSParagraphStyle", "NSFont", "NSColor",
+            "MessageAttributedString", "MessageMutableAttributedString"
+        ]
+        let filtered = runs.filter { run in
+            let trimmed = run.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.count >= 4
+                && !noise.contains(where: { trimmed.hasPrefix($0) })
+        }
+
+        guard let best = filtered.max(by: { $0.count < $1.count }) else {
+            return nil
+        }
+        let trimmed = best.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// Extract text from a query result row with attributedBody fallback.
@@ -252,8 +349,6 @@ public enum MessagesModule {
                     throw ToolRouterError.invalidArguments(toolName: "messages_search", reason: "missing 'query'")
                 }
                 let limit: Int = { if case .int(let l) = args["limit"] { return l }; return 50 }()
-
-                let conn = try getConnection()
                 // Search text column directly + attributedBody fallback via CAST for blob keyword match
                 let sql = """
                     SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me,
@@ -267,7 +362,7 @@ public enum MessagesModule {
                     ORDER BY m.date DESC
                     LIMIT ?2
                     """
-                let rows = try conn.query(sql, params: [query, String(limit)])
+                let rows = try performQuery(sql, params: [query, String(limit)])
                 return rowsToValue(rows)
             }
         ))
@@ -291,8 +386,6 @@ public enum MessagesModule {
                        case .int(let l) = args["limit"] { return l }
                     return 20
                 }()
-
-                let conn = try getConnection()
                 let sql = """
                     SELECT c.ROWID, c.chat_identifier, c.display_name,
                            m.text AS last_message, m.attributedBody,
@@ -310,7 +403,7 @@ public enum MessagesModule {
                     ORDER BY m.date DESC
                     LIMIT ?1
                     """
-                let rows = try conn.query(sql, params: [String(limit)])
+                let rows = try performQuery(sql, params: [String(limit)])
                 return rowsToValue(rows, textKey: "last_message")
             }
         ))
@@ -335,8 +428,6 @@ public enum MessagesModule {
                     throw ToolRouterError.invalidArguments(toolName: "messages_chat", reason: "missing 'contact'")
                 }
                 let limit: Int = { if case .int(let l) = args["limit"] { return l }; return 50 }()
-
-                let conn = try getConnection()
                 let sql = """
                     SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me,
                            h.id AS handle_id,
@@ -350,7 +441,7 @@ public enum MessagesModule {
                     ORDER BY m.date DESC
                     LIMIT ?2
                     """
-                let rows = try conn.query(sql, params: [contact, String(limit)])
+                let rows = try performQuery(sql, params: [contact, String(limit)])
                 return rowsToValue(rows)
             }
         ))
@@ -373,8 +464,6 @@ public enum MessagesModule {
                       case .int(let msgId) = args["messageId"] else {
                     throw ToolRouterError.invalidArguments(toolName: "messages_content", reason: "missing 'messageId'")
                 }
-
-                let conn = try getConnection()
                 let sql = """
                     SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me, m.service,
                            m.cache_has_attachments,
@@ -384,7 +473,7 @@ public enum MessagesModule {
                     LEFT JOIN handle h ON m.handle_id = h.ROWID
                     WHERE m.ROWID = ?1
                     """
-                let rows = try conn.query(sql, params: [String(msgId)])
+                let rows = try performQuery(sql, params: [String(msgId)])
                 return rowsToValue(rows)
             }
         ))
@@ -407,8 +496,6 @@ public enum MessagesModule {
                       case .string(let chatId) = args["chatIdentifier"] else {
                     throw ToolRouterError.invalidArguments(toolName: "messages_participants", reason: "missing 'chatIdentifier'")
                 }
-
-                let conn = try getConnection()
                 let sql = """
                     SELECT h.ROWID, h.id AS handle_id, h.service
                     FROM handle h
@@ -416,7 +503,7 @@ public enum MessagesModule {
                     JOIN chat c ON c.ROWID = chj.chat_id
                     WHERE c.chat_identifier LIKE '%' || ?1 || '%'
                     """
-                let rows = try conn.query(sql, params: [chatId])
+                let rows = try performQuery(sql, params: [chatId])
                 return rawRowsToValue(rows)
             }
         ))
