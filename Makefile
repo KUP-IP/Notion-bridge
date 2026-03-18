@@ -56,6 +56,24 @@ app: build
 	@for f in $(RESOURCES_DIR)/*.png; do \
 		test -f "$$f" && cp "$$f" $(APP_BUNDLE)/Contents/Resources/ || true; \
 	done
+	@# ── Copy SPM resource bundle (for Bundle.module resolution) ──
+	@SPM_BUNDLE="$(RELEASE_DIR)/NotionBridge_NotionBridge.bundle"; \
+		if [ -d "$$SPM_BUNDLE" ]; then \
+			cp -R "$$SPM_BUNDLE" "$(APP_BUNDLE)/Contents/Resources/"; \
+			echo "  ↳ Copied SPM resource bundle"; \
+		fi
+	@# ── Compile Assets.xcassets → Assets.car via actool ──
+	@XCASSETS="$(APP_BUNDLE)/Contents/Resources/NotionBridge_NotionBridge.bundle/Assets.xcassets"; \
+		if [ -d "$$XCASSETS" ]; then \
+			actool --compile "$(APP_BUNDLE)/Contents/Resources/NotionBridge_NotionBridge.bundle" \
+				--platform macosx --minimum-deployment-target 14.0 \
+				--app-icon AppIcon --output-partial-info-plist /dev/null \
+				"$$XCASSETS" >/dev/null 2>&1 && \
+			echo "  ↳ Compiled Assets.xcassets → Assets.car" || \
+			echo "  ⚠️  actool compile failed (menu bar icon may use fallback)"; \
+			rm -rf "$$XCASSETS"; \
+			echo "  ↳ Cleaned raw .xcassets from bundle"; \
+		fi
 	@echo "✅ App bundle: $(APP_BUNDLE)"
 
 # ── Install ────────────────────────────────────────────────────────────
