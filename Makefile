@@ -56,12 +56,20 @@ app: build
 	@for f in $(RESOURCES_DIR)/*.png; do \
 		test -f "$$f" && cp "$$f" $(APP_BUNDLE)/Contents/Resources/ || true; \
 	done
-	@# ── Copy SPM resource bundle (for Bundle.module resolution) ──
+	@# ── Copy SPM resource bundle to .app root (where Bundle.module expects it) ──
 	@SPM_BUNDLE="$(RELEASE_DIR)/NotionBridge_NotionBridge.bundle"; \
 		if [ -d "$$SPM_BUNDLE" ]; then \
 			cp -R "$$SPM_BUNDLE" "$(APP_BUNDLE)/"; \
 			echo "  ↳ Copied SPM resource bundle to .app root"; \
 		fi
+	@# ── Add MenuBarIcon-named copies for image(forResource:) lookup ──
+	@if [ -f "$(APP_BUNDLE)/NotionBridge_NotionBridge.bundle/notionbridge-menubar.png" ]; then \
+		cp "$(APP_BUNDLE)/NotionBridge_NotionBridge.bundle/notionbridge-menubar.png" \
+			"$(APP_BUNDLE)/NotionBridge_NotionBridge.bundle/MenuBarIcon.png"; \
+		cp "$(APP_BUNDLE)/NotionBridge_NotionBridge.bundle/notionbridge-menubar@2x.png" \
+			"$(APP_BUNDLE)/NotionBridge_NotionBridge.bundle/MenuBarIcon@2x.png"; \
+		echo "  ↳ Added MenuBarIcon.png + @2x aliases"; \
+	fi
 	@# ── Compile Assets.xcassets → Assets.car via actool ──
 	@XCASSETS="$(APP_BUNDLE)/NotionBridge_NotionBridge.bundle/Assets.xcassets"; \
 		if [ -d "$$XCASSETS" ]; then \
