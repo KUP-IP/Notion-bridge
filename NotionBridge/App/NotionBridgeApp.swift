@@ -9,8 +9,7 @@ import NotionBridgeLib
 
 /// Load menu bar icon from SPM resource bundle.
 /// Uses the bridge logo as a template image for the menu bar.
-/// Runtime alpha cleanup: thresholds low-alpha corner pixels to fully transparent
-/// so isTemplate rendering doesn't show a faint square outline.
+/// Source PNGs are RGBA with clean transparency (low-alpha pixels pre-zeroed).
 /// PKT-353: Unified to Bundle.module (SPM executable target with processed resources).
 /// Bundle.main kept as secondary lookup for .app packaging scenarios.
 private func loadMenuBarIcon() -> NSImage? {
@@ -18,30 +17,7 @@ private func loadMenuBarIcon() -> NSImage? {
         Bundle.module.image(forResource: "MenuBarIcon")
         ?? Bundle.main.image(forResource: "MenuBarIcon")
     guard let nsImage else { return nil }
-
-    // Runtime alpha cleanup: pixels with alpha < 0.25 become fully transparent.
-    // The source PNGs (Gray colorspace) have near-zero but non-zero alpha in corners,
-    // which isTemplate renders as a visible gray square outline.
-    if let tiff = nsImage.tiffRepresentation,
-       let rep = NSBitmapImageRep(data: tiff) {
-        let w = rep.pixelsWide, h = rep.pixelsHigh
-        for y in 0..<h {
-            for x in 0..<w {
-                if let c = rep.colorAt(x: x, y: y),
-                   c.alphaComponent > 0 && c.alphaComponent < 0.25 {
-                    rep.setColor(.clear, atX: x, y: y)
-                }
-            }
-        }
-        let cleaned = NSImage(size: nsImage.size)
-        cleaned.addRepresentation(rep)
-        cleaned.size = NSSize(width: 22, height: 22)
-        cleaned.isTemplate = true
-        return cleaned
-    }
-
-    // Fallback if TIFF conversion fails — just resize
-    nsImage.size = NSSize(width: 22, height: 22)
+    nsImage.size = NSSize(width: 24, height: 24)
     nsImage.isTemplate = true
     return nsImage
 }
