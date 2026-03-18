@@ -79,13 +79,13 @@ app: build
 # ── Install ────────────────────────────────────────────────────────────
 install: app
 	@echo "📲 Installing to /Applications..."
-	@rm -rf /Applications/NotionBridge.app
-	@cp -R $(APP_BUNDLE) /Applications/
+	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
+	@cp -R "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
 	@echo "🧹 Clearing old TCC cache..."
 	-tccutil reset All solutions.kup.keepr
 	@echo "🔄 Refreshing icon caches..."
 	@killall Dock 2>/dev/null || true
-	@echo "✅ Installed: /Applications/NotionBridge.app"
+	@echo "✅ Installed: /Applications/Notion Bridge.app"
 
 # ── Clean TCC ──────────────────────────────────────────────────────────
 clean-tcc:
