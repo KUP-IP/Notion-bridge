@@ -153,6 +153,13 @@ NotionBridge is **macOS-only**. The Cloud Agent VM runs Ubuntu 24.04 x86_64, so 
 | `make build` (release) | Same framework errors |
 | `make app` / `make install` | Requires successful build + macOS bundle tooling |
 
+### PATH setup
+
+The update script adds Swift to `~/.bashrc`, but some terminal contexts (e.g. GUI-launched terminals) may not source it. If `swift` is not found, run:
+```bash
+export PATH=/opt/swift-6.2.4-RELEASE-ubuntu24.04/usr/bin:$PATH
+```
+
 ### Recommended workflow for Cloud Agents
 
 1. **Code review and static analysis** — read/edit Swift source files, validate `Package.swift`, resolve dependencies.
