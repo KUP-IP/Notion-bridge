@@ -5,10 +5,17 @@
 // PKT-349 B3: Added permission pre-triggers for Automation and Contacts grants
 //   (mirrors D2 pattern from OnboardingWindow.swift)
 // PKT-357 F14: Auto-refresh permission status every 2s while view is visible
+// BUGFIX: Automation button always opens System Settings > Automation pane.
+//   Previous approach (tccutil reset + silent re-probe) is unreliable on
+//   macOS Sequoia — prompts are suppressed and the button appeared to do nothing.
+//   Now consistently opens the Automation settings pane for manual grant.
 
 import SwiftUI
 import Combine
 import AppKit
+import os.log
+
+private let permLog = Logger(subsystem: "kup.solutions.notion-bridge", category: "PermissionView")
 
 /// Displays the 5-grant TCC permission status grid.
 /// Each row shows a colored indicator (green = granted, red = denied/unknown)
@@ -75,7 +82,9 @@ public struct PermissionView: View {
                     .foregroundStyle(status == .granted ? .green : .orange)
 
                 if status != .granted {
-                    Button(status == .partiallyGranted ? "Open Settings" : "Allow") {
+                    Button(grant == .automation || grant == .fullDiskAccess
+                           ? "Open Settings" : "Allow") {
+                        permLog.notice("Button tapped for grant: \(grant.displayName)")
                         openSystemSettings(for: grant)
                     }
                     .buttonStyle(.plain)
@@ -122,11 +131,14 @@ public struct PermissionView: View {
     // MARK: - Deep Links
 
     /// Opens the relevant System Settings pane for the given TCC grant.
-    /// BUG-FIX: Removed NSWorkspace.open() for grants that already trigger a native
-    /// macOS system prompt (Accessibility, Screen Recording, Automation, Contacts).
-    /// Opening System Settings simultaneously with the system prompt is redundant and
-    /// disorienting. The prompt itself guides the user. Only Full Disk Access opens
-    /// Settings directly since macOS provides no prompt for it.
+    /// Strategy per grant:
+    /// - Accessibility, Screen Recording: Trigger native macOS prompt (reliable on Sequoia).
+    /// - Automation: Always open System Settings > Automation pane. The previous approach
+    ///   (tccutil reset + NSAppleScript re-probe) is unreliable on macOS Sequoia — prompts
+    ///   are silently suppressed and the button appeared to do nothing. Direct Settings
+    ///   navigation is the only reliable path for users to grant Automation targets.
+    /// - Contacts: Trigger native Contacts prompt.
+    /// - Full Disk Access: Always open System Settings (no native prompt exists).
     private func openSystemSettings(for grant: PermissionManager.Grant) {
         switch grant {
         case .accessibility:
@@ -137,9 +149,21 @@ public struct PermissionView: View {
                 await permissionManager.recheckAllForTruth()
             }
         case .automation:
-            // Trigger the native Automation prompt only.
+            // Always open System Settings > Automation pane directly.
+            // tccutil reset + re-probe is unreliable on macOS Sequoia — prompts get
+            // silently suppressed, making the button appear to do nothing.
+            // The checkAutomation() probes running on the 2s timer will register the
+            // app in TCC so it appears in the Automation list.
+            let urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+            permLog.notice("[AUTOMATION] Attempting to open: \(urlString)")
+            if let url = URL(string: urlString) {
+                permLog.notice("[AUTOMATION] URL created successfully: \(url.absoluteString)")
+                let result = NSWorkspace.shared.open(url)
+                permLog.notice("[AUTOMATION] NSWorkspace.shared.open returned: \(result)")
+            } else {
+                permLog.error("[AUTOMATION] Failed to create URL from string: \(urlString)")
+            }
             Task {
-                await permissionManager.requestAutomationAccess()
                 await permissionManager.recheckAllForTruth()
             }
         case .contacts:
@@ -155,15 +179,10 @@ public struct PermissionView: View {
                 try? await Task.sleep(nanoseconds: 300_000_000)
                 await permissionManager.recheckAllForTruth()
             }
-        default:
+        case .fullDiskAccess:
             // Full Disk Access: no native prompt exists — must open System Settings directly.
-            switch grant {
-            case .fullDiskAccess:
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-                    NSWorkspace.shared.open(url)
-                }
-            default:
-                return
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+                NSWorkspace.shared.open(url)
             }
             Task {
                 await permissionManager.recheckAllForTruth()

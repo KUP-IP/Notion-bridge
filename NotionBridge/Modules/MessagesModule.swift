@@ -1,4 +1,4 @@
-// MessagesModule.swift – V1-PATCH-002 iMessage Tools
+// MessagesModule.swift – V1-PATCH-004 iMessage Tools
 // NotionBridge · Modules
 //
 // Six tools: messages_search, messages_recent, messages_chat,
@@ -21,6 +21,17 @@
 //   substitution + raw blob text extraction fallback for null text gap
 // - Added performQuery() serialized query method
 // - Removed direct getConnection().query() calls from all handler closures
+//
+// V1-PATCH-003 changes (typedstream decoder):
+// - BUGFIX: Replaced broken NSKeyedUnarchiver decode (silently fails on typedstream blobs)
+//   with proper typedstream binary parser that extracts NSString payload directly
+// - Root cause: ALL iMessage attributedBody blobs use Apple typedstream format (0x04 0x0B
+//   "streamtyped"), NOT bplist/NSKeyedArchiver. NSKeyedUnarchiver.init(forReadingFrom:)
+//   silently fails, falling through to raw blob scan which leaked bplist header bytes
+//   ("X$versionY$archiverT$topX$objects") from embedded calendar event detector results
+// - New decode priority: typedstream parser → NSKeyedUnarchiver fallback → raw scan
+// - Typedstream parser locates NSString class marker (0x84 0x01 0x2B) and reads
+//   length-prefixed UTF-8 payload with proper multi-byte length decoding
 
 import Foundation
 import SQLite3
@@ -181,37 +192,139 @@ public enum MessagesModule {
     // MARK: - Text Extraction
 
     /// Decode an `attributedBody` blob to plain text.
-    /// V1-PATCH-002: Two-stage decode — NSKeyedUnarchiver with class substitution,
-    /// then raw blob scan fallback for typedstream/unknown formats.
+    /// V1-PATCH-003: Three-stage decode — typedstream parser (primary), then
+    /// NSKeyedUnarchiver fallback (for rare bplist blobs), then raw scan (last resort).
+    ///
+    /// iMessage attributedBody blobs are almost always Apple typedstream format:
+    ///   Header: 0x04 0x0B "streamtyped"
+    ///   NSString class marker: 0x84 0x01 0x2B
+    ///   Length-prefixed UTF-8 payload follows the marker
     private static func decodeAttributedBody(_ data: Data) -> String? {
-        // Stage 1: NSKeyedUnarchiver with Messages framework class substitution
-        if let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) {
-            unarchiver.requiresSecureCoding = false
-            // Substitute Messages.framework private classes -> Foundation equivalents
-            unarchiver.setClass(
-                NSAttributedString.self,
-                forClassName: "MessageAttributedString"
-            )
-            unarchiver.setClass(
-                NSMutableAttributedString.self,
-                forClassName: "MessageMutableAttributedString"
-            )
-            defer { unarchiver.finishDecoding() }
-            if let attrStr = unarchiver.decodeObject(
-                forKey: NSKeyedArchiveRootObjectKey
-            ) as? NSAttributedString {
-                let text = attrStr.string
-                if !text.isEmpty { return text }
+        // Stage 1: Typedstream parser (handles ~99% of iMessage blobs)
+        if let text = decodeTypedStream(data) {
+            return text
+        }
+
+        // Stage 2: NSKeyedUnarchiver fallback (for rare bplist00 format blobs)
+        if data.count > 8, data[0...7] == Data([0x62, 0x70, 0x6C, 0x69, 0x73, 0x74, 0x30, 0x30]) {
+            if let text = decodeViaNSKeyedUnarchiver(data) {
+                return text
             }
         }
 
-        // Stage 2: Raw blob text extraction fallback
+        // Stage 3: Raw blob text extraction (last resort)
         return extractTextFromBlob(data)
     }
 
+    // MARK: - Typedstream Decoder
+
+    /// Parse Apple typedstream binary format to extract the NSString payload.
+    ///
+    /// Format structure (verified against live iMessage chat.db):
+    ///   Bytes 0-1:   0x04 0x0B (typedstream magic)
+    ///   Bytes 2-12:  "streamtyped" (format identifier)
+    ///   Bytes 13-69: NSAttributedString class hierarchy + metadata
+    ///   Byte  70-72: 0x84 0x01 0x2B (NSString class reference marker)
+    ///   Byte  73+:   Length-prefixed UTF-8 string payload:
+    ///     - If byte < 0x80: single-byte length, text follows immediately
+    ///     - If byte == 0x81: next byte is length (128-255), then 0x00 pad, then text
+    ///     - If byte == 0x82: next 2 bytes are big-endian length (256-65535), then 0x00 pad, then text
+    private static func decodeTypedStream(_ data: Data) -> String? {
+        let bytes = [UInt8](data)
+        // Verify typedstream magic header
+        guard bytes.count > 75,
+              bytes[0] == 0x04,
+              bytes[1] == 0x0B else {
+            return nil
+        }
+
+        // Locate NSString class marker: 0x84 0x01 0x2B
+        // Usually at offset 70, but scan a range to be safe
+        let marker: [UInt8] = [0x84, 0x01, 0x2B]
+        var markerOffset: Int? = nil
+        let searchStart = max(0, 60)
+        let searchEnd = min(bytes.count - 4, 120)
+        for i in searchStart..<searchEnd {
+            if bytes[i] == marker[0] && bytes[i+1] == marker[1] && bytes[i+2] == marker[2] {
+                markerOffset = i
+                break
+            }
+        }
+
+        guard let offset = markerOffset else { return nil }
+        let lengthStart = offset + 3
+        guard lengthStart < bytes.count else { return nil }
+
+        // Decode length prefix
+        let firstByte = bytes[lengthStart]
+        let textLength: Int
+        let textStart: Int
+
+        if firstByte < 0x80 {
+            // Single-byte length (0-127)
+            textLength = Int(firstByte)
+            textStart = lengthStart + 1
+        } else if firstByte == 0x81 {
+            // Two-byte encoding: 0x81 + length byte (128-255)
+            guard lengthStart + 2 < bytes.count else { return nil }
+            textLength = Int(bytes[lengthStart + 1])
+            // Skip optional 0x00 padding byte
+            let possiblePad = lengthStart + 2
+            if possiblePad < bytes.count && bytes[possiblePad] == 0x00 {
+                textStart = possiblePad + 1
+            } else {
+                textStart = possiblePad
+            }
+        } else if firstByte == 0x82 {
+            // Three-byte encoding: 0x82 + 2-byte big-endian length (256-65535)
+            guard lengthStart + 3 < bytes.count else { return nil }
+            textLength = (Int(bytes[lengthStart + 1]) << 8) | Int(bytes[lengthStart + 2])
+            // Skip optional 0x00 padding byte
+            let possiblePad = lengthStart + 3
+            if possiblePad < bytes.count && bytes[possiblePad] == 0x00 {
+                textStart = possiblePad + 1
+            } else {
+                textStart = possiblePad
+            }
+        } else {
+            // Unknown length encoding
+            return nil
+        }
+
+        guard textLength > 0,
+              textStart + textLength <= bytes.count else { return nil }
+
+        let textBytes = Array(bytes[textStart..<textStart + textLength])
+        guard let text = String(bytes: textBytes, encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: - NSKeyedUnarchiver Fallback
+
+    /// Decode bplist00 (NSKeyedArchiver) format attributedBody.
+    /// Fallback for the rare case where a blob is NOT typedstream.
+    private static func decodeViaNSKeyedUnarchiver(_ data: Data) -> String? {
+        guard let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) else { return nil }
+        unarchiver.requiresSecureCoding = false
+        unarchiver.decodingFailurePolicy = .setErrorAndReturn
+        // Substitute Messages.framework private classes -> Foundation equivalents
+        unarchiver.setClass(NSAttributedString.self, forClassName: "MessageAttributedString")
+        unarchiver.setClass(NSMutableAttributedString.self, forClassName: "MessageMutableAttributedString")
+        unarchiver.setClass(NSMutableString.self, forClassName: "NSMutableStringProxyForMutableAttributedString")
+        defer { unarchiver.finishDecoding() }
+        if let attrStr = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) as? NSAttributedString {
+            let text = attrStr.string
+            if !text.isEmpty { return text }
+        }
+        return nil
+    }
+
+    // MARK: - Raw Blob Scan Fallback
+
     /// Scan raw blob bytes for the longest contiguous printable UTF-8 run.
-    /// Filters out known binary artifact strings (class names, format markers).
-    /// Used as last-resort fallback when NSKeyedUnarchiver cannot decode.
+    /// Filters out known binary artifact strings (class names, format markers, bplist keys).
+    /// Last-resort fallback when both typedstream and NSKeyedUnarchiver fail.
     private static func extractTextFromBlob(_ data: Data) -> String? {
         guard data.count > 10 else { return nil }
         let bytes = [UInt8](data)
@@ -220,13 +333,10 @@ public enum MessagesModule {
 
         for byte in bytes {
             if byte >= 0x20 && byte <= 0x7E {
-                // Printable ASCII
                 current.append(byte)
             } else if byte >= 0xC2 && byte <= 0xF4 {
-                // UTF-8 lead byte (start of multi-byte sequence)
                 current.append(byte)
             } else if byte >= 0x80 && byte <= 0xBF && !current.isEmpty {
-                // UTF-8 continuation byte
                 current.append(byte)
             } else {
                 if let run = String(bytes: current, encoding: .utf8), run.count >= 4 {
@@ -239,19 +349,27 @@ public enum MessagesModule {
             runs.append(run)
         }
 
-        // Filter known noise (class names, format markers)
+        // Filter known noise (class names, format markers, bplist keys)
         let noise: Set<String> = [
             "streamtyped", "NSString", "NSMutableString", "NSObject",
             "NSAttributedString", "NSMutableAttributedString",
-            "NSDictionary", "NSMutableDictionary", "bplist00",
-            "NSValue", "NSNumber", "NSDate", "NSURL",
+            "NSDictionary", "NSMutableDictionary", "NSMutableData", "NSData",
+            "NSValue", "NSNumber", "NSDate", "NSURL", "NSArray", "NSMutableArray",
             "NSParagraphStyle", "NSFont", "NSColor",
-            "MessageAttributedString", "MessageMutableAttributedString"
+            "MessageAttributedString", "MessageMutableAttributedString",
+            "bplist00", "$version", "$archiver", "$top", "$objects",
+            "X$versionY$archiver", "NSKeyedArchiver",
+            "__kIMMessagePartAttributeName", "__kIMCalendarEventAttributeName",
+            "__kIMDataDetectedAttributeName", "__kIMFileTransferGUIDAttributeName",
+            "NSDictionary", "dd-result", "NS.keys", "NS.objects",
         ]
         let filtered = runs.filter { run in
             let trimmed = run.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.count >= 4
                 && !noise.contains(where: { trimmed.hasPrefix($0) })
+                && !trimmed.hasPrefix("__kIM")
+                && !trimmed.hasPrefix("$")
+                && !trimmed.hasPrefix("NS.")
         }
 
         guard let best = filtered.max(by: { $0.count < $1.count }) else {
@@ -325,6 +443,32 @@ public enum MessagesModule {
     }
 
     // MARK: - Tool Registration
+
+    // MARK: - Delivery Verification
+
+    /// Check if a sent message appears in chat.db within a short window.
+    /// Compares messages after preSendMaxId for the given recipient.
+    /// Returns true if a matching outbound message is found.
+    private static func verifySend(recipient: String, afterId: Int) -> Bool {
+        // Brief delay to allow Messages.app to write to chat.db
+        Thread.sleep(forTimeInterval: 1.5)
+
+        let sql = """
+            SELECT m.ROWID, m.is_from_me
+            FROM message m
+            LEFT JOIN handle h ON m.handle_id = h.ROWID
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN chat c ON c.ROWID = cmj.chat_id
+            WHERE m.ROWID > ?1
+              AND m.is_from_me = 1
+              AND (c.chat_identifier LIKE '%' || ?2 || '%'
+                   OR h.id LIKE '%' || ?2 || '%')
+            ORDER BY m.ROWID DESC
+            LIMIT 1
+            """
+        let rows = (try? performQuery(sql, params: [String(afterId), recipient])) ?? []
+        return !rows.isEmpty
+    }
 
     /// Register all MessagesModule tools on the given router.
     public static func register(on router: ToolRouter) async {
@@ -513,13 +657,14 @@ public enum MessagesModule {
             name: "messages_send",
             module: moduleName,
             tier: .notify,
-            description: "Send an iMessage via AppleScript. Requires explicit confirm='SEND' parameter. SecurityGate enforces red-tier confirmation.",
+            description: "Send an iMessage or SMS/RCS message via AppleScript. Auto-detects service type from chat history. Requires explicit confirm='SEND' parameter. SecurityGate enforces red-tier confirmation.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "recipient": .object(["type": .string("string"), "description": .string("Recipient phone number or email")]),
                     "body": .object(["type": .string("string"), "description": .string("Message body text")]),
-                    "confirm": .object(["type": .string("string"), "description": .string("Must be exactly 'SEND' to proceed")])
+                    "confirm": .object(["type": .string("string"), "description": .string("Must be exactly 'SEND' to proceed")]),
+                    "service": .object(["type": .string("string"), "description": .string("Optional: 'iMessage' or 'SMS'. Auto-detected from chat history if omitted. RCS recipients use 'SMS'.")])
                 ]),
                 "required": .array([.string("recipient"), .string("body"), .string("confirm")])
             ]),
@@ -538,6 +683,50 @@ public enum MessagesModule {
                     ])
                 }
 
+                // Determine service type: manual override or auto-detect from chat.db
+                let serviceOverride: String? = {
+                    if case .string(let s) = args["service"] { return s }
+                    return nil
+                }()
+
+                let serviceType: String  // "iMessage" or "SMS" for AppleScript
+                let detectedService: String  // What we found in chat.db
+
+                if let override = serviceOverride {
+                    serviceType = (override.lowercased() == "imessage") ? "iMessage" : "SMS"
+                    detectedService = override
+                } else {
+                    // Auto-detect from chat.db: query most recent chat for this recipient
+                    let detectSQL = """
+                        SELECT c.service_name
+                        FROM chat c
+                        WHERE c.chat_identifier LIKE '%' || ?1 || '%'
+                        ORDER BY c.ROWID DESC
+                        LIMIT 1
+                        """
+                    let detectRows = (try? performQuery(detectSQL, params: [recipient])) ?? []
+                    if let serviceName = detectRows.first?["service_name"] as? String {
+                        detectedService = serviceName
+                        // Map chat.db service names to AppleScript service types:
+                        // "iMessage" -> iMessage, "SMS" -> SMS, "RCS" -> SMS
+                        switch serviceName.lowercased() {
+                        case "imessage":
+                            serviceType = "iMessage"
+                        default:
+                            serviceType = "SMS"
+                        }
+                    } else {
+                        serviceType = "iMessage"
+                        detectedService = "iMessage (no history, default)"
+                    }
+                }
+
+                // Get the max ROWID before sending (for delivery verification)
+                let preRows = (try? performQuery(
+                    "SELECT MAX(ROWID) as max_id FROM message", params: []
+                )) ?? []
+                let preSendMaxId = (preRows.first?["max_id"] as? Int) ?? 0
+
                 // Sanitize inputs for AppleScript
                 let safeRecipient = recipient
                     .replacingOccurrences(of: "\\", with: "\\\\")
@@ -546,9 +735,10 @@ public enum MessagesModule {
                     .replacingOccurrences(of: "\\", with: "\\\\")
                     .replacingOccurrences(of: "\"", with: "\\\"")
 
+                // Build and execute AppleScript with detected service type
                 let script = """
                     tell application "Messages"
-                        set targetService to 1st service whose service type = iMessage
+                        set targetService to 1st service whose service type = \(serviceType)
                         set targetBuddy to buddy "\(safeRecipient)" of targetService
                         send "\(safeBody)" to targetBuddy
                     end tell
@@ -558,21 +748,62 @@ public enum MessagesModule {
                 var errorInfo: NSDictionary?
                 _ = appleScript?.executeAndReturnError(&errorInfo)
 
-                if errorInfo == nil {
-                    return .object([
-                        "sent": .bool(true),
-                        "recipient": .string(recipient),
-                        "bodyLength": .int(body.utf8.count)
-                    ])
-                } else {
-                    let errorMessage = errorInfo?[NSAppleScript.errorMessage] as? String ?? "AppleScript execution failed"
-                    let errorNumber = errorInfo?[NSAppleScript.errorNumber] as? Int ?? -1
+                if let errorInfo = errorInfo {
+                    let errorMessage = errorInfo[NSAppleScript.errorMessage] as? String ?? "AppleScript execution failed"
+                    let errorNumber = errorInfo[NSAppleScript.errorNumber] as? Int ?? -1
+
+                    // If iMessage failed and we auto-detected, retry with SMS fallback
+                    if serviceType == "iMessage" && serviceOverride == nil {
+                        let retryScript = """
+                            tell application "Messages"
+                                set targetService to 1st service whose service type = SMS
+                                set targetBuddy to buddy "\(safeRecipient)" of targetService
+                                send "\(safeBody)" to targetBuddy
+                            end tell
+                            """
+                        let retryAS = NSAppleScript(source: retryScript)
+                        var retryError: NSDictionary?
+                        _ = retryAS?.executeAndReturnError(&retryError)
+
+                        if retryError == nil {
+                            let verified = verifySend(recipient: recipient, afterId: preSendMaxId)
+                            return .object([
+                                "sent": .bool(true),
+                                "recipient": .string(recipient),
+                                "bodyLength": .int(body.utf8.count),
+                                "service": .string("SMS (fallback from iMessage)"),
+                                "verified": .bool(verified)
+                            ])
+                        }
+                        let retryMsg = retryError?[NSAppleScript.errorMessage] as? String ?? "SMS retry also failed"
+                        return .object([
+                            "sent": .bool(false),
+                            "error": .string("iMessage failed: \(errorMessage). SMS fallback failed: \(retryMsg)"),
+                            "errorNumber": .int(errorNumber),
+                            "detectedService": .string(detectedService)
+                        ])
+                    }
+
                     return .object([
                         "sent": .bool(false),
                         "error": .string(errorMessage),
-                        "errorNumber": .int(errorNumber)
+                        "errorNumber": .int(errorNumber),
+                        "service": .string(serviceType),
+                        "detectedService": .string(detectedService)
                     ])
                 }
+
+                // AppleScript reported success — verify delivery in chat.db
+                let verified = verifySend(recipient: recipient, afterId: preSendMaxId)
+
+                return .object([
+                    "sent": .bool(true),
+                    "recipient": .string(recipient),
+                    "bodyLength": .int(body.utf8.count),
+                    "service": .string(serviceType),
+                    "detectedService": .string(detectedService),
+                    "verified": .bool(verified)
+                ])
             }
         ))
     }
