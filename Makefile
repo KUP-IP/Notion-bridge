@@ -59,13 +59,13 @@ app: build
 	@# ── Copy SPM resource bundle (for Bundle.module resolution) ──
 	@SPM_BUNDLE="$(RELEASE_DIR)/NotionBridge_NotionBridge.bundle"; \
 		if [ -d "$$SPM_BUNDLE" ]; then \
-			cp -R "$$SPM_BUNDLE" "$(APP_BUNDLE)/Contents/Resources/"; \
-			echo "  ↳ Copied SPM resource bundle"; \
+			cp -R "$$SPM_BUNDLE" "$(APP_BUNDLE)/"; \
+			echo "  ↳ Copied SPM resource bundle to .app root"; \
 		fi
 	@# ── Compile Assets.xcassets → Assets.car via actool ──
-	@XCASSETS="$(APP_BUNDLE)/Contents/Resources/NotionBridge_NotionBridge.bundle/Assets.xcassets"; \
+	@XCASSETS="$(APP_BUNDLE)/NotionBridge_NotionBridge.bundle/Assets.xcassets"; \
 		if [ -d "$$XCASSETS" ]; then \
-			actool --compile "$(APP_BUNDLE)/Contents/Resources/NotionBridge_NotionBridge.bundle" \
+			actool --compile "$(APP_BUNDLE)/NotionBridge_NotionBridge.bundle" \
 				--platform macosx --minimum-deployment-target 14.0 \
 				--app-icon AppIcon --output-partial-info-plist /dev/null \
 				"$$XCASSETS" >/dev/null 2>&1 && \
