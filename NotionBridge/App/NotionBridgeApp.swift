@@ -12,12 +12,13 @@ import NotionBridgeLib
 /// Source PNGs are RGBA with clean transparency (low-alpha pixels pre-zeroed).
 /// PKT-353: Unified to Bundle.module (SPM executable target with processed resources).
 /// Bundle.main kept as secondary lookup for .app packaging scenarios.
+/// Icon sized at 30pt for optimal display on notched MacBook Pro menu bars.
 private func loadMenuBarIcon() -> NSImage? {
     let nsImage: NSImage? =
         Bundle.module.image(forResource: "MenuBarIcon")
         ?? Bundle.main.image(forResource: "MenuBarIcon")
     guard let nsImage else { return nil }
-    nsImage.size = NSSize(width: 24, height: 24)
+    nsImage.size = NSSize(width: 30, height: 30)
     nsImage.isTemplate = true
     return nsImage
 }

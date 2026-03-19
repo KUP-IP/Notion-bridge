@@ -6,6 +6,7 @@
 // macOS grants Automation TCC to NotionBridge.app itself — one grant, permanent.
 //
 // Created by PKT-356 hotfix: TCC prompt storm on osascript child processes.
+// V1-03 (BUG-FIX): Added TCC error detection (-1743) with actionable guidance.
 
 import Foundation
 import MCP
@@ -54,6 +55,28 @@ public enum AppleScriptModule {
                 if let error = errorInfo {
                     let errorMessage = error[NSAppleScript.errorMessage] as? String ?? "Unknown AppleScript error"
                     let errorNumber = error[NSAppleScript.errorNumber] as? Int ?? -1
+
+                    // V1-03: Detect TCC Automation denial (error -1743) and provide
+                    // actionable guidance. This error means NotionBridge does not have
+                    // Automation permission for the target application.
+                    if errorNumber == -1743 {
+                        // Attempt to extract the target app name from the script
+                        let targetApp = extractTargetApp(from: script) ?? "the target application"
+                        return .object([
+                            "error": .string(errorMessage),
+                            "errorNumber": .int(errorNumber),
+                            "tccDenied": .bool(true),
+                            "guidance": .string(
+                                "NotionBridge does not have Automation permission for \(targetApp). "
+                                + "This is a macOS TCC (Transparency, Consent, and Control) restriction. "
+                                + "To fix: Open the NotionBridge permission panel — the periodic permission "
+                                + "check will probe \(targetApp) and trigger the macOS consent prompt. "
+                                + "Alternatively, open System Settings > Privacy & Security > Automation "
+                                + "and grant NotionBridge access to \(targetApp)."
+                            )
+                        ])
+                    }
+
                     return .object([
                         "error": .string(errorMessage),
                         "errorNumber": .int(errorNumber)
@@ -66,5 +89,23 @@ public enum AppleScriptModule {
                 ])
             }
         ))
+    }
+
+    // MARK: - Helpers
+
+    /// Extract the target application name from a `tell application "X"` script.
+    /// Returns nil if no target is found.
+    private static func extractTargetApp(from script: String) -> String? {
+        // Match: tell application "AppName"
+        let pattern = #"tell application \"([^\"]+)\""#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(
+                in: script,
+                range: NSRange(script.startIndex..., in: script)
+              ),
+              let range = Range(match.range(at: 1), in: script) else {
+            return nil
+        }
+        return String(script[range])
     }
 }

@@ -73,6 +73,7 @@ public actor ServerManager {
         await ScreenModule.registerRecording(on: router)
         await AccessibilityModule.register(on: router)
         await AppleScriptModule.register(on: router)
+        await ChromeModule.register(on: router)
 
         // 3. Register echo tool (backward compatibility from V1-01)
         await router.register(ToolRegistration(

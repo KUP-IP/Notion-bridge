@@ -121,6 +121,7 @@ dmg: app
 sign: app
 	@echo "🔏 Signing app bundle..."
 	codesign --force --deep --sign "$(SIGNING_ID)" \
+		--entitlements NotionBridge.entitlements \
 		--options runtime \
 		--timestamp \
 		$(APP_BUNDLE)

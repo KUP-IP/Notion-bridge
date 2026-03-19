@@ -10,6 +10,10 @@
 //   Security Model moved to Advanced, Reset Onboarding moved to Advanced,
 //   status indicator added to General, BridgeTheme tokens adopted,
 //   Build Target uses runtime version, "Since now" timestamp fixed.
+// PKT-362 D2: Removed Sensitive Paths section from Permissions tab.
+// PKT-362 D3: Re-check All uses animatedRecheckAll() for per-row feedback.
+// PKT-362 D4: Reset TCC dialog rewritten with user-facing language.
+// PKT-362 D5: Post-reset guided instruction sheet with deep links + restart.
 
 import SwiftUI
 import ServiceManagement
@@ -80,8 +84,8 @@ public struct SettingsView: View {
     @State private var isRecheckingPermissions = false
     @State private var permissionActionMessage: String?
     @State private var showTCCResetDialog = false
+    // PKT-362 D5: Post-reset guided instruction sheet
     @State private var showPostResetSheet = false
-    @State private var postResetSheetMessage = "Notion Bridge permissions have been reset."
 
     enum SettingsSection: String, CaseIterable, Identifiable {
         case general = "General"
@@ -147,7 +151,7 @@ public struct SettingsView: View {
     private var maskedTokenLabel: String {
         let masked = NotionTokenResolver.maskedToken()
         if masked == "Not configured" {
-            return "Not configured ⚠️"
+            return "Not configured \u{26A0}\u{FE0F}"
         }
         return masked
     }
@@ -217,33 +221,19 @@ public struct SettingsView: View {
                 PermissionView(permissionManager: permissionManager)
             }
 
-            Section("Sensitive Paths") {
-                Text("First access to these paths triggers approval:")
-                    .font(.caption)
-                    .foregroundStyle(BridgeColors.secondary)
-                VStack(alignment: .leading, spacing: BridgeSpacing.xxs) {
-                    ForEach(["~/.ssh", "~/.aws", "~/.gnupg", "~/.config", "~/Library/Keychains"], id: \.self) { path in
-                        HStack(spacing: BridgeSpacing.xs) {
-                            Image(systemName: "folder.badge.questionmark")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                            Text(path)
-                                .font(.system(.caption, design: .monospaced))
-                        }
-                    }
-                }
-            }
+            // PKT-362 D2: Sensitive Paths section REMOVED.
+            // Hardcoded path list (~/.ssh, ~/.aws, ~/.gnupg, ~/.config, ~/Library/Keychains)
+            // served no interactive purpose. Documented in README instead.
 
             Section {
-                Button(isRecheckingPermissions ? "Re-checking…" : "Re-check All Permissions") {
+                // PKT-362 D3: Uses animatedRecheckAll() for per-row animated feedback
+                Button(isRecheckingPermissions ? "Re-checking\u{2026}" : "Re-check All Permissions") {
                     isRecheckingPermissions = true
                     permissionActionMessage = nil
                     Task {
-                        await permissionManager.recheckAllForTruth()
-                        await MainActor.run {
-                            isRecheckingPermissions = false
-                            permissionActionMessage = "Permission state refreshed at \(Date().formatted(date: .omitted, time: .standard))."
-                        }
+                        await permissionManager.animatedRecheckAll()
+                        isRecheckingPermissions = false
+                        permissionActionMessage = "Permission state refreshed at \(Date().formatted(date: .omitted, time: .standard))."
                     }
                 }
                 .disabled(isRecheckingPermissions)
@@ -254,30 +244,29 @@ public struct SettingsView: View {
                         .foregroundStyle(BridgeColors.muted)
                 }
 
-                Button("Reset TCC for Notion Bridge (Developer)") {
+                // PKT-362 D4: User-facing language, no tccutil/bundle ID references
+                Button("Reset All Permissions") {
                     showTCCResetDialog = true
                 }
                 .foregroundStyle(BridgeColors.error)
                 .confirmationDialog(
-                    "Reset all Notion Bridge TCC permissions?",
+                    "Reset all permissions for NotionBridge?",
                     isPresented: $showTCCResetDialog,
                     titleVisibility: .visible
                 ) {
                     Button("Reset", role: .destructive) {
                         Task {
                             let resetResult = await resetTCCPermissions()
-                            await MainActor.run {
-                                permissionActionMessage = resetResult.message
-                                postResetSheetMessage = resetResult.didFail
-                                    ? "Notion Bridge permissions were partially reset. Restart Notion Bridge before re-checking permissions."
-                                    : "Notion Bridge permissions have been reset."
-                                showPostResetSheet = true
-                            }
+                            permissionActionMessage = resetResult
+                            // PKT-362 D5: Show post-reset guided instruction sheet
+                            showPostResetSheet = true
                         }
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("This runs tccutil reset All for both current and legacy bundle IDs. macOS will prompt for permissions again.")
+                    // PKT-362 D4: Plain-language copy — no mention of tccutil,
+                    // bundle IDs, or internal implementation details.
+                    Text("This will reset all system permissions for NotionBridge. You\u{2019}ll need to re-grant each permission after resetting.")
                 }
 
                 if let permissionActionMessage {
@@ -288,8 +277,9 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // PKT-362 D5: Post-reset guided instruction sheet
         .sheet(isPresented: $showPostResetSheet) {
-            PostResetSheet(bodyText: postResetSheetMessage)
+            PostResetSheet(permissionManager: permissionManager)
         }
     }
 
@@ -514,7 +504,7 @@ public struct SettingsView: View {
                         .foregroundStyle(.purple)
                     Text("Notion Bridge")
                         .fontWeight(.medium)
-                    Text("— Local MCP server connecting AI assistants to your Mac.")
+                    Text("\u{2014} Local MCP server connecting AI assistants to your Mac.")
                         .foregroundStyle(BridgeColors.secondary)
                 }
                 .font(.callout)
@@ -528,7 +518,7 @@ public struct SettingsView: View {
                     }
                 }
 
-                Text("© 2026 KUP Solutions. All rights reserved.")
+                Text("\u{00A9} 2026 KUP Solutions. All rights reserved.")
                     .font(.caption2)
                     .foregroundStyle(BridgeColors.muted)
             }
@@ -606,39 +596,103 @@ public struct SettingsView: View {
 
         await permissionManager.recheckAllForTruth()
         if failures.isEmpty {
-            return ("TCC reset complete. Relaunch Notion Bridge and grant permissions again.", false)
+            return "Permissions reset. Follow the steps below to re-grant access."
         }
-        return ("TCC reset partially failed for: \(failures.joined(separator: ", ")). You may need to run tccutil manually.", true)
+        return "Reset partially failed. Some permissions may need to be reset manually in System Settings."
     }
 }
 
+// MARK: - PKT-362 D5: Post-Reset Guided Instruction Sheet
+
+/// Presented after TCC reset completes. Shows an ordered list of each V1 grant
+/// with a deep link button to the corresponding System Settings pane, plus a
+/// "Restart NotionBridge" button at the bottom. Dismisses on restart.
 private struct PostResetSheet: View {
-    let bodyText: String
+    let permissionManager: PermissionManager
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: BridgeSpacing.md) {
-            Text("Permissions Reset")
-                .font(.headline)
-            Text(bodyText)
-                .font(.body)
-                .foregroundStyle(BridgeColors.secondary)
-            Text("Restarting now helps ensure macOS permission changes are reflected.")
-                .font(.caption)
-                .foregroundStyle(BridgeColors.muted)
+        VStack(spacing: 16) {
+            // Header
+            Image(systemName: "lock.shield")
+                .font(.largeTitle)
+                .foregroundStyle(.orange)
 
-            HStack {
-                Spacer()
-                Button("Not Now") {
-                    dismiss()
+            Text("Re-grant Permissions")
+                .font(.headline)
+
+            Text("NotionBridge permissions have been reset. Open each setting below to re-grant access, then restart the app.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Divider()
+
+            // Ordered grant list with deep links
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(PermissionManager.Grant.v1Cases.enumerated()), id: \.element.id) { index, grant in
+                    HStack(spacing: 12) {
+                        // Step number
+                        Text("\(index + 1)")
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundStyle(.white)
+                            .frame(width: 22, height: 22)
+                            .background(Circle().fill(.blue))
+
+                        // Grant name + current status
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(grant.displayName)
+                                .font(.callout)
+                            Text(permissionManager.statusLabel(for: grant))
+                                .font(.caption2)
+                                .foregroundStyle(
+                                    permissionManager.status(for: grant) == .granted
+                                        ? .green : .orange
+                                )
+                        }
+
+                        Spacer()
+
+                        // Deep link button
+                        if let url = grant.systemSettingsURL {
+                            Button("Open Settings") {
+                                NSWorkspace.shared.open(url)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
                 }
-                Button("Restart Notion Bridge") {
-                    restartApp(reopenSettings: true)
-                }
-                .buttonStyle(.borderedProminent)
             }
+
+            Divider()
+
+            // Restart button
+            Button {
+                let bundleURL = Bundle.main.bundleURL
+                let config = NSWorkspace.OpenConfiguration()
+                config.createsNewApplicationInstance = true
+                NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
+                    DispatchQueue.main.async {
+                        NSApp.terminate(nil)
+                    }
+                }
+            } label: {
+                Label("Restart NotionBridge", systemImage: "arrow.clockwise")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+
+            // Dismiss option
+            Button("Close") {
+                dismiss()
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
-        .padding(20)
+        .padding(24)
         .frame(width: 420)
     }
 }
