@@ -124,7 +124,7 @@ public struct ConnectionSetupView: View {
 
             // Help text
             if activeProvider == .cloudflare {
-                Text("Run: cloudflared tunnel --url http://localhost:\(ssePort)")
+                Text(verbatim: "Run: cloudflared tunnel --url http://localhost:\(ssePort)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)

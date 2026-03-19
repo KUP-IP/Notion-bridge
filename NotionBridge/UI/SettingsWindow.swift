@@ -289,17 +289,17 @@ public struct SettingsView: View {
         Form {
             Section("Local Server") {
                 LabeledContent("Streamable HTTP") {
-                    Text("http://localhost:\(ssePort)/mcp")
+                    Text(verbatim: "http://localhost:\(ssePort)/mcp")
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                 }
                 LabeledContent("Legacy SSE") {
-                    Text("http://localhost:\(ssePort)/sse")
+                    Text(verbatim: "http://localhost:\(ssePort)/sse")
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                 }
                 LabeledContent("Health Check") {
-                    Text("http://localhost:\(ssePort)/health")
+                    Text(verbatim: "http://localhost:\(ssePort)/health")
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                 }
