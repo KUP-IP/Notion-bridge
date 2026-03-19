@@ -6,9 +6,7 @@
 //        ax_element_info (open), ax_perform_action (notify).
 // PKT-356: Mac Steering Sprint — AccessibilityModule.
 
-import Foundation
 import MCP
-import ApplicationServices
 import AppKit
 
 public enum AccessibilityModule {

@@ -8,9 +8,7 @@
 // Previous history: PKT-317, PKT-329, PKT-320, PKT-341, PKT-342, PKT-346
 
 import SwiftUI
-import CoreGraphics
 import AppKit
-import ApplicationServices
 import UserNotifications
 import Contacts
 

@@ -405,6 +405,7 @@ await runScreenModuleTests()
 await runAppleScriptModuleTests()
 await runBuiltinModuleTests()
 await runConfigManagerTests()
+await runGoogleDriveModuleTests()
 
 
 // ============================================================

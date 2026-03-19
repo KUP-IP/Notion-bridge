@@ -107,4 +107,144 @@ public final class ConfigManager: @unchecked Sendable {
         sensitivePaths = current
         return current
     }
+
+    // MARK: - Notion API Token (V3-QUALITY A4)
+
+    /// Read/write the Notion API token from config.json.
+    public var notionAPIToken: String? {
+        get {
+            queue.sync {
+                let config = readConfig()
+                // Check connections array first (new format)
+                if let connections = config["connections"] as? [[String: Any]],
+                   let primary = connections.first(where: { $0["primary"] as? Bool == true }),
+                   let token = primary["token"] as? String, !token.isEmpty {
+                    return token
+                }
+                // Fall back to flat key (legacy format)
+                return config["notion_api_token"] as? String
+            }
+        }
+        set {
+            queue.sync(flags: .barrier) {
+                var config = readConfig()
+                if let value = newValue {
+                    config["notion_api_token"] = value
+                } else {
+                    config.removeValue(forKey: "notion_api_token")
+                }
+                do {
+                    try writeConfig(config)
+                } catch {
+                    print("[ConfigManager] ⚠️ Failed to write notionAPIToken: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Google Drive Token (V3-QUALITY A4)
+
+    /// Read/write the Google Drive OAuth2 token from config.json.
+    public var googleDriveToken: String? {
+        get {
+            queue.sync {
+                let config = readConfig()
+                return config["google_drive_token"] as? String
+            }
+        }
+        set {
+            queue.sync(flags: .barrier) {
+                var config = readConfig()
+                if let value = newValue {
+                    config["google_drive_token"] = value
+                } else {
+                    config.removeValue(forKey: "google_drive_token")
+                }
+                do {
+                    try writeConfig(config)
+                } catch {
+                    print("[ConfigManager] ⚠️ Failed to write googleDriveToken: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Notion Connections (V3-QUALITY A4)
+
+    /// Read/write the connections array from config.json.
+    public var notionConnections: [[String: Any]] {
+        get {
+            queue.sync {
+                let config = readConfig()
+                return config["connections"] as? [[String: Any]] ?? []
+            }
+        }
+        set {
+            queue.sync(flags: .barrier) {
+                var config = readConfig()
+                config["connections"] = newValue
+                do {
+                    try writeConfig(config)
+                } catch {
+                    print("[ConfigManager] ⚠️ Failed to write notionConnections: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Generic Config Access (V3-QUALITY A4)
+
+    /// The config.json file URL (exposed for callers that need the path).
+    public var configFileURL: URL { configURL }
+
+    /// Read the full parsed config dictionary.
+    public var configJSON: [String: Any] {
+        queue.sync { readConfig() }
+    }
+
+    /// Write a value for a specific key.
+    public func setValue(_ value: Any?, forKey key: String) {
+        queue.sync(flags: .barrier) {
+            var config = readConfig()
+            if let value = value {
+                config[key] = value
+            } else {
+                config.removeValue(forKey: key)
+            }
+            do {
+                try writeConfig(config)
+            } catch {
+                print("[ConfigManager] ⚠️ Failed to write key ''\(key)''': \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Read a value for a specific key.
+    public func value(forKey key: String) -> Any? {
+        queue.sync {
+            readConfig()[key]
+        }
+    }
+
+
+    // MARK: - Keychain Migration (V3-QUALITY B4)
+
+    /// Migrate tokens from config.json to Keychain on first launch.
+    /// Reads existing tokens from config, saves to Keychain if not already there.
+    /// Safe to call multiple times — skips if Keychain already has the token.
+    public func migrateTokensToKeychain() {
+        // Migrate Notion API token
+        if let token = notionAPIToken, !token.isEmpty,
+           !KeychainManager.shared.exists(key: KeychainManager.Key.notionAPIToken) {
+            KeychainManager.shared.save(key: KeychainManager.Key.notionAPIToken, value: token)
+            print("[ConfigManager] Migrated notion_api_token to Keychain")
+        }
+
+        // Migrate Google Drive token
+        if let token = googleDriveToken, !token.isEmpty,
+           !KeychainManager.shared.exists(key: KeychainManager.Key.googleDriveToken) {
+            KeychainManager.shared.save(key: KeychainManager.Key.googleDriveToken, value: token)
+            print("[ConfigManager] Migrated google_drive_token to Keychain")
+        }
+    }
 }

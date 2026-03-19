@@ -6,7 +6,6 @@
 //   Stores client name, version, and connection time from MCP initialize clientInfo.
 // PKT-353: Added right-click context menu for Quit action (relocated from DashboardView footer).
 
-import Foundation
 import AppKit
 import Observation
 

@@ -7,10 +7,8 @@
 // Recording state managed by actor-isolated RecordingManager.
 // Files written to /tmp/nb-screen-<timestamp>.mp4 (same cleanup pattern as capture).
 
-import Foundation
 import MCP
 import ScreenCaptureKit
-import CoreGraphics
 import CoreMedia
 import AVFoundation
 

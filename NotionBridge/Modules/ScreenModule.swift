@@ -15,10 +15,8 @@
 // Capture files: /tmp/nb-screen-<timestamp>.<ext>
 // Cleanup: On each screen_capture call, delete files >1hr old, cap at 20.
 
-import Foundation
 import MCP
 import ScreenCaptureKit
-import CoreGraphics
 import Vision
 import ImageIO
 import UniformTypeIdentifiers

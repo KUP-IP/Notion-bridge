@@ -15,7 +15,6 @@
 // PKT-362 D6: Batched restart banner when needsRestart flag is set.
 
 import SwiftUI
-import Combine
 import AppKit
 import os.log
 

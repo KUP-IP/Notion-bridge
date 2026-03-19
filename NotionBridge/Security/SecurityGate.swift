@@ -18,7 +18,6 @@
 // - Sensitive path check skipped when trustedMode is enabled
 // - Nuclear patterns and dangerous command patterns ALWAYS enforced regardless of trust
 
-import Foundation
 import UserNotifications
 import MCP
 

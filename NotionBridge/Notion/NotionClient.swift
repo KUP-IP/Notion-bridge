@@ -33,18 +33,25 @@ public enum NotionTokenResolver {
         case missing
     }
 
-    /// Config file path: ~/.config/notion-bridge/config.json
-    public static let configFilePath: String = {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let path = "\(home)/.config/notion-bridge/config.json"
-        print("[TokenResolver] Config file path resolved: \(path)")
+    /// Config file path: V3-QUALITY A2 — delegates to ConfigManager.
+    public static var configFilePath: String {
+        let path = ConfigManager.shared.configFileURL.path
+        print("[TokenResolver] Config file path (via ConfigManager): \(path)")
         return path
-    }()
+    }
 
     /// Resolve the API token from all sources.
     /// Priority: NOTION_API_TOKEN env → NOTION_API_KEY env (legacy) → config file
     public static func resolve() -> (token: String, source: String)? {
         print("[TokenResolver] Starting token resolution...")
+
+        // 0. Keychain (V3-QUALITY B2: primary secure storage)
+        if let token = KeychainManager.shared.read(key: KeychainManager.Key.notionAPIToken),
+           !token.isEmpty {
+            print("[TokenResolver] ✅ Found token via Keychain")
+            return (token, "keychain:notion_api_token")
+        }
+        print("[TokenResolver] Keychain — no token stored")
 
         // 1. NOTION_API_TOKEN environment variable (primary)
         if let token = ProcessInfo.processInfo.environment["NOTION_API_TOKEN"],
@@ -85,32 +92,16 @@ public enum NotionTokenResolver {
     /// Supports both new connections format and legacy flat format.
     /// New format: { "connections": [{ "name": "...", "token": "ntn_...", "primary": true }] }
     /// Legacy format: { "notion_api_token": "ntn_..." }
+    /// V3-QUALITY A2: Reads config via ConfigManager (single source of truth).
     private static func readFromConfigFile() -> String? {
-        let path = configFilePath
-
-        // Step 1: Check file exists
-        guard FileManager.default.fileExists(atPath: path) else {
-            print("[TokenResolver] Config file does not exist at: \(path)")
+        let json = ConfigManager.shared.configJSON
+        guard !json.isEmpty else {
+            print("[TokenResolver] ConfigManager returned empty config")
             return nil
         }
-        print("[TokenResolver] Config file exists at: \(path)")
+        print("[TokenResolver] Config loaded via ConfigManager — keys: \(json.keys.sorted())")
 
-        // Step 2: Read file contents
-        guard let data = FileManager.default.contents(atPath: path) else {
-            print("[TokenResolver] Config file exists but FileManager.contents() returned nil — possible permission issue")
-            return nil
-        }
-        print("[TokenResolver] Config file read: \(data.count) bytes")
-
-        // Step 3: Parse JSON
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            let rawContent = String(data: data, encoding: .utf8) ?? "<non-UTF8>"
-            print("[TokenResolver] Config file JSON parse failed. Raw content: \(rawContent.prefix(200))")
-            return nil
-        }
-        print("[TokenResolver] Config file parsed — keys: \(json.keys.sorted())")
-
-        // Step 4a: New connections format — find primary connection
+        // New connections format — find primary connection
         if let connections = json["connections"] as? [[String: Any]] {
             if let primary = connections.first(where: { $0["primary"] as? Bool == true }),
                let token = primary["token"] as? String, !token.isEmpty {
@@ -118,7 +109,6 @@ public enum NotionTokenResolver {
                 print("[TokenResolver] Key 'connections' found — primary connection '\(name)', token length: \(token.count)")
                 return token
             }
-            // Fall back to first connection if no primary
             if let first = connections.first,
                let token = first["token"] as? String, !token.isEmpty {
                 let name = first["name"] as? String ?? "default"
@@ -127,7 +117,7 @@ public enum NotionTokenResolver {
             }
         }
 
-        // Step 4b: Legacy flat format
+        // Legacy flat format
         if let token = json["notion_api_token"] as? String, !token.isEmpty {
             print("[TokenResolver] Key 'notion_api_token' found — token length: \(token.count)")
             return token
@@ -137,7 +127,7 @@ public enum NotionTokenResolver {
             return token
         }
 
-        print("[TokenResolver] Config file has no 'connections', 'notion_api_token', or 'notion_api_key' key, or value is empty. Available keys: \(json.keys.sorted())")
+        print("[TokenResolver] No token keys found. Available keys: \(json.keys.sorted())")
         return nil
     }
 
@@ -169,20 +159,11 @@ public enum NotionTokenResolver {
         return (true, nil)
     }
 
-    /// Write token to config file, preserving other keys.
+    /// V3-QUALITY A2+B3: Write token to both ConfigManager and Keychain.
     public static func writeToken(_ newToken: String) throws {
-        let path = configFilePath
-        let dir = (path as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
-        var config: [String: Any] = [:]
-        if let data = FileManager.default.contents(atPath: path),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            config = existing
-        }
-        config["notion_api_token"] = newToken
-        let jsonData = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
-        try jsonData.write(to: URL(fileURLWithPath: path))
-        print("[TokenResolver] Token written to config file at: \(path)")
+        ConfigManager.shared.notionAPIToken = newToken
+        KeychainManager.shared.save(key: KeychainManager.Key.notionAPIToken, value: newToken)
+        print("[TokenResolver] Token written via ConfigManager + Keychain")
     }
 }
 

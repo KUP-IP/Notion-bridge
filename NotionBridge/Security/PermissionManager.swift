@@ -529,6 +529,11 @@ public final class PermissionManager {
     /// Called from recheckAllForTruth() and animatedRecheckAll().
     /// checkAll() remains synchronous and skips this check.
     public func checkNotifications() async {
+        // V3-QUALITY: Guard against CLI context (test runner has no bundle → UNUserNotificationCenter crashes)
+        guard Bundle.main.bundleIdentifier != nil else {
+            print("[PermissionManager] Skipping notification check — no bundle context (CLI/test runner)")
+            return
+        }
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         // PKT-369 N1: Diagnostic probe — log raw authorization status
         print("[PermissionManager] N1 diagnostic: authorizationStatus=\(settings.authorizationStatus.rawValue) (0=notDetermined, 1=denied, 2=authorized, 3=provisional, 4=ephemeral)")

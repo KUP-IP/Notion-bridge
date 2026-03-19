@@ -405,6 +405,31 @@ make test
 swift run NotionBridgeTests
 ```
 
+### Test Suites
+
+| Suite | File | Coverage |
+|-------|------|----------|
+| SecurityGate | `main.swift` | 2-tier model, nuclear handoff, sensitive paths, session/permanent permissions |
+| ToolRouter | `main.swift` | Registration, dispatch, overwrite, module filter, batch gate |
+| AuditLog | `main.swift` | Append, filter by tool/tier/status, Codable round-trip |
+| PermissionManager | `PermissionManagerTests.swift` | Grant enum, TCC checks, async notifications, evidence loop |
+| ShellModule | `ShellModuleTests.swift` | Tool registration, security tiers |
+| FileModule | `FileModuleTests.swift` | Tool registration, security tiers |
+| SessionModule | `SessionModuleTests.swift` | Tool registration, security tiers |
+| MessagesModule | `MessagesModuleTests.swift` | Tool registration, security tiers |
+| SystemModule | `SystemModuleTests.swift` | Tool registration, security tiers |
+| NotionModule | `NotionModuleTests.swift` | 16 tools, security tiers, model validation |
+| GoogleDriveModule | `GoogleDriveModuleTests.swift` | 6 tools, security tiers, token resolution |
+| AccessibilityModule | `AccessibilityModuleTests.swift` | Tool registration, security tiers |
+| ScreenModule | `ScreenModuleTests.swift` | Tool registration, security tiers |
+| AppleScriptModule | `AppleScriptModuleTests.swift` | Tool registration, security tiers |
+| BuiltinModule | `BuiltinModuleTests.swift` | Tool registration, security tiers |
+| ConfigManager | `ConfigManagerTests.swift` | Singleton, config read/write, accessors |
+| Integration/E2E | `IntegrationTests/` | End-to-end tool dispatch flows |
+
+> **Note:** Tests use a custom harness (`swift run NotionBridgeTests`), not XCTest.
+> The `checkNotifications()` async test is skipped in CLI context (no app bundle).
+
 ### Release Pipeline
 
 ```bash

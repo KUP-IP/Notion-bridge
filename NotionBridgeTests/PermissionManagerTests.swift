@@ -27,11 +27,12 @@ func runPermissionManagerTests() async {
 
     await test("Grant enum has all 5 required TCC grants") {
         let grants = PermissionManager.Grant.allCases
-        try expect(grants.count == 5, "Expected 5 grants, got \(grants.count)")
+        try expect(grants.count == 6, "Expected 6 grants, got \(grants.count)")
         try expect(grants.contains(.accessibility))
         try expect(grants.contains(.screenRecording))
         try expect(grants.contains(.fullDiskAccess))
         try expect(grants.contains(.automation))
+        try expect(grants.contains(.notifications))
         try expect(grants.contains(.contacts))
     }
 
@@ -40,6 +41,7 @@ func runPermissionManagerTests() async {
         try expect(PermissionManager.Grant.screenRecording.displayName == "Screen Recording")
         try expect(PermissionManager.Grant.fullDiskAccess.displayName == "Full Disk Access")
         try expect(PermissionManager.Grant.automation.displayName == "Automation")
+        try expect(PermissionManager.Grant.notifications.displayName == "Notifications")
         try expect(PermissionManager.Grant.contacts.displayName == "Contacts")
     }
 
@@ -121,6 +123,7 @@ func runPermissionManagerTests() async {
         try expect(await manager.status(for: .screenRecording) == manager.screenRecordingStatus)
         try expect(await manager.status(for: .fullDiskAccess) == manager.fullDiskAccessStatus)
         try expect(await manager.status(for: .automation) == manager.automationStatus)
+        try expect(await manager.status(for: .notifications) == manager.notificationStatus)
         try expect(await manager.status(for: .contacts) == manager.contactsStatus)
     }
 
@@ -128,7 +131,9 @@ func runPermissionManagerTests() async {
         let manager = await PermissionManager()
         await manager.checkAll()
         try expect(await manager.lastCheckedAt != nil, "Expected lastCheckedAt to be set after checkAll")
-        for grant in PermissionManager.Grant.allCases {
+        // Sync grants only — notifications requires async checkNotifications(), not called by checkAll()
+        let syncGrants = PermissionManager.Grant.allCases.filter { $0 != .notifications }
+        for grant in syncGrants {
             try expect(await manager.evidence(for: grant) != nil, "Expected evidence for \(grant.displayName)")
         }
     }
@@ -144,5 +149,28 @@ func runPermissionManagerTests() async {
         if let before, let after {
             try expect(after >= before, "Expected recheckAllForTruth to refresh timestamp")
         }
+    }
+
+    await test("checkNotifications resolves to granted or denied or unknown") {
+        let manager = await PermissionManager()
+        await manager.checkNotifications()
+        let status = await manager.notificationStatus
+        try expect(
+            status == .granted || status == .denied || status == .unknown,
+            "Expected valid notification status, got \(status)"
+        )
+    }
+
+    await test("checkAllAsync includes notification status") {
+        let manager = await PermissionManager()
+        await manager.checkAllAsync()
+        // V3-QUALITY: In CLI context (no bundle), notification check is safely skipped
+        if Bundle.main.bundleIdentifier != nil {
+            let notifStatus = await manager.notificationStatus
+            try expect(notifStatus != .unknown,
+                       "Expected notification status resolved after checkAllAsync")
+        }
+        try expect(await manager.lastCheckedAt != nil,
+                   "Expected lastCheckedAt set after checkAllAsync")
     }
 }

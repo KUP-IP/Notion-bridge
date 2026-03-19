@@ -385,15 +385,9 @@ public struct ConnectionsManagementView: View {
         }
     }
 
+    /// V3-QUALITY A3: Delegates to ConfigManager (eliminates direct config.json manipulation).
     private func removeGDriveToken() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let configPath = "\(home)/.config/notion-bridge/config.json"
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
-              var config = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-        config.removeValue(forKey: "google_drive_token")
-        if let jsonData = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]) {
-            try? jsonData.write(to: URL(fileURLWithPath: configPath))
-        }
+        ConfigManager.shared.googleDriveToken = nil
     }
 }
 
@@ -506,22 +500,9 @@ struct AddConnectionSheet: View {
         isSaving = false
     }
 
-    /// Save Google Drive token to config.json.
+    /// V3-QUALITY A3+B5: Saves to ConfigManager + Keychain (dual write).
     private func saveGDriveToken(_ token: String) throws {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let configPath = "\(home)/.config/notion-bridge/config.json"
-        let dir = (configPath as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-
-        var config: [String: Any] = [:]
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: configPath)),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            config = existing
-        }
-
-        config["google_drive_token"] = token
-
-        let jsonData = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
-        try jsonData.write(to: URL(fileURLWithPath: configPath), options: .atomic)
+        ConfigManager.shared.googleDriveToken = token
+        KeychainManager.shared.save(key: KeychainManager.Key.googleDriveToken, value: token)
     }
 }

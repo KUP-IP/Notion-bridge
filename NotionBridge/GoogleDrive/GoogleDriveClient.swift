@@ -12,16 +12,22 @@ import Foundation
 /// Resolves the Google Drive OAuth2 token from environment or config file.
 public enum GoogleDriveTokenResolver {
 
-    /// Config file path: ~/.config/notion-bridge/config.json
-    private static let configFilePath: String = {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/.config/notion-bridge/config.json"
-    }()
+    /// V3-QUALITY A1: Delegates to ConfigManager (eliminates config split-brain).
+    @available(*, deprecated, message: "Use ConfigManager.shared.googleDriveToken directly")
+    private static let configFilePath: String = ConfigManager.shared.configFileURL.path
 
     /// Resolve the OAuth2 token from all sources.
     /// Priority: GOOGLE_DRIVE_TOKEN env → config file
     public static func resolve() -> (token: String, source: String)? {
         print("[GDriveTokenResolver] Starting token resolution...")
+
+        // 0. Keychain (V3-QUALITY B2: primary secure storage)
+        if let token = KeychainManager.shared.read(key: KeychainManager.Key.googleDriveToken),
+           !token.isEmpty {
+            print("[GDriveTokenResolver] ✅ Found token via Keychain")
+            return (token, "keychain:google_drive_token")
+        }
+        print("[GDriveTokenResolver] Keychain — no token stored")
 
         // 1. Environment variable
         if let token = ProcessInfo.processInfo.environment["GOOGLE_DRIVE_TOKEN"],
@@ -31,16 +37,13 @@ public enum GoogleDriveTokenResolver {
         }
         print("[GDriveTokenResolver] env:GOOGLE_DRIVE_TOKEN — not set or empty")
 
-        // 2. Config file fallback
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: configFilePath)),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let token = json["google_drive_token"] as? String,
-              !token.isEmpty else {
-            print("[GDriveTokenResolver] ⚠️ No token found in config file")
-            return nil
+        // 2. Config file fallback — V3-QUALITY A1: via ConfigManager
+        if let token = ConfigManager.shared.googleDriveToken, !token.isEmpty {
+            print("[GDriveTokenResolver] ✅ Found token via ConfigManager:google_drive_token")
+            return (token, "config:google_drive_token")
         }
-        print("[GDriveTokenResolver] ✅ Found token via config:google_drive_token")
-        return (token, "config:google_drive_token")
+        print("[GDriveTokenResolver] ⚠️ No token found in ConfigManager")
+        return nil
     }
 
     /// Check whether any token is configured (fast, no network).

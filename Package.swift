@@ -31,7 +31,7 @@ let package = Package(
             name: "NotionBridge",
             dependencies: ["NotionBridgeLib"],
             path: "NotionBridge/App",
-            exclude: ["AppDelegate.swift", "StatusBarController.swift", "Info.plist"],
+            exclude: ["AppDelegate.swift", "StatusBarController.swift", "WindowTracker.swift", "Info.plist"],
             sources: ["NotionBridgeApp.swift"],
             resources: [.process("Resources")]
         ),

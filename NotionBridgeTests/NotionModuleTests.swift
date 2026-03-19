@@ -31,7 +31,7 @@ func runNotionModuleTests() async {
         "notion_search", "notion_page_read", "notion_page_update",
         "notion_query", "notion_page_create", "notion_blocks_append",
         "notion_block_delete", "notion_page_markdown_read", "notion_page_markdown_write",
-        "notion_comments_list", "notion_comments_create", "notion_users_list",
+        "notion_comments_list", "notion_comment_create", "notion_users_list",
         "notion_page_move", "notion_file_upload", "notion_token_introspect",
         "notion_connections_list"
     ]
@@ -56,7 +56,7 @@ func runNotionModuleTests() async {
     for toolName in openTools {
         await test("\(toolName) tier is open") {
             let tools = await router.registrations(forModule: "notion")
-            let tool = tools.first(where: { $0.name == toolName })!
+            guard let tool = tools.first(where: { $0.name == toolName }) else { throw TestError.assertion("Tool \(toolName) not found") }
             try expect(tool.tier == .open, "Expected open tier for \(toolName), got \(tool.tier.rawValue)")
         }
     }
@@ -64,12 +64,12 @@ func runNotionModuleTests() async {
     let notifyTools = [
         "notion_page_update", "notion_page_create", "notion_blocks_append",
         "notion_block_delete", "notion_page_markdown_write",
-        "notion_comments_create", "notion_page_move", "notion_file_upload"
+        "notion_comment_create", "notion_page_move", "notion_file_upload"
     ]
     for toolName in notifyTools {
         await test("\(toolName) tier is notify") {
             let tools = await router.registrations(forModule: "notion")
-            let tool = tools.first(where: { $0.name == toolName })!
+            guard let tool = tools.first(where: { $0.name == toolName }) else { throw TestError.assertion("Tool \(toolName) not found") }
             try expect(tool.tier == .notify, "Expected notify tier for \(toolName), got \(tool.tier.rawValue)")
         }
     }
@@ -222,7 +222,7 @@ func runNotionModuleTests() async {
     await test("notion_comments_create rejects missing text") {
         do {
             _ = try await router.dispatch(
-                toolName: "notion_comments_create",
+                toolName: "notion_comment_create",
                 arguments: .object([:])
             )
             throw TestError.assertion("Expected error for missing text")
@@ -234,7 +234,7 @@ func runNotionModuleTests() async {
     await test("notion_comments_create rejects missing parentId and discussionId") {
         do {
             _ = try await router.dispatch(
-                toolName: "notion_comments_create",
+                toolName: "notion_comment_create",
                 arguments: .object(["text": .string("test comment")])
             )
             throw TestError.assertion("Expected error for missing parentId/discussionId")

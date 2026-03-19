@@ -115,6 +115,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // PKT-369 N3: Check TCC permissions on launch (async to include notifications)
         Task { await permissionManager.checkAllAsync() }
 
+        // V3-QUALITY B4: Migrate plaintext tokens to Keychain on first launch
+        ConfigManager.shared.migrateTokensToKeychain()
+
         startMCPServer()
         validateNotionToken()
 
