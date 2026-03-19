@@ -19,6 +19,10 @@ public struct PermissionView: View {
 
     // PKT-357 F14: Timer publisher for auto-refresh
     private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    @State private var v1StatusSnapshot: [PermissionManager.Grant: PermissionManager.GrantStatus] = [:]
+    @State private var needsRestart = false
+    @State private var needsRestartSetCycle: Int?
+    @State private var checkCycle: Int = 0
 
     public init(permissionManager: PermissionManager) {
         self.permissionManager = permissionManager
@@ -38,18 +42,28 @@ public struct PermissionView: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
+
+            if needsRestart {
+                restartBanner
+            } else if allV1Granted {
+                Label("All permissions granted", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, 4)
+            }
         }
         // PKT-357 F14: Check permissions on appear
         .onAppear {
-            permissionManager.checkAll()
+            refreshPermissionState()
         }
         // PKT-357 F14: Auto-refresh every 2s so status updates after user
         // grants permission in System Settings and switches back
         .onReceive(refreshTimer) { _ in
-            permissionManager.checkAll()
+            refreshPermissionState()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            permissionManager.checkAll()
+            refreshPermissionState()
         }
     }
 
@@ -117,6 +131,55 @@ public struct PermissionView: View {
         case .partiallyGranted: return .orange
         case .restartRecommended: return .orange
         }
+    }
+
+    private var allV1Granted: Bool {
+        !v1StatusSnapshot.isEmpty && PermissionManager.Grant.v1Cases.allSatisfy { v1StatusSnapshot[$0] == .granted }
+    }
+
+    private var restartBanner: some View {
+        HStack(spacing: 8) {
+            Label("Restart required to apply permission changes", systemImage: "arrow.clockwise.circle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+            Spacer()
+            Button("Restart Notion Bridge") {
+                restartApp(reopenSettings: true)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        }
+        .padding(.top, 4)
+    }
+
+    private func refreshPermissionState() {
+        permissionManager.checkAll()
+        checkCycle += 1
+
+        let statuses = Dictionary(uniqueKeysWithValues: PermissionManager.Grant.v1Cases.map {
+            ($0, permissionManager.status(for: $0))
+        })
+        let allGranted = statuses.values.allSatisfy { $0 == .granted }
+
+        let restartQualifyingGrants: [PermissionManager.Grant] = [.screenRecording, .fullDiskAccess]
+        let newlyGrantedNeedsRestart = restartQualifyingGrants.contains { grant in
+            guard let previousStatus = v1StatusSnapshot[grant] else { return false }
+            guard let currentStatus = statuses[grant] else { return false }
+            return previousStatus != .granted && currentStatus == .granted
+        }
+
+        if newlyGrantedNeedsRestart {
+            needsRestart = true
+            needsRestartSetCycle = checkCycle
+        } else if allGranted,
+                  needsRestart,
+                  let setCycle = needsRestartSetCycle,
+                  checkCycle - setCycle > 1 {
+            needsRestart = false
+            needsRestartSetCycle = nil
+        }
+
+        v1StatusSnapshot = statuses
     }
 
     // MARK: - Deep Links

@@ -14,6 +14,25 @@
 import AppKit
 import ServiceManagement
 
+private let reopenSettingsAfterRestartKey = "reopenSettingsAfterRestart"
+
+@MainActor
+func restartApp(reopenSettings: Bool = false) {
+    if reopenSettings {
+        UserDefaults.standard.set(true, forKey: reopenSettingsAfterRestartKey)
+    }
+
+    let bundleURL = Bundle.main.bundleURL
+    let config = NSWorkspace.OpenConfiguration()
+    config.createsNewApplicationInstance = true
+
+    NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            NSApp.terminate(nil)
+        }
+    }
+}
+
 /// PKT-341: Signal handler for crash resilience.
 /// Flushes log file descriptor, then re-raises with default handler.
 /// Only calls async-signal-safe functions (fsync, signal, raise).
@@ -123,6 +142,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // V1-QUALITY-C2: Show first-launch onboarding window
         onboardingController.showIfNeeded()
+
+        reopenSettingsIfRequested()
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
@@ -156,6 +177,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsController.show()
     }
 
+    /// Restart app from context menu.
+    @objc public func restartApp(_ sender: Any?) {
+        restartApp(reopenSettings: true)
+    }
+
     // MARK: - Signal Handlers
 
     /// PKT-341: Install signal handlers for SIGTERM and SIGABRT.
@@ -184,6 +210,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         print("[Notion Bridge] Single-instance check passed (PID: \(myPID))")
         return true
+    }
+
+    private func reopenSettingsIfRequested() {
+        guard UserDefaults.standard.bool(forKey: reopenSettingsAfterRestartKey) else {
+            return
+        }
+        UserDefaults.standard.removeObject(forKey: reopenSettingsAfterRestartKey)
+        settingsController.show()
     }
 
     // MARK: - MCP Server

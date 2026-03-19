@@ -80,6 +80,8 @@ public struct SettingsView: View {
     @State private var isRecheckingPermissions = false
     @State private var permissionActionMessage: String?
     @State private var showTCCResetDialog = false
+    @State private var showPostResetSheet = false
+    @State private var postResetSheetMessage = "Notion Bridge permissions have been reset."
 
     enum SettingsSection: String, CaseIterable, Identifiable {
         case general = "General"
@@ -197,6 +199,12 @@ public struct SettingsView: View {
                         }
                     }
             }
+
+            Section("App Control") {
+                Button("Restart Notion Bridge", systemImage: "arrow.clockwise") {
+                    restartApp(reopenSettings: true)
+                }
+            }
         }
         .formStyle(.grouped)
     }
@@ -259,7 +267,11 @@ public struct SettingsView: View {
                         Task {
                             let resetResult = await resetTCCPermissions()
                             await MainActor.run {
-                                permissionActionMessage = resetResult
+                                permissionActionMessage = resetResult.message
+                                postResetSheetMessage = resetResult.didFail
+                                    ? "Notion Bridge permissions were partially reset. Restart Notion Bridge before re-checking permissions."
+                                    : "Notion Bridge permissions have been reset."
+                                showPostResetSheet = true
                             }
                         }
                     }
@@ -276,6 +288,9 @@ public struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showPostResetSheet) {
+            PostResetSheet(bodyText: postResetSheetMessage)
+        }
     }
 
     // MARK: - Connections
@@ -570,7 +585,7 @@ public struct SettingsView: View {
 
     // MARK: - Permissions Helpers
 
-    private func resetTCCPermissions() async -> String {
+    private func resetTCCPermissions() async -> (message: String, didFail: Bool) {
         let ids = ["kup.solutions.notion-bridge", "solutions.kup.keepr"]
         var failures: [String] = []
 
@@ -591,8 +606,39 @@ public struct SettingsView: View {
 
         await permissionManager.recheckAllForTruth()
         if failures.isEmpty {
-            return "TCC reset complete. Relaunch Notion Bridge and grant permissions again."
+            return ("TCC reset complete. Relaunch Notion Bridge and grant permissions again.", false)
         }
-        return "TCC reset partially failed for: \(failures.joined(separator: ", ")). You may need to run tccutil manually."
+        return ("TCC reset partially failed for: \(failures.joined(separator: ", ")). You may need to run tccutil manually.", true)
+    }
+}
+
+private struct PostResetSheet: View {
+    let bodyText: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: BridgeSpacing.md) {
+            Text("Permissions Reset")
+                .font(.headline)
+            Text(bodyText)
+                .font(.body)
+                .foregroundStyle(BridgeColors.secondary)
+            Text("Restarting now helps ensure macOS permission changes are reflected.")
+                .font(.caption)
+                .foregroundStyle(BridgeColors.muted)
+
+            HStack {
+                Spacer()
+                Button("Not Now") {
+                    dismiss()
+                }
+                Button("Restart Notion Bridge") {
+                    restartApp(reopenSettings: true)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 }
