@@ -1,5 +1,6 @@
 // swift-tools-version: 6.2
 // PKT-318: Added swift-nio for SSE transport on :9700
+// NOTE: Tests use a custom executable harness (not XCTest). Run via: swift run NotionBridgeTests
 // PKT-353: Platform bumped to macOS 26 (Tahoe) for Liquid Glass adoption.
 //   swift-tools-version bumped 6.0 → 6.2 (required for .macOS(.v26)).
 import PackageDescription
