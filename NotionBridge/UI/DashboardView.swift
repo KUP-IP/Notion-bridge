@@ -7,6 +7,7 @@
 
 import SwiftUI
 import CoreGraphics
+import AppKit
 
 /// Status popover for the menu bar app.
 /// Shows server status (primary), connected clients (secondary), permissions, and stats.
@@ -35,6 +36,7 @@ public struct DashboardView: View {
             clientsSection
             permissionsSection
             statsSection
+            quitSection
         }
         .frame(minWidth: 260, maxWidth: 320)
         .padding(.vertical, BridgeSpacing.xs)
@@ -155,6 +157,19 @@ public struct DashboardView: View {
         HStack(spacing: BridgeSpacing.md) {
             statItem(label: "Tools", value: "\(statusBar.registeredToolCount)")
             statItem(label: "Calls", value: "\(statusBar.totalToolCalls)")
+        }
+        .bridgeRow()
+    }
+
+    private var quitSection: some View {
+        HStack {
+            Spacer()
+            Button("Quit Notion Bridge") {
+                NSApp.terminate(nil)
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundStyle(BridgeColors.muted)
         }
         .bridgeRow()
     }
