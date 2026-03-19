@@ -257,7 +257,7 @@ public struct SettingsView: View {
                     Button("Reset", role: .destructive) {
                         Task {
                             let resetResult = await resetTCCPermissions()
-                            permissionActionMessage = resetResult
+                            permissionActionMessage = resetResult.message
                             // PKT-362 D5: Show post-reset guided instruction sheet
                             showPostResetSheet = true
                         }
@@ -596,9 +596,9 @@ public struct SettingsView: View {
 
         await permissionManager.recheckAllForTruth()
         if failures.isEmpty {
-            return "Permissions reset. Follow the steps below to re-grant access."
+            return (message: "Permissions reset. Follow the steps below to re-grant access.", didFail: false)
         }
-        return "Reset partially failed. Some permissions may need to be reset manually in System Settings."
+        return (message: "Reset partially failed. Some permissions may need to be reset manually in System Settings.", didFail: true)
     }
 }
 
