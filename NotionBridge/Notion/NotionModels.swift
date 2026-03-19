@@ -1,9 +1,10 @@
-// NotionModels.swift – V1-05 → V1-12 Notion API Type Definitions
+// NotionModels.swift – V1-05 → V1-12 → PKT-367 Notion API Type Definitions
 // NotionBridge · Notion
 //
-// Minimal models for Notion REST API integration.
-// Covers Page and Block types needed by NotionModule.
+// Models for Notion REST API integration.
 // PKT-320: Updated error messages to reference NOTION_API_TOKEN
+// PKT-367: Added models for comments, users, file uploads, connections.
+//          Replaced `archived` references with `in_trash` (A2).
 
 import Foundation
 
@@ -16,6 +17,7 @@ public enum NotionClientError: Error, LocalizedError, Sendable {
     case maxRetriesExceeded
     case httpError(Int, String)
     case decodingError(String)
+    case connectionNotFound(String)
 
     public var errorDescription: String? {
         switch self {
@@ -29,6 +31,8 @@ public enum NotionClientError: Error, LocalizedError, Sendable {
             return "HTTP \(code): \(String(body.prefix(500)))"
         case .decodingError(let msg):
             return "Decoding error: \(msg)"
+        case .connectionNotFound(let name):
+            return "Notion connection '\(name)' not found in registry"
         }
     }
 }
@@ -40,12 +44,14 @@ public struct NotionPage: Sendable {
     public let id: String
     public let url: String
     public let title: String
+    public let inTrash: Bool  // PKT-367: A2 — renamed from `archived`
     public let properties: String // raw JSON string
 
-    public init(id: String, url: String, title: String, properties: String) {
+    public init(id: String, url: String, title: String, inTrash: Bool = false, properties: String) {
         self.id = id
         self.url = url
         self.title = title
+        self.inTrash = inTrash
         self.properties = properties
     }
 }
@@ -57,12 +63,14 @@ public struct NotionBlock: Sendable {
     public let id: String
     public let type: String
     public let hasChildren: Bool
+    public let inTrash: Bool  // PKT-367: A2 — renamed from `archived`
     public let content: String // raw JSON string
 
-    public init(id: String, type: String, hasChildren: Bool, content: String) {
+    public init(id: String, type: String, hasChildren: Bool, inTrash: Bool = false, content: String) {
         self.id = id
         self.type = type
         self.hasChildren = hasChildren
+        self.inTrash = inTrash
         self.content = content
     }
 }
@@ -81,6 +89,83 @@ public struct NotionSearchResult: Sendable {
         self.objectType = objectType
         self.title = title
         self.url = url
+    }
+}
+
+// MARK: - PKT-367: New Models
+
+/// A Notion comment.
+public struct NotionComment: Sendable {
+    public let id: String
+    public let parentId: String
+    public let text: String
+    public let createdTime: String
+    public let createdBy: String // user ID
+
+    public init(id: String, parentId: String, text: String, createdTime: String, createdBy: String) {
+        self.id = id
+        self.parentId = parentId
+        self.text = text
+        self.createdTime = createdTime
+        self.createdBy = createdBy
+    }
+}
+
+/// A Notion user.
+public struct NotionUser: Sendable {
+    public let id: String
+    public let name: String
+    public let email: String?
+    public let type: String // "person" or "bot"
+    public let avatarURL: String?
+
+    public init(id: String, name: String, email: String?, type: String, avatarURL: String?) {
+        self.id = id
+        self.name = name
+        self.email = email
+        self.type = type
+        self.avatarURL = avatarURL
+    }
+}
+
+/// A Notion file upload result.
+public struct NotionFileUpload: Sendable {
+    public let id: String
+    public let status: String
+    public let url: String?
+
+    public init(id: String, status: String, url: String?) {
+        self.id = id
+        self.status = status
+        self.url = url
+    }
+}
+
+/// A named workspace connection for the multi-token registry.
+public struct NotionConnection: Sendable, Codable {
+    public let name: String
+    public let token: String
+    public let primary: Bool
+
+    public init(name: String, token: String, primary: Bool = false) {
+        self.name = name
+        self.token = token
+        self.primary = primary
+    }
+}
+
+/// Connection info returned by notion_connections_list (token masked).
+public struct NotionConnectionInfo: Sendable {
+    public let name: String
+    public let isPrimary: Bool
+    public let status: String // "connected" or "error: ..."
+    public let maskedToken: String
+
+    public init(name: String, isPrimary: Bool, status: String, maskedToken: String) {
+        self.name = name
+        self.isPrimary = isPrimary
+        self.status = status
+        self.maskedToken = maskedToken
     }
 }
 
@@ -108,6 +193,11 @@ public enum NotionJSON {
         return "Untitled"
     }
 
+    /// Extract plain text from a rich_text array.
+    public static func extractPlainText(from richText: [[String: Any]]) -> String {
+        return richText.compactMap { $0["plain_text"] as? String }.joined()
+    }
+
     /// Pretty-print a JSON object to string.
     public static func prettyPrint(_ obj: Any) -> String {
         guard let data = try? JSONSerialization.data(
@@ -117,5 +207,13 @@ public enum NotionJSON {
             return String(describing: obj)
         }
         return String(data: data, encoding: .utf8) ?? String(describing: obj)
+    }
+
+    /// Mask a token for display: ntn_•••••••1234
+    public static func maskToken(_ token: String) -> String {
+        guard token.count >= 8 else { return "••••••••" }
+        let prefix = String(token.prefix(4))
+        let suffix = String(token.suffix(4))
+        return "\(prefix)•••••••\(suffix)"
     }
 }

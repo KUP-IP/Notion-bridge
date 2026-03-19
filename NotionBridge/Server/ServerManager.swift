@@ -36,16 +36,21 @@ public actor ServerManager {
     /// Parameters: (clientName: String, clientVersion: String)
     private let onClientConnected: @MainActor @Sendable (String, String) -> Void
 
+    /// PKT-366 F13: Callback invoked on the main actor when a client disconnects.
+    private let onClientDisconnected: @MainActor @Sendable (String) -> Void
+
     /// - Parameter onToolCall: Closure called on MainActor after each tool call completes.
     ///   Use this to increment StatusBarController.totalToolCalls.
     /// - Parameter onClientConnected: Closure called on MainActor when an MCP client connects.
     ///   Use this to update StatusBarController.connectedClients.
     public init(
         onToolCall: @escaping @MainActor @Sendable () -> Void,
-        onClientConnected: @escaping @MainActor @Sendable (String, String) -> Void = { _, _ in }
+        onClientConnected: @escaping @MainActor @Sendable (String, String) -> Void = { _, _ in },
+        onClientDisconnected: @escaping @MainActor @Sendable (String) -> Void = { _ in }
     ) {
         self.onToolCall = onToolCall
         self.onClientConnected = onClientConnected
+        self.onClientDisconnected = onClientDisconnected
         self.ssePort = Int(ProcessInfo.processInfo.environment["NOTION_BRIDGE_PORT"] ?? "") ?? 9700
     }
 
@@ -74,6 +79,7 @@ public actor ServerManager {
         await AccessibilityModule.register(on: router)
         await AppleScriptModule.register(on: router)
         await ChromeModule.register(on: router)
+        await SkillsModule.register(on: router)
 
         // 3. Register echo tool (backward compatibility from V1-01)
         await router.register(ToolRegistration(
@@ -139,7 +145,8 @@ public actor ServerManager {
             port: ssePort,
             router: router,
             onToolCall: onToolCall,
-            onClientConnected: onClientConnected
+            onClientConnected: onClientConnected,
+            onClientDisconnected: onClientDisconnected
         )
 
         return await router.allRegistrations().count

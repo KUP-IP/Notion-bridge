@@ -65,6 +65,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// on applicationDidFinishLaunching (not just on popover open).
     public let permissionManager = PermissionManager()
 
+    /// PKT-369 W3: Shared window tracker for activation policy switching.
+    /// Observes Settings window lifecycle and toggles .accessory ↔ .regular.
+    public let windowTracker = WindowTracker()
+
     /// V1-QUALITY-C2: Onboarding window controller for first-launch experience.
     private lazy var onboardingController = OnboardingWindowController(
         permissionManager: permissionManager
@@ -108,9 +112,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // PKT-341: Install signal handlers for crash breadcrumbs
         installSignalHandlers()
 
-        // PKT-341: Check TCC permissions on launch — indicators reflect
-        // actual System Settings state immediately, not just on popover open
-        permissionManager.checkAll()
+        // PKT-369 N3: Check TCC permissions on launch (async to include notifications)
+        Task { await permissionManager.checkAllAsync() }
 
         startMCPServer()
         validateNotionToken()
@@ -134,9 +137,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Keep permission state fresh after returning from System Settings.
+        // PKT-369 N3: Use async variant to include notification status
         NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                self?.permissionManager.checkAll()
+                await self?.permissionManager.checkAllAsync()
             }
         }
 
@@ -168,6 +172,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusBar.markServerStopped()
         print("[Notion Bridge] Server stopped.")
+    }
+
+    /// PKT-369 W2: Dock icon click opens or brings Settings to front.
+    /// When activation policy is .regular (Settings open), clicking the dock
+    /// icon should either open Settings or bring it to the foreground.
+    public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openSettings()
+        return true
     }
 
     // MARK: - Public API (V1-QUALITY-C2)
@@ -230,11 +242,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             statusBar.addClient(name: name, version: version)
         }
 
+        // PKT-366 F13: Client disconnection callback — updates StatusBarController
+        let onClientDisconnected: @MainActor @Sendable (String) -> Void = { name in
+            statusBar.removeClient(name: name)
+        }
+
         let manager = ServerManager(
             onToolCall: {
                 statusBar.incrementToolCalls()
             },
-            onClientConnected: onClientConnected
+            onClientConnected: onClientConnected,
+            onClientDisconnected: onClientDisconnected
         )
         self.serverManager = manager
 

@@ -28,8 +28,20 @@ import AppKit
 
 // MARK: - Security Tier (v2: 2-tier model)
 
-/// Two security tiers replacing the previous 4-tier system.
-/// Open = execute immediately. Notify = user approval via notification.
+/// Two security tiers replacing the previous 4-tier system (V1-QUALITY-C1).
+///
+/// - `open`: Execute immediately. No user interaction. Used for read-only operations.
+/// - `notify`: Informs the user via macOS notification when the tool executes.
+///
+/// **Architecture note (F3 — PKT-366):**
+/// This enum is strictly 2-tier. There is no "confirm" or "destructive" case.
+/// Behavioral escalation (nuclear patterns, dangerous commands) is enforced at
+/// **runtime** by `SecurityGate.enforce()` — it is NOT a separate tier.
+/// The UI toggle (F1) controls notification behavior only. It does not bypass
+/// runtime escalation: nuclear and dangerous command patterns still gate
+/// regardless of the user's tier choice.
+/// Auto-escalation patterns are enforced unconditionally by
+/// `checkNuclearPattern()` and `checkDangerousCommand()`.
 public enum SecurityTier: String, Sendable, CaseIterable, Codable {
     case open = "open"
     case notify = "notify"
@@ -211,6 +223,17 @@ public actor SecurityGate {
 
     // MARK: Enforcement
 
+    /// Evaluate a tool call against all security policies.
+    ///
+    /// **Enforcement order (F3 — PKT-366):**
+    /// 1. Nuclear pattern check — ALWAYS enforced, even in trusted mode
+    /// 2. Dangerous command patterns — ALWAYS enforced, even in trusted mode
+    /// 3. Safe command auto-allow — read-only commands skip notification
+    /// 4. Trusted mode bypass — auto-allows after nuclear + dangerous checks pass
+    /// 5. Sensitive path check — prompts for access to ~/.ssh, ~/.aws, etc.
+    /// 6. Tier-based logic — Open = allow, Notify = request approval
+    ///
+    /// The UI tier toggle (F1) only affects step 6. Steps 1–2 are unconditional.
     public func enforce(
         toolName: String,
         tier: SecurityTier,
@@ -394,6 +417,18 @@ public actor SecurityGate {
         UserDefaults.standard.removeObject(forKey: key)
     }
 
+    // MARK: Fire-and-Forget Notification (F2)
+
+    /// F2: Sends a fire-and-forget macOS notification when a Notify-tier tool executes.
+    /// This is informational only — no approval actions. Additive to the existing approval flow.
+    /// Called by ToolRouter after successful execution of a Notify-tier tool.
+    public func sendExecutionNotification(toolName: String) async {
+        await approvalManager.sendFireAndForget(
+            title: "Notion Bridge",
+            body: "\"\(toolName)\" was called"
+        )
+    }
+
     public func clearSessionPermissions() {
         sessionAllowedPaths.removeAll()
     }
@@ -504,6 +539,25 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             options: []
         )
         center.setNotificationCategories([category])
+    }
+
+    // MARK: Fire-and-Forget (F2)
+
+    /// F2: Fire-and-forget notification — informational only, no approval actions.
+    /// Sends a brief notification that a tool was called. Does not wait for user response.
+    public func sendFireAndForget(title: String, body: String) async {
+        guard !isTestProcess, let center else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        // No categoryIdentifier — no Allow/Deny action buttons
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        try? await center.add(request)
     }
 
     public func requestPermission() async {
