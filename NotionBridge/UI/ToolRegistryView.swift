@@ -1,24 +1,40 @@
 // ToolRegistryView.swift — Tool Registry Tab
 // NotionBridge · UI
 // Displays all registered MCP tools grouped by module with enable/disable toggles.
-// V1.2.0: Added search filter, fixed module display names (AppleScript capitalization).
+// V1.3.0: PKT-366 F1/F4/F5 — Tappable tier toggle, Reset to Defaults, search removed.
 //
 // History:
 // PKT-350 F2: Original tool registry with grouped modules and toggles.
 // V1.2.0: Search bar, moduleDisplayNames dictionary, filteredGroups.
+// V1.3.0: PKT-366 F1 tappable Open/Notify tier toggle per tool,
+//          F4 "Reset to Defaults" button, F5 search bar removed.
 
 import SwiftUI
 
 /// Tool Registry tab for Settings window.
-/// Shows all MCP tools grouped by module with toggle controls and search filter.
+/// Shows all MCP tools grouped by module with toggle controls and tier overrides.
+///
+/// PKT-366 additions:
+/// - F1: Tappable Open/Notify toggle per tool. Persisted to `com.notionbridge.tierOverrides`.
+/// - F4: "Reset to Defaults" clears all tier overrides.
+/// - F5: Search bar removed.
 struct ToolRegistryView: View {
     let tools: [ToolInfo]
     let onToggle: (String, Bool) -> Void
 
+    /// F7: Whether notification permission is denied/not determined.
+    /// When true AND any tool has Notify tier, a warning banner is shown.
+    var notificationDenied: Bool = false
+
     @State private var disabledTools: Set<String> = Set(
         UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? []
     )
-    @State private var searchText = ""
+
+    /// F1: User tier overrides. Keys are tool names, values are tier raw values ("open"/"notify").
+    /// Tools not in this map inherit their registered default tier.
+    @State private var tierOverrides: [String: String] = (
+        UserDefaults.standard.dictionary(forKey: "com.notionbridge.tierOverrides") as? [String: String]
+    ) ?? [:]
 
     private static let coreTools: Set<String> = ["echo", "session_info", "tools_list"]
 
@@ -39,18 +55,14 @@ struct ToolRegistryView: View {
         return dict.keys.sorted().map { ($0, dict[$0]!.sorted(by: { $0.name < $1.name })) }
     }
 
-    /// Grouped tools filtered by search query. Matches tool name, description, or module.
-    private var filteredGroups: [(module: String, tools: [ToolInfo])] {
-        guard !searchText.isEmpty else { return groupedTools }
-        let query = searchText.lowercased()
-        return groupedTools.compactMap { group in
-            let matching = group.tools.filter {
-                $0.name.lowercased().contains(query) ||
-                $0.description.lowercased().contains(query) ||
-                displayName(for: group.module).lowercased().contains(query)
-            }
-            return matching.isEmpty ? nil : (group.module, matching)
-        }
+    /// Effective tier for a tool, considering user overrides.
+    private func effectiveTier(for tool: ToolInfo) -> String {
+        tierOverrides[tool.name] ?? tool.tier
+    }
+
+    /// F7: Whether any tool is set to Notify tier (via override or default).
+    private var hasNotifyTierTools: Bool {
+        tools.contains { effectiveTier(for: $0) == "notify" }
     }
 
     var body: some View {
@@ -71,35 +83,45 @@ struct ToolRegistryView: View {
             }
         } else {
             Form {
-                Section {
-                    HStack(spacing: BridgeSpacing.xs) {
-                        Image(systemName: "magnifyingglass")
-                            .foregroundStyle(BridgeColors.muted)
-                        TextField("Search tools…", text: $searchText)
-                            .textFieldStyle(.plain)
+                // F7: Cross-dependency warning — notifications denied + Notify-tier tools exist
+                if notificationDenied && hasNotifyTierTools {
+                    Section {
+                        Label("Notification permission is not granted. Tools set to Notify tier won’t produce alerts.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
                     }
                 }
 
-                if filteredGroups.isEmpty {
+                // F4: Reset to Defaults — only visible when user overrides exist
+                if !tierOverrides.isEmpty {
                     Section {
-                        Text("No tools matching \"\(searchText)\"")
-                            .foregroundStyle(BridgeColors.secondary)
-                    }
-                } else {
-                    ForEach(filteredGroups, id: \.module) { group in
-                        Section {
-                            ForEach(group.tools) { tool in
-                                toolRow(tool)
-                            }
-                        } header: {
+                        Button {
+                            tierOverrides.removeAll()
+                            persistTierOverrides()
+                        } label: {
                             HStack {
-                                Text(displayName(for: group.module))
-                                    .font(.headline)
-                                Spacer()
-                                Text("\(enabledCount(in: group.tools))/\(group.tools.count)")
-                                    .font(.caption)
-                                    .foregroundStyle(BridgeColors.secondary)
+                                Image(systemName: "arrow.counterclockwise")
+                                Text("Reset to Defaults")
                             }
+                        }
+                        .foregroundStyle(.orange)
+                    }
+                }
+
+                ForEach(groupedTools, id: \.module) { group in
+                    Section {
+                        ForEach(group.tools) { tool in
+                            toolRow(tool)
+                        }
+                    } header: {
+                        HStack {
+                            Text(displayName(for: group.module))
+                                .font(.headline)
+                            Spacer()
+                            Text("\(enabledCount(in: group.tools))/\(group.tools.count)")
+                                .font(.caption)
+                                .foregroundStyle(BridgeColors.secondary)
                         }
                     }
                 }
@@ -116,6 +138,7 @@ struct ToolRegistryView: View {
     private func toolRow(_ tool: ToolInfo) -> some View {
         let isCoreProtected = Self.coreTools.contains(tool.name)
         let isEnabled = !disabledTools.contains(tool.name)
+        let currentTier = effectiveTier(for: tool)
 
         HStack(alignment: .top, spacing: 12) {
             Toggle("", isOn: Binding(
@@ -139,16 +162,32 @@ struct ToolRegistryView: View {
                     Text(tool.name)
                         .fontWeight(.medium)
 
-                    Text(tool.tier)
-                        .font(.caption2)
-                        .fontWeight(.semibold)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 1)
-                        .background(tool.tier == "open"
-                            ? Color.green.opacity(0.15)
-                            : Color.orange.opacity(0.15))
-                        .foregroundStyle(tool.tier == "open" ? .green : .orange)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
+                    // F1: Tappable Open/Notify tier toggle (capsule style)
+                    // Green = Open, Orange = Notify. Click to toggle.
+                    Button {
+                        let newTier = currentTier == "open" ? "notify" : "open"
+                        if newTier == tool.tier {
+                            // Reverted to registered default — remove override
+                            tierOverrides.removeValue(forKey: tool.name)
+                        } else {
+                            tierOverrides[tool.name] = newTier
+                        }
+                        persistTierOverrides()
+                    } label: {
+                        Text(currentTier)
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(currentTier == "open"
+                                ? Color.green.opacity(0.15)
+                                : Color.orange.opacity(0.15))
+                            .foregroundStyle(currentTier == "open" ? .green : .orange)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    // Dimmed when tool is disabled (per Interaction spec)
+                    .opacity(isEnabled ? 1.0 : 0.4)
 
                     if isCoreProtected {
                         Image(systemName: "lock.fill")
@@ -168,5 +207,10 @@ struct ToolRegistryView: View {
 
     private func persistDisabledTools() {
         UserDefaults.standard.set(Array(disabledTools), forKey: "com.notionbridge.disabledTools")
+    }
+
+    /// Persist tier overrides to UserDefaults.
+    private func persistTierOverrides() {
+        UserDefaults.standard.set(tierOverrides, forKey: "com.notionbridge.tierOverrides")
     }
 }

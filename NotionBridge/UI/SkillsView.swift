@@ -1,0 +1,160 @@
+// SkillsView.swift — Skills Tab in Settings
+// NotionBridge · UI
+// PKT-366 F9: Skills configuration UI with add/remove/toggle.
+// PKT-366 F11: Cross-tab dependency guard (fetch_skill disabled warning).
+
+import SwiftUI
+
+/// Skills tab for the Settings window.
+///
+/// PKT-366 F9: Each row shows skill name + Notion page ID + on/off toggle.
+/// "Add Skill" inline form with unique name enforcement.
+/// PKT-366 F11: Warning banner if `fetch_skill` is disabled in Tools AND skills exist.
+struct SkillsView: View {
+    let skillsManager: SkillsManager
+
+    /// F11: Whether `fetch_skill` is currently disabled in the Tools tab.
+    var fetchSkillDisabled: Bool = false
+
+    @State private var newSkillName: String = ""
+    @State private var newSkillPageId: String = ""
+    @State private var addError: String?
+
+    var body: some View {
+        Form {
+            // F11: Cross-tab dependency guard
+            if fetchSkillDisabled && !skillsManager.skills.isEmpty {
+                Section {
+                    Label("The fetch_skill tool is disabled in Tools. Skills won\u{2019}t be available to AI clients until it\u{2019}s re-enabled.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            // Skill list
+            if skillsManager.skills.isEmpty {
+                Section {
+                    VStack(spacing: 12) {
+                        Image(systemName: "book.closed")
+                            .font(.system(size: 36))
+                            .foregroundStyle(.gray.opacity(0.5))
+                        Text("No skills configured")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Text("Skills are Notion pages that AI clients can fetch at runtime via the fetch_skill MCP tool.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                }
+            } else {
+                Section {
+                    ForEach(skillsManager.skills) { skill in
+                        skillRow(skill)
+                    }
+                } header: {
+                    HStack {
+                        Text("Skills")
+                            .font(.headline)
+                        Spacer()
+                        Text("\(skillsManager.enabledSkills.count)/\(skillsManager.skills.count) enabled")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            // Add Skill form
+            Section("Add Skill") {
+                TextField("Skill Name", text: $newSkillName)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Notion Page ID or URL", text: $newSkillPageId)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+
+                if let error = addError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
+                Button("Add Skill") {
+                    addSkill()
+                }
+                .disabled(newSkillName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || newSkillPageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - Skill Row
+
+    @ViewBuilder
+    private func skillRow(_ skill: SkillsManager.Skill) -> some View {
+        HStack(spacing: 12) {
+            Toggle("", isOn: Binding(
+                get: { skill.enabled },
+                set: { _ in skillsManager.toggleSkill(named: skill.name) }
+            ))
+            .toggleStyle(.switch)
+            .labelsHidden()
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(skill.name)
+                    .fontWeight(.medium)
+                Text(skill.notionPageId)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button(role: .destructive) {
+                skillsManager.removeSkill(named: skill.name)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.red.opacity(0.7))
+        }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: - Add Skill
+
+    private func addSkill() {
+        addError = nil
+        let name = newSkillName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pageId = newSkillPageId.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let cleanPageId = extractPageId(from: pageId)
+
+        let success = skillsManager.addSkill(name: name, notionPageId: cleanPageId)
+        if success {
+            newSkillName = ""
+            newSkillPageId = ""
+        } else {
+            addError = "A skill with this name already exists."
+        }
+    }
+
+    /// Extract a Notion page ID from a URL, or return the input unchanged.
+    private func extractPageId(from input: String) -> String {
+        // Handle common Notion URL patterns
+        if input.contains("notion.so") || input.contains("notion.site"),
+           let lastComponent = input.split(separator: "/").last {
+            let str = String(lastComponent)
+            // Page ID is the last 32 hex chars
+            if let range = str.range(of: "[a-f0-9]{32}", options: .regularExpression) {
+                return String(str[range])
+            }
+        }
+        return input
+    }
+}

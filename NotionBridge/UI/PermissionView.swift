@@ -60,13 +60,17 @@ public struct PermissionView: View {
         .onAppear {
             permissionManager.checkAll()
         }
-        // PKT-357 F14: Auto-refresh every 2s so status updates after user
-        // grants permission in System Settings and switches back
+        // PKT-366 F6: Async notification check on appear
+        .task {
+            await permissionManager.checkNotifications()
+        }
+        // PKT-369 N3: Auto-refresh every 2s with async variant (includes notifications)
         .onReceive(refreshTimer) { _ in
-            permissionManager.checkAll()
+            Task { await permissionManager.checkAllAsync() }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            permissionManager.checkAll()
+            // PKT-369 N3: Use async variant for complete permission check
+            Task { await permissionManager.checkAllAsync() }
         }
     }
 
@@ -231,16 +235,14 @@ public struct PermissionView: View {
                 await permissionManager.recheckAllForTruth()
             }
         case .notifications:
-            // PKT-364 D3: Probe-then-deep-link for notification permission.
-            Task {
-                let granted = await permissionManager.requestNotificationAccess()
-                if !granted {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                await permissionManager.recheckAllForTruth()
+            // PKT-369 N4: Open System Settings directly — no pre-flight
+            // requestNotificationAccess(). The pre-flight was unreliable because
+            // requestAuthorization returns false when auth was already determined
+            // externally. The 2s timer + checkAllAsync() detects grant state.
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+                NSWorkspace.shared.open(url)
             }
+            Task { await permissionManager.recheckAllForTruth() }
         case .contacts:
             // Trigger the native Contacts prompt only.
             Task {

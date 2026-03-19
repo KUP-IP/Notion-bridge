@@ -1,4 +1,4 @@
-// NotionClient.swift – V1-05 → V1-12 → V1-FIX Notion REST API Client
+// NotionClient.swift – V1-05 → V1-12 → V1-FIX → PKT-367 Notion REST API Client
 // NotionBridge · Notion
 //
 // Actor-based HTTP client with:
@@ -9,6 +9,8 @@
 // PKT-320: Updated env var to NOTION_API_TOKEN, added config file fallback,
 //          added validate() method for startup health check
 // PKT-332: Added verbose diagnostic logging to token resolver for cold-boot debugging
+// PKT-367: API version upgrade 2022-06-28 → 2026-03-11, in_trash migration,
+//          12 new API methods, multi-workspace registry support
 
 import Foundation
 
@@ -80,7 +82,9 @@ public enum NotionTokenResolver {
     }
 
     /// Read token from config file.
-    /// Expected format: { "notion_api_token": "ntn_..." }
+    /// Supports both new connections format and legacy flat format.
+    /// New format: { "connections": [{ "name": "...", "token": "ntn_...", "primary": true }] }
+    /// Legacy format: { "notion_api_token": "ntn_..." }
     private static func readFromConfigFile() -> String? {
         let path = configFilePath
 
@@ -106,7 +110,24 @@ public enum NotionTokenResolver {
         }
         print("[TokenResolver] Config file parsed — keys: \(json.keys.sorted())")
 
-        // Step 4: Check both key names
+        // Step 4a: New connections format — find primary connection
+        if let connections = json["connections"] as? [[String: Any]] {
+            if let primary = connections.first(where: { $0["primary"] as? Bool == true }),
+               let token = primary["token"] as? String, !token.isEmpty {
+                let name = primary["name"] as? String ?? "default"
+                print("[TokenResolver] Key 'connections' found — primary connection '\(name)', token length: \(token.count)")
+                return token
+            }
+            // Fall back to first connection if no primary
+            if let first = connections.first,
+               let token = first["token"] as? String, !token.isEmpty {
+                let name = first["name"] as? String ?? "default"
+                print("[TokenResolver] Key 'connections' found — no primary, using first connection '\(name)', token length: \(token.count)")
+                return token
+            }
+        }
+
+        // Step 4b: Legacy flat format
         if let token = json["notion_api_token"] as? String, !token.isEmpty {
             print("[TokenResolver] Key 'notion_api_token' found — token length: \(token.count)")
             return token
@@ -116,7 +137,7 @@ public enum NotionTokenResolver {
             return token
         }
 
-        print("[TokenResolver] Config file has no 'notion_api_token' or 'notion_api_key' key, or value is empty. Available keys: \(json.keys.sorted())")
+        print("[TokenResolver] Config file has no 'connections', 'notion_api_token', or 'notion_api_key' key, or value is empty. Available keys: \(json.keys.sorted())")
         return nil
     }
 
@@ -168,12 +189,13 @@ public enum NotionTokenResolver {
 // MARK: - NotionClient Actor
 
 /// Thread-safe Notion REST API client with rate limiting and retry logic.
+/// PKT-367: Upgraded to API v2026-03-11 with 16 total API methods.
 public actor NotionClient {
 
     private let apiKey: String
     private let tokenSource: String
     private let baseURL = "https://api.notion.com/v1"
-    private let notionVersion = "2022-06-28"
+    private let notionVersion = "2026-03-11"  // PKT-367: A1 — upgraded from 2022-06-28
     private let maxRequestsPerSecond: Double = 3.0
     private let maxRetries = 3
     private var lastRequestTime: ContinuousClock.Instant?
@@ -201,6 +223,11 @@ public actor NotionClient {
     /// Returns the source of the resolved token (for diagnostics).
     public func getTokenSource() -> String {
         return tokenSource
+    }
+
+    /// Returns the Notion API version string (for testing).
+    public func getAPIVersion() -> String {
+        return notionVersion
     }
 
     // MARK: - Validation
@@ -242,7 +269,8 @@ public actor NotionClient {
     private func request(
         method: String,
         path: String,
-        body: Data? = nil
+        body: Data? = nil,
+        contentType: String = "application/json"
     ) async throws -> (Data, HTTPURLResponse) {
         var lastError: Error?
 
@@ -257,7 +285,7 @@ public actor NotionClient {
             req.httpMethod = method
             req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
             req.setValue(notionVersion, forHTTPHeaderField: "Notion-Version")
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue(contentType, forHTTPHeaderField: "Content-Type")
             if let body = body { req.httpBody = body }
 
             do {
@@ -303,7 +331,7 @@ public actor NotionClient {
         throw lastError ?? NotionClientError.maxRetriesExceeded
     }
 
-    // MARK: - API Methods
+    // MARK: - Existing API Methods
 
     /// Search Notion workspace.
     public func search(query: String, pageSize: Int = 10) async throws -> Data {
@@ -350,6 +378,231 @@ public actor NotionClient {
             path: "/pages/\(cleanId)",
             body: properties
         )
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    // MARK: - PKT-367: New API Methods (A3–A13)
+
+    /// A3: Create a page under a parent (page or database).
+    /// POST /v1/pages
+    public func createPage(parentId: String, parentType: String = "page_id", properties: Data, children: Data? = nil) async throws -> Data {
+        let cleanId = parentId.replacingOccurrences(of: "-", with: "")
+        var body: [String: Any] = ["parent": [parentType: cleanId]]
+
+        // Parse properties Data into dictionary
+        if let propsObj = try? JSONSerialization.jsonObject(with: properties) {
+            body["properties"] = propsObj
+        }
+
+        // Optional children blocks
+        if let childrenData = children,
+           let childrenObj = try? JSONSerialization.jsonObject(with: childrenData) {
+            body["children"] = childrenObj
+        }
+
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "POST", path: "/pages", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A4: Query a data source (database).
+    /// POST /v1/databases/{id}/query
+    public func queryDatabase(databaseId: String, filter: Data? = nil, sorts: Data? = nil, pageSize: Int = 100, startCursor: String? = nil) async throws -> Data {
+        let cleanId = databaseId.replacingOccurrences(of: "-", with: "")
+        var body: [String: Any] = ["page_size": pageSize]
+
+        if let filterData = filter,
+           let filterObj = try? JSONSerialization.jsonObject(with: filterData) {
+            body["filter"] = filterObj
+        }
+        if let sortsData = sorts,
+           let sortsObj = try? JSONSerialization.jsonObject(with: sortsData) {
+            body["sorts"] = sortsObj
+        }
+        if let cursor = startCursor {
+            body["start_cursor"] = cursor
+        }
+
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "POST", path: "/databases/\(cleanId)/query", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A5: Append child blocks to a parent block/page with optional position.
+    /// PATCH /v1/blocks/{id}/children
+    public func appendBlocks(blockId: String, children: Data, position: [String: String]? = nil) async throws -> Data {
+        let cleanId = blockId.replacingOccurrences(of: "-", with: "")
+        var body: [String: Any] = [:]
+
+        if let childrenObj = try? JSONSerialization.jsonObject(with: children) {
+            body["children"] = childrenObj
+        }
+        if let pos = position {
+            body["after"] = pos  // v2026-03-11 position object
+        }
+
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "PATCH", path: "/blocks/\(cleanId)/children", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A6: Delete (trash) a block.
+    /// DELETE /v1/blocks/{id}
+    public func deleteBlock(blockId: String) async throws -> Data {
+        let cleanId = blockId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(method: "DELETE", path: "/blocks/\(cleanId)")
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A7: Get page content as markdown.
+    /// GET /v1/pages/{id}/markdown
+    public func getPageMarkdown(pageId: String) async throws -> Data {
+        let cleanId = pageId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(method: "GET", path: "/pages/\(cleanId)/markdown")
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A8: Update page content from markdown.
+    /// PATCH /v1/pages/{id}/markdown
+    public func updatePageMarkdown(pageId: String, markdown: String) async throws -> Data {
+        let cleanId = pageId.replacingOccurrences(of: "-", with: "")
+        let body: [String: Any] = ["markdown": markdown]
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "PATCH", path: "/pages/\(cleanId)/markdown", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A9a: List comments on a block or page.
+    /// GET /v1/comments?block_id={id}
+    public func listComments(blockId: String, pageSize: Int = 100) async throws -> Data {
+        let cleanId = blockId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(
+            method: "GET",
+            path: "/comments?block_id=\(cleanId)&page_size=\(pageSize)"
+        )
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A9b: Create a comment on a page.
+    /// POST /v1/comments
+    public func createComment(pageId: String, text: String) async throws -> Data {
+        let cleanId = pageId.replacingOccurrences(of: "-", with: "")
+        let body: [String: Any] = [
+            "parent": ["page_id": cleanId],
+            "rich_text": [["type": "text", "text": ["content": text]]]
+        ]
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "POST", path: "/comments", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A10a: List all users in the workspace.
+    /// GET /v1/users
+    public func listUsers(pageSize: Int = 100) async throws -> Data {
+        let (data, response) = try await request(
+            method: "GET",
+            path: "/users?page_size=\(pageSize)"
+        )
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A10b: Get a single user by ID.
+    /// GET /v1/users/{id}
+    public func getUser(userId: String) async throws -> Data {
+        let cleanId = userId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(method: "GET", path: "/users/\(cleanId)")
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A11: Move a page to a new parent.
+    /// PATCH /v1/pages/{id} with new parent
+    public func movePage(pageId: String, newParentId: String, parentType: String = "page_id") async throws -> Data {
+        let cleanPageId = pageId.replacingOccurrences(of: "-", with: "")
+        let cleanParentId = newParentId.replacingOccurrences(of: "-", with: "")
+        let body: [String: Any] = ["parent": [parentType: cleanParentId]]
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "PATCH", path: "/pages/\(cleanPageId)", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A12: Upload a file (single-part ≤ 20MB).
+    /// POST /v1/file_uploads — multipart/form-data
+    public func uploadFile(fileName: String, fileData: Data, contentType: String = "application/octet-stream") async throws -> Data {
+        let boundary = "NotionBridge-\(UUID().uuidString)"
+        var bodyData = Data()
+
+        // Build multipart form body
+        bodyData.append("--\(boundary)\r\n".data(using: .utf8)!)
+        bodyData.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+        bodyData.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
+        bodyData.append(fileData)
+        bodyData.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
+        let (data, response) = try await request(
+            method: "POST",
+            path: "/file_uploads",
+            body: bodyData,
+            contentType: "multipart/form-data; boundary=\(boundary)"
+        )
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A13: Introspect the current API token.
+    /// POST /v1/tokens/introspect
+    public func introspectToken() async throws -> Data {
+        let (data, response) = try await request(method: "POST", path: "/tokens/introspect")
         guard (200...299).contains(response.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? ""
             throw NotionClientError.httpError(response.statusCode, msg)

@@ -99,10 +99,19 @@ public actor ToolRouter {
             throw ToolRouterError.unknownTool(toolName)
         }
 
+        // F1: Resolve effective tier — user override takes precedence over registered default.
+        // Overrides are stored as [String: String] in UserDefaults by ToolRegistryView.
+        let overrides = UserDefaults.standard.dictionary(
+            forKey: "com.notionbridge.tierOverrides"
+        ) as? [String: String] ?? [:]
+        let effectiveTier = overrides[toolName].flatMap {
+            SecurityTier(rawValue: $0)
+        } ?? tool.tier
+
         // SecurityGate enforcement (now async for notification approval)
         let decision = await securityGate.enforce(
             toolName: toolName,
-            tier: tool.tier,
+            tier: effectiveTier,
             arguments: arguments
         )
 
@@ -117,7 +126,7 @@ public actor ToolRouter {
             await auditLog.append(AuditEntry(
                 timestamp: Date(),
                 toolName: toolName,
-                tier: tool.tier,
+                tier: effectiveTier,
                 inputSummary: stringifySummary(arguments),
                 outputSummary: "REJECTED: \(reason)",
                 durationMs: ms,
@@ -133,7 +142,7 @@ public actor ToolRouter {
             await auditLog.append(AuditEntry(
                 timestamp: Date(),
                 toolName: toolName,
-                tier: tool.tier,
+                tier: effectiveTier,
                 inputSummary: stringifySummary(arguments),
                 outputSummary: "HANDOFF: \(command)",
                 durationMs: ms,
@@ -151,13 +160,20 @@ public actor ToolRouter {
         // Execute handler
         do {
             let result = try await tool.handler(arguments)
+
+            // F2: Fire-and-forget notification for Notify-tier executions.
+            // Runs after successful execution — informational only.
+            if effectiveTier == .notify {
+                await securityGate.sendExecutionNotification(toolName: toolName)
+            }
+
             let duration = ContinuousClock.now - start
             let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
                 + Double(duration.components.seconds) * 1000.0
             await auditLog.append(AuditEntry(
                 timestamp: Date(),
                 toolName: toolName,
-                tier: tool.tier,
+                tier: effectiveTier,
                 inputSummary: stringifySummary(arguments),
                 outputSummary: stringifySummary(result),
                 durationMs: ms,
@@ -171,7 +187,7 @@ public actor ToolRouter {
             await auditLog.append(AuditEntry(
                 timestamp: Date(),
                 toolName: toolName,
-                tier: tool.tier,
+                tier: effectiveTier,
                 inputSummary: stringifySummary(arguments),
                 outputSummary: "ERROR: \(error.localizedDescription)",
                 durationMs: ms,

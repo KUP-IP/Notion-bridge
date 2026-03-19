@@ -25,6 +25,7 @@ import MCP
 public final class LegacySSEBridge: @unchecked Sendable {
     private let lock = NSLock()
     private var channels: [String: Channel] = [:]
+    private var clientNames: [String: String] = [:]  // PKT-366 F13
     
     public init() {}
 
@@ -39,13 +40,21 @@ public final class LegacySSEBridge: @unchecked Sendable {
         return id
     }
 
-    /// Remove a disconnected SSE session.
-    public func remove(sessionID: String) {
-        let remaining: Int = lock.withLock {
+    /// PKT-366 F13: Associate a client name with a legacy session.
+    public func setClientName(sessionID: String, name: String) {
+        lock.withLock { clientNames[sessionID] = name }
+    }
+
+    /// Remove a disconnected SSE session. Returns client name if known (F13).
+    @discardableResult
+    public func remove(sessionID: String) -> String? {
+        let result: (remaining: Int, clientName: String?) = lock.withLock {
             channels.removeValue(forKey: sessionID)
-            return channels.count
+            let name = clientNames.removeValue(forKey: sessionID)
+            return (channels.count, name)
         }
-        print("[SSE-Legacy] Client disconnected — session \(sessionID.prefix(8))… (remaining: \(remaining))")
+        print("[SSE-Legacy] Client disconnected — session \(sessionID.prefix(8))… (remaining: \(result.remaining))")
+        return result.clientName
     }
 
     /// Send an SSE event to the client's stream.
@@ -98,6 +107,7 @@ public actor SSEServer {
     private let router: ToolRouter
     private let onToolCall: @MainActor @Sendable () -> Void
     private let onClientConnected: @MainActor @Sendable (String, String) -> Void
+    private let onClientDisconnected: @MainActor @Sendable (String) -> Void  // PKT-366 F13
     private var channel: Channel?
     private var sessions: [String: SessionContext] = [:]
     private let sessionTimeout: TimeInterval = 3600
@@ -121,13 +131,15 @@ public actor SSEServer {
         port: Int = 9700,
         router: ToolRouter,
         onToolCall: @escaping @MainActor @Sendable () -> Void,
-        onClientConnected: @escaping @MainActor @Sendable (String, String) -> Void = { _, _ in }
+        onClientConnected: @escaping @MainActor @Sendable (String, String) -> Void = { _, _ in },
+        onClientDisconnected: @escaping @MainActor @Sendable (String) -> Void = { _ in }
     ) {
         self.host = host
         self.port = port
         self.router = router
         self.onToolCall = onToolCall
         self.onClientConnected = onClientConnected
+        self.onClientDisconnected = onClientDisconnected
     }
 
     // MARK: - Lifecycle
@@ -141,6 +153,13 @@ public actor SSEServer {
         // PKT-338 V1-SSE-FIX: Capture non-actor references BEFORE the bootstrap closure.
         let bridge = self.legacy
         let endpointPath = self.endpoint
+
+        // PKT-366 F13: Capture disconnect callback for NIO handler
+        let onDisconnect: @Sendable (String) async -> Void = { [weak self] name in
+            guard let self else { return }
+            let callback = await self.onClientDisconnected
+            await MainActor.run { callback(name) }
+        }
 
         let rpcHandler: @Sendable (Data) async -> Data? = { [weak self] data in
             await self?.processLegacyRPC(data)
@@ -168,7 +187,8 @@ public actor SSEServer {
                         endpoint: endpointPath,
                         rpcHandler: rpcHandler,
                         httpRequestHandler: httpRequestHandler,
-                        healthHandler: healthHandler
+                        healthHandler: healthHandler,
+                        onClientDisconnected: onDisconnect
                     ))
                 }
             }
@@ -242,6 +262,11 @@ public actor SSEServer {
             let response = await session.transport.handleRequest(request)
 
             if request.method.uppercased() == "DELETE" && response.statusCode == 200 {
+                // PKT-366 F13: Notify UI of client disconnection
+                if let name = session.clientName {
+                    let callback = self.onClientDisconnected
+                    await MainActor.run { callback(name) }
+                }
                 sessions.removeValue(forKey: sessionID)
                 print("[SSE] Session closed: \(sessionID.prefix(8))…")
             }
@@ -457,6 +482,11 @@ public actor SSEServer {
             }
             for (id, _) in expired {
                 if let session = sessions.removeValue(forKey: id) {
+                    // PKT-366 F13: Notify UI of client disconnection
+                    if let name = session.clientName {
+                        let callback = self.onClientDisconnected
+                        await MainActor.run { callback(name) }
+                    }
                     await session.transport.disconnect()
                     print("[SSE] Session expired: \(id.prefix(8))…")
                 }
@@ -491,6 +521,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     private let rpcHandler: @Sendable (Data) async -> Data?
     private let httpRequestHandler: @Sendable (HTTPRequest) async -> HTTPResponse
     private let healthHandler: @Sendable () async -> Data
+    private let onClientDisconnected: @Sendable (String) async -> Void  // PKT-366 F13
 
     private struct PendingRequest {
         var head: HTTPRequestHead
@@ -505,13 +536,15 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         endpoint: String,
         rpcHandler: @escaping @Sendable (Data) async -> Data?,
         httpRequestHandler: @escaping @Sendable (HTTPRequest) async -> HTTPResponse,
-        healthHandler: @escaping @Sendable () async -> Data
+        healthHandler: @escaping @Sendable () async -> Data,
+        onClientDisconnected: @escaping @Sendable (String) async -> Void = { _ in }
     ) {
         self.legacyBridge = legacyBridge
         self.endpoint = endpoint
         self.rpcHandler = rpcHandler
         self.httpRequestHandler = httpRequestHandler
         self.healthHandler = healthHandler
+        self.onClientDisconnected = onClientDisconnected
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
@@ -542,7 +575,12 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
 
     func channelInactive(context: ChannelHandlerContext) {
         if let sessionID = legacySessionID {
-            legacyBridge.remove(sessionID: sessionID)
+            // PKT-366 F13: Get client name and notify UI of disconnect
+            let clientName = legacyBridge.remove(sessionID: sessionID)
+            if let name = clientName {
+                let callback = self.onClientDisconnected
+                Task { await callback(name) }
+            }
         }
         context.fireChannelInactive()
     }
@@ -659,6 +697,16 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         guard let bodyData = body else {
             await writeSimpleResponse(statusCode: 400, version: head.version, context: context)
             return
+        }
+
+        // PKT-366 F13: Store client name in bridge for disconnect tracking
+        if let sid = sessionID,
+           let json = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+           let method = json["method"] as? String, method == "initialize",
+           let params = json["params"] as? [String: Any],
+           let clientInfo = params["clientInfo"] as? [String: Any],
+           let clientName = clientInfo["name"] as? String {
+            legacyBridge.setClientName(sessionID: sid, name: clientName)
         }
 
         if let responseData = await rpcHandler(bodyData),

@@ -3,11 +3,16 @@
 // PKT-353: Full rewrite — content-first, monochrome, no pills, no dividers,
 //   BridgeTheme design system, content-adaptive sizing, quit relocated to context menu.
 // PKT-354: Added Screen Recording permission indicator (green/red).
+// PKT-366 F12: Full TCC permissions display (Accessibility, Screen Recording,
+//   Notifications, Contacts, Full Disk Access).
 // Previous history: PKT-317, PKT-329, PKT-320, PKT-341, PKT-342, PKT-346
 
 import SwiftUI
 import CoreGraphics
 import AppKit
+import ApplicationServices
+import UserNotifications
+import Contacts
 
 /// Status popover for the menu bar app.
 /// Shows server status (primary), connected clients (secondary), permissions, and stats.
@@ -26,8 +31,13 @@ public struct DashboardView: View {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.0.0"
     }
 
-    /// Screen Recording TCC grant status — checked on each popover appearance.
+    // MARK: - TCC Permission States (F12)
+
+    @State private var accessibilityGranted: Bool = false
     @State private var screenRecordingGranted: Bool = false
+    @State private var notificationsGranted: Bool = false
+    @State private var contactsGranted: Bool = false
+    @State private var fullDiskAccessGranted: Bool = false
 
     public var body: some View {
         VStack(alignment: .leading, spacing: BridgeSpacing.xs) {
@@ -41,8 +51,29 @@ public struct DashboardView: View {
         .frame(minWidth: 260, maxWidth: 320)
         .padding(.vertical, BridgeSpacing.xs)
         .onAppear {
-            screenRecordingGranted = CGPreflightScreenCaptureAccess()
+            refreshPermissions()
         }
+    }
+
+    /// Query all TCC permission states (F12).
+    private func refreshPermissions() {
+        accessibilityGranted = AXIsProcessTrusted()
+        screenRecordingGranted = CGPreflightScreenCaptureAccess()
+        fullDiskAccessGranted = checkFullDiskAccess()
+        contactsGranted = CNContactStore.authorizationStatus(for: .contacts) == .authorized
+        Task {
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
+            await MainActor.run {
+                notificationsGranted = settings.authorizationStatus == .authorized
+            }
+        }
+    }
+
+    /// Full Disk Access probe: attempt to read a TCC-protected path.
+    /// If readable, FDA is granted. If permission denied, it's not.
+    private func checkFullDiskAccess() -> Bool {
+        let protectedPath = "/Library/Application Support/com.apple.TCC/TCC.db"
+        return FileManager.default.isReadableFile(atPath: protectedPath)
     }
 
     // MARK: - Header
@@ -85,7 +116,7 @@ public struct DashboardView: View {
                 Text(statusBar.isServerRunning ? "Running" : "Stopped")
                     .bridgeLabel()
                 if statusBar.isServerRunning {
-                    Text("· \(statusBar.uptimeString)")
+                    Text("\u{00B7} \(statusBar.uptimeString)")
                         .bridgeSecondary()
                 }
                 Spacer()
@@ -126,7 +157,7 @@ public struct DashboardView: View {
         .bridgeRow()
     }
 
-    // MARK: - Permissions (PKT-354)
+    // MARK: - Permissions (F12: Full TCC Display)
 
     private var permissionsSection: some View {
         VStack(alignment: .leading, spacing: BridgeSpacing.xs) {
@@ -135,20 +166,29 @@ public struct DashboardView: View {
                 .fontWeight(.medium)
                 .foregroundStyle(BridgeColors.primary)
 
-            HStack(spacing: BridgeSpacing.xs) {
-                Circle()
-                    .fill(screenRecordingGranted ? BridgeColors.success : BridgeColors.error)
-                    .frame(width: 8, height: 8)
-                Text("Screen Recording")
-                    .font(.caption)
-                    .foregroundStyle(BridgeColors.primary)
-                Spacer()
-                Text(screenRecordingGranted ? "Granted" : "Not Granted")
-                    .font(.caption)
-                    .foregroundStyle(screenRecordingGranted ? BridgeColors.success : BridgeColors.error)
-            }
+            permissionRow("Accessibility", granted: accessibilityGranted)
+            permissionRow("Screen Recording", granted: screenRecordingGranted)
+            permissionRow("Notifications", granted: notificationsGranted)
+            permissionRow("Contacts", granted: contactsGranted)
+            permissionRow("Full Disk Access", granted: fullDiskAccessGranted)
         }
         .bridgeRow()
+    }
+
+    /// Single permission status row with dot indicator and granted/denied label (F12).
+    private func permissionRow(_ name: String, granted: Bool) -> some View {
+        HStack(spacing: BridgeSpacing.xs) {
+            Circle()
+                .fill(granted ? BridgeColors.success : BridgeColors.error)
+                .frame(width: 8, height: 8)
+            Text(name)
+                .font(.caption)
+                .foregroundStyle(BridgeColors.primary)
+            Spacer()
+            Text(granted ? "Granted" : "Not Granted")
+                .font(.caption)
+                .foregroundStyle(granted ? BridgeColors.success : BridgeColors.error)
+        }
     }
 
     // MARK: - Stats (Tertiary)

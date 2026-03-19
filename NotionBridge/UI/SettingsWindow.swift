@@ -92,6 +92,7 @@ public struct SettingsView: View {
         case permissions = "Permissions"
         case connections = "Connections"
         case tools = "Tools"
+        case skills = "Skills"
         case advanced = "Advanced"
 
         var id: String { rawValue }
@@ -102,6 +103,7 @@ public struct SettingsView: View {
             case .permissions: return "lock.shield"
             case .connections: return "network"
             case .tools: return "hammer"
+            case .skills: return "book.closed"
             case .advanced: return "wrench.and.screwdriver"
             }
         }
@@ -131,6 +133,7 @@ public struct SettingsView: View {
         case .permissions: permissionsSection
         case .connections: connectionsSection
         case .tools: toolsSection
+        case .skills: skillsSection
         case .advanced: advancedSection
         }
     }
@@ -396,13 +399,27 @@ public struct SettingsView: View {
 
     // MARK: - Tools
 
+    // PKT-366 F9: Skills manager for Skills tab
+    @State private var skillsManager = SkillsManager()
+
     private var toolsSection: some View {
         ToolRegistryView(
             tools: statusBar.toolInfoList,
             onToggle: { _, _ in
                 let disabled = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
                 statusBar.registeredToolCount = statusBar.toolInfoList.count - disabled.count
-            }
+            },
+            notificationDenied: permissionManager.notificationStatus != .granted
+        )
+    }
+
+    // MARK: - Skills (PKT-366 F9)
+
+    private var skillsSection: some View {
+        let disabledTools = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
+        return SkillsView(
+            skillsManager: skillsManager,
+            fetchSkillDisabled: disabledTools.contains("fetch_skill")
         )
     }
 
@@ -568,6 +585,7 @@ public struct SettingsView: View {
             "  Full Disk Access: \(permissionManager.fullDiskAccessStatus)",
             "  Automation: \(permissionManager.automationStatus)",
             "  Contacts: \(permissionManager.contactsStatus)",
+            "  Notifications: \(permissionManager.notificationStatus)",
         ].joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(lines, forType: .string)

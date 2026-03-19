@@ -53,7 +53,7 @@ public final class PermissionManager {
 
         /// V1 grants — Contacts is deferred to expansion (no V1 tool uses it)
         public static var v1Cases: [Grant] {
-            allCases.filter { $0 != .contacts && $0 != .notifications }
+            allCases.filter { $0 != .contacts }
         }
 
         public var displayName: String {
@@ -231,6 +231,14 @@ public final class PermissionManager {
         checkAutomation()
         checkContacts()
         lastCheckedAt = Date()
+    }
+
+    /// PKT-369 N3: Async variant of checkAll() that includes notification status.
+    /// Ensures notification authorization is checked alongside synchronous TCC grants.
+    /// Use at all call sites where async context is available.
+    public func checkAllAsync() async {
+        checkAll()
+        await checkNotifications()
     }
 
     /// Active reconciliation pass intended for "truth sync" from UI.
@@ -522,6 +530,8 @@ public final class PermissionManager {
     /// checkAll() remains synchronous and skips this check.
     public func checkNotifications() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
+        // PKT-369 N1: Diagnostic probe — log raw authorization status
+        print("[PermissionManager] N1 diagnostic: authorizationStatus=\(settings.authorizationStatus.rawValue) (0=notDetermined, 1=denied, 2=authorized, 3=provisional, 4=ephemeral)")
         switch settings.authorizationStatus {
         case .authorized, .provisional, .ephemeral:
             notificationStatus = .granted
@@ -541,28 +551,37 @@ public final class PermissionManager {
     }
 
     /// Request notification authorization. Triggers system prompt if .notDetermined.
-    /// If already denied, returns false — caller should deep link to System Settings.
+    /// PKT-369 N2: Always uses notificationSettings() as the source of truth after
+    /// requestAuthorization(). The boolean return from requestAuthorization is unreliable
+    /// when authorization was determined externally (e.g., granted via System Settings) —
+    /// it returns false even though the permission IS granted (UNErrorDomain error 1).
     public func requestNotificationAccess() async -> Bool {
+        let center = UNUserNotificationCenter.current()
         do {
-            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
-            notificationStatus = granted ? .granted : .denied
-            notificationEvidence = .init(
-                source: "UNUserNotificationCenter.requestAuthorization(options: [.alert, .sound])",
-                observed: granted ? "granted=true" : "granted=false",
-                detail: "Notification authorization request result.",
-                checkedAt: Date()
-            )
-            return granted
+            _ = try await center.requestAuthorization(options: [.alert, .sound])
         } catch {
-            notificationStatus = .denied
-            notificationEvidence = .init(
-                source: "UNUserNotificationCenter.requestAuthorization(options: [.alert, .sound])",
-                observed: "error",
-                detail: "Notification authorization threw error: \(error.localizedDescription)",
-                checkedAt: Date()
-            )
-            return false
+            print("[PermissionManager] requestAuthorization error: \(error.localizedDescription)")
         }
+        // N2: Source of truth — notificationSettings() reflects actual macOS grant state
+        let settings = await center.notificationSettings()
+        print("[PermissionManager] N2 source-of-truth: authorizationStatus=\(settings.authorizationStatus.rawValue)")
+        let granted: Bool
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            granted = true
+        default:
+            granted = false
+        }
+        notificationStatus = granted ? .granted : .denied
+        notificationEvidence = .init(
+            source: "requestAuthorization + notificationSettings() [N2 source-of-truth]",
+            observed: "authorizationStatus=\(settings.authorizationStatus.rawValue)",
+            detail: granted
+                ? "Notification authorization confirmed via notificationSettings()."
+                : "Not authorized. authorizationStatus=\(settings.authorizationStatus.rawValue).",
+            checkedAt: Date()
+        )
+        return granted
     }
 
     // MARK: - UX helpers
