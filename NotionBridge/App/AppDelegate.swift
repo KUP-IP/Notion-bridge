@@ -22,15 +22,15 @@ func restartApp(reopenSettings: Bool = false) {
         UserDefaults.standard.set(true, forKey: reopenSettingsAfterRestartKey)
     }
 
-    let bundleURL = Bundle.main.bundleURL
-    let config = NSWorkspace.OpenConfiguration()
-    config.createsNewApplicationInstance = true
+    // Spawn a detached shell process that survives app termination,
+    // waits briefly, then relaunches the app via `open`.
+    let bundlePath = Bundle.main.bundlePath
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/bin/sh")
+    task.arguments = ["-c", "sleep 1 && open '\(bundlePath)'"]
+    try? task.run()
 
-    NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            NSApp.terminate(nil)
-        }
-    }
+    NSApp.terminate(nil)
 }
 
 /// PKT-341: Signal handler for crash resilience.

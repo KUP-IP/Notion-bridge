@@ -156,7 +156,7 @@ public struct PermissionView: View {
                     .foregroundStyle(.orange)
             }
 
-            Button("Restart NotionBridge") {
+            Button("Restart Notion Bridge") {
                 restartApp()
             }
             .buttonStyle(.borderedProminent)
@@ -184,14 +184,12 @@ public struct PermissionView: View {
 
     /// PKT-362 D6: Restart the app by launching a new instance and terminating current.
     private func restartApp() {
-        let bundleURL = Bundle.main.bundleURL
-        let config = NSWorkspace.OpenConfiguration()
-        config.createsNewApplicationInstance = true
-        NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
-            DispatchQueue.main.async {
-                NSApp.terminate(nil)
-            }
-        }
+        let bundlePath = Bundle.main.bundlePath
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "sleep 1 && open '\(bundlePath)'"]
+        try? task.run()
+        NSApp.terminate(nil)
     }
 
     // MARK: - Deep Links

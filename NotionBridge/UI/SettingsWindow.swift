@@ -621,7 +621,7 @@ private struct PostResetSheet: View {
             Text("Re-grant Permissions")
                 .font(.headline)
 
-            Text("NotionBridge permissions have been reset. Open each setting below to re-grant access, then restart the app.")
+            Text("Notion Bridge permissions have been reset. Open each setting below to re-grant access, then restart the app.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -670,16 +670,14 @@ private struct PostResetSheet: View {
 
             // Restart button
             Button {
-                let bundleURL = Bundle.main.bundleURL
-                let config = NSWorkspace.OpenConfiguration()
-                config.createsNewApplicationInstance = true
-                NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
-                    DispatchQueue.main.async {
-                        NSApp.terminate(nil)
-                    }
-                }
+                let bundlePath = Bundle.main.bundlePath
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: "/bin/sh")
+                task.arguments = ["-c", "sleep 1 && open '\(bundlePath)'"]
+                try? task.run()
+                NSApp.terminate(nil)
             } label: {
-                Label("Restart NotionBridge", systemImage: "arrow.clockwise")
+                Label("Restart Notion Bridge", systemImage: "arrow.clockwise")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
