@@ -94,7 +94,7 @@ public struct ConnectionSetupView: View {
                 Image(systemName: "server.rack")
                     .font(.caption)
                     .foregroundStyle(.blue)
-                Text("Local: 127.0.0.1:\(ssePort)/mcp")
+                Text(verbatim: "Local: 127.0.0.1:\(ssePort)/mcp")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)

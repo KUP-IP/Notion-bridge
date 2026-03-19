@@ -70,6 +70,14 @@ app: build
 			"$(APP_BUNDLE)/Contents/Resources/NotionBridge_NotionBridge.bundle/MenuBarIcon@2x.png"; \
 		echo "  ↳ Added MenuBarIcon.png + @2x aliases"; \
 	fi
+	@# ── Copy MenuBarIcon to top-level Contents/Resources for Bundle.main fallback ──
+	@if [ -f "$(APP_BUNDLE)/Contents/Resources/notionbridge-menubar.png" ]; then \
+		cp "$(APP_BUNDLE)/Contents/Resources/notionbridge-menubar.png" \
+			"$(APP_BUNDLE)/Contents/Resources/MenuBarIcon.png"; \
+		cp "$(APP_BUNDLE)/Contents/Resources/notionbridge-menubar@2x.png" \
+			"$(APP_BUNDLE)/Contents/Resources/MenuBarIcon@2x.png"; \
+		echo "  ↳ Added top-level MenuBarIcon.png + @2x for Bundle.main"; \
+	fi
 	@# ── Compile Assets.xcassets → Assets.car via actool ──
 	@XCASSETS="$(APP_BUNDLE)/Contents/Resources/NotionBridge_NotionBridge.bundle/Assets.xcassets"; \
 		if [ -d "$$XCASSETS" ]; then \

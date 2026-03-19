@@ -213,7 +213,7 @@ public actor NotionClient {
             let bodyData = try JSONSerialization.data(withJSONObject: body)
             let (_, response) = try await request(method: "POST", path: "/search", body: bodyData)
             if (200...299).contains(response.statusCode) {
-                return (true, "Connected (token source: \(tokenSource))")
+                return (true, "Connected")
             } else {
                 return (false, "HTTP \(response.statusCode)")
             }
