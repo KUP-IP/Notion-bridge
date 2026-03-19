@@ -183,13 +183,7 @@ public actor SecurityGate {
 
     // MARK: Sensitive Paths
 
-    private static let sensitivePaths: [String] = [
-        "~/.ssh",
-        "~/.aws",
-        "~/.gnupg",
-        "~/.config",
-        "~/Library/Keychains"
-    ]
+    // PKT-363 D2: sensitivePaths moved to ConfigManager (config.json-backed)
 
     private let approvalManager: NotificationApprovalManager
     private var sessionAllowedPaths: Set<String> = []
@@ -213,6 +207,9 @@ public actor SecurityGate {
             d + d + " if=",
             ":(){ :|:" + "& };:",
         ]
+
+        // PKT-363 D1: Seed sensitivePaths defaults on first launch with new schema
+        ConfigManager.shared.seedDefaultsIfNeeded()
     }
 
     // MARK: Permission Setup
@@ -346,7 +343,8 @@ public actor SecurityGate {
                 expanded = str
             }
 
-            for sensitive in SecurityGate.sensitivePaths {
+            // PKT-363 D2: Dynamic read from config-backed list (fallback to defaults on error)
+            for sensitive in ConfigManager.shared.sensitivePaths {
                 let expandedSensitive: String
                 if sensitive.hasPrefix("~/") {
                     expandedSensitive = home + String(sensitive.dropFirst(1))

@@ -16,6 +16,9 @@ import Foundation
 /// Each connection has its own `NotionClient` instance with independent rate limiting.
 public actor NotionClientRegistry {
 
+    /// Shared singleton for app-wide access.
+    public static let shared = NotionClientRegistry()
+
     private var clients: [String: NotionClient] = [:]
     private var connectionConfigs: [NotionConnection] = []
     private var primaryName: String?
