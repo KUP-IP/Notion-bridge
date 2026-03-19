@@ -126,6 +126,15 @@ public final class StatusBarController {
     private func showContextMenu(at event: NSEvent) {
         let menu = NSMenu()
 
+        let restartItem = NSMenuItem(
+            title: "Restart Notion Bridge",
+            action: #selector(AppDelegate.restartApp(_:)),
+            keyEquivalent: ""
+        )
+        restartItem.target = NSApp.delegate
+        menu.addItem(restartItem)
+        menu.addItem(.separator())
+
         let quitItem = NSMenuItem(
             title: "Quit Notion Bridge",
             action: #selector(NSApplication.terminate(_:)),
