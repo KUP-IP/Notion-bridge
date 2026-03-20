@@ -147,7 +147,6 @@ public struct SettingsView: View {
     }
 
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false
-    @AppStorage("com.notionbridge.security.trustedMode") var trustedMode: Bool = false
 
     var ssePort: Int {
         Int(ProcessInfo.processInfo.environment["NOTION_BRIDGE_PORT"] ?? "") ?? 9700
@@ -181,4 +180,5 @@ public struct SettingsView: View {
     @State var skillsManager = SkillsManager()
     // PKT-375: Screen output directory state
     @State var screenOutputDir: String = ConfigManager.shared.screenOutputDir
+    @State var learnedAllowPrefixes: [String] = ConfigManager.shared.learnedAllowPrefixes.sorted()
 }

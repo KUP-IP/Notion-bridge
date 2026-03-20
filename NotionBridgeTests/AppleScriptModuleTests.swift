@@ -33,10 +33,10 @@ func runAppleScriptModuleTests() async {
 
     // --- Tier classification ---
 
-    await test("applescript_exec is notify tier") {
+    await test("applescript_exec is request tier") {
         let tools = await router.registrations(forModule: "applescript")
         let tool = tools.first(where: { $0.name == "applescript_exec" })!
-        try expect(tool.tier == .notify, "Expected notify, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .request, "Expected request, got \(tool.tier.rawValue)")
     }
 
     // --- Functional tests ---

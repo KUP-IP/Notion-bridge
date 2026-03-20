@@ -25,16 +25,16 @@ func runShellModuleTests() async {
         try expect(names.contains("run_script"), "Missing run_script")
     }
 
-    await test("shell_exec tier is orange") {
+    await test("shell_exec tier is request") {
         let tools = await router.registrations(forModule: "shell")
         let shellExec = tools.first(where: { $0.name == "shell_exec" })!
-        try expect(shellExec.tier == .notify, "Expected orange, got \(shellExec.tier.rawValue)")
+        try expect(shellExec.tier == .request, "Expected request, got \(shellExec.tier.rawValue)")
     }
 
-    await test("run_script tier is green") {
+    await test("run_script tier is request") {
         let tools = await router.registrations(forModule: "shell")
         let runScript = tools.first(where: { $0.name == "run_script" })!
-        try expect(runScript.tier == .open, "Expected green, got \(runScript.tier.rawValue)")
+        try expect(runScript.tier == .request, "Expected request, got \(runScript.tier.rawValue)")
     }
 
     // shell_exec: basic command
@@ -173,11 +173,11 @@ func runShellModuleTests() async {
         }
     }
 
-    // Auto-escalation: these are tested via SecurityGate, but verify the tier assignment is correct
-    await test("shell_exec is registered at orange tier (auto-escalation eligible)") {
+    // Verify tier assignment for high-risk shell execution.
+    await test("shell_exec is registered at request tier") {
         let tools = await router.allRegistrations()
         let shellExec = tools.first(where: { $0.name == "shell_exec" })!
-        try expect(shellExec.tier == .notify, "shell_exec must be orange tier")
+        try expect(shellExec.tier == .request, "shell_exec must be request tier")
     }
 
     // P2-3: Path traversal prevention in run_script (PKT-373)

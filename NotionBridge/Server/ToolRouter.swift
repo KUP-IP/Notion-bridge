@@ -1,6 +1,6 @@
-// ToolRouter.swift – V1-03 Tool Registration & Dispatch
+// ToolRouter.swift – Tool Registration & Dispatch
 // NotionBridge · Server
-// V1-QUALITY-C1: Updated for 2-tier security model + .handoff support
+// PKT-376: Updated for 3-tier security model + .handoff support
 
 import Foundation
 import MCP
@@ -93,7 +93,7 @@ public actor ToolRouter {
             SecurityTier(rawValue: $0)
         } ?? tool.tier
 
-        // SecurityGate enforcement (now async for notification approval)
+        // SecurityGate enforcement (async for request-tier approvals)
         let decision = await securityGate.enforce(
             toolName: toolName,
             tier: effectiveTier,

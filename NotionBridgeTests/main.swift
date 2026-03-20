@@ -2,7 +2,7 @@
 // NotionBridge · Tests (standalone executable — no XCTest needed)
 //
 // Runs: SecurityGate, ToolRouter, AuditLog, Module tests, Integration/E2E tests
-// V1-QUALITY-C1: SecurityGate tests updated for 2-tier model
+// PKT-376: SecurityGate tests updated for 3-tier model
 
 import Foundation
 import MCP
@@ -36,10 +36,10 @@ enum TestError: Error, LocalizedError {
 }
 
 // ============================================================
-// MARK: - SecurityGate Tests (v2: 2-tier model)
+// MARK: - SecurityGate Tests (v3: 3-tier model)
 // ============================================================
 
-print("\n\u{1F512} SecurityGate Tests (v2)")
+print("\n\u{1F512} SecurityGate Tests (v3)")
 
 let gate = SecurityGate()
 
@@ -53,15 +53,17 @@ await test("Open tier allows with safe content") {
     if case .allow = d { } else { throw TestError.assertion("Expected .allow for open tier write") }
 }
 
-await test("SecurityTier has exactly 2 cases") {
-    try expect(SecurityTier.allCases.count == 2, "Expected 2 tiers, got \(SecurityTier.allCases.count)")
+await test("SecurityTier has exactly 3 cases") {
+    try expect(SecurityTier.allCases.count == 3, "Expected 3 tiers, got \(SecurityTier.allCases.count)")
     try expect(SecurityTier.allCases.contains(.open))
     try expect(SecurityTier.allCases.contains(.notify))
+    try expect(SecurityTier.allCases.contains(.request))
 }
 
 await test("SecurityTier raw values are correct") {
     try expect(SecurityTier.open.rawValue == "open")
     try expect(SecurityTier.notify.rawValue == "notify")
+    try expect(SecurityTier.request.rawValue == "request")
 }
 
 await test("SecurityTier is Codable (JSON round-trip)") {
@@ -72,34 +74,8 @@ await test("SecurityTier is Codable (JSON round-trip)") {
     try expect(decoded == .open, "Expected .open after decode")
 }
 
-// Nuclear pattern tests — use checkNuclearPattern directly
-// Build test strings from Unicode scalars to avoid audit gate pattern matching
-let nuclearDiskutil = "diskutil erasedisk JHFS+ Untitled /dev/disk2"
-let nuclearCsrutil = "csrutil disable"
-let nuclearDD = "dd if=/dev/zero of=/dev/sda"
+// Nuclear pattern tests — fork bomb only
 let forkBomb = ":(){ :|:" + "& };:"
-
-await test("Nuclear handoff: diskutil eraseDisk") {
-    let d = await gate.checkNuclearPattern(nuclearDiskutil.lowercased(), raw: nuclearDiskutil)
-    guard let decision = d else { throw TestError.assertion("Expected non-nil for nuclear diskutil") }
-    if case .handoff(let cmd, _, _) = decision {
-        try expect(cmd.contains("diskutil"), "Handoff command should contain diskutil")
-    } else {
-        throw TestError.assertion("Expected .handoff decision")
-    }
-}
-
-await test("Nuclear handoff: csrutil disable") {
-    let d = await gate.checkNuclearPattern(nuclearCsrutil.lowercased(), raw: nuclearCsrutil)
-    guard let decision = d else { throw TestError.assertion("Expected non-nil for nuclear csrutil") }
-    if case .handoff = decision { } else { throw TestError.assertion("Expected .handoff") }
-}
-
-await test("Nuclear handoff: dd if=") {
-    let d = await gate.checkNuclearPattern(nuclearDD.lowercased(), raw: nuclearDD)
-    guard let decision = d else { throw TestError.assertion("Expected non-nil for nuclear dd") }
-    if case .handoff = decision { } else { throw TestError.assertion("Expected .handoff") }
-}
 
 await test("Nuclear handoff: fork bomb") {
     let d = await gate.checkNuclearPattern(forkBomb.lowercased(), raw: forkBomb)
@@ -107,14 +83,20 @@ await test("Nuclear handoff: fork bomb") {
     if case .handoff = decision { } else { throw TestError.assertion("Expected .handoff") }
 }
 
-await test("Safe command is not nuclear") {
-    let safe = "ls -la ~/Documents"
-    let d = await gate.checkNuclearPattern(safe.lowercased(), raw: safe)
-    try expect(d == nil, "Expected nil for safe command")
+await test("Diskutil is not nuclear anymore") {
+    let cmd = "diskutil erasedisk JHFS+ Untitled /dev/disk2"
+    let d = await gate.checkNuclearPattern(cmd.lowercased(), raw: cmd)
+    try expect(d == nil, "Expected nil for diskutil")
+}
+
+await test("sudo is not nuclear anymore") {
+    let cmd = "sudo -n true"
+    let d = await gate.checkNuclearPattern(cmd.lowercased(), raw: cmd)
+    try expect(d == nil, "Expected nil for sudo")
 }
 
 await test("Nuclear handoff returns command in decision") {
-    let d = await gate.checkNuclearPattern(nuclearDiskutil.lowercased(), raw: nuclearDiskutil)
+    let d = await gate.checkNuclearPattern(forkBomb.lowercased(), raw: forkBomb)
     if case .handoff(let cmd, let explanation, let warning) = d {
         try expect(!cmd.isEmpty, "Command should not be empty")
         try expect(!explanation.isEmpty, "Explanation should not be empty")
@@ -153,7 +135,7 @@ await test("Sensitive path with permanent allow passes through") {
 }
 
 await test("GateDecision.handoff is not allow or reject") {
-    let d = await gate.checkNuclearPattern("diskutil erasedisk".lowercased(), raw: "diskutil erasedisk")
+    let d = await gate.checkNuclearPattern(forkBomb.lowercased(), raw: forkBomb)
     if case .allow = d { throw TestError.assertion("Nuclear should not be .allow") }
     if case .reject = d { throw TestError.assertion("Nuclear should not be .reject") }
     if case .handoff = d { /* expected */ } else { throw TestError.assertion("Expected .handoff") }
@@ -240,7 +222,7 @@ await test("Dispatch throws for unknown tool") {
     }
 }
 
-await test("Dispatch returns handoff for nuclear commands") {
+await test("Dispatch returns handoff for fork-bomb commands") {
     await router.register(ToolRegistration(
         name: "nuclear_test", module: "test", tier: .open,
         description: "Test", inputSchema: .object([:]),
@@ -248,7 +230,7 @@ await test("Dispatch returns handoff for nuclear commands") {
     ))
     let result = try await router.dispatch(
         toolName: "nuclear_test",
-        arguments: .object(["command": .string("diskutil erasedisk JHFS+ Untitled /dev/disk2")])
+        arguments: .object(["command": .string(forkBomb)])
     )
     if case .object(let dict) = result {
         if case .string(let status) = dict["status"] {
@@ -257,7 +239,7 @@ await test("Dispatch returns handoff for nuclear commands") {
             throw TestError.assertion("Expected status key in handoff response")
         }
     } else {
-        throw TestError.assertion("Expected object result for nuclear handoff")
+        throw TestError.assertion("Expected object result for fork-bomb handoff")
     }
 }
 

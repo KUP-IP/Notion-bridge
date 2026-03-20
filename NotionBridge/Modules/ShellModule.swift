@@ -1,7 +1,7 @@
 // ShellModule.swift – V1-04 Shell Command Execution
 // NotionBridge · Modules
 //
-// Two tools: shell_exec (notify), run_script (open).
+// Two tools: shell_exec (request), run_script (request).
 // Auto-escalation and forbidden path enforcement handled by SecurityGate.
 
 import Foundation
@@ -19,11 +19,11 @@ public enum ShellModule {
     /// Register all ShellModule tools on the given router.
     public static func register(on router: ToolRouter) async {
 
-        // MARK: shell_exec – notify
+        // MARK: shell_exec – request
         await router.register(ToolRegistration(
             name: "shell_exec",
             module: moduleName,
-            tier: .notify,
+            tier: .request,
             description: "Execute a shell command with optional timeout and working directory. Returns stdout, stderr, exit code, and duration in seconds. SecurityGate enforces auto-escalation patterns and forbidden path restrictions.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -109,11 +109,11 @@ public enum ShellModule {
             }
         ))
 
-        // MARK: run_script – open
+        // MARK: run_script – request
         await router.register(ToolRegistration(
             name: "run_script",
             module: moduleName,
-            tier: .open,
+            tier: .request,
             description: "Execute a pre-approved script from the scripts directory. Only scripts listed in the approved scripts file can run. Returns stdout, stderr, and exit code.",
             inputSchema: .object([
                 "type": .string("object"),

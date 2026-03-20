@@ -23,11 +23,11 @@ public enum AppleScriptModule {
     /// Register all AppleScriptModule tools on the given router.
     public static func register(on router: ToolRouter) async {
 
-        // MARK: applescript_exec – notify
+        // MARK: applescript_exec – request
         await router.register(ToolRegistration(
             name: "applescript_exec",
             module: moduleName,
-            tier: .notify,
+            tier: .request,
             description: "Execute AppleScript code in-process via NSAppleScript. Avoids TCC re-prompting by running as NotionBridge.app (not /usr/bin/osascript). Use for controlling apps (Chrome, Finder, System Events, etc.). Returns the result string or error info.",
             inputSchema: .object([
                 "type": .string("object"),

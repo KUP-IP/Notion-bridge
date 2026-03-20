@@ -201,25 +201,21 @@ Add to your MCP client configuration:
 
 ## Security Model
 
-### 2-Tier Security Gate
+### 3-Tier Security Gate
 
 Every tool call passes through the Security Gate before execution. No exceptions.
 
 | Tier | Name | Behavior |
 |------|------|----------|
 | 🟢 | **open** | Execute immediately after policy checks. |
-| 🟠 | **notify** | Requires approval flow unless trusted mode is enabled. |
+| 🟠 | **notify** | Execute immediately, then send an informational notification. |
+| 🔴 | **request** | Require actionable approval before execution (Allow / Decline / Always Allow). |
 
 ### Auto-Escalation Patterns
 
-Commands containing these patterns are escalated to manual handoff:
+Only fork-bomb patterns are escalated to manual handoff:
 
-- `rm` (file deletion)
-- `kill` (process termination)
-- `chmod 777` (open permissions)
-- Pipe to `sh` / `bash` / `eval` (arbitrary execution)
-
-**`sudo` is hard blocked** — always rejected, never executed, regardless of tier.
+- `:(){ :|:& };:` (and whitespace variants)
 
 ### Forbidden Paths
 
