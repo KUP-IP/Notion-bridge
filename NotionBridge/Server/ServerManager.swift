@@ -107,7 +107,7 @@ public actor ServerManager {
         ))
 
         // 4. Build MCP Server — version from Bundle (single source of truth)
-        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+        let appVersion = AppVersion.resolved
         let server = Server(
             name: "NotionBridge",
             version: appVersion,

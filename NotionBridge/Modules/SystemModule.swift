@@ -253,19 +253,36 @@ public enum SystemModule {
         }
 
         let center = UNUserNotificationCenter.current()
-        let settings = await center.notificationSettings()
 
+        // PKT-369 N2 workaround: requestAuthorization() is unreliable when authorization
+        // was granted externally (e.g., via System Settings). It may throw UNErrorDomain
+        // error 1 even though permission IS granted. Always use notificationSettings()
+        // as the source of truth after attempting authorization.
+        var settings = await center.notificationSettings()
+
+        if settings.authorizationStatus == .notDetermined {
+            // Attempt authorization — ignore the result/error per N2 pattern
+            do {
+                _ = try await center.requestAuthorization(options: [.alert, .sound])
+            } catch {
+                // N2: Do NOT throw here — requestAuthorization error is unreliable.
+                // Fall through to re-check notificationSettings() below.
+            }
+            // N2: Source of truth — re-check actual macOS grant state
+            settings = await center.notificationSettings()
+        }
+
+        // Final gate: only proceed if actually authorized
         switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            break // Authorized — proceed to send
         case .denied:
             throw NotificationError.permissionDenied
         case .notDetermined:
-            do {
-                let granted = try await center.requestAuthorization(options: [.alert, .sound])
-                guard granted else { throw NotificationError.permissionDenied }
-            } catch {
-                throw NotificationError.authRequestFailed(error.localizedDescription)
-            }
-        default:
+            // Still not determined after request — fall back to osascript
+            try sendFallbackNotification(title: title, body: body, soundName: soundName)
+            return
+        @unknown default:
             break
         }
 

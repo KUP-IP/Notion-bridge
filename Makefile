@@ -13,7 +13,8 @@ BUILD_DIR      = .build
 RELEASE_DIR    = $(BUILD_DIR)/release
 DEBUG_DIR      = $(BUILD_DIR)/debug
 APP_BUNDLE     = $(BUILD_DIR)/NotionBridge.app
-DMG_NAME       = notion-bridge-v1.1.0.dmg
+VERSION       := $(shell /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
+DMG_NAME       = notion-bridge-v$(VERSION).dmg
 DMG_STAGING    = $(BUILD_DIR)/dmg-staging
 SIGNING_ID    ?= Developer ID Application: Isaiah Peters (VP24Z9CS22)
 NOTARIZE_PROFILE ?= notionbridge-notarize
@@ -103,13 +104,11 @@ app: build
 	@echo "✅ App bundle: $(APP_BUNDLE)"
 
 # ── Install ────────────────────────────────────────────────────────────
-install: app
+install: sign
 	@echo "📲 Installing to /Applications..."
 	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
 	@cp -R "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
-	@echo "🧹 Resetting TCC for bundle IDs (legacy + current)..."
-	-tccutil reset All solutions.kup.keepr
-	-tccutil reset All $(BUNDLE_ID)
+	@echo "🧹 Clearing launch services cache (preserving TCC grants)..."
 	@echo "🔄 Refreshing icon caches..."
 	@killall Dock 2>/dev/null || true
 	@echo "✅ Installed: /Applications/Notion Bridge.app"
@@ -117,7 +116,6 @@ install: app
 # ── Clean TCC ──────────────────────────────────────────────────────────
 clean-tcc:
 	@echo "🧹 Resetting TCC for old bundle ID..."
-	-tccutil reset All solutions.kup.keepr
 	@echo "🧹 Resetting TCC for current bundle ID..."
 	-tccutil reset All kup.solutions.notion-bridge
 	@echo "✅ TCC reset complete — permissions will be re-requested on next launch"

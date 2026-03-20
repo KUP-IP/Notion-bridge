@@ -231,7 +231,7 @@ public actor SSEServer {
     /// Build the JSON health response.
     /// Returns: {"status": "running", "tools": N, "uptime": N, "version": "X.Y.Z", "clients": N}
     private func buildHealthResponse() async -> Data {
-        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+        let appVersion = AppVersion.resolved
         let toolCount = await router.allRegistrations().count
         let uptime: Int = {
             guard let earliest = sessions.values.map(\.createdAt).min() else { return 0 }
@@ -316,7 +316,7 @@ public actor SSEServer {
             validationPipeline: validationPipeline
         )
 
-        let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+        let appVersion = AppVersion.resolved
         let server = Server(
             name: "NotionBridgeSSE",
             version: appVersion,
@@ -402,7 +402,7 @@ public actor SSEServer {
                 print("[SSE-Legacy] Client identified: \(name) v\(version)")
             }
 
-            let legacyVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.0"
+            let legacyVersion = AppVersion.resolved
             return buildRPCResponse(id: requestId, result: [
                 "protocolVersion": "2024-11-05",
                 "capabilities": ["tools": [:] as [String: Any]] as [String: Any],

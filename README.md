@@ -2,7 +2,7 @@
 
 **A native macOS menu bar app that replaces the Python + ngrok MCP server, serving as the persistent bidirectional bridge between Notion agents and the local Mac.**
 
-Version 1.1.0 · macOS 26+ · Apple Silicon · Swift 6.2
+Version 1.1.4 · macOS 26+ · Apple Silicon · Swift 6.2
 
 ---
 
