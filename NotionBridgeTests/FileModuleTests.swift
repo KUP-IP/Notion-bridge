@@ -12,7 +12,7 @@ func runFileModuleTests() async {
 
     let gate = SecurityGate()
     let log = AuditLog()
-    let router = ToolRouter(securityGate: gate, auditLog: log, batchThreshold: 50)
+    let router = ToolRouter(securityGate: gate, auditLog: log)
     await FileModule.register(on: router)
 
     // Registration
@@ -46,7 +46,7 @@ func runFileModuleTests() async {
         try expect(tierMap["clipboard_read"] == .open, "clipboard_read should be green")
         // Yellow: clipboard_write, file_copy
         try expect(tierMap["clipboard_write"] == .open, "clipboard_write should be yellow")
-        try expect(tierMap["file_copy"] == .open, "file_copy should be yellow")
+        try expect(tierMap["file_copy"] == .notify, "file_copy should be orange (elevated PKT-373 P1-1)")
         // Orange: file_write, file_append, file_move, file_rename, dir_create
         try expect(tierMap["file_write"] == .notify, "file_write should be orange")
         try expect(tierMap["file_append"] == .notify, "file_append should be orange")
@@ -340,4 +340,12 @@ func runFileModuleTests() async {
             // Expected
         }
     }
+
+    // P2-3: file_copy security tier verification (PKT-373)
+    await test("file_copy is registered at notify tier") {
+        let tools = await router.allRegistrations()
+        let fileCopy = tools.first(where: { $0.name == "file_copy" })!
+        try expect(fileCopy.tier == .notify, "file_copy must be notify tier (was .open before PKT-373)")
+    }
+
 }
