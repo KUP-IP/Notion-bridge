@@ -90,6 +90,16 @@ app: build
 			rm -rf "$$XCASSETS"; \
 			echo "  ↳ Cleaned raw .xcassets from bundle"; \
 		fi
+	@# ── Compile AppIcon from source .xcassets into main Contents/Resources for Notification Center ──
+	@SRC_XCASSETS="$(RESOURCES_DIR)/Assets.xcassets"; \
+		if [ -d "$$SRC_XCASSETS" ]; then \
+			actool --compile "$(APP_BUNDLE)/Contents/Resources" \
+				--platform macosx --minimum-deployment-target 14.0 \
+				--app-icon AppIcon --output-partial-info-plist /dev/null \
+				"$$SRC_XCASSETS" >/dev/null 2>&1 && \
+			echo "  ↳ Compiled AppIcon into main Contents/Resources" || \
+			echo "  ⚠️  actool AppIcon compile failed"; \
+		fi
 	@echo "✅ App bundle: $(APP_BUNDLE)"
 
 # ── Install ────────────────────────────────────────────────────────────

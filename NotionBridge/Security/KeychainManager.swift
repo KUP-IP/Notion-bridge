@@ -17,11 +17,18 @@ public final class KeychainManager: Sendable {
 
     private init() {}
 
+    /// When running outside an .app bundle (e.g. test binary), keychain ops
+    /// return safe no-ops to avoid password prompt storms from mismatched code signatures.
+    private var isAppBundle: Bool {
+        Bundle.main.bundleURL.pathExtension == "app"
+    }
+
     // MARK: - CRUD Operations
 
     /// Save a value to the Keychain. Overwrites if key already exists.
     @discardableResult
     public func save(key: String, value: String) -> Bool {
+        guard isAppBundle else { return true }
         guard let data = value.data(using: .utf8) else { return false }
 
         // Delete existing item first (SecItemAdd fails if duplicate)
@@ -44,6 +51,7 @@ public final class KeychainManager: Sendable {
 
     /// Read a value from the Keychain. Returns nil if not found.
     public func read(key: String) -> String? {
+        guard isAppBundle else { return nil }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -66,6 +74,7 @@ public final class KeychainManager: Sendable {
     /// Delete a value from the Keychain. Returns true if deleted or not found.
     @discardableResult
     public func delete(key: String) -> Bool {
+        guard isAppBundle else { return true }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -78,6 +87,7 @@ public final class KeychainManager: Sendable {
 
     /// Check if a key exists in the Keychain.
     public func exists(key: String) -> Bool {
+        guard isAppBundle else { return false }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -92,6 +102,8 @@ public final class KeychainManager: Sendable {
     /// Update an existing value in the Keychain. Falls back to save if not found.
     @discardableResult
     public func update(key: String, value: String) -> Bool {
+        guard isAppBundle else { return true }
+        guard isAppBundle else { return true }
         guard let data = value.data(using: .utf8) else { return false }
 
         let query: [String: Any] = [
@@ -120,6 +132,7 @@ public final class KeychainManager: Sendable {
 
     /// List all keys stored under this service.
     public func allKeys() -> [String] {
+        guard isAppBundle else { return [] }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -141,6 +154,7 @@ public final class KeychainManager: Sendable {
     /// Delete all items stored under this service.
     @discardableResult
     public func deleteAll() -> Bool {
+        guard isAppBundle else { return true }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service
