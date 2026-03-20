@@ -355,7 +355,7 @@ func runEndToEndTests() async {
 
     await test("E2E: Total module tool count is 58") {
         let all = await router.allRegistrations()
-        // 39 module tools (this suite does not register builtin echo).
+        // 58 module tools (this suite does not register builtin echo).
         let moduleTools = all.filter { $0.module != "builtin" }
         try expect(moduleTools.count == 58, "Expected 58 module tools, got \(moduleTools.count)")
     }

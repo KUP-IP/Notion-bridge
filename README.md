@@ -368,6 +368,20 @@ tccutil reset All kup.solutions.notion-bridge  # Current Notion Bridge bundle ID
 
 > **Note:** `tccutil reset All` removes all TCC grants for the specified bundle ID. The app will prompt for each permission again on next launch. This is safe — no data is lost, only permission state is cleared.
 
+### `make install` vs `make clean-tcc`
+
+- **`make install`** — Builds the release `.app`, copies it to `/Applications/Notion Bridge.app`, then runs the same two `tccutil reset All` commands as `clean-tcc` (legacy `solutions.kup.keepr` and current `kup.solutions.notion-bridge`). Use this after a fresh build when you want the installed app and a clean TCC slate in one step.
+- **`make clean-tcc`** — Resets TCC only; does not build or install. Use when permissions feel stale but you are not reinstalling.
+
+If `tccutil` prints **No such bundle identifier** for the legacy ID (`-10814`), that is expected when Keepr was never installed; the line is ignored and the reset for the current ID still runs.
+
+### Permissions feel tied to the wrong app
+
+1. **Quit** every running instance (menu bar and any CLI `NotionBridge` you started from Terminal).
+2. Confirm identity: in the app, open **Settings** and check **Bundle ID** and bundle path — it should be `kup.solutions.notion-bridge` and your intended `.app` location.
+3. **Prefer one launch path** for normal use: `/Applications/Notion Bridge.app`. Running the raw `.build/release/NotionBridge` binary is a different executable path; macOS can treat TCC grants separately from the bundled app.
+4. Run **`make clean-tcc`** or **`make install`**, then reopen only the `/Applications` app and re-grant in **System Settings** (Accessibility, Full Disk Access, Automation per target app, Screen Recording, Notifications as needed).
+
 ---
 
 ## Known Limitations
@@ -410,7 +424,7 @@ swift run NotionBridgeTests
 | Suite | File | Coverage |
 |-------|------|----------|
 | SecurityGate | `main.swift` | 2-tier model, nuclear handoff, sensitive paths, session/permanent permissions |
-| ToolRouter | `main.swift` | Registration, dispatch, overwrite, module filter, batch gate |
+| ToolRouter | `main.swift` | Registration, dispatch, overwrite, module filter |
 | AuditLog | `main.swift` | Append, filter by tool/tier/status, Codable round-trip |
 | PermissionManager | `PermissionManagerTests.swift` | Grant enum, TCC checks, async notifications, evidence loop |
 | ShellModule | `ShellModuleTests.swift` | Tool registration, security tiers |
@@ -422,6 +436,8 @@ swift run NotionBridgeTests
 | AccessibilityModule | `AccessibilityModuleTests.swift` | Tool registration, security tiers |
 | ScreenModule | `ScreenModuleTests.swift` | Tool registration, security tiers |
 | AppleScriptModule | `AppleScriptModuleTests.swift` | Tool registration, security tiers |
+| ChromeModule | `ChromeModuleTests.swift` | Tool registration, tiers, schemas |
+| SkillsModule | `SkillsModuleTests.swift` | Tool registration, tier, schema |
 | BuiltinModule | `BuiltinModuleTests.swift` | Tool registration, security tiers |
 | ConfigManager | `ConfigManagerTests.swift` | Singleton, config read/write, accessors |
 | Integration/E2E | `IntegrationTests/` | End-to-end tool dispatch flows |
@@ -446,8 +462,8 @@ make verify      # Gatekeeper assessment
 ### Maintenance
 
 ```bash
-make install     # Build .app bundle and install to /Applications
-make clean-tcc   # Reset TCC permissions for old + current bundle IDs
+make install     # Build .app, install to /Applications, reset TCC (legacy + current bundle IDs)
+make clean-tcc   # Reset TCC only (same two bundle IDs as install)
 make clean       # Remove build artifacts
 ```
 

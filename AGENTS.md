@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-NotionBridge is a native macOS menu bar app (Swift 6, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes 58 tools across 12 modules via both stdio and SSE transports, routing every call through a security gate with an append-only audit log.
+NotionBridge is a native macOS menu bar app (Swift 6, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **58 module tools** across **12 modules** via both stdio and SSE transports (plus optional built-in tools when registered), routing every call through a security gate with an append-only audit log.
 
 Bundle ID: `kup.solutions.notion-bridge` (legacy: `solutions.kup.keepr`)
 
@@ -37,7 +37,7 @@ There is no way to run a single test file in isolation — all tests run from `N
 
 ```bash
 make app        # Package .app bundle (requires make build first)
-make install    # Build .app and install to /Applications (also clears legacy TCC)
+make install    # Build .app and install to /Applications (resets TCC for legacy + current bundle IDs)
 make dmg        # Create distributable DMG
 make sign       # Code-sign with Developer ID
 make notarize   # Submit to Apple notarization (requires keychain profile)
@@ -89,7 +89,7 @@ Client → Transport (stdio or SSE) → ServerManager → ToolRouter.dispatch()
 
 **`ServerManager`** (`NotionBridge/Server/ServerManager.swift`) — actor that orchestrates startup: creates `SecurityGate`, `AuditLog`, and `ToolRouter`; registers all modules; wires MCP `ListTools`/`CallTool` handlers; starts both transports concurrently via `TaskGroup`. The `NOTION_BRIDGE_PORT` env var is read here.
 
-**`ToolRouter`** (`NotionBridge/Server/ToolRouter.swift`) — actor. Central registry and dispatch hub. Each `ToolRegistration` carries a name, module, `SecurityTier`, description, JSON input schema, and a `@Sendable` async handler closure. `dispatchFormatted()` is the shared helper used by all transports (returns `(text: String, isError: Bool)` for MCP `CallTool` responses). Batch gate triggers at ≥3 planned calls.
+**`ToolRouter`** (`NotionBridge/Server/ToolRouter.swift`) — actor. Central registry and dispatch hub. Each `ToolRegistration` carries a name, module, `SecurityTier`, description, JSON input schema, and a `@Sendable` async handler closure. `dispatchFormatted()` is the shared helper used by all transports (returns `(text: String, isError: Bool)` for MCP `CallTool` responses).
 
 **`SecurityGate`** (`NotionBridge/Security/SecurityGate.swift`) — actor. Enforces a 2-tier model:
 - `.open` — execute immediately, no prompt

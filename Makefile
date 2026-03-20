@@ -107,8 +107,9 @@ install: app
 	@echo "📲 Installing to /Applications..."
 	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
 	@cp -R "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
-	@echo "🧹 Clearing old TCC cache..."
+	@echo "🧹 Resetting TCC for bundle IDs (legacy + current)..."
 	-tccutil reset All solutions.kup.keepr
+	-tccutil reset All $(BUNDLE_ID)
 	@echo "🔄 Refreshing icon caches..."
 	@killall Dock 2>/dev/null || true
 	@echo "✅ Installed: /Applications/Notion Bridge.app"

@@ -72,15 +72,22 @@ func runAccessibilityModuleTests() async {
 
     // --- Graceful error handling (no AX permission in test env) ---
 
-    await test("ax_focused_app returns error object when AX not trusted") {
+    await test("ax_focused_app returns success or a structured error") {
         let result = try await router.dispatch(
             toolName: "ax_focused_app",
             arguments: .object([:])
         )
         if case .object(let dict) = result {
             if case .string(let err) = dict["error"] {
-                try expect(err.contains("Accessibility") || err.contains("permission") || err.contains("trusted"),
-                           "Error should mention accessibility permission")
+                // notTrusted, noFocusedApp, or other AXModuleError paths (headless/CI varies)
+                try expect(
+                    err.contains("Accessibility") || err.contains("permission") || err.contains("trusted")
+                        || err.contains("No focused application") || err.contains("not found"),
+                    "Error should be a known AX-module user message, got: \(err.prefix(120))"
+                )
+            } else {
+                try expect(dict["name"] != nil && dict["bundleId"] != nil,
+                           "Success path should include name and bundleId")
             }
         }
     }
