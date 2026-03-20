@@ -10,6 +10,8 @@
 //   for gear icon / Cmd+, access. Client identification callbacks from SSE server.
 // PKT-353: Right-click context menu setup for Quit action
 // PKT-357 F15: App Nap prevention via NSProcessInfo activity assertion
+// V1-PATCH-003: Rapid restart detection (B1-B3) — detect 3+ launches in 2 min,
+//   defer non-critical init by 5s to let app stabilize
 
 import AppKit
 import ServiceManagement
@@ -112,8 +114,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // PKT-341: Install signal handlers for crash breadcrumbs
         installSignalHandlers()
 
-        // PKT-369 N3: Check TCC permissions on launch (async to include notifications)
-        Task { await permissionManager.checkAllAsync() }
+        // V1-PATCH-003 B1/B2: Rapid restart detection — defer TCC if restarting too fast
+        let rapidRestart = detectRapidRestart()
+        if rapidRestart {
+            // B2: Defer non-critical init by 5s to let app stabilize
+            Task {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                await permissionManager.checkAllAsync()
+            }
+        } else {
+            // PKT-369 N3: Check TCC permissions on launch (async to include notifications)
+            Task { await permissionManager.checkAllAsync() }
+        }
 
         // V3-QUALITY B4: Migrate plaintext tokens to Keychain on first launch
         ConfigManager.shared.migrateTokensToKeychain()
@@ -205,6 +217,42 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         signal(SIGTERM, crashFlushHandler)
         signal(SIGABRT, crashFlushHandler)
         print("[Notion Bridge] Signal handlers installed (SIGTERM, SIGABRT)")
+    }
+
+    // MARK: - Rapid Restart Detection (V1-PATCH-003)
+
+    private static let rapidLaunchTimeKey = "com.notionbridge.lastLaunchTime"
+    private static let rapidLaunchCountKey = "com.notionbridge.rapidLaunchCount"
+    /// 2-minute window for detecting rapid restart cycles.
+    private static let rapidRestartWindow: TimeInterval = 120
+    /// 3 launches within the window triggers deferred init.
+    private static let rapidRestartThreshold = 3
+
+    /// V1-PATCH-003 B1: Detect rapid restart cycle (3+ launches in 2 min).
+    /// Returns true if the app has restarted too frequently, indicating a potential
+    /// main-thread blocking crash loop. B3: Logs detection for diagnostics.
+    private func detectRapidRestart() -> Bool {
+        let now = Date().timeIntervalSince1970
+        let lastLaunch = UserDefaults.standard.double(forKey: Self.rapidLaunchTimeKey)
+        let count = UserDefaults.standard.integer(forKey: Self.rapidLaunchCountKey)
+
+        UserDefaults.standard.set(now, forKey: Self.rapidLaunchTimeKey)
+
+        let elapsed = now - lastLaunch
+        if elapsed < Self.rapidRestartWindow && lastLaunch > 0 {
+            let newCount = count + 1
+            UserDefaults.standard.set(newCount, forKey: Self.rapidLaunchCountKey)
+            if newCount >= Self.rapidRestartThreshold {
+                print("[Notion Bridge] ⚠️ RAPID RESTART CYCLE: \(newCount) launches in \(Int(elapsed))s — deferring non-critical init by 5s")
+                return true
+            }
+            print("[Notion Bridge] Launch \(newCount)/\(Self.rapidRestartThreshold) within restart window (\(Int(elapsed))s)")
+            return false
+        } else {
+            // Outside window — reset counter
+            UserDefaults.standard.set(1, forKey: Self.rapidLaunchCountKey)
+            return false
+        }
     }
 
     // MARK: - Single-Instance Guard

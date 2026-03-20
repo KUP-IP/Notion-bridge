@@ -56,8 +56,9 @@ public struct PermissionView: View {
                 .padding(.top, 4)
         }
         // PKT-357 F14: Check permissions on appear
-        .onAppear {
-            permissionManager.checkAll()
+        // V1-PATCH-003: checkAll() is now async (automation probes off main thread)
+        .task {
+            await permissionManager.checkAll()
         }
         // PKT-366 F6: Async notification check on appear
         .task {

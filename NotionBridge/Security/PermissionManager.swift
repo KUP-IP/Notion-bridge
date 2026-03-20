@@ -6,6 +6,9 @@
 //   Fixes: NotionBridge invisible in Automation prefs when Chrome was the
 //   first Apple Event target (TCC prompt silently suppressed on Sequoia).
 // PKT-362 D3: Added grantCheckingState and animatedRecheckAll() for animated re-check.
+// V1-PATCH-003: Offloaded NSAppleScript automation probes to background thread via
+//   Task.detached to eliminate main-thread blocking that caused macOS to sever the
+//   Dock/WindowServer connection. checkAll() and checkAutomation() are now async.
 // PKT-362 D5: Added systemSettingsURL to Grant for deep links in post-reset sheet.
 // PKT-362 D6: Added needsRestart flag and restart transition tracking.
 //
@@ -219,16 +222,17 @@ public final class PermissionManager {
         }
     }
 
-    /// Check synchronous TCC grants. Safe to call from main thread —
-    /// individual checks are fast (<100ms total).
+    /// Check all TCC grants including async automation probes.
+    /// V1-PATCH-003: Now async — automation probes run on background thread
+    /// to prevent main-thread blocking that caused Dock connection severing.
     /// Call on popover open and periodically to detect re-grant needs.
-    /// Note: Notifications check is async and NOT included here.
+    /// Note: Notifications check is NOT included here.
     /// Use recheckAllForTruth() or checkNotifications() for notification status.
-    public func checkAll() {
+    public func checkAll() async {
         checkAccessibility()
         checkScreenRecording()
         checkFullDiskAccess()
-        checkAutomation()
+        await checkAutomation()
         checkContacts()
         lastCheckedAt = Date()
     }
@@ -237,20 +241,20 @@ public final class PermissionManager {
     /// Ensures notification authorization is checked alongside synchronous TCC grants.
     /// Use at all call sites where async context is available.
     public func checkAllAsync() async {
-        checkAll()
+        await checkAll()
         await checkNotifications()
     }
 
     /// Active reconciliation pass intended for "truth sync" from UI.
     /// Re-runs all probes and briefly waits for TCC state propagation.
     public func recheckAllForTruth() async {
-        checkAll()
+        await checkAll()
         await checkNotifications()
         try? await Task.sleep(nanoseconds: 300_000_000)
         checkAccessibility()
         checkScreenRecording()
         checkFullDiskAccess()
-        checkAutomation()
+        await checkAutomation()
         checkContacts()
         await checkNotifications()
         lastCheckedAt = Date()
@@ -425,10 +429,11 @@ public final class PermissionManager {
     /// and Messages. Now probes all targets in `automationTargets`, including
     /// Chrome and Contacts. This fixes the bug where Chrome Apple Events
     /// were silently denied because no probe ever triggered the TCC prompt.
-    public func checkAutomation() {
+    /// V1-PATCH-003: Now async — probes run via Task.detached on background thread.
+    public func checkAutomation() async {
         var results: [String: Bool] = [:]
         for target in Self.automationTargets {
-            results[target.bundleID] = runAppleScriptProbe(target.probe)
+            results[target.bundleID] = await runAppleScriptProbe(target.probe)
         }
         automationTargetGrants = results
 
@@ -472,7 +477,7 @@ public final class PermissionManager {
         // Brief pause then re-probe all targets to trigger any missing prompts.
         // Each un-granted target will show a macOS TCC consent dialog.
         try? await Task.sleep(nanoseconds: 300_000_000)
-        checkAutomation()
+        await checkAutomation()
     }
 
     /// Contacts: CNContactStore.authorizationStatus(for:) — direct API.
@@ -672,10 +677,16 @@ public final class PermissionManager {
 
     // MARK: - Internal probes
 
-    private func runAppleScriptProbe(_ source: String) -> Bool {
-        let script = NSAppleScript(source: source)
-        var error: NSDictionary?
-        _ = script?.executeAndReturnError(&error)
-        return error == nil
+    /// V1-PATCH-003: Runs on background thread via Task.detached to prevent
+    /// main-thread blocking from Security framework calls (code signing,
+    /// TCC validation) triggered by NSAppleScript execution.
+    private func runAppleScriptProbe(_ source: String) async -> Bool {
+        let probeSource = source
+        return await Task.detached {
+            let script = NSAppleScript(source: probeSource)
+            var error: NSDictionary?
+            _ = script?.executeAndReturnError(&error)
+            return error == nil
+        }.value
     }
 }

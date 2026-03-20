@@ -188,8 +188,8 @@ struct OnboardingView: View {
             .padding(.top, 8)
 
             Button("Refresh Status") {
-                permissionManager.checkAll()
-                Task { await permissionManager.checkNotifications() }
+                // V1-PATCH-003: checkAll() is now async (automation probes off main thread)
+                Task { await permissionManager.checkAllAsync() }
             }
             .buttonStyle(.plain)
             .font(.caption)
