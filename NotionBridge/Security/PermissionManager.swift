@@ -677,16 +677,27 @@ public final class PermissionManager {
 
     // MARK: - Internal probes
 
-    /// V1-PATCH-003: Runs on background thread via Task.detached to prevent
-    /// main-thread blocking from Security framework calls (code signing,
-    /// TCC validation) triggered by NSAppleScript execution.
+    /// V1-PATCH-003 v2: Runs osascript in a child Process to completely isolate
+    /// Security framework calls (code signing, TCC validation) from our process's
+    /// main thread. NSAppleScript.executeAndReturnError() internally dispatches
+    /// TCC validation to the main thread even from Task.detached — Process-based
+    /// approach eliminates this entirely.
     private func runAppleScriptProbe(_ source: String) async -> Bool {
         let probeSource = source
         return await Task.detached {
-            let script = NSAppleScript(source: probeSource)
-            var error: NSDictionary?
-            _ = script?.executeAndReturnError(&error)
-            return error == nil
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", probeSource]
+            // Suppress stdout/stderr — we only care about exit code
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+                return process.terminationStatus == 0
+            } catch {
+                return false
+            }
         }.value
     }
 }

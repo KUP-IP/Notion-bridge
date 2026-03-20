@@ -237,6 +237,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let count = UserDefaults.standard.integer(forKey: Self.rapidLaunchCountKey)
 
         UserDefaults.standard.set(now, forKey: Self.rapidLaunchTimeKey)
+        print("[Notion Bridge] detectRapidRestart: set lastLaunchTime=\(now)")
 
         let elapsed = now - lastLaunch
         if elapsed < Self.rapidRestartWindow && lastLaunch > 0 {
@@ -244,13 +245,17 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(newCount, forKey: Self.rapidLaunchCountKey)
             if newCount >= Self.rapidRestartThreshold {
                 print("[Notion Bridge] ⚠️ RAPID RESTART CYCLE: \(newCount) launches in \(Int(elapsed))s — deferring non-critical init by 5s")
+                UserDefaults.standard.synchronize()
                 return true
             }
             print("[Notion Bridge] Launch \(newCount)/\(Self.rapidRestartThreshold) within restart window (\(Int(elapsed))s)")
+            UserDefaults.standard.synchronize()
             return false
         } else {
             // Outside window — reset counter
             UserDefaults.standard.set(1, forKey: Self.rapidLaunchCountKey)
+            UserDefaults.standard.synchronize()
+            print("[Notion Bridge] detectRapidRestart: outside window, reset count=1")
             return false
         }
     }
