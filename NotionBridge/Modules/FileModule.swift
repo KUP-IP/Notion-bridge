@@ -350,11 +350,11 @@ public enum FileModule {
             }
         ))
 
-        // 9. file_copy – open
+        // 9. file_copy – notify (PKT-373 P1-1: elevated from .open)
         await router.register(ToolRegistration(
             name: "file_copy",
             module: moduleName,
-            tier: .open,
+            tier: .notify,
             description: "Copy a file or directory to a new location.",
             inputSchema: .object([
                 "type": .string("object"),

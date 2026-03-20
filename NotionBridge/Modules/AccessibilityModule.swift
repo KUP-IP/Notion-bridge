@@ -54,7 +54,7 @@ public enum AccessibilityModule {
         let sys = AXUIElementCreateSystemWide()
         var ref: AnyObject?
         guard AXUIElementCopyAttributeValue(sys, kAXFocusedApplicationAttribute as CFString, &ref) == .success,
-              let appEl = ref as! AXUIElement? else {
+              let appEl = ref as! AXUIElement? else { // Safe: CF bridging guarantees type on .success
             throw AXModuleError.noFocusedApp
         }
         var pid: pid_t = 0
@@ -138,6 +138,7 @@ public enum AccessibilityModule {
     private static func position(_ el: AXUIElement) -> (x: Double, y: Double)? {
         guard let val = attr(el, kAXPositionAttribute as String) else { return nil }
         var pt = CGPoint.zero
+        // PKT-373 P0-2: val is guaranteed AXValue by AX API when attr() succeeds
         AXValueGetValue(val as! AXValue, .cgPoint, &pt)
         return (Double(pt.x), Double(pt.y))
     }
@@ -145,6 +146,7 @@ public enum AccessibilityModule {
     private static func size(_ el: AXUIElement) -> (w: Double, h: Double)? {
         guard let val = attr(el, kAXSizeAttribute as String) else { return nil }
         var sz = CGSize.zero
+        // PKT-373 P0-2: val is guaranteed AXValue by AX API when attr() succeeds
         AXValueGetValue(val as! AXValue, .cgSize, &sz)
         return (Double(sz.width), Double(sz.height))
     }
@@ -308,7 +310,7 @@ public enum AccessibilityModule {
                         "bundleId": .string(app.bundleIdentifier ?? "Unknown"),
                         "pid":      .int(Int(app.processIdentifier))
                     ]
-                    if let fe = attr(appEl, kAXFocusedUIElementAttribute as String) as! AXUIElement? {
+                    if let fe = attr(appEl, kAXFocusedUIElementAttribute as String) as! AXUIElement? { // Safe: CF bridging
                         result["focusedElement"] = .object([
                             "role":  .string(role(fe)),
                             "title": .string(title(fe) ?? ""),

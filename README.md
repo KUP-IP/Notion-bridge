@@ -419,7 +419,6 @@ swift run NotionBridgeTests
 | MessagesModule | `MessagesModuleTests.swift` | Tool registration, security tiers |
 | SystemModule | `SystemModuleTests.swift` | Tool registration, security tiers |
 | NotionModule | `NotionModuleTests.swift` | 16 tools, security tiers, model validation |
-| GoogleDriveModule | `GoogleDriveModuleTests.swift` | 6 tools, security tiers, token resolution |
 | AccessibilityModule | `AccessibilityModuleTests.swift` | Tool registration, security tiers |
 | ScreenModule | `ScreenModuleTests.swift` | Tool registration, security tiers |
 | AppleScriptModule | `AppleScriptModuleTests.swift` | Tool registration, security tiers |

@@ -5,7 +5,7 @@
 //   screen_record_start (notify), screen_record_stop (notify).
 // Uses SCStream with SCStreamOutput delegate writing to AVAssetWriter.
 // Recording state managed by actor-isolated RecordingManager.
-// Files written to /tmp/nb-screen-<timestamp>.mp4 (same cleanup pattern as capture).
+// Files written to <configuredDir>/nb-screen-<timestamp>.mp4 (default ~/Desktop, fallback /tmp).
 
 import MCP
 import ScreenCaptureKit
@@ -47,13 +47,17 @@ extension ScreenModule {
 
                 do {
                     let result = try await RecordingManager.shared.start(safetyCap: cap)
-                    return .object([
+                    var response: [String: Value] = [
                         "status":          .string("recording"),
                         "filePath":        .string(result.path),
                         "width":           .int(result.width),
                         "height":          .int(result.height),
                         "safetyCapSeconds": .int(Int(cap))
-                    ])
+                    ]
+                    if result.isFallback {
+                        response["warning"] = .string("Configured output directory is invalid or not writable — fell back to /tmp")
+                    }
+                    return .object(response)
                 } catch let error as RecordingError {
                     return error.toResponse()
                 } catch {
@@ -194,7 +198,7 @@ private actor RecordingManager {
     var isRecording: Bool { recording != nil }
 
     /// Start a new screen recording. Returns (filePath, width, height).
-    func start(safetyCap: TimeInterval) async throws -> (path: String, width: Int, height: Int) {
+    func start(safetyCap: TimeInterval) async throws -> (path: String, width: Int, height: Int, isFallback: Bool) {
         guard recording == nil else {
             throw RecordingError.recordingAlreadyActive
         }
@@ -212,9 +216,10 @@ private actor RecordingManager {
         let width = display.width
         let height = display.height
 
-        // Output file (same /tmp/nb-screen-* pattern as captures)
+        // Output file (same nb-screen-* pattern as captures, uses configured directory)
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-        let outputPath = "/tmp/nb-screen-\(timestamp).mp4"
+        let resolved = ConfigManager.shared.resolvedScreenOutputDir()
+        let outputPath = "\(resolved.path)/nb-screen-\(timestamp).mp4"
         let outputURL = URL(fileURLWithPath: outputPath)
 
         // AVAssetWriter + H.264 video input
@@ -268,7 +273,7 @@ private actor RecordingManager {
             startTime: Date(), safetyTask: safetyTask
         )
 
-        return (path: outputPath, width: width, height: height)
+        return (path: outputPath, width: width, height: height, isFallback: resolved.isFallback)
     }
 
     /// Stop the active recording. Returns (filePath, durationSeconds, bytes).

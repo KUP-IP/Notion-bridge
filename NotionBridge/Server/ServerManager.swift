@@ -6,9 +6,9 @@
 // Updated by PKT-341: Version from Bundle (single source of truth), AuditLog simplified
 // V1-QUALITY-C2: Added onClientConnected callback for client identification.
 //   SSEServer and legacy RPC now extract clientInfo from initialize requests.
-// PKT-354: Added ScreenModule registration (screen_capture + screen_ocr). 32 tools across 8 modules.
-// PKT-356: Added AccessibilityModule (5 AX tools) + screen recording (2 tools). 39 tools across 9 modules.
-// PKT-356-hotfix: Added AppleScriptModule (1 tool) for in-process AppleScript — fixes TCC prompt storm. 40 tools across 10 modules.
+// PKT-354: Added ScreenModule registration (screen_capture + screen_ocr).
+// PKT-356: Added AccessibilityModule + screen recording tools.
+// PKT-356-hotfix: Added AppleScriptModule for in-process AppleScript — fixes TCC prompt storm.
 
 import Foundation
 import MCP
@@ -64,10 +64,10 @@ public actor ServerManager {
         self.securityGate = securityGate
         let auditLog = AuditLog()
         self.auditLog = auditLog
-        let router = ToolRouter(securityGate: securityGate, auditLog: auditLog, batchThreshold: 3)
+        let router = ToolRouter(securityGate: securityGate, auditLog: auditLog)
         self.router = router
 
-        // 2. Register modules — GoogleDriveModule added by PKT-368
+        // 2. Register modules
         await ShellModule.register(on: router)
         await FileModule.register(on: router)
         await SessionModule.register(on: router, auditLog: auditLog)
@@ -80,7 +80,6 @@ public actor ServerManager {
         await AppleScriptModule.register(on: router)
         await ChromeModule.register(on: router)
         await SkillsModule.register(on: router)
-        await GoogleDriveModule.register(on: router)
 
         // 3. Register echo tool (backward compatibility from V1-01)
         await router.register(ToolRegistration(

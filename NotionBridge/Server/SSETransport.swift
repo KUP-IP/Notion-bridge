@@ -642,7 +642,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         ctx.eventLoop.execute {
             var head = HTTPResponseHead(version: version, status: .ok)
             head.headers.add(name: "Content-Type", value: "application/json")
-            head.headers.add(name: "Access-Control-Allow-Origin", value: "*")
+            // PKT-373 P1-4: CORS wildcard removed
             head.headers.add(name: "Cache-Control", value: "no-cache")
             ctx.write(self.wrapOutboundOut(.head(head)), promise: nil)
 
@@ -724,11 +724,11 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     ) async {
         nonisolated(unsafe) let ctx = context
         ctx.eventLoop.execute {
-            var head = HTTPResponseHead(
+            let head = HTTPResponseHead(
                 version: version,
                 status: HTTPResponseStatus(statusCode: statusCode)
             )
-            head.headers.add(name: "Access-Control-Allow-Origin", value: "*")
+            // PKT-373 P1-4: CORS wildcard removed -- localhost-only server needs no cross-origin access
             ctx.write(self.wrapOutboundOut(.head(head)), promise: nil)
             ctx.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
         }
@@ -738,7 +738,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         nonisolated(unsafe) let ctx = context
         ctx.eventLoop.execute {
             var head = HTTPResponseHead(version: version, status: .noContent)
-            head.headers.add(name: "Access-Control-Allow-Origin", value: "*")
+            // PKT-373 P1-4: CORS wildcard removed -- localhost-only server needs no cross-origin access
             head.headers.add(name: "Access-Control-Allow-Methods", value: "GET, POST, OPTIONS")
             head.headers.add(name: "Access-Control-Allow-Headers", value: "Content-Type, Authorization, Mcp-Session-Id")
             head.headers.add(name: "Access-Control-Max-Age", value: "86400")

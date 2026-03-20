@@ -43,6 +43,35 @@ extension SettingsView {
                     restartApp(reopenSettings: true)
                 }
             }
+
+            // PKT-375: Configurable screen output directory
+            Section("Screen Output") {
+                LabeledContent("Save Location") {
+                    HStack(spacing: BridgeSpacing.xs) {
+                        Text(screenOutputDir)
+                            .font(.system(.caption, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        Button("Choose\u{2026}") {
+                            let panel = NSOpenPanel()
+                            panel.canChooseDirectories = true
+                            panel.canChooseFiles = false
+                            panel.allowsMultipleSelection = false
+                            panel.prompt = "Select"
+                            panel.message = "Choose where screen captures and recordings are saved."
+                            panel.directoryURL = URL(fileURLWithPath: screenOutputDir)
+                            if panel.runModal() == .OK, let url = panel.url {
+                                screenOutputDir = url.path
+                                ConfigManager.shared.screenOutputDir = url.path
+                            }
+                        }
+                    }
+                }
+                Text("Screen captures and recordings will be saved here instead of /tmp. Default: ~/Desktop")
+                    .font(.caption)
+                    .foregroundStyle(BridgeColors.secondary)
+            }
         }
         .formStyle(.grouped)
     }

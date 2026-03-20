@@ -179,4 +179,6 @@ public struct SettingsView: View {
 
     // MARK: - Skills state (must be in struct body)
     @State var skillsManager = SkillsManager()
+    // PKT-375: Screen output directory state
+    @State var screenOutputDir: String = ConfigManager.shared.screenOutputDir
 }

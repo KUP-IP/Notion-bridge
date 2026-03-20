@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-NotionBridge is a native macOS menu bar app (Swift 6, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes 40 tools across 10 modules via both stdio and SSE transports, routing every call through a security gate with an append-only audit log.
+NotionBridge is a native macOS menu bar app (Swift 6, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes 58 tools across 12 modules via both stdio and SSE transports, routing every call through a security gate with an append-only audit log.
 
 Bundle ID: `kup.solutions.notion-bridge` (legacy: `solutions.kup.keepr`)
 

@@ -132,7 +132,7 @@ public enum ChromeModule {
                     newTab = false
                 }
 
-                let escapedURL = url.replacingOccurrences(of: "\"", with: "\\\"")
+                let escapedURL = url.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
 
                 let script: String
                 if newTab {
@@ -220,7 +220,7 @@ public enum ChromeModule {
 
                 let selector: String
                 if case .string(let s) = args["selector"] {
-                    selector = s.replacingOccurrences(of: "'", with: "\\'")
+                    selector = s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
                 } else {
                     selector = ""
                 }
@@ -238,7 +238,7 @@ public enum ChromeModule {
                     : "document.querySelector('\(selector)')"
                 let js = "(\(jsElement) || {}).\\(prop) || ''"
 
-                let escapedJS = js.replacingOccurrences(of: "\"", with: "\\\"")
+                let escapedJS = js.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
 
                 let tabTarget: String
                 if let windowIdVal = args["windowId"],
@@ -316,7 +316,7 @@ public enum ChromeModule {
                     )
                 }
 
-                let escapedJS = javascript.replacingOccurrences(of: "\"", with: "\\\"")
+                let escapedJS = javascript.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
 
                 let tabTarget: String
                 if let windowIdVal = args["windowId"],
@@ -417,7 +417,7 @@ public enum ChromeModule {
                             return JSON.stringify({error: e.message});
                         }
                     })()
-                    """.replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: " ")
+                    """.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: " ")
 
                 let tabTarget: String
                 if let windowIdVal = args["windowId"],

@@ -168,6 +168,16 @@ public enum ShellModule {
                 }
 
                 let scriptPath = scriptsDir.appendingPathComponent(scriptName)
+
+                // PKT-373 P1-2: Path traversal prevention -- resolve to canonical path
+                let resolvedPath = scriptPath.standardizedFileURL.path
+                let resolvedDir = scriptsDir.standardizedFileURL.path
+                guard resolvedPath.hasPrefix(resolvedDir + "/") || resolvedPath == resolvedDir else {
+                    return .object([
+                        "error": .string("Path traversal blocked: resolved path is outside scripts directory")
+                    ])
+                }
+
                 guard FileManager.default.fileExists(atPath: scriptPath.path) else {
                     return .object([
                         "error": .string("Script file not found: \(scriptPath.path)")
@@ -195,10 +205,26 @@ public enum ShellModule {
                 process.standardError = stderrPipe
 
                 try process.run()
-                process.waitUntilExit()
 
+                // PKT-373 P1-3: Timeout enforcement (default 30s, matching shell_exec)
+                let scriptTimeout: Int = {
+                    if case .int(let t) = args["timeout"] { return max(1, t) }
+                    return 30
+                }()
+                let timeoutItem = DispatchWorkItem {
+                    if process.isRunning { process.terminate() }
+                }
+                DispatchQueue.global().asyncAfter(
+                    deadline: .now() + .seconds(scriptTimeout),
+                    execute: timeoutItem
+                )
+
+                // PKT-373 P0-3: Read pipes BEFORE waitUntilExit to prevent deadlock
                 let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
                 let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+
+                process.waitUntilExit()
+                timeoutItem.cancel()
                 let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
                 let stderr = String(data: stderrData, encoding: .utf8) ?? ""
 

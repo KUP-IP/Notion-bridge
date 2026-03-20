@@ -12,7 +12,7 @@
 //   - ImageIO: CGImageDestination for PNG/JPEG encoding (Sendable-safe)
 //   - CoreGraphics: CGPreflightScreenCaptureAccess for TCC detection
 //
-// Capture files: /tmp/nb-screen-<timestamp>.<ext>
+// Capture files: <configuredDir>/nb-screen-<timestamp>.<ext> (default ~/Desktop, fallback /tmp)
 // Cleanup: On each screen_capture call, delete files >1hr old, cap at 20.
 
 import MCP
@@ -34,7 +34,8 @@ public enum ScreenModule {
     /// Deletes nb-screen-* files older than 1 hour, then caps at 20 remaining.
     /// Failures are logged but never block the capture operation.
     private static func cleanupCaptureFiles() {
-        let tmpDir = "/tmp"
+        let resolved = ConfigManager.shared.resolvedScreenOutputDir()
+        let tmpDir = resolved.path
         let prefix = "nb-screen-"
         let oneHourAgo = Date().addingTimeInterval(-3600)
         let fm = FileManager.default
@@ -244,25 +245,34 @@ public enum ScreenModule {
                 // Encode to file
                 let ext = format == "jpg" ? "jpg" : "png"
                 let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-                let filePath = "/tmp/nb-screen-\(timestamp).\(ext)"
+                let resolved = ConfigManager.shared.resolvedScreenOutputDir()
+                let filePath = "\(resolved.path)/nb-screen-\(timestamp).\(ext)"
 
                 do {
                     try writeImage(cgImage, format: format, to: filePath)
                 } catch let error as ScreenModuleError {
+                    // PKT-373 P2-2: Clean up partial file on failure
+                    try? FileManager.default.removeItem(atPath: filePath)
                     return error.toResponse()
                 } catch {
+                    // PKT-373 P2-2: Clean up partial file on failure
+                    try? FileManager.default.removeItem(atPath: filePath)
                     return ScreenModuleError.captureFailed("Failed to write image to \(filePath): \(error.localizedDescription)").toResponse()
                 }
 
                 let fileSize = (try? FileManager.default.attributesOfItem(atPath: filePath)[.size] as? Int) ?? 0
 
-                return .object([
+                var response: [String: Value] = [
                     "filePath": .string(filePath),
                     "width": .int(cgImage.width),
                     "height": .int(cgImage.height),
                     "bytes": .int(fileSize),
                     "format": .string(format)
-                ])
+                ]
+                if resolved.isFallback {
+                    response["warning"] = .string("Configured output directory is invalid or not writable — fell back to /tmp")
+                }
+                return .object(response)
             }
         ))
 

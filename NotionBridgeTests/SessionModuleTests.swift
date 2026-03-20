@@ -12,7 +12,7 @@ func runSessionModuleTests() async {
 
     let gate = SecurityGate()
     let log = AuditLog()
-    let router = ToolRouter(securityGate: gate, auditLog: log, batchThreshold: 50)
+    let router = ToolRouter(securityGate: gate, auditLog: log)
     await SessionModule.register(on: router, auditLog: log)
 
     // Registration

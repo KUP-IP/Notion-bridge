@@ -13,7 +13,7 @@ func runShellModuleTests() async {
     // Set up a fresh router with SecurityGate + AuditLog
     let gate = SecurityGate()
     let log = AuditLog()
-    let router = ToolRouter(securityGate: gate, auditLog: log, batchThreshold: 10)
+    let router = ToolRouter(securityGate: gate, auditLog: log)
     await ShellModule.register(on: router)
 
     // Verify registration
@@ -179,4 +179,35 @@ func runShellModuleTests() async {
         let shellExec = tools.first(where: { $0.name == "shell_exec" })!
         try expect(shellExec.tier == .notify, "shell_exec must be orange tier")
     }
+
+    // P2-3: Path traversal prevention in run_script (PKT-373)
+    await test("run_script rejects path traversal attempts") {
+        let result = try await router.dispatch(
+            toolName: "run_script",
+            arguments: .object(["scriptName": .string("../../etc/passwd")])
+        )
+        if case .object(let dict) = result,
+           case .string(let error) = dict["error"] {
+            try expect(error.contains("outside") || error.contains("traversal") || error.contains("not on the approved list") || error.contains("does not exist") || error.contains("Invalid"),
+                       "Expected path traversal rejection, got: \(error)")
+        } else {
+            throw TestError.assertion("Expected error object for path traversal attempt")
+        }
+    }
+
+    // P2-3: run_script rejects absolute path injection (PKT-373)
+    await test("run_script rejects absolute path in scriptName") {
+        let result = try await router.dispatch(
+            toolName: "run_script",
+            arguments: .object(["scriptName": .string("/etc/passwd")])
+        )
+        if case .object(let dict) = result,
+           case .string(let error) = dict["error"] {
+            try expect(error.contains("outside") || error.contains("not on the approved list") || error.contains("does not exist") || error.contains("Invalid") || error.contains("absolute"),
+                       "Expected rejection for absolute path, got: \(error)")
+        } else {
+            throw TestError.assertion("Expected error object for absolute path attempt")
+        }
+    }
+
 }

@@ -21,6 +21,9 @@ public final class ConfigManager: @unchecked Sendable {
         "~/Library/Keychains"
     ]
 
+    /// Default screen output directory (PKT-375).
+    public static let defaultScreenOutputDir = "~/Desktop"
+
     private let configURL: URL
     private let queue = DispatchQueue(label: "com.notionbridge.config", attributes: .concurrent)
 
@@ -142,32 +145,6 @@ public final class ConfigManager: @unchecked Sendable {
         }
     }
 
-    // MARK: - Google Drive Token (V3-QUALITY A4)
-
-    /// Read/write the Google Drive OAuth2 token from config.json.
-    public var googleDriveToken: String? {
-        get {
-            queue.sync {
-                let config = readConfig()
-                return config["google_drive_token"] as? String
-            }
-        }
-        set {
-            queue.sync(flags: .barrier) {
-                var config = readConfig()
-                if let value = newValue {
-                    config["google_drive_token"] = value
-                } else {
-                    config.removeValue(forKey: "google_drive_token")
-                }
-                do {
-                    try writeConfig(config)
-                } catch {
-                    print("[ConfigManager] ⚠️ Failed to write googleDriveToken: \(error.localizedDescription)")
-                }
-            }
-        }
-    }
 
     // MARK: - Notion Connections (V3-QUALITY A4)
 
@@ -227,6 +204,45 @@ public final class ConfigManager: @unchecked Sendable {
     }
 
 
+    // MARK: - Screen Output Directory (PKT-375)
+
+    /// Read/write the screen output directory from config.json.
+    /// Falls back to ~/Desktop if key is missing.
+    /// Path with ~ is expanded to absolute path at read time.
+    public var screenOutputDir: String {
+        get {
+            queue.sync {
+                let config = readConfig()
+                let raw = config["screenOutputDir"] as? String ?? Self.defaultScreenOutputDir
+                return NSString(string: raw).expandingTildeInPath
+            }
+        }
+        set {
+            queue.sync(flags: .barrier) {
+                var config = readConfig()
+                config["screenOutputDir"] = newValue
+                do {
+                    try writeConfig(config)
+                } catch {
+                    print("[ConfigManager] ⚠️ Failed to write screenOutputDir: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// Validate that the screen output directory exists and is writable.
+    /// Returns the configured path if valid, otherwise falls back to /tmp.
+    public func resolvedScreenOutputDir() -> (path: String, isFallback: Bool) {
+        let dir = screenOutputDir
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        if fm.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue, fm.isWritableFile(atPath: dir) {
+            return (path: dir, isFallback: false)
+        }
+        print("[ConfigManager] ⚠️ screenOutputDir '\(dir)' is invalid or not writable — falling back to /tmp")
+        return (path: "/tmp", isFallback: true)
+    }
+
     // MARK: - Keychain Migration (V3-QUALITY B4)
 
     /// Migrate tokens from config.json to Keychain on first launch.
@@ -240,11 +256,5 @@ public final class ConfigManager: @unchecked Sendable {
             print("[ConfigManager] Migrated notion_api_token to Keychain")
         }
 
-        // Migrate Google Drive token
-        if let token = googleDriveToken, !token.isEmpty,
-           !KeychainManager.shared.exists(key: KeychainManager.Key.googleDriveToken) {
-            KeychainManager.shared.save(key: KeychainManager.Key.googleDriveToken, value: token)
-            print("[ConfigManager] Migrated google_drive_token to Keychain")
-        }
     }
 }

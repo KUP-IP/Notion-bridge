@@ -116,7 +116,6 @@ public final class KeychainManager: Sendable {
     /// Well-known key constants for token storage.
     public enum Key {
         public static let notionAPIToken = "notion_api_token"
-        public static let googleDriveToken = "google_drive_token"
     }
 
     /// List all keys stored under this service.

@@ -167,7 +167,7 @@ print("\n\u{1F500} ToolRouter Tests")
 
 let routerGate = SecurityGate()
 let routerLog = AuditLog()
-let router = ToolRouter(securityGate: routerGate, auditLog: routerLog, batchThreshold: 3)
+let router = ToolRouter(securityGate: routerGate, auditLog: routerLog)
 
 await test("Tool registration stores and retrieves tools") {
     await router.register(ToolRegistration(
@@ -261,31 +261,7 @@ await test("Dispatch returns handoff for nuclear commands") {
     }
 }
 
-await test("Batch gate triggers at threshold") {
-    let plan = [
-        ExecutionPlanEntry(toolName: "a", tier: .open, inputSummary: ""),
-        ExecutionPlanEntry(toolName: "b", tier: .open, inputSummary: ""),
-        ExecutionPlanEntry(toolName: "c", tier: .open, inputSummary: ""),
-    ]
-    let result = await router.batchGate(planned: plan)
-    try expect(result != nil, "Batch gate should trigger at threshold")
-    try expect(result?.count == 3)
-}
-
-await test("Batch gate does not trigger below threshold") {
-    let plan = [
-        ExecutionPlanEntry(toolName: "a", tier: .open, inputSummary: ""),
-        ExecutionPlanEntry(toolName: "b", tier: .open, inputSummary: ""),
-    ]
-    let result = await router.batchGate(planned: plan)
-    try expect(result == nil, "Batch gate should not trigger below threshold")
-}
-
-await test("Batch threshold is configurable") {
-    let customRouter = ToolRouter(securityGate: routerGate, auditLog: routerLog, batchThreshold: 5)
-    let threshold = await customRouter.batchThreshold
-    try expect(threshold == 5, "Expected threshold 5")
-}
+// PKT-373 P1-5: batchGate tests removed (dead code removed)
 
 // ============================================================
 // MARK: - AuditLog Tests
@@ -405,7 +381,6 @@ await runScreenModuleTests()
 await runAppleScriptModuleTests()
 await runBuiltinModuleTests()
 await runConfigManagerTests()
-await runGoogleDriveModuleTests()
 await runChromeModuleTests()
 await runSkillsModuleTests()
 

@@ -20,14 +20,12 @@ struct ConnectionItem: Identifiable {
 
     enum ConnectionType: String, CaseIterable, Identifiable {
         case notion = "Notion"
-        case googleDrive = "Google Drive"
 
         var id: String { rawValue }
 
         var icon: String {
             switch self {
             case .notion:      return "doc.text"
-            case .googleDrive: return "externaldrive"
             }
         }
     }
@@ -321,18 +319,6 @@ public struct ConnectionsManagementView: View {
             print("[ConnectionsManagement] Failed to load Notion connections: \(error)")
         }
 
-        // Check Google Drive connection
-        let gdriveHealth = await ConnectionHealthChecker.shared.checkGoogleDriveHealth()
-        let gdriveToken = GoogleDriveTokenResolver.isConfigured
-        items.append(ConnectionItem(
-            id: "gdrive:default",
-            name: "Google Drive",
-            type: .googleDrive,
-            isPrimary: false,
-            maskedToken: gdriveToken ? "configured" : "not set",
-            health: gdriveHealth
-        ))
-
         connections = items
         isLoading = false
     }
@@ -347,9 +333,6 @@ public struct ConnectionsManagementView: View {
             } catch {
                 print("[ConnectionsManagement] Remove failed: \(error)")
             }
-        } else if conn.type == .googleDrive {
-            // Remove Google Drive token from config.json
-            removeGDriveToken()
         }
         await ConnectionHealthChecker.shared.invalidateAll()
         await loadConnections()
@@ -385,15 +368,11 @@ public struct ConnectionsManagementView: View {
         }
     }
 
-    /// V3-QUALITY A3: Delegates to ConfigManager (eliminates direct config.json manipulation).
-    private func removeGDriveToken() {
-        ConfigManager.shared.googleDriveToken = nil
-    }
 }
 
 // MARK: - Add Connection Sheet (D2)
 
-/// Guided form for adding a new Notion workspace or Google Drive connection.
+/// Guided form for adding a new Notion workspace connection.
 struct AddConnectionSheet: View {
     @Environment(\.dismiss) private var dismiss
     let onComplete: () -> Void
@@ -487,8 +466,6 @@ struct AddConnectionSheet: View {
                     token: token,
                     primary: makePrimary
                 )
-            } else {
-                try saveGDriveToken(token)
             }
             await ConnectionHealthChecker.shared.invalidateAll()
             onComplete()
@@ -500,9 +477,4 @@ struct AddConnectionSheet: View {
         isSaving = false
     }
 
-    /// V3-QUALITY A3+B5: Saves to ConfigManager + Keychain (dual write).
-    private func saveGDriveToken(_ token: String) throws {
-        ConfigManager.shared.googleDriveToken = token
-        KeychainManager.shared.save(key: KeychainManager.Key.googleDriveToken, value: token)
-    }
 }

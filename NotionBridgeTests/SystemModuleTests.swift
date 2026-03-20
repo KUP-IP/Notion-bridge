@@ -12,7 +12,7 @@ func runSystemModuleTests() async {
 
     let gate = SecurityGate()
     let log = AuditLog()
-    let router = ToolRouter(securityGate: gate, auditLog: log, batchThreshold: 10)
+    let router = ToolRouter(securityGate: gate, auditLog: log)
     await SystemModule.register(on: router)
 
     // Registration tests

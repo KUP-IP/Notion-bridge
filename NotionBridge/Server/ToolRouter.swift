@@ -33,18 +33,7 @@ public struct ToolRegistration: Sendable {
     }
 }
 
-/// A single entry in a batch execution plan.
-public struct ExecutionPlanEntry: Sendable {
-    public let toolName: String
-    public let tier: SecurityTier
-    public let inputSummary: String
-
-    public init(toolName: String, tier: SecurityTier, inputSummary: String) {
-        self.toolName = toolName
-        self.tier = tier
-        self.inputSummary = inputSummary
-    }
-}
+// PKT-373 P1-5: ExecutionPlanEntry removed (was dead code)
 
 // MARK: - ToolRouter Actor
 
@@ -53,16 +42,12 @@ public actor ToolRouter {
     private var registry: [String: ToolRegistration] = [:]
     private let securityGate: SecurityGate
     private let auditLog: AuditLog
-    public var batchThreshold: Int
-
     public init(
         securityGate: SecurityGate,
-        auditLog: AuditLog,
-        batchThreshold: Int = 3
+        auditLog: AuditLog
     ) {
         self.securityGate = securityGate
         self.auditLog = auditLog
-        self.batchThreshold = batchThreshold
     }
 
     // MARK: Registration
@@ -197,16 +182,7 @@ public actor ToolRouter {
         }
     }
 
-    // MARK: Batch Gate
-
-    /// Evaluate whether a set of planned calls exceeds the batch threshold.
-    /// Returns an execution plan if the threshold is met or exceeded.
-    public func batchGate(planned: [ExecutionPlanEntry]) -> [ExecutionPlanEntry]? {
-        if planned.count >= batchThreshold {
-            return planned
-        }
-        return nil
-    }
+    // PKT-373 P1-5: batchGate removed (was dead code, never wired into dispatch pipeline)
 
     // MARK: CallTool Dispatch Helper
 

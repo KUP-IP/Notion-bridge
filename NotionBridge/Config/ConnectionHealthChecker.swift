@@ -94,50 +94,12 @@ public actor ConnectionHealthChecker {
         }
     }
 
-    // MARK: - Google Drive Connection Health
-
-    /// Check health of the Google Drive connection.
-    /// Fast path: just checks if a token is configured (no network call).
-    /// Deep check: attempts to list 1 file to validate the token.
-    public func checkGoogleDriveHealth(deep: Bool = false) async -> ConnectionHealth {
-        let key = "gdrive:default"
-        if let cached = cache[key],
-           Date().timeIntervalSince(cached.timestamp) < cacheDuration {
-            return cached.health
-        }
-
-        guard GoogleDriveTokenResolver.isConfigured else {
-            let health = ConnectionHealth.unconfigured
-            cache[key] = (health, Date())
-            return health
-        }
-
-        if !deep {
-            // Fast: token exists, assume healthy until proven otherwise
-            let health = ConnectionHealth.healthy
-            cache[key] = (health, Date())
-            return health
-        }
-
-        // Deep check: attempt an API call
-        do {
-            let _ = try await GoogleDriveClient.shared.listFiles(pageSize: 1)
-            let health = ConnectionHealth.healthy
-            cache[key] = (health, Date())
-            return health
-        } catch {
-            let health = ConnectionHealth.error
-            cache[key] = (health, Date())
-            return health
-        }
-    }
 
     // MARK: - Cache Management
 
     /// Invalidate cached health for a specific connection.
     public func invalidate(connectionName: String) {
         cache.removeValue(forKey: "notion:\(connectionName)")
-        cache.removeValue(forKey: "gdrive:\(connectionName)")
     }
 
     /// Invalidate all cached health statuses.

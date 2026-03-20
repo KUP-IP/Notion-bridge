@@ -15,7 +15,7 @@ func runBuiltinModuleTests() async {
 
     let gate = SecurityGate()
     let log = AuditLog()
-    let router = ToolRouter(securityGate: gate, auditLog: log, batchThreshold: 10)
+    let router = ToolRouter(securityGate: gate, auditLog: log)
 
     // Register echo exactly as ServerManager does
     await router.register(ToolRegistration(
