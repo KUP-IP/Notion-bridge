@@ -288,6 +288,13 @@ extension SettingsView {
         )
     }
 
+
+    // MARK: - Credentials (PKT-372)
+
+    var credentialsSection: some View {
+        CredentialsView()
+    }
+
     // MARK: - Advanced
 
     var advancedSection: some View {
