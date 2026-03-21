@@ -236,8 +236,8 @@ public final class PermissionManager {
     }
 
     /// Check all TCC grants including async automation probes.
-    /// V1-PATCH-003: Now async — automation probes run on background thread
-    /// to prevent main-thread blocking that caused Dock connection severing.
+    /// V1-PATCH-003: Now async — automation probes run on a background queue
+    /// with timeout guard to prevent main-thread blocking.
     /// Call on popover open and periodically to detect re-grant needs.
     /// Note: Notifications check is NOT included here.
     /// Use recheckAllForTruth() or checkNotifications() for notification status.
@@ -442,7 +442,8 @@ public final class PermissionManager {
     /// and Messages. Now probes all targets in `automationTargets`, including
     /// Chrome and Contacts. This fixes the bug where Chrome Apple Events
     /// were silently denied because no probe ever triggered the TCC prompt.
-    /// V1-PATCH-003: Now async — probes run via Task.detached on background thread.
+    /// V1-PATCH-003: Now async — probes run via NSAppleScript on a background
+    /// DispatchQueue with timeout guard.
     public func checkAutomation() async {
         var results: [String: Bool] = [:]
         for target in Self.automationTargets {
