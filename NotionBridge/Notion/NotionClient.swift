@@ -471,7 +471,15 @@ public actor NotionClient {
     /// PATCH /v1/pages/{id}/markdown
     public func updatePageMarkdown(pageId: String, markdown: String) async throws -> Data {
         let cleanId = pageId.replacingOccurrences(of: "-", with: "")
-        let body: [String: Any] = ["type": "replace_content", "replace_content": ["new_str": markdown]]
+        let body: [String: Any] = [
+            "type": "page_content",
+            "page_content": [
+                "type": "markdown",
+                "markdown": [
+                    "content": markdown
+                ]
+            ]
+        ]
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await request(method: "PATCH", path: "/pages/\(cleanId)/markdown", body: bodyData)
         guard (200...299).contains(response.statusCode) else {
@@ -559,8 +567,7 @@ public actor NotionClient {
     public func uploadFile(fileName: String, fileData: Data, contentType: String = "application/octet-stream") async throws -> Data {
         // Phase 1: Create the file upload object (JSON metadata only)
         let createBody: [String: Any] = [
-            "mode": "single_part",
-            "filename": fileName,
+            "file_name": fileName,
             "content_type": contentType
         ]
         let createData = try JSONSerialization.data(withJSONObject: createBody)
@@ -587,7 +594,7 @@ public actor NotionClient {
 
         let (data, response) = try await request(
             method: "POST",
-            path: "/file_uploads/\(uploadId)/send",
+            path: "/file_uploads/\(uploadId)/send_content",
             body: bodyData,
             contentType: "multipart/form-data; boundary=\(boundary)"
         )

@@ -15,9 +15,6 @@
 
 import Foundation
 import MCP
-import ScreenCaptureKit
-import ImageIO
-import UniformTypeIdentifiers
 
 // MARK: - ChromeModule
 
@@ -354,7 +351,7 @@ public enum ChromeModule {
             name: "chrome_screenshot_tab",
             module: moduleName,
             tier: .open,
-            description: "Capture the visible content of a Chrome tab. Uses ScreenCaptureKit to capture the Chrome window as a PNG. When windowId and tabIndex are provided, activates that tab first. Returns the file path and dimensions.",
+            description: "Capture the visible content of a Chrome tab as a PNG. Uses AppleScript for Chrome window bounds and macOS screencapture for the region. When windowId and tabIndex are provided, activates that tab first. Returns the file path and dimensions.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -377,11 +374,7 @@ public enum ChromeModule {
                     args = [:]
                 }
 
-                // Use ScreenCaptureKit to capture Chrome window (proven pattern from ScreenModule)
-                guard CGPreflightScreenCaptureAccess() else {
-                    return .object(["error": .string("Screen Recording permission not granted. Grant access in System Settings > Privacy & Security > Screen Recording.")])
-                }
-
+                let targetBoundsExpression: String
                 if let windowIdVal = args["windowId"],
                    let tabIndexVal = args["tabIndex"],
                    case .int(let windowId) = windowIdVal,
@@ -399,65 +392,79 @@ public enum ChromeModule {
                             "errorNumber": .int(activateTabResult.errorNumber ?? -1)
                         ])
                     }
-                    _ = executeAppleScript("tell application \"Google Chrome\" to activate")
-                    try await Task.sleep(nanoseconds: 300_000_000)
-                }
-
-                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-
-                // Find Chrome windows
-                let chromeWindows = content.windows.filter {
-                    $0.owningApplication?.bundleIdentifier == "com.google.Chrome"
-                }
-
-                guard !chromeWindows.isEmpty else {
-                    return .object(["error": .string("No Chrome windows found on screen")])
-                }
-
-                // Select target window
-                let targetWindow: SCWindow
-                if let windowIdVal = args["windowId"],
-                   case .int(let windowId) = windowIdVal {
-                    // Chrome AppleScript window IDs map to CGWindowIDs
-                    if let w = chromeWindows.first(where: { Int($0.windowID) == windowId }) {
-                        targetWindow = w
-                    } else {
-                        // Fallback to front Chrome window
-                        targetWindow = chromeWindows[0]
-                    }
+                    targetBoundsExpression = "bounds of (first window whose id is \(windowId))"
                 } else {
-                    targetWindow = chromeWindows[0]
+                    targetBoundsExpression = "bounds of front window"
                 }
 
-                // Capture using ScreenCaptureKit
-                let filter = SCContentFilter(desktopIndependentWindow: targetWindow)
-                let config = SCStreamConfiguration()
-                config.width = Int(targetWindow.frame.width) * 2
-                config.height = Int(targetWindow.frame.height) * 2
-                config.scalesToFit = false
+                let boundsScript = """
+                    tell application "Google Chrome"
+                        set b to \(targetBoundsExpression)
+                        return (item 1 of b as string) & "," & (item 2 of b as string) & "," & (item 3 of b as string) & "," & (item 4 of b as string)
+                    end tell
+                """
+                let boundsResult = executeAppleScript(boundsScript)
+                if let error = boundsResult.error {
+                    return .object([
+                        "error": .string(error),
+                        "errorNumber": .int(boundsResult.errorNumber ?? -1)
+                    ])
+                }
 
-                let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+                let boundsParts = (boundsResult.value ?? "")
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                guard boundsParts.count == 4,
+                      let x1 = Int(boundsParts[0]),
+                      let y1 = Int(boundsParts[1]),
+                      let x2 = Int(boundsParts[2]),
+                      let y2 = Int(boundsParts[3]) else {
+                    return .object([
+                        "error": .string("Failed to parse Chrome window bounds")
+                    ])
+                }
 
-                // Save PNG to temp directory
+                let width = x2 - x1
+                let height = y2 - y1
+                guard width > 0, height > 0 else {
+                    return .object([
+                        "error": .string("Invalid Chrome window bounds")
+                    ])
+                }
+
+                _ = executeAppleScript("tell application \"Google Chrome\" to activate")
+                try await Task.sleep(nanoseconds: 300_000_000)
+
                 let tempDir = FileManager.default.temporaryDirectory
                 let filename = "chrome_screenshot_\(Int(Date().timeIntervalSince1970)).png"
-                let filePath = tempDir.appendingPathComponent(filename)
+                let filePath = tempDir.appendingPathComponent(filename).path
 
-                let url = filePath as CFURL
-                guard let destination = CGImageDestinationCreateWithURL(url, UTType.png.identifier as CFString, 1, nil) else {
-                    return .object(["error": .string("Failed to create image destination")])
-                }
-                CGImageDestinationAddImage(destination, cgImage, nil)
-                guard CGImageDestinationFinalize(destination) else {
-                    return .object(["error": .string("Failed to encode PNG")])
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                process.arguments = ["-R", "\(x1),\(y1),\(width),\(height)", "-x", filePath]
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                } catch {
+                    return .object([
+                        "error": .string("Failed to run screencapture: \(error.localizedDescription)")
+                    ])
                 }
 
-                let fileSize = (try? FileManager.default.attributesOfItem(atPath: filePath.path))?[.size] as? Int ?? 0
+                guard process.terminationStatus == 0 else {
+                    return .object([
+                        "error": .string("screencapture exited with status \(process.terminationStatus)")
+                    ])
+                }
+
+                let attributes = try? FileManager.default.attributesOfItem(atPath: filePath)
+                let fileSize = (attributes?[.size] as? NSNumber)?.intValue ?? 0
 
                 return .object([
-                    "path": .string(filePath.path),
-                    "width": .int(cgImage.width),
-                    "height": .int(cgImage.height),
+                    "path": .string(filePath),
+                    "width": .int(width),
+                    "height": .int(height),
                     "size": .int(fileSize)
                 ])
             }
