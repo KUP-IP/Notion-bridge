@@ -110,6 +110,8 @@ private enum RecordingError: Error {
     case recordingAlreadyActive
     case noActiveRecording
     case writerSetupFailed(String)
+    case noFramesCaptured
+    case finalizationFailed(String)
 
     func toResponse() -> Value {
         switch self {
@@ -138,6 +140,16 @@ private enum RecordingError: Error {
                 "error":   .string("writer_setup_failed"),
                 "message": .string("AVAssetWriter setup failed: \(detail)")
             ])
+        case .noFramesCaptured:
+            return .object([
+                "error":   .string("no_frames_captured"),
+                "message": .string("Recording stopped but no video frames were captured. The output file has been removed.")
+            ])
+        case .finalizationFailed(let detail):
+            return .object([
+                "error":   .string("finalization_failed"),
+                "message": .string("AVAssetWriter finalization failed: \(detail). The output file has been removed.")
+            ])
         }
     }
 }
@@ -145,12 +157,20 @@ private enum RecordingError: Error {
 // MARK: - Recording Delegate
 
 /// SCStreamOutput delegate that receives sample buffers and writes them to AVAssetWriter.
-/// Thread safety: uses NSLock for the session-start flag (delegate runs on a GCD queue).
+/// Thread safety: uses NSLock for the session-start flag and frame counter (delegate runs on a GCD queue).
 private class RecordingDelegate: NSObject, SCStreamOutput, @unchecked Sendable {
     let writerInput: AVAssetWriterInput
     let writer: AVAssetWriter
     private var sessionStarted = false
+    private var _framesWritten: Int = 0
     private let lock = NSLock()
+
+    /// Thread-safe count of frames successfully appended to the writer input.
+    var framesWritten: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _framesWritten
+    }
 
     init(writerInput: AVAssetWriterInput, writer: AVAssetWriter) {
         self.writerInput = writerInput
@@ -173,6 +193,10 @@ private class RecordingDelegate: NSObject, SCStreamOutput, @unchecked Sendable {
 
         guard writerInput.isReadyForMoreMediaData else { return }
         writerInput.append(sampleBuffer)
+
+        lock.lock()
+        _framesWritten += 1
+        lock.unlock()
     }
 }
 
@@ -260,10 +284,15 @@ private actor RecordingManager {
         // Safety cap: auto-stop after safetyCap seconds
         let safetyTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(safetyCap))
+            guard !Task.isCancelled else { return }
             guard let self else { return }
             if await self.isRecording {
-                _ = try? await self.stop()
-                print("[ScreenModule] Recording auto-stopped after \(Int(safetyCap))s safety cap")
+                do {
+                    _ = try await self.stop()
+                    print("[ScreenModule] Recording auto-stopped after \(Int(safetyCap))s safety cap")
+                } catch {
+                    print("[ScreenModule] Safety-cap auto-stop failed: \(error)")
+                }
             }
         }
 
@@ -284,10 +313,33 @@ private actor RecordingManager {
         recording = nil
         rec.safetyTask?.cancel()
 
-        // Stop capture, finalize writer
+        // Stop capture
         try await rec.stream.stopCapture()
+
+        // Zero-frame guard: if no frames were captured, clean up and throw
+        if rec.delegate.framesWritten == 0 {
+            rec.input.markAsFinished()
+            await rec.writer.finishWriting()
+            try? FileManager.default.removeItem(atPath: rec.outputPath)
+            throw RecordingError.noFramesCaptured
+        }
+
+        // Verify writer is still in writing state before finalization
+        guard rec.writer.status == .writing else {
+            let detail = rec.writer.error?.localizedDescription ?? "status=\(rec.writer.status.rawValue)"
+            try? FileManager.default.removeItem(atPath: rec.outputPath)
+            throw RecordingError.finalizationFailed("Writer not in writing state: \(detail)")
+        }
+
         rec.input.markAsFinished()
         await rec.writer.finishWriting()
+
+        // Verify finalization completed successfully (moov atom written)
+        guard rec.writer.status == .completed else {
+            let detail = rec.writer.error?.localizedDescription ?? "status=\(rec.writer.status.rawValue)"
+            try? FileManager.default.removeItem(atPath: rec.outputPath)
+            throw RecordingError.finalizationFailed(detail)
+        }
 
         let duration = Date().timeIntervalSince(rec.startTime)
         let attrs = try FileManager.default.attributesOfItem(atPath: rec.outputPath)
