@@ -58,7 +58,7 @@ struct CredentialsView: View {
 
                 HStack {
                     Button("Refresh") {
-                        Task { await loadCredentials() }
+                        loadCredentials()
                     }
                     .font(.caption)
 
@@ -75,7 +75,7 @@ struct CredentialsView: View {
         }
         .formStyle(.grouped)
         .task {
-            await loadCredentials()
+            loadCredentials()
         }
         .confirmationDialog(
             "Delete Credential?",
@@ -163,7 +163,7 @@ struct CredentialsView: View {
 
     // MARK: - Data Loading
 
-    private func loadCredentials() async {
+    private func loadCredentials() {
         isLoading = true
         errorMessage = nil
         do {
@@ -178,7 +178,7 @@ struct CredentialsView: View {
     private func deleteCredential(service: String, account: String) async {
         do {
             _ = try await manager.deleteCredential(service: service, account: account)
-            await loadCredentials()
+            loadCredentials()
         } catch {
             errorMessage = "Delete failed: \(error.localizedDescription)"
         }

@@ -367,6 +367,9 @@ await runChromeModuleTests()
 await runSkillsModuleTests()
 await runCredentialManagerTests()
 await runCredentialModuleTests()
+await runStripeClientTests()
+await runPaymentModuleTests()
+await runStripeTokenizationTests()
 
 
 // ============================================================

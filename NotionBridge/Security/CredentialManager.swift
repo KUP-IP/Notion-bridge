@@ -114,12 +114,18 @@ public final class CredentialManager: Sendable {
         Bundle.main.bundleURL.pathExtension == "app"
     }
 
+    /// Test-only escape hatch to exercise Stripe tokenization in the standalone
+    /// test executable (non-.app bundle) without touching Keychain writes.
+    private var shouldTokenizeCardsInNonAppTests: Bool {
+        UserDefaults.standard.bool(forKey: "com.notionbridge.tests.enableStripeTokenizationOutsideApp")
+    }
+
     // MARK: - Biometric Gate
 
     /// Evaluate LAContext biometric on the write path (save/delete).
     /// Bounded MainActor hop — explicitly scoped, not open-ended blocking.
     /// Falls back to device passcode if biometric is unavailable.
-    private func requireBiometric(reason: String) async throws {
+    public func requireBiometric(reason: String) async throws {
         // Skip biometric in non-app context (tests)
         guard isAppBundle else { return }
 
@@ -165,7 +171,8 @@ public final class CredentialManager: Sendable {
         metadata: CredentialMetadata = .empty,
         syncToiCloud: Bool = false
     ) async throws -> CredentialEntry {
-        guard isAppBundle else {
+        let runTokenizationOnly = !isAppBundle && type == .card && shouldTokenizeCardsInNonAppTests
+        guard isAppBundle || runTokenizationOnly else {
             return CredentialEntry(
                 service: service, account: account, type: type,
                 metadata: metadata, password: nil,
@@ -174,7 +181,9 @@ public final class CredentialManager: Sendable {
         }
 
         // Biometric gate (write path)
-        try await requireBiometric(reason: "Save credential for \(service)")
+        if isAppBundle {
+            try await requireBiometric(reason: "Save credential for \(service)")
+        }
 
         var finalPassword = password
         var finalMetadata = metadata
@@ -191,6 +200,15 @@ public final class CredentialManager: Sendable {
             finalMetadata.stripePm = tokenResult.pmToken
             finalMetadata.last4 = tokenResult.last4
             finalMetadata.brand = tokenResult.brand
+        }
+
+        // In standalone tests, stop after tokenization to avoid keychain writes.
+        guard isAppBundle else {
+            return CredentialEntry(
+                service: service, account: account, type: type,
+                metadata: finalMetadata, password: nil,
+                createdAt: Date(), modifiedAt: Date()
+            )
         }
 
         // Encode metadata to JSON
@@ -395,8 +413,13 @@ public final class CredentialManager: Sendable {
         expYear: Int,
         brand: String?
     ) async throws -> StripeTokenResult {
-        guard let apiKey = KeychainManager.shared.read(key: "STRIPE_API_KEY") else {
-            throw CredentialError.stripeKeyMissing
+        let keychainKey = KeychainManager.shared.read(key: "STRIPE_API_KEY")
+        let testFallbackKey: String? = {
+            guard !isAppBundle else { return nil }
+            return UserDefaults.standard.string(forKey: "com.notionbridge.tests.stripeApiKey")
+        }()
+        guard let apiKey = keychainKey ?? testFallbackKey, !apiKey.isEmpty else {
+            throw StripeError.authenticationFailed
         }
 
         let url = URL(string: "https://api.stripe.com/v1/payment_methods")!
@@ -418,24 +441,25 @@ public final class CredentialManager: Sendable {
 
         request.httpBody = body.data(using: .utf8)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw CredentialError.stripeTokenizationFailed("Invalid response")
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch {
+            throw StripeError.networkError(error)
         }
 
-        guard httpResponse.statusCode == 200 else {
-            let errorBody = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw CredentialError.stripeTokenizationFailed(
-                "HTTP \(httpResponse.statusCode): \(errorBody)"
-            )
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw StripeError.invalidResponse
+        }
+
+        guard (200...299).contains(httpResponse.statusCode) else {
+            throw StripeClient.parseStripeError(statusCode: httpResponse.statusCode, data: data)
         }
 
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let pmId = json["id"] as? String else {
-            throw CredentialError.stripeTokenizationFailed(
-                "Missing payment method ID in response"
-            )
+            throw StripeError.invalidResponse
         }
 
         // Extract card details from Stripe response

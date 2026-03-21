@@ -12,6 +12,7 @@ public struct ToolRegistration: Sendable {
     public let name: String
     public let module: String
     public let tier: SecurityTier
+    public let neverAutoApprove: Bool
     public let description: String
     public let inputSchema: Value
     public let handler: @Sendable (Value) async throws -> Value
@@ -20,6 +21,7 @@ public struct ToolRegistration: Sendable {
         name: String,
         module: String,
         tier: SecurityTier,
+        neverAutoApprove: Bool = false,
         description: String,
         inputSchema: Value,
         handler: @escaping @Sendable (Value) async throws -> Value
@@ -27,6 +29,7 @@ public struct ToolRegistration: Sendable {
         self.name = name
         self.module = module
         self.tier = tier
+        self.neverAutoApprove = neverAutoApprove
         self.description = description
         self.inputSchema = inputSchema
         self.handler = handler
@@ -89,14 +92,14 @@ public actor ToolRouter {
         let overrides = UserDefaults.standard.dictionary(
             forKey: "com.notionbridge.tierOverrides"
         ) as? [String: String] ?? [:]
-        let effectiveTier = overrides[toolName].flatMap {
-            SecurityTier(rawValue: $0)
-        } ?? tool.tier
+        let overriddenTier = overrides[toolName].flatMap { SecurityTier(rawValue: $0) } ?? tool.tier
+        let effectiveTier: SecurityTier = tool.neverAutoApprove ? .request : overriddenTier
 
         // SecurityGate enforcement (async for request-tier approvals)
         let decision = await securityGate.enforce(
             toolName: toolName,
             tier: effectiveTier,
+            neverAutoApprove: tool.neverAutoApprove,
             arguments: arguments
         )
 
