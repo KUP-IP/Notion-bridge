@@ -56,6 +56,7 @@ public struct DashboardView: View {
     }
 
     /// Query all TCC permission states (F12).
+    @MainActor
     private func refreshPermissions() {
         accessibilityGranted = AXIsProcessTrusted()
         screenRecordingGranted = CGPreflightScreenCaptureAccess()
