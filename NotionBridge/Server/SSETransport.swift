@@ -128,7 +128,7 @@ public actor SSEServer {
 
     public init(
         host: String = "127.0.0.1",
-        port: Int = 9700,
+        port: Int = BridgeConstants.defaultSSEPort,
         router: ToolRouter,
         onToolCall: @escaping @MainActor @Sendable () -> Void,
         onClientConnected: @escaping @MainActor @Sendable (String, String) -> Void = { _, _ in },
@@ -404,7 +404,7 @@ public actor SSEServer {
 
             let legacyVersion = AppVersion.resolved
             return buildRPCResponse(id: requestId, result: [
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": BridgeConstants.mcpProtocolVersion,
                 "capabilities": ["tools": [:] as [String: Any]] as [String: Any],
                 "serverInfo": ["name": "NotionBridge", "version": legacyVersion] as [String: Any]
             ] as [String: Any])

@@ -83,16 +83,22 @@ public struct SettingsView: View {
     @State var tokenError: String?
     @State var tokenSaveSuccess = false
     @State var showResetConfirmation = false
+    @State var showFactoryResetConfirmation = false
     @State var isRecheckingPermissions = false
     @State var permissionActionMessage: String?
+    @State var launchAtLoginError: String?
+    @State var isApplyingLaunchAtLoginChange = false
+    @State var ssePortInput = String(ConfigManager.shared.ssePort)
+    @State var ssePortError: String?
+    @State var factoryResetMessage: String?
     @State var showTCCResetDialog = false
     // PKT-362 D5: Post-reset guided instruction sheet
     @State var showPostResetSheet = false
 
     enum SettingsSection: String, CaseIterable, Identifiable {
         case general = "General"
-        case permissions = "Permissions"
         case connections = "Connections"
+        case permissions = "Permissions"
         case tools = "Tools"
         case skills = "Skills"
         case advanced = "Advanced"
@@ -132,8 +138,8 @@ public struct SettingsView: View {
     private var detailContent: some View {
         switch selectedSection {
         case .general: generalSection
-        case .permissions: permissionsSection
         case .connections: connectionsSection
+        case .permissions: permissionsSection
         case .tools: toolsSection
         case .skills: skillsSection
         case .advanced: advancedSection
@@ -143,13 +149,13 @@ public struct SettingsView: View {
     // MARK: - Shared Properties
 
     var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.2.0"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? AppVersion.marketing
     }
 
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false
 
     var ssePort: Int {
-        Int(ProcessInfo.processInfo.environment["NOTION_BRIDGE_PORT"] ?? "") ?? 9700
+        ConfigManager.shared.ssePort
     }
 
     var maskedTokenLabel: String {

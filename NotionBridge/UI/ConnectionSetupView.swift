@@ -16,9 +16,9 @@ public enum TunnelProvider: String, CaseIterable, Identifiable {
 
     var displayDescription: String {
         switch self {
-        case .cloudflare: return "Recommended · Free · Auto-reconnecting"
-        case .tailscale: return "Private network · Requires account"
-        case .manual: return "Enter tunnel URL manually"
+        case .cloudflare: return "Easiest setup for a public HTTPS URL"
+        case .tailscale: return "Private network URL for your own devices/team"
+        case .manual: return "Paste a URL from another tunnel provider"
         }
     }
 
@@ -41,9 +41,9 @@ public struct ConnectionSetupView: View {
     @AppStorage("tunnelURL") private var tunnelURL: String = ""
     @State private var isExpanded: Bool = false
 
-    /// SSE port, read from NOTION_BRIDGE_PORT env var (default 9700).
+    /// SSE port resolution: config.json -> env var -> default.
     private var ssePort: Int {
-        Int(ProcessInfo.processInfo.environment["NOTION_BRIDGE_PORT"] ?? "") ?? 9700
+        ConfigManager.shared.ssePort
     }
 
     public init() {}
@@ -66,7 +66,7 @@ public struct ConnectionSetupView: View {
             Circle()
                 .fill(tunnelURL.isEmpty ? .orange : .green)
                 .frame(width: 8, height: 8)
-            Text("Connection")
+            Text("Remote Access")
                 .font(.callout)
             Spacer()
             Text(tunnelURL.isEmpty ? "Not configured" : activeProvider.rawValue)
@@ -89,6 +89,10 @@ public struct ConnectionSetupView: View {
 
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Text("A tunnel gives Notion Agents a secure URL to reach your local Notion Bridge server when they are not running on your Mac.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             // Local endpoint info
             HStack(spacing: 6) {
                 Image(systemName: "server.rack")
@@ -124,15 +128,19 @@ public struct ConnectionSetupView: View {
 
             // Help text
             if activeProvider == .cloudflare {
-                Text(verbatim: "Run: cloudflared tunnel --url http://localhost:\(ssePort)")
+                Text(verbatim: "Run in Terminal: cloudflared tunnel --url http://localhost:\(ssePort)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)
             } else if activeProvider == .tailscale {
-                Text("Run: tailscale funnel \(ssePort)")
+                Text("Run in Terminal: tailscale funnel \(ssePort)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)
+            } else {
+                Text("Paste your tunnel URL here. It should forward to localhost:\(ssePort).")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
         }
         .padding(.top, 4)

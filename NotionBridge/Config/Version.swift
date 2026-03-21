@@ -11,7 +11,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "1.1.4"
+    public static let marketing = "1.1.6"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -24,4 +24,13 @@ public enum AppVersion {
     public static var resolved: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? marketing
     }
+}
+
+/// Shared constants used across UI + transport layers.
+public enum BridgeConstants {
+    /// Current MCP protocol version advertised by Notion Bridge.
+    public static let mcpProtocolVersion = "2024-11-05"
+
+    /// Default local SSE/MCP port when no override is provided.
+    public static let defaultSSEPort = 9700
 }

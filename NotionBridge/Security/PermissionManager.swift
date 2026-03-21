@@ -59,6 +59,21 @@ public final class PermissionManager {
             allCases.filter { $0 != .contacts }
         }
 
+        /// Grants surfaced during onboarding.
+        /// Only include permissions users can actively grant from this flow.
+        public static var onboardingCases: [Grant] {
+            v1Cases.filter(\.isActionableInOnboarding)
+        }
+
+        public var isActionableInOnboarding: Bool {
+            switch self {
+            case .contacts:
+                return false
+            default:
+                return true
+            }
+        }
+
         public var displayName: String {
             switch self {
             case .accessibility: return "Accessibility"

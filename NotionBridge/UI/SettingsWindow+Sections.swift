@@ -28,14 +28,29 @@ extension SettingsView {
             Section("Startup") {
                 Toggle("Launch at login", isOn: $launchAtLogin)
                     .onChange(of: launchAtLogin) { _, enabled in
+                        guard !isApplyingLaunchAtLoginChange else { return }
+                        launchAtLoginError = nil
                         let service = SMAppService.mainApp
-                        if enabled {
-                            try? service.unregister() // remove stale entries first
-                            try? service.register()
-                        } else {
-                            try? service.unregister()
+                        do {
+                            if enabled {
+                                try service.unregister() // remove stale entries first
+                                try service.register()
+                            } else {
+                                try service.unregister()
+                            }
+                        } catch {
+                            launchAtLoginError = "Could not update launch-at-login: \(error.localizedDescription)"
+                            isApplyingLaunchAtLoginChange = true
+                            launchAtLogin.toggle()
+                            isApplyingLaunchAtLoginChange = false
                         }
                     }
+
+                if let launchAtLoginError {
+                    Text(launchAtLoginError)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             Section("App Control") {
@@ -76,6 +91,7 @@ extension SettingsView {
         .formStyle(.grouped)
         .onAppear {
             refreshLearnedAllowPrefixes()
+            ssePortInput = String(ssePort)
         }
     }
 
@@ -170,11 +186,9 @@ extension SettingsView {
                 }
             }
 
-            Section("Workspace Connections") {
+            Section("Workspace Connections & Notion API") {
                 ConnectionsManagementView()
-            }
 
-                        Section("Notion API") {
                 if isEditingToken {
                     SecureField("Paste new token", text: $newTokenValue)
                         .textFieldStyle(.roundedBorder)
@@ -206,7 +220,7 @@ extension SettingsView {
                     }
                 } else {
                     HStack {
-                        LabeledContent("Token", value: maskedTokenLabel)
+                        LabeledContent("Primary Token", value: maskedTokenLabel)
                         Button {
                             isEditingToken = true
                             tokenSaveSuccess = false
@@ -294,33 +308,32 @@ extension SettingsView {
         Form {
             Section("Version") {
                 LabeledContent("App Version", value: "v\(appVersion)")
-                LabeledContent("MCP Protocol", value: "v2024-11-05")
+                LabeledContent("MCP Protocol", value: "v\(BridgeConstants.mcpProtocolVersion)")
                 LabeledContent("Build Target", value: buildTargetString)
             }
 
-            Section("App Identity") {
-                LabeledContent("Bundle ID", value: Bundle.main.bundleIdentifier ?? "unknown")
-                LabeledContent("App Path") {
-                    Text(Bundle.main.bundleURL.path)
-                        .font(.system(.caption, design: .monospaced))
-                        .lineLimit(2)
+            Section("Network") {
+                HStack(spacing: BridgeSpacing.xs) {
+                    Text("SSE Port")
+                    Spacer()
+                    TextField("9700", text: $ssePortInput)
+                        .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
-                        .textSelection(.enabled)
+                        .frame(width: 100)
+                    Button("Save") {
+                        saveSSEPort()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                 }
-                LabeledContent("Executable") {
-                    Text(Bundle.main.executableURL?.path ?? "unknown")
-                        .font(.system(.caption2, design: .monospaced))
-                        .lineLimit(2)
-                        .multilineTextAlignment(.trailing)
-                        .textSelection(.enabled)
+                Text("Applied on next app restart. Port resolution order: config.json → NOTION_BRIDGE_PORT → \(BridgeConstants.defaultSSEPort).")
+                    .font(.caption2)
+                    .foregroundStyle(BridgeColors.muted)
+                if let ssePortError {
+                    Text(ssePortError)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
                 }
-            }
-
-            Section("Security Model") {
-                LabeledContent("Model", value: "3-Tier (Open / Notify / Request)")
-                Text("Open executes immediately, Notify executes and alerts, Request asks approval before running. Notification actions support Allow, Deny, and Always Allow.")
-                    .font(.caption)
-                    .foregroundStyle(BridgeColors.secondary)
             }
 
             Section("Learned Command Allows") {
@@ -355,7 +368,15 @@ extension SettingsView {
                 }
             }
 
-            Section("Logging") {
+            Section("Paths") {
+                LabeledContent("Config File") {
+                    Text(ConfigManager.shared.configFileURL.path)
+                        .font(.system(.caption2, design: .monospaced))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                        .textSelection(.enabled)
+                }
+
                 LabeledContent("Log Directory") {
                     Button {
                         let logPath = NSString("~/Library/Logs/NotionBridge").expandingTildeInPath
@@ -367,12 +388,13 @@ extension SettingsView {
                     }
                     .buttonStyle(.plain)
                 }
-            }
-
-            Section("Nuclear Handoff") {
-                Text("Fork-bomb command patterns are never executed directly. The exact terminal command is returned for manual execution.")
-                    .font(.caption)
-                    .foregroundStyle(BridgeColors.secondary)
+                LabeledContent("Screen Output") {
+                    Text(screenOutputDir)
+                        .font(.system(.caption2, design: .monospaced))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.trailing)
+                        .textSelection(.enabled)
+                }
             }
 
             Section("Maintenance") {
@@ -393,9 +415,35 @@ extension SettingsView {
                 } message: {
                     Text("This will restart the setup wizard. Your settings and data will not be affected.")
                 }
+
+                Button("Factory Reset", role: .destructive) {
+                    showFactoryResetConfirmation = true
+                }
+                .confirmationDialog(
+                    "Factory Reset Notion Bridge?",
+                    isPresented: $showFactoryResetConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Factory Reset", role: .destructive) {
+                        Task {
+                            let result = await performFactoryReset()
+                            factoryResetMessage = result.message
+                            showPostResetSheet = true
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This clears app preferences, removes config.json, deletes stored keychain tokens, and resets macOS permissions for Notion Bridge.")
+                }
+
+                if let factoryResetMessage {
+                    Text(factoryResetMessage)
+                        .font(.caption)
+                        .foregroundStyle(BridgeColors.secondary)
+                }
             }
 
-            Section("Diagnostics") {
+            Section("Support") {
                 Button("Export Diagnostics to Clipboard") {
                     exportDiagnostics()
                 }
@@ -431,6 +479,13 @@ extension SettingsView {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            ssePortInput = String(ssePort)
+            ssePortError = nil
+        }
+        .sheet(isPresented: $showPostResetSheet) {
+            PostResetSheet(permissionManager: permissionManager)
+        }
     }
 
     // MARK: - Token Management
@@ -454,6 +509,60 @@ extension SettingsView {
         }
     }
 
+    /// Persist SSE port to config.json (config -> env -> default fallback model).
+    func saveSSEPort() {
+        let trimmed = ssePortInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let port = Int(trimmed), (1...65535).contains(port) else {
+            ssePortError = "Port must be a number between 1 and 65535."
+            return
+        }
+        ConfigManager.shared.ssePort = port
+        ssePortInput = String(ConfigManager.shared.ssePort)
+        ssePortError = nil
+    }
+
+    /// Full local reset for pre-ship recovery/testing.
+    func performFactoryReset() async -> (message: String, didFail: Bool) {
+        var failures: [String] = []
+
+        // 1) Clear app-scoped UserDefaults.
+        if let bundleID = Bundle.main.bundleIdentifier {
+            UserDefaults.standard.removePersistentDomain(forName: bundleID)
+        } else {
+            failures.append("user defaults")
+        }
+
+        // 2) Remove config file.
+        let configURL = ConfigManager.shared.configFileURL
+        if FileManager.default.fileExists(atPath: configURL.path) {
+            do {
+                try FileManager.default.removeItem(at: configURL)
+            } catch {
+                failures.append("config.json")
+            }
+        }
+
+        // 3) Remove all saved keychain items for Notion Bridge.
+        if !KeychainManager.shared.deleteAll() {
+            failures.append("keychain")
+        }
+
+        // 4) Reset TCC grants for current + legacy bundle IDs.
+        let tccReset = await resetTCCPermissions()
+        if tccReset.didFail {
+            failures.append("TCC")
+        }
+
+        await permissionManager.recheckAllForTruth()
+        NotificationCenter.default.post(name: .notionTokenDidChange, object: nil)
+        UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
+
+        if failures.isEmpty {
+            return ("Factory reset complete. Restart Notion Bridge, then re-grant permissions.", false)
+        }
+        return ("Factory reset finished with issues: \(failures.joined(separator: ", ")).", true)
+    }
+
     // MARK: - Diagnostics
 
     func exportDiagnostics() {
@@ -461,7 +570,7 @@ extension SettingsView {
             "Notion Bridge Diagnostics",
             "========================",
             "App Version: v\(appVersion)",
-            "MCP Protocol: v2024-11-05",
+            "MCP Protocol: v\(BridgeConstants.mcpProtocolVersion)",
             "Build Target: \(buildTargetString)",
             "Port: \(ssePort)",
             "Server Running: \(statusBar.isServerRunning)",

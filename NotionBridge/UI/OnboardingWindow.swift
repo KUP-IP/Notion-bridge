@@ -75,9 +75,13 @@ struct OnboardingView: View {
     let permissionManager: PermissionManager
     let onComplete: () -> Void
 
+    private let permissionsRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     @State private var currentStep: OnboardingStep = .welcome
     @State private var healthCheckStatus: HealthCheckStatus = .idle
     @State private var showLegacySSE: Bool = false
+    @State private var isRefreshingPermissions: Bool = false
+    @State private var previousPermissionStatuses: [PermissionManager.Grant: PermissionManager.GrantStatus] = [:]
+    @State private var recentlyGrantedPermissions: Set<PermissionManager.Grant> = []
 
     enum OnboardingStep: Int, CaseIterable {
         case welcome = 0
@@ -89,8 +93,12 @@ struct OnboardingView: View {
     enum HealthCheckStatus {
         case idle
         case checking
-        case success
+        case success(milliseconds: Int)
         case failed(String)
+    }
+
+    private var ssePort: Int {
+        ConfigManager.shared.ssePort
     }
 
     var body: some View {
@@ -125,6 +133,21 @@ struct OnboardingView: View {
                 .padding(.bottom, 24)
         }
         .frame(width: 520, height: 480)
+        .task {
+            await permissionManager.checkAllAsync()
+            await MainActor.run {
+                capturePermissionTransitions()
+            }
+        }
+        .onChange(of: currentStep) { _, newStep in
+            if newStep == .permissions {
+                refreshPermissionStatus()
+            }
+        }
+        .onReceive(permissionsRefreshTimer) { _ in
+            guard currentStep == .permissions else { return }
+            refreshPermissionStatus()
+        }
     }
 
     // MARK: - Progress Bar
@@ -142,6 +165,7 @@ struct OnboardingView: View {
     // MARK: - Welcome Step (PKT-357: F6, F7, F8)
 
     private var welcomeStep: some View {
+        let isReturningUser = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
         VStack(spacing: 16) {
             // PKT-357 F7: Larger brand icon for visual impact
             Image(systemName: "bridge.fill")
@@ -149,13 +173,16 @@ struct OnboardingView: View {
                 .foregroundStyle(.purple)
 
             // PKT-357 F6: Explicit opacity to prevent animation fade-in
-            Text("Welcome to Notion Bridge")
+            Text(isReturningUser ? "Welcome back to Notion Bridge" : "Welcome to Notion Bridge")
                 .font(.title)
                 .fontWeight(.semibold)
                 .opacity(1)
 
-            // PKT-357 F8: Power language — direct, confident, concise
-            Text("Your Mac, fully connected to Notion AI. Manage files, execute commands, control apps, and automate workflows through a secure local MCP server. Every action requires your explicit permission.")
+            Text(
+                isReturningUser
+                ? "Your local bridge to Notion Agents is ready. Recheck permissions, confirm your connection, and continue where you left off."
+                : "Your Mac, fully connected to Notion Agents. Manage files, execute commands, control apps, and automate workflows through a secure local MCP server. Every action requires your explicit permission."
+            )
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -179,17 +206,27 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: .infinity)
 
+            if isRefreshingPermissions {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Checking permissions…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+
             // PKT-357 F10: Always show ALL grants, not just the first missing one
             VStack(spacing: 8) {
-                ForEach(PermissionManager.Grant.v1Cases) { grant in
+                ForEach(PermissionManager.Grant.onboardingCases) { grant in
                     onboardingPermissionRow(grant: grant)
                 }
             }
             .padding(.top, 8)
 
             Button("Refresh Status") {
-                // V1-PATCH-003: checkAll() is now async (automation probes off main thread)
-                Task { await permissionManager.checkAllAsync() }
+                refreshPermissionStatus()
             }
             .buttonStyle(.plain)
             .font(.caption)
@@ -200,10 +237,13 @@ struct OnboardingView: View {
     }
 
     private func onboardingPermissionRow(grant: PermissionManager.Grant) -> some View {
+        let status = permissionManager.status(for: grant)
         HStack(spacing: 12) {
             Circle()
-                .fill(permissionManager.status(for: grant) == .granted ? .green : .orange)
+                .fill(status == .granted ? .green : .orange)
                 .frame(width: 10, height: 10)
+                .scaleEffect(isRefreshingPermissions && status != .granted ? 1.12 : 1.0)
+                .animation(.easeInOut(duration: 0.45), value: isRefreshingPermissions)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(grant.displayName)
@@ -215,9 +255,15 @@ struct OnboardingView: View {
 
             Spacer()
 
-            if permissionManager.status(for: grant) == .granted {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+            if status == .granted {
+                if recentlyGrantedPermissions.contains(grant) {
+                    Text("\u{2713} Granted")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                } else {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
             } else {
                 Button("Allow") {
                     openSystemSettings(for: grant)
@@ -248,20 +294,16 @@ struct OnboardingView: View {
             _ = permissionManager.requestAccessibilityAccess()
             Task {
                 try? await Task.sleep(nanoseconds: 300_000_000)
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
-                }
                 await permissionManager.recheckAllForTruth()
+                await MainActor.run { capturePermissionTransitions() }
             }
             return
         case .screenRecording:
             _ = permissionManager.requestScreenRecordingAccess()
             Task {
                 try? await Task.sleep(nanoseconds: 300_000_000)
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                    NSWorkspace.shared.open(url)
-                }
                 await permissionManager.recheckAllForTruth()
+                await MainActor.run { capturePermissionTransitions() }
             }
             return
         case .fullDiskAccess:
@@ -276,6 +318,7 @@ struct OnboardingView: View {
                     NSWorkspace.shared.open(url)
                 }
                 await permissionManager.recheckAllForTruth()
+                await MainActor.run { capturePermissionTransitions() }
             }
             return
         case .notifications:
@@ -290,6 +333,7 @@ struct OnboardingView: View {
                     }
                 }
                 await permissionManager.recheckAllForTruth()
+                await MainActor.run { capturePermissionTransitions() }
             }
             return
         case .contacts:
@@ -302,6 +346,7 @@ struct OnboardingView: View {
                     NSWorkspace.shared.open(url)
                 }
                 await permissionManager.recheckAllForTruth()
+                await MainActor.run { capturePermissionTransitions() }
             }
             return
         }
@@ -310,6 +355,7 @@ struct OnboardingView: View {
         }
         Task {
             await permissionManager.recheckAllForTruth()
+            await MainActor.run { capturePermissionTransitions() }
         }
     }
 
@@ -337,7 +383,7 @@ struct OnboardingView: View {
                     {
                       "mcpServers": {
                         "notion-bridge": {
-                          "url": "http://localhost:9700/mcp"
+                              "url": "http://localhost:\(ssePort)/mcp"
                         }
                       }
                     }
@@ -355,7 +401,7 @@ struct OnboardingView: View {
                         {
                           "mcpServers": {
                             "notion-bridge": {
-                              "url": "http://localhost:9700/sse"
+                              "url": "http://localhost:\(ssePort)/sse"
                             }
                           }
                         }
@@ -464,8 +510,8 @@ struct OnboardingView: View {
                     Text("Checking health endpoint...")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                case .success:
-                    Text("Notion Bridge is running and responding! You\u{2019}re all set.")
+                case .success(let milliseconds):
+                    Text("Connected \u{2014} \(milliseconds)ms")
                         .font(.caption)
                         .foregroundStyle(.green)
                 case .failed(let reason):
@@ -503,7 +549,7 @@ struct OnboardingView: View {
         switch healthCheckStatus {
         case .idle: return "Test Connection"
         case .checking: return "Checking..."
-        case .success: return "Connected \u{2713}"
+        case .success(let milliseconds): return "Connected \u{2014} \(milliseconds)ms"
         case .failed: return "Retry"
         }
     }
@@ -512,7 +558,8 @@ struct OnboardingView: View {
         healthCheckStatus = .checking
         Task {
             do {
-                let url = URL(string: "http://localhost:9700/health")!
+                let start = Date()
+                let url = URL(string: "http://localhost:\(ssePort)/health")!
                 let (data, response) = try await URLSession.shared.data(from: url)
                 guard let httpResponse = response as? HTTPURLResponse,
                       httpResponse.statusCode == 200 else {
@@ -522,13 +569,45 @@ struct OnboardingView: View {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let status = json["status"] as? String,
                    status == "running" {
-                    healthCheckStatus = .success
+                    let latencyMs = max(1, Int(Date().timeIntervalSince(start) * 1000))
+                    healthCheckStatus = .success(milliseconds: latencyMs)
                 } else {
                     healthCheckStatus = .failed("Unexpected response format")
                 }
             } catch {
                 healthCheckStatus = .failed("Could not reach server \u{2014} is it running?")
             }
+        }
+    }
+
+    private func refreshPermissionStatus() {
+        guard !isRefreshingPermissions else { return }
+        isRefreshingPermissions = true
+        Task {
+            await permissionManager.checkAllAsync()
+            await MainActor.run {
+                capturePermissionTransitions()
+                isRefreshingPermissions = false
+            }
+        }
+    }
+
+    @MainActor
+    private func capturePermissionTransitions() {
+        for grant in PermissionManager.Grant.onboardingCases {
+            let current = permissionManager.status(for: grant)
+            if let previous = previousPermissionStatuses[grant],
+               previous == .denied,
+               current == .granted {
+                recentlyGrantedPermissions.insert(grant)
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    await MainActor.run {
+                        recentlyGrantedPermissions.remove(grant)
+                    }
+                }
+            }
+            previousPermissionStatuses[grant] = current
         }
     }
 

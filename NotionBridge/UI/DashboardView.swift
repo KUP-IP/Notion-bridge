@@ -26,7 +26,7 @@ public struct DashboardView: View {
 
     /// Version from Bundle (single source of truth — Info.plist)
     private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.0.0"
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? AppVersion.marketing
     }
 
     // MARK: - TCC Permission States (F12)
@@ -177,7 +177,7 @@ public struct DashboardView: View {
     private func permissionRow(_ name: String, granted: Bool) -> some View {
         HStack(spacing: BridgeSpacing.xs) {
             Circle()
-                .fill(granted ? BridgeColors.success : BridgeColors.error)
+                .fill(granted ? BridgeColors.success : .orange)
                 .frame(width: 8, height: 8)
             Text(name)
                 .font(.caption)
@@ -185,7 +185,7 @@ public struct DashboardView: View {
             Spacer()
             Text(granted ? "Granted" : "Not Granted")
                 .font(.caption)
-                .foregroundStyle(granted ? BridgeColors.success : BridgeColors.error)
+                .foregroundStyle(granted ? BridgeColors.success : .orange)
         }
     }
 
