@@ -57,9 +57,19 @@ public final class PermissionManager {
 
         public var id: String { rawValue }
 
-        /// V1 grants — all TCC permissions tracked in the production UI.
+        /// V1 grants used by current onboarding/settings surfaces.
         public static var v1Cases: [Grant] {
-            Array(allCases)
+            allCases
+        }
+
+        /// PKT-388 D1-1: Grants that can be prompted directly via API.
+        public var isAutoGrantable: Bool {
+            switch self {
+            case .contacts, .notifications, .automation:
+                return true
+            case .accessibility, .screenRecording, .fullDiskAccess:
+                return false
+            }
         }
 
         public var displayName: String {

@@ -267,3 +267,330 @@ public struct PermissionView: View {
         }
     }
 }
+
+// MARK: - Onboarding: Auto Permissions (PKT-388)
+
+private enum AutoGrantProgressState {
+    case pending
+    case prompting
+    case granted
+    case denied
+}
+
+struct AutoPermissionsStepView: View {
+    let permissionManager: PermissionManager
+    let onResolved: (() -> Void)?
+
+    @State private var isGrantingAll = false
+    @State private var progressState: [PermissionManager.Grant: AutoGrantProgressState] = [:]
+
+    init(permissionManager: PermissionManager, onResolved: (() -> Void)? = nil) {
+        self.permissionManager = permissionManager
+        self.onResolved = onResolved
+    }
+
+    private var autoGrants: [PermissionManager.Grant] {
+        PermissionManager.Grant.v1Cases.filter(\.isAutoGrantable)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Step 2: Auto Permissions")
+                .font(.title2)
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            Text("Use Grant All to trigger Contacts, Notifications, and Automation prompts. Each permission resolves to Granted or Denied.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+
+            VStack(spacing: 10) {
+                ForEach(autoGrants) { grant in
+                    autoPermissionRow(for: grant)
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button(isGrantingAll ? "Granting…" : "Grant All") {
+                    Task { await runGrantAllSequentially() }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.purple)
+                .disabled(isGrantingAll)
+
+                Button("Re-check Status") {
+                    Task {
+                        await permissionManager.recheckAllForTruth()
+                        syncProgressFromManager()
+                        notifyResolvedIfNeeded()
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isGrantingAll)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .task {
+            await permissionManager.recheckAllForTruth()
+            syncProgressFromManager()
+            notifyResolvedIfNeeded()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task {
+                await permissionManager.recheckAllForTruth()
+                syncProgressFromManager()
+                notifyResolvedIfNeeded()
+            }
+        }
+    }
+
+    private func autoPermissionRow(for grant: PermissionManager.Grant) -> some View {
+        let state = uiState(for: grant)
+        let status = permissionManager.status(for: grant)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(color(for: state))
+                    .frame(width: 9, height: 9)
+
+                Text(grant.displayName)
+                    .font(.callout)
+
+                Spacer()
+
+                Text(label(for: state, status: status))
+                    .font(.caption)
+                    .foregroundStyle(color(for: state))
+            }
+
+            Text(permissionManager.remediation(for: grant))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if needsRemediation(status: status) {
+                Button("Open \(grant.displayName) Settings") {
+                    openSettings(for: grant)
+                }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.blue)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: state)
+    }
+
+    private func uiState(for grant: PermissionManager.Grant) -> AutoGrantProgressState {
+        if let inFlightState = progressState[grant], inFlightState == .prompting {
+            return inFlightState
+        }
+        return baselineState(for: grant)
+    }
+
+    private func baselineState(for grant: PermissionManager.Grant) -> AutoGrantProgressState {
+        switch permissionManager.status(for: grant) {
+        case .granted:
+            return .granted
+        case .denied, .partiallyGranted, .restartRecommended:
+            return .denied
+        case .unknown:
+            return .pending
+        }
+    }
+
+    private func syncProgressFromManager() {
+        for grant in autoGrants {
+            progressState[grant] = baselineState(for: grant)
+        }
+    }
+
+    private func notifyResolvedIfNeeded() {
+        guard autoGrants.allSatisfy({ permissionManager.status(for: $0).isAutoResolved }) else {
+            return
+        }
+        onResolved?()
+    }
+
+    private func runGrantAllSequentially() async {
+        guard !isGrantingAll else { return }
+        isGrantingAll = true
+        defer { isGrantingAll = false }
+
+        await permissionManager.recheckAllForTruth()
+
+        for grant in autoGrants {
+            if permissionManager.status(for: grant).isAutoResolved {
+                progressState[grant] = baselineState(for: grant)
+                continue
+            }
+
+            withAnimation {
+                progressState[grant] = .prompting
+            }
+
+            switch grant {
+            case .contacts:
+                _ = await permissionManager.requestContactsAccess()
+            case .notifications:
+                _ = await permissionManager.requestNotificationAccess()
+            case .automation:
+                await permissionManager.requestAutomationAccess()
+            default:
+                break
+            }
+
+            await permissionManager.recheckAllForTruth()
+            withAnimation {
+                progressState[grant] = baselineState(for: grant)
+            }
+            try? await Task.sleep(nanoseconds: 120_000_000)
+        }
+
+        syncProgressFromManager()
+        notifyResolvedIfNeeded()
+    }
+
+    private func color(for state: AutoGrantProgressState) -> Color {
+        switch state {
+        case .pending: return .orange
+        case .prompting: return .yellow
+        case .granted: return .green
+        case .denied: return .red
+        }
+    }
+
+    private func label(for state: AutoGrantProgressState, status: PermissionManager.GrantStatus) -> String {
+        switch state {
+        case .pending: return "Pending"
+        case .prompting: return "Prompting…"
+        case .granted: return "Granted"
+        case .denied:
+            if status == .partiallyGranted {
+                return "Denied (Partial)"
+            }
+            return "Denied"
+        }
+    }
+
+    private func needsRemediation(status: PermissionManager.GrantStatus) -> Bool {
+        switch status {
+        case .denied, .partiallyGranted:
+            return true
+        case .granted, .unknown, .restartRecommended:
+            return false
+        }
+    }
+
+    private func openSettings(for grant: PermissionManager.Grant) {
+        guard let url = grant.systemSettingsURL else { return }
+        NSWorkspace.shared.open(url)
+    }
+}
+
+// MARK: - Onboarding: Manual Permissions (PKT-388)
+
+struct ManualPermissionsStepView: View {
+    let permissionManager: PermissionManager
+
+    private var manualGrants: [PermissionManager.Grant] {
+        PermissionManager.Grant.v1Cases.filter { !$0.isAutoGrantable }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Step 3: Manual Permissions")
+                .font(.title2)
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            Text("These permissions must be enabled manually in System Settings. Use each deep link, grant access, then return and re-check.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+
+            VStack(spacing: 10) {
+                ForEach(manualGrants) { grant in
+                    manualPermissionRow(for: grant)
+                }
+            }
+
+            Button("Re-check Status") {
+                Task { await permissionManager.recheckAllForTruth() }
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .task {
+            await permissionManager.recheckAllForTruth()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await permissionManager.recheckAllForTruth() }
+        }
+    }
+
+    private func manualPermissionRow(for grant: PermissionManager.Grant) -> some View {
+        let status = permissionManager.status(for: grant)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 10) {
+                Circle()
+                    .fill(statusColor(status))
+                    .frame(width: 9, height: 9)
+
+                Text(grant.displayName)
+                    .font(.callout)
+
+                Spacer()
+
+                Text(permissionManager.statusLabel(for: grant))
+                    .font(.caption)
+                    .foregroundStyle(status == .granted ? .green : .orange)
+            }
+
+            Text(manualInstruction(for: grant))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Button("Open \(grant.displayName) Settings") {
+                guard let url = grant.systemSettingsURL else { return }
+                NSWorkspace.shared.open(url)
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundStyle(.blue)
+        }
+    }
+
+    private func statusColor(_ status: PermissionManager.GrantStatus) -> Color {
+        switch status {
+        case .granted: return .green
+        case .denied: return .red
+        case .unknown, .partiallyGranted, .restartRecommended: return .orange
+        }
+    }
+
+    private func manualInstruction(for grant: PermissionManager.Grant) -> String {
+        switch grant {
+        case .accessibility:
+            return "System Settings > Privacy & Security > Accessibility: enable Notion Bridge."
+        case .screenRecording:
+            return "System Settings > Privacy & Security > Screen Recording: enable Notion Bridge."
+        case .fullDiskAccess:
+            return "System Settings > Privacy & Security > Full Disk Access: enable Notion Bridge."
+        case .automation, .notifications, .contacts:
+            return permissionManager.remediation(for: grant)
+        }
+    }
+}
+
+private extension PermissionManager.GrantStatus {
+    var isAutoResolved: Bool {
+        switch self {
+        case .granted, .denied, .partiallyGranted:
+            return true
+        case .unknown, .restartRecommended:
+            return false
+        }
+    }
+}
