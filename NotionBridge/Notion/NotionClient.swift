@@ -471,7 +471,7 @@ public actor NotionClient {
     /// PATCH /v1/pages/{id}/markdown
     public func updatePageMarkdown(pageId: String, markdown: String) async throws -> Data {
         let cleanId = pageId.replacingOccurrences(of: "-", with: "")
-        let body: [String: Any] = ["type": "markdown", "markdown": markdown]
+        let body: [String: Any] = ["type": "replace_content", "replace_content": ["new_str": markdown]]
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await request(method: "PATCH", path: "/pages/\(cleanId)/markdown", body: bodyData)
         guard (200...299).contains(response.statusCode) else {
