@@ -394,10 +394,10 @@ public actor NotionClient {
         return data
     }
 
-    /// A4: Query a data source (database).
-    /// POST /v1/databases/{id}/query
-    public func queryDatabase(databaseId: String, filter: Data? = nil, sorts: Data? = nil, pageSize: Int = 100, startCursor: String? = nil) async throws -> Data {
-        let cleanId = databaseId.replacingOccurrences(of: "-", with: "")
+    /// A4: Query a data source.
+    /// POST /v1/data_sources/{id}/query
+    public func queryDataSource(dataSourceId: String, filter: Data? = nil, sorts: Data? = nil, pageSize: Int = 100, startCursor: String? = nil) async throws -> Data {
+        let cleanId = dataSourceId.replacingOccurrences(of: "-", with: "")
         var body: [String: Any] = ["page_size": pageSize]
 
         if let filterData = filter,
@@ -413,7 +413,7 @@ public actor NotionClient {
         }
 
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await request(method: "POST", path: "/databases/\(cleanId)/query", body: bodyData)
+        let (data, response) = try await request(method: "POST", path: "/data_sources/\(cleanId)/query", body: bodyData)
         guard (200...299).contains(response.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? ""
             throw NotionClientError.httpError(response.statusCode, msg)

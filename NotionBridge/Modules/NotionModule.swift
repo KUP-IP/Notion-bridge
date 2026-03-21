@@ -290,23 +290,23 @@ public enum NotionModule {
             name: "notion_query",
             module: moduleName,
             tier: .open,
-            description: "Query a Notion database with optional filter and sort. Returns matching pages.",
+            description: "Query a Notion data source with optional filter and sort. Returns matching pages.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "databaseId": .object(["type": .string("string"), "description": .string("Database ID to query")]),
+                    "dataSourceId": .object(["type": .string("string"), "description": .string("Data source ID to query")]),
                     "filter": .object(["type": .string("string"), "description": .string("Optional JSON string of filter object")]),
                     "sorts": .object(["type": .string("string"), "description": .string("Optional JSON string of sorts array")]),
                     "pageSize": .object(["type": .string("integer"), "description": .string("Max results (default: 100)")]),
                     "startCursor": .object(["type": .string("string"), "description": .string("Pagination cursor from previous query")]),
                     "workspace": workspaceParam
                 ]),
-                "required": .array([.string("databaseId")])
+                "required": .array([.string("dataSourceId")])
             ]),
             handler: { arguments in
                 guard case .object(let args) = arguments,
-                      case .string(let dbId) = args["databaseId"] else {
-                    throw ToolRouterError.invalidArguments(toolName: "notion_query", reason: "missing 'databaseId'")
+                      case .string(let dsId) = args["dataSourceId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_query", reason: "missing 'dataSourceId'")
                 }
 
                 let pageSize: Int = { if case .int(let ps) = args["pageSize"] { return min(ps, 100) }; return 100 }()
@@ -318,8 +318,8 @@ public enum NotionModule {
                 if case .string(let s) = args["sorts"] { sortsData = s.data(using: .utf8) }
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                let data = try await client.queryDatabase(
-                    databaseId: dbId,
+                let data = try await client.queryDataSource(
+                    dataSourceId: dsId,
                     filter: filterData,
                     sorts: sortsData,
                     pageSize: pageSize,
