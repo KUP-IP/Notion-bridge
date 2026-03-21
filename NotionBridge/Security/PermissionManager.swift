@@ -54,9 +54,9 @@ public final class PermissionManager {
 
         public var id: String { rawValue }
 
-        /// V1 grants — Contacts is deferred to expansion (no V1 tool uses it)
+        /// V1 grants — all TCC permissions tracked in the production UI.
         public static var v1Cases: [Grant] {
-            allCases.filter { $0 != .contacts }
+            Array(allCases)
         }
 
         public var displayName: String {
