@@ -858,7 +858,7 @@ private final class NotionRegistryHolder: @unchecked Sendable {
     private var registry: NotionClientRegistry?
     private let lock = NSLock()
 
-    private func ensureRegistry() throws -> NotionClientRegistry {
+    private func ensureRegistry() -> NotionClientRegistry {
         lock.lock()
         defer { lock.unlock() }
 
@@ -866,18 +866,18 @@ private final class NotionRegistryHolder: @unchecked Sendable {
             return existing
         }
 
-        let newRegistry = try NotionClientRegistry()
+        let newRegistry = NotionClientRegistry()
         registry = newRegistry
         return newRegistry
     }
 
     func getClient(workspace: String?) async throws -> NotionClient {
-        let reg = try ensureRegistry()
+        let reg = ensureRegistry()
         return try await reg.getClient(workspace: workspace)
     }
 
     func listConnections() async throws -> [NotionConnectionInfo] {
-        let reg = try ensureRegistry()
+        let reg = ensureRegistry()
         return try await reg.listConnections()
     }
 }
