@@ -13,7 +13,8 @@ import SwiftUI
 import AppKit
 
 /// Manages the first-launch onboarding NSWindow.
-/// Shows a multi-step wizard: Welcome → Permissions → Connection → Test Connection.
+/// Shows a multi-step wizard:
+/// Welcome → Auto Permissions → Manual Permissions → Connection → Test Connection.
 /// Checks `UserDefaults.bool(forKey: "hasCompletedOnboarding")` — skips if true.
 @MainActor
 public final class OnboardingWindowController {
@@ -70,7 +71,8 @@ public final class OnboardingWindowController {
 
 // MARK: - Onboarding View
 
-/// Multi-step onboarding wizard: Welcome → Permissions → Connection → Test Connection.
+/// Multi-step onboarding wizard:
+/// Welcome → Auto Permissions → Manual Permissions → Connection → Test Connection.
 struct OnboardingView: View {
     let permissionManager: PermissionManager
     let onComplete: () -> Void
@@ -78,12 +80,14 @@ struct OnboardingView: View {
     @State private var currentStep: OnboardingStep = .welcome
     @State private var healthCheckStatus: HealthCheckStatus = .idle
     @State private var showLegacySSE: Bool = false
+    @State private var didAutoAdvanceFromAutoStep: Bool = false
 
     enum OnboardingStep: Int, CaseIterable {
         case welcome = 0
-        case permissions = 1
-        case connection = 2
-        case testConnection = 3
+        case autoPermissions = 1
+        case manualPermissions = 2
+        case connection = 3
+        case testConnection = 4
     }
 
     enum HealthCheckStatus {
@@ -107,8 +111,10 @@ struct OnboardingView: View {
                 switch currentStep {
                 case .welcome:
                     welcomeStep
-                case .permissions:
-                    permissionsStep
+                case .autoPermissions:
+                    autoPermissionsStep
+                case .manualPermissions:
+                    manualPermissionsStep
                 case .connection:
                     connectionStep
                 case .testConnection:
@@ -164,153 +170,18 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Permissions Step (PKT-357 F10: All permissions always listed)
+    // MARK: - Permissions Steps (PKT-388 split)
 
-    private var permissionsStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Grant Permissions")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .frame(maxWidth: .infinity, alignment: .center)
-
-            Text("Notion Bridge needs these permissions to work. Grant them one at a time in System Settings.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-
-            // PKT-357 F10: Always show ALL grants, not just the first missing one
-            VStack(spacing: 8) {
-                ForEach(PermissionManager.Grant.v1Cases) { grant in
-                    onboardingPermissionRow(grant: grant)
-                }
-            }
-            .padding(.top, 8)
-
-            Button("Refresh Status") {
-                // V1-PATCH-003: checkAll() is now async (automation probes off main thread)
-                Task { await permissionManager.checkAllAsync() }
-            }
-            .buttonStyle(.plain)
-            .font(.caption)
-            .foregroundStyle(.blue)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 4)
+    private var autoPermissionsStep: some View {
+        AutoPermissionsStepView(permissionManager: permissionManager) {
+            guard currentStep == .autoPermissions, !didAutoAdvanceFromAutoStep else { return }
+            didAutoAdvanceFromAutoStep = true
+            currentStep = .manualPermissions
         }
     }
 
-    private func onboardingPermissionRow(grant: PermissionManager.Grant) -> some View {
-        HStack(spacing: 12) {
-            Circle()
-                .fill(permissionManager.status(for: grant) == .granted ? .green : .orange)
-                .frame(width: 10, height: 10)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(grant.displayName)
-                    .font(.callout)
-                Text(grantExplanation(grant))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            if permissionManager.status(for: grant) == .granted {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-            } else {
-                Button("Allow") {
-                    openSystemSettings(for: grant)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func grantExplanation(_ grant: PermissionManager.Grant) -> String {
-        switch grant {
-        case .accessibility: return "Control UI elements and simulate input"
-        case .screenRecording: return "Capture screen content for AI context"
-        case .fullDiskAccess: return "Read files outside the sandbox"
-        case .automation: return "Script other apps via AppleScript (System Events, Messages, Chrome)"
-        case .notifications: return "Security approvals appear as notification banners"
-        case .contacts: return "Search and read your contacts"
-        }
-    }
-
-    // D2: Modified to trigger permission probes before opening System Settings
-    private func openSystemSettings(for grant: PermissionManager.Grant) {
-        let urlString: String
-        switch grant {
-        case .accessibility:
-            _ = permissionManager.requestAccessibilityAccess()
-            Task {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-                    NSWorkspace.shared.open(url)
-                }
-                await permissionManager.recheckAllForTruth()
-            }
-            return
-        case .screenRecording:
-            _ = permissionManager.requestScreenRecordingAccess()
-            Task {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                    NSWorkspace.shared.open(url)
-                }
-                await permissionManager.recheckAllForTruth()
-            }
-            return
-        case .fullDiskAccess:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
-        case .automation:
-            // D2: Fire the NSAppleScript probe first to trigger the macOS Automation
-            // permission prompt, then open Settings after a short delay so the app
-            // appears in the Automation panel.
-            Task {
-                await permissionManager.requestAutomationAccess()
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
-                    NSWorkspace.shared.open(url)
-                }
-                await permissionManager.recheckAllForTruth()
-            }
-            return
-        case .notifications:
-            // PKT-364 D3: Probe-then-deep-link for notification permission.
-            // requestAuthorization triggers system prompt if .notDetermined.
-            // If denied, deep link to System Settings > Notifications.
-            Task {
-                let granted = await permissionManager.requestNotificationAccess()
-                if !granted {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                await permissionManager.recheckAllForTruth()
-            }
-            return
-        case .contacts:
-            // D2: Request contacts access first to trigger the macOS "NotionBridge
-            // would like to access your contacts" prompt, then open Settings so the
-            // app appears in the Contacts panel.
-            Task {
-                _ = await permissionManager.requestContactsAccess()
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
-                    NSWorkspace.shared.open(url)
-                }
-                await permissionManager.recheckAllForTruth()
-            }
-            return
-        }
-        if let url = URL(string: urlString) {
-            NSWorkspace.shared.open(url)
-        }
-        Task {
-            await permissionManager.recheckAllForTruth()
-        }
+    private var manualPermissionsStep: some View {
+        ManualPermissionsStepView(permissionManager: permissionManager)
     }
 
     // MARK: - Connection Step (D3)

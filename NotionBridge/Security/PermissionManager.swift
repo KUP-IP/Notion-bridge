@@ -54,9 +54,19 @@ public final class PermissionManager {
 
         public var id: String { rawValue }
 
-        /// V1 grants — Contacts is deferred to expansion (no V1 tool uses it)
+        /// V1 grants used by current onboarding/settings surfaces.
         public static var v1Cases: [Grant] {
-            allCases.filter { $0 != .contacts }
+            allCases
+        }
+
+        /// PKT-388 D1-1: Grants that can be prompted directly via API.
+        public var isAutoGrantable: Bool {
+            switch self {
+            case .contacts, .notifications, .automation:
+                return true
+            case .accessibility, .screenRecording, .fullDiskAccess:
+                return false
+            }
         }
 
         public var displayName: String {
