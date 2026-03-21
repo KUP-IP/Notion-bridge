@@ -12,6 +12,7 @@ public struct ToolRegistration: Sendable {
     public let name: String
     public let module: String
     public let tier: SecurityTier
+    public let neverAutoApprove: Bool
     public let description: String
     public let inputSchema: Value
     public let handler: @Sendable (Value) async throws -> Value
@@ -20,6 +21,7 @@ public struct ToolRegistration: Sendable {
         name: String,
         module: String,
         tier: SecurityTier,
+        neverAutoApprove: Bool = false,
         description: String,
         inputSchema: Value,
         handler: @escaping @Sendable (Value) async throws -> Value
@@ -27,6 +29,7 @@ public struct ToolRegistration: Sendable {
         self.name = name
         self.module = module
         self.tier = tier
+        self.neverAutoApprove = neverAutoApprove
         self.description = description
         self.inputSchema = inputSchema
         self.handler = handler
@@ -97,7 +100,8 @@ public actor ToolRouter {
         let decision = await securityGate.enforce(
             toolName: toolName,
             tier: effectiveTier,
-            arguments: arguments
+            arguments: arguments,
+            neverAutoApprove: tool.neverAutoApprove
         )
 
         switch decision {
