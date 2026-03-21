@@ -153,7 +153,6 @@ public enum AppleScriptModule {
 
         do {
             try task.run()
-            task.waitUntilExit()
         } catch {
             return (
                 exitCode: -1,
@@ -164,6 +163,7 @@ public enum AppleScriptModule {
 
         let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
         let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
         let stderr = String(data: stderrData, encoding: .utf8) ?? ""
 
