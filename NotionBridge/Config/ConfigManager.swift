@@ -23,6 +23,7 @@ public final class ConfigManager: @unchecked Sendable {
 
     /// Default screen output directory (PKT-375).
     public static let defaultScreenOutputDir = "~/Desktop"
+    public static let defaultLearnedAllowPrefixes: [String] = []
 
     private let configURL: URL
     private let queue = DispatchQueue(label: "com.notionbridge.config", attributes: .concurrent)
@@ -82,16 +83,22 @@ public final class ConfigManager: @unchecked Sendable {
     /// Called on first launch with new schema to populate defaults.
     public func seedDefaultsIfNeeded() {
         queue.sync(flags: .barrier) {
-            let config = readConfig()
+            var config = readConfig()
+            var didUpdate = false
             if config["sensitivePaths"] == nil {
-                var updated = config
-                updated["sensitivePaths"] = Self.defaultSensitivePaths
-                do {
-                    try writeConfig(updated)
-                    print("[ConfigManager] Seeded sensitivePaths with \(Self.defaultSensitivePaths.count) defaults")
-                } catch {
-                    print("[ConfigManager] ⚠️ Failed to seed defaults: \(error.localizedDescription)")
-                }
+                config["sensitivePaths"] = Self.defaultSensitivePaths
+                didUpdate = true
+            }
+            if config["learnedAllowPrefixes"] == nil {
+                config["learnedAllowPrefixes"] = Self.defaultLearnedAllowPrefixes
+                didUpdate = true
+            }
+            guard didUpdate else { return }
+            do {
+                try writeConfig(config)
+                print("[ConfigManager] Seeded missing config defaults")
+            } catch {
+                print("[ConfigManager] ⚠️ Failed to seed defaults: \(error.localizedDescription)")
             }
         }
     }
@@ -201,6 +208,65 @@ public final class ConfigManager: @unchecked Sendable {
         queue.sync {
             readConfig()[key]
         }
+    }
+
+    // MARK: - Learned Command Prefixes (PKT-376)
+
+    public var learnedAllowPrefixes: [String] {
+        get {
+            queue.sync {
+                let config = readConfig()
+                return config["learnedAllowPrefixes"] as? [String] ?? Self.defaultLearnedAllowPrefixes
+            }
+        }
+        set {
+            queue.sync(flags: .barrier) {
+                var config = readConfig()
+                config["learnedAllowPrefixes"] = newValue
+                do {
+                    try writeConfig(config)
+                } catch {
+                    print("[ConfigManager] ⚠️ Failed to write learnedAllowPrefixes: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    public func addLearnedAllowPrefix(_ prefix: String) {
+        queue.sync(flags: .barrier) {
+            let normalized = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !normalized.isEmpty else { return }
+
+            var config = readConfig()
+            var prefixes = config["learnedAllowPrefixes"] as? [String] ?? []
+            if !prefixes.contains(normalized) {
+                prefixes.append(normalized)
+                config["learnedAllowPrefixes"] = prefixes
+                do {
+                    try writeConfig(config)
+                } catch {
+                    print("[ConfigManager] ⚠️ Failed to append learnedAllowPrefix: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    public func removeLearnedAllowPrefix(_ prefix: String) {
+        queue.sync(flags: .barrier) {
+            var config = readConfig()
+            var prefixes = config["learnedAllowPrefixes"] as? [String] ?? []
+            prefixes.removeAll { $0 == prefix }
+            config["learnedAllowPrefixes"] = prefixes
+            do {
+                try writeConfig(config)
+            } catch {
+                print("[ConfigManager] ⚠️ Failed to remove learnedAllowPrefix: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    public func clearLearnedAllowPrefixes() {
+        learnedAllowPrefixes = []
     }
 
 

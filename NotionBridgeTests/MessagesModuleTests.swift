@@ -59,10 +59,10 @@ func runMessagesModuleTests() async {
         try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
-    await test("messages_send tier is red") {
+    await test("messages_send tier is request") {
         let tools = await router.registrations(forModule: "messages")
         let tool = tools.first(where: { $0.name == "messages_send" })!
-        try expect(tool.tier == .notify, "Expected red, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .request, "Expected request, got \(tool.tier.rawValue)")
     }
 
     // Functional tests — messages_search (requires chat.db access)

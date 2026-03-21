@@ -4,7 +4,7 @@
 // Six tools: messages_search, messages_recent, messages_chat,
 // messages_content, messages_participants, messages_send.
 // Read tools use native SQLite C API on ~/Library/Messages/chat.db.
-// Send uses in-process AppleScript (NSAppleScript). Tier: notify (5 open, 1 notify).
+// Send uses in-process AppleScript (NSAppleScript). Tier: request (5 open, 1 request).
 //
 // V1-PATCH-001 changes:
 // - Replaced runSQLite CLI helper with SQLiteConnection (native sqlite3 C API)
@@ -652,11 +652,11 @@ public enum MessagesModule {
             }
         ))
 
-        // MARK: 6. messages_send – notify
+        // MARK: 6. messages_send – request
         await router.register(ToolRegistration(
             name: "messages_send",
             module: moduleName,
-            tier: .notify,
+            tier: .request,
             description: "Send an iMessage or SMS/RCS message via AppleScript. Auto-detects service type from chat history. Requires explicit confirm='SEND' parameter. SecurityGate enforces red-tier confirmation.",
             inputSchema: .object([
                 "type": .string("object"),

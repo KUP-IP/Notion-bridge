@@ -1,22 +1,12 @@
-// SecurityGate.swift – V1-PATCH-002: Security Model v2.2 — Trusted Mode
+// SecurityGate.swift – PKT-376: Security Model v3
 // NotionBridge · Security
-// Builds on v2.1 (2-Tier + Command-Aware Classification) with Trusted Mode:
+// 3-tier model:
 // - Open: execute immediately
-// - Notify: actionable notification approval (UNUserNotificationCenter)
-//   - Safe commands (read-only): auto-allow, skip notification (~70-80% reduction)
-//   - Dangerous commands: nuclear handoff
+// - Notify: execute immediately + fire-and-forget notification
+// - Request: actionable pre-execution approval (Allow / Deny / Always Allow)
+//   - Safe commands (read-only): auto-allow for shell/cli tools
 // - Sensitive path prompting with session/permanent allow (UserDefaults)
-// - Nuclear handoff for system-critical commands (return helpful response, never block)
-// - **Trusted Mode (v2.2):** When enabled, all .notify tier tools auto-allow without
-//   prompting. Nuclear patterns and dangerous command patterns still enforced.
-//   Persisted via UserDefaults. Toggle via setTrustedMode() or `defaults write`.
-//
-// V1-PATCH-002 changes:
-// - Added trustedMode property (UserDefaults-backed, key: com.notionbridge.security.trustedMode)
-// - Added setTrustedMode(_:) and isTrustedMode computed property
-// - Modified enforce() to skip notification when trustedMode is enabled
-// - Sensitive path check skipped when trustedMode is enabled
-// - Nuclear patterns and dangerous command patterns ALWAYS enforced regardless of trust
+// - Nuclear handoff for fork bomb patterns only
 
 import UserNotifications
 import MCP
@@ -25,25 +15,19 @@ import MCP
 import AppKit
 #endif
 
-// MARK: - Security Tier (v2: 2-tier model)
+// MARK: - Security Tier (v3: 3-tier model)
 
-/// Two security tiers replacing the previous 4-tier system (V1-QUALITY-C1).
+/// Three security tiers replacing the previous 2-tier system.
 ///
 /// - `open`: Execute immediately. No user interaction. Used for read-only operations.
-/// - `notify`: Informs the user via macOS notification when the tool executes.
+/// - `notify`: Execute immediately and send fire-and-forget notification after execution.
+/// - `request`: Request explicit approval before execution.
 ///
-/// **Architecture note (F3 — PKT-366):**
-/// This enum is strictly 2-tier. There is no "confirm" or "destructive" case.
-/// Behavioral escalation (nuclear patterns, dangerous commands) is enforced at
-/// **runtime** by `SecurityGate.enforce()` — it is NOT a separate tier.
-/// The UI toggle (F1) controls notification behavior only. It does not bypass
-/// runtime escalation: nuclear and dangerous command patterns still gate
-/// regardless of the user's tier choice.
-/// Auto-escalation patterns are enforced unconditionally by
-/// `checkNuclearPattern()` and `checkDangerousCommand()`.
+/// Nuclear pattern enforcement remains runtime-driven by `SecurityGate.enforce()`.
 public enum SecurityTier: String, Sendable, CaseIterable, Codable {
     case open = "open"
     case notify = "notify"
+    case request = "request"
 }
 
 // MARK: - Gate Decision
@@ -61,33 +45,9 @@ public enum GateDecision: Sendable {
 /// No tool can bypass this gate — it is not optional.
 public actor SecurityGate {
 
-    // MARK: Trusted Mode (V1-PATCH-002)
-
-    private static let trustedModeKey = "com.notionbridge.security.trustedMode"
-
-    /// When true, .notify tier tools auto-allow without prompting.
-    /// Nuclear patterns and dangerous commands are ALWAYS enforced.
-    public var isTrustedMode: Bool {
-        UserDefaults.standard.bool(forKey: SecurityGate.trustedModeKey)
-    }
-
-    /// Enable or disable trusted mode. Persists across app restarts.
-    public func setTrustedMode(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: SecurityGate.trustedModeKey)
-        let state = enabled ? "ENABLED" : "DISABLED"
-        print("[SecurityGate] Trusted mode \(state) — nuclear patterns still enforced")
-    }
-
     // MARK: Nuclear Patterns
 
-    private let nuclearPatterns: [String]
-
-    /// Separate check for recursive forced removal of root
-    private static func isNuclearRecursiveDelete(_ lowered: String) -> Bool {
-        let trimmed = lowered.trimmingCharacters(in: .whitespaces)
-        let prefix = String(UnicodeScalar(0x72)) + String(UnicodeScalar(0x6D))
-        return trimmed.contains(prefix + " -rf /")
-    }
+    private static let normalizedForkBomb = ":(){:|:&};:"
 
     // MARK: Command-Aware Classification (V1-PATCH-001)
 
@@ -173,13 +133,6 @@ public actor SecurityGate {
         #"^make\s+-n"#,
     ]
 
-    /// Commands that are dangerous and should trigger nuclear handoff.
-    private static let dangerousCommandPatterns: [String] = [
-        #"^\s*su[d]\s*[o]\s"#,
-        #"\|\s*(sh|bas[h]|zsh|eva[l])\b"#,
-        #"\bchmo[d]\s+77[7]\b"#,
-    ]
-
     // MARK: Sensitive Paths
 
     // PKT-363 D2: sensitivePaths moved to ConfigManager (config.json-backed)
@@ -191,21 +144,6 @@ public actor SecurityGate {
 
     public init() {
         self.approvalManager = NotificationApprovalManager()
-        // Nuclear patterns use character-level construction to avoid
-        // triggering content scanners that inspect file text.
-        let s = String(UnicodeScalar(0x73))
-        let u = String(UnicodeScalar(0x75))
-        let d = String(UnicodeScalar(0x64))
-        let o = String(UnicodeScalar(0x6F))
-        self.nuclearPatterns = [
-            s + u + d + o + " ",
-            "diskutil erasedisk",
-            "csrutil disable",
-            "nvram ",
-            String(UnicodeScalar(0x6D)) + "kfs.",
-            d + d + " if=",
-            ":(){ :|:" + "& };:",
-        ]
 
         // PKT-363 D1: Seed sensitivePaths defaults on first launch with new schema
         ConfigManager.shared.seedDefaultsIfNeeded()
@@ -221,15 +159,11 @@ public actor SecurityGate {
 
     /// Evaluate a tool call against all security policies.
     ///
-    /// **Enforcement order (F3 — PKT-366):**
-    /// 1. Nuclear pattern check — ALWAYS enforced, even in trusted mode
-    /// 2. Dangerous command patterns — ALWAYS enforced, even in trusted mode
-    /// 3. Safe command auto-allow — read-only commands skip notification
-    /// 4. Trusted mode bypass — auto-allows after nuclear + dangerous checks pass
-    /// 5. Sensitive path check — prompts for access to ~/.ssh, ~/.aws, etc.
-    /// 6. Tier-based logic — Open = allow, Notify = request approval
-    ///
-    /// The UI tier toggle (F1) only affects step 6. Steps 1–2 are unconditional.
+    /// **Enforcement order (PKT-376):**
+    /// 1. Nuclear pattern check (fork bomb only)
+    /// 2. Safe command auto-allow for shell/cli tools
+    /// 3. Sensitive path check
+    /// 4. Tier-based logic — Open = allow, Notify = allow, Request = approval
     public func enforce(
         toolName: String,
         tier: SecurityTier,
@@ -237,55 +171,50 @@ public actor SecurityGate {
     ) async -> GateDecision {
         let allStrings = extractStrings(from: arguments)
         let combined = allStrings.joined(separator: " ")
-        let lowered = combined.lowercased()
+        let detail = requestDetail(toolName: toolName, arguments: arguments, fallback: combined)
+        let lowered = detail.lowercased()
 
         // 1. Nuclear pattern check (highest priority)
-        //    ALWAYS enforced, even in trusted mode.
         if let handoff = checkNuclearPattern(lowered, raw: combined) {
             return handoff
         }
 
         // 2. Command-aware classification for shell execution tools
-        //    Dangerous patterns ALWAYS enforced, even in trusted mode.
         if toolName == "shell_exec" || toolName == "cli_exec" {
-            if let dangerous = checkDangerousCommand(combined) {
-                return dangerous
-            }
-            if checkSafeCommand(combined) {
+            if checkSafeCommand(detail) {
                 return .allow
             }
         }
 
-        // 3. Trusted mode bypass (V1-PATCH-002)
-        //    After nuclear + dangerous checks pass, auto-allow everything.
-        if isTrustedMode {
-            return .allow
-        }
-
-        // 4. Sensitive path check (skipped in trusted mode — handled above)
+        // 3. Sensitive path check
         if let sensitiveResult = await checkSensitivePaths(allStrings, toolName: toolName) {
             return sensitiveResult
         }
 
-        // 5. Tier-based logic
+        // 4. Tier-based logic
         switch tier {
         case .open:
             return .allow
         case .notify:
-            return await requestApproval(toolName: toolName, detail: combined)
+            return .allow
+        case .request:
+            if checkLearnedAllow(detail) {
+                return .allow
+            }
+            return await requestApproval(toolName: toolName, detail: detail)
         }
     }
 
     // MARK: Nuclear Check
 
     public func checkNuclearPattern(_ lowered: String, raw: String) -> GateDecision? {
-        if SecurityGate.isNuclearRecursiveDelete(lowered) {
+        let normalized = lowered.replacingOccurrences(
+            of: #"\s+"#,
+            with: "",
+            options: .regularExpression
+        )
+        if normalized.contains(SecurityGate.normalizedForkBomb) {
             return makeHandoff(raw)
-        }
-        for pattern in nuclearPatterns {
-            if lowered.contains(pattern.lowercased()) {
-                return makeHandoff(raw)
-            }
         }
         return nil
     }
@@ -294,8 +223,8 @@ public actor SecurityGate {
         let safeCommand = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return .handoff(
             command: safeCommand,
-            explanation: "This command could cause irreversible system damage. For safety, it must be run manually in Terminal.",
-            warning: "Nuclear command detected. This is not an error — the command has been prepared for manual execution.\n\nOpen Terminal.app and paste:\n\n    \(safeCommand)\n\nReview carefully before executing."
+            explanation: "This command matches a fork-bomb pattern that can destabilize your system. For safety, it must be run manually in Terminal.",
+            warning: "Fork bomb pattern detected. This is not an error — the command has been prepared for manual execution.\n\nOpen Terminal.app and paste:\n\n    \(safeCommand)\n\nReview carefully before executing."
         )
     }
 
@@ -312,19 +241,6 @@ public actor SecurityGate {
             }
         }
         return false
-    }
-
-    private func checkDangerousCommand(_ command: String) -> GateDecision? {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        for pattern in SecurityGate.dangerousCommandPatterns {
-            if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
-                let range = NSRange(trimmed.startIndex..., in: trimmed)
-                if regex.firstMatch(in: trimmed, options: [], range: range) != nil {
-                    return makeHandoff(trimmed)
-                }
-            }
-        }
-        return nil
     }
 
     // MARK: Sensitive Path Check
@@ -390,16 +306,93 @@ public actor SecurityGate {
 
     private func requestApproval(toolName: String, detail: String) async -> GateDecision {
         let truncated = String(detail.prefix(120))
-        let approved = await approvalManager.requestApproval(
+        let decision = await approvalManager.requestApproval(
             title: "Notion Bridge wants to \(toolName)",
             body: truncated
         )
 
-        if approved {
+        switch decision {
+        case .allow:
             return .allow
-        } else {
+        case .alwaysAllow:
+            let prefix = learnedPrefix(for: detail)
+            if !prefix.isEmpty {
+                ConfigManager.shared.addLearnedAllowPrefix(prefix)
+            }
+            return .allow
+        case .deny:
             return .reject(reason: "User denied via notification (or 30s timeout)")
         }
+    }
+
+    // MARK: Learned Allow Prefixes
+
+    private func checkLearnedAllow(_ command: String) -> Bool {
+        let normalizedCommand = normalizeForPrefixMatch(command)
+        guard !normalizedCommand.isEmpty else { return false }
+        for prefix in ConfigManager.shared.learnedAllowPrefixes {
+            let normalizedPrefix = normalizeForPrefixMatch(prefix)
+            guard !normalizedPrefix.isEmpty else { continue }
+            if normalizedCommand.hasPrefix(normalizedPrefix) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func learnedPrefix(for command: String) -> String {
+        let normalized = normalizeWhitespace(command)
+        guard !normalized.isEmpty else { return "" }
+
+        if normalized.contains("\n") {
+            let firstLine = normalized
+                .split(separator: "\n")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first(where: { !$0.isEmpty }) ?? ""
+            return String(firstLine.prefix(80))
+        }
+
+        let tokens = normalized.split(separator: " ")
+        if tokens.isEmpty { return "" }
+        return tokens.prefix(3).joined(separator: " ")
+    }
+
+    private func normalizeForPrefixMatch(_ value: String) -> String {
+        normalizeWhitespace(value).lowercased()
+    }
+
+    private func normalizeWhitespace(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func requestDetail(toolName: String, arguments: Value, fallback: String) -> String {
+        guard case .object(let dict) = arguments else {
+            return normalizeWhitespace(fallback)
+        }
+
+        let keyCandidatesByTool: [String: [String]] = [
+            "shell_exec": ["command"],
+            "cli_exec": ["command"],
+            "run_script": ["scriptName"],
+            "applescript_exec": ["script"],
+            "messages_send": ["recipient", "body"],
+        ]
+
+        let keyCandidates = keyCandidatesByTool[toolName] ?? ["command", "script", "scriptName"]
+        let parts = keyCandidates.compactMap { key -> String? in
+            if case .string(let value) = dict[key] {
+                let normalized = normalizeWhitespace(value)
+                return normalized.isEmpty ? nil : normalized
+            }
+            return nil
+        }
+
+        if parts.isEmpty {
+            return normalizeWhitespace(fallback)
+        }
+        return parts.joined(separator: " ")
     }
 
     // MARK: Session Management
@@ -461,17 +454,24 @@ public actor SecurityGate {
 /// Thread safety: NSLock via nonisolated synchronous helpers (Swift 6 safe).
 public final class NotificationApprovalManager: NSObject, @unchecked Sendable, UNUserNotificationCenterDelegate {
 
+    public enum ApprovalDecision: Sendable {
+        case allow
+        case deny
+        case alwaysAllow
+    }
+
     private let center: UNUserNotificationCenter?
     private var hasPermission: Bool = false
     private let approvalTimeout: TimeInterval = 30
     private let isTestProcess: Bool
 
     private let lock = NSLock()
-    private var pendingApprovals: [String: CheckedContinuation<Bool, Never>] = [:]
+    private var pendingApprovals: [String: CheckedContinuation<ApprovalDecision, Never>] = [:]
 
     static let categoryIdentifier = "SECURITY_APPROVAL"
     static let allowActionIdentifier = "ALLOW_ACTION"
     static let denyActionIdentifier = "DENY_ACTION"
+    static let alwaysAllowActionIdentifier = "ALWAYS_ALLOW"
 
     /// UserNotifications is only reliable when running as a bundled app process.
     /// CLI test executables (e.g. swift run NotionBridgeTests) can crash when calling
@@ -503,13 +503,16 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
     // MARK: Thread-Safe Helpers (nonisolated — safe from async contexts)
 
-    private nonisolated func storePending(forKey key: String, continuation: CheckedContinuation<Bool, Never>) {
+    private nonisolated func storePending(
+        forKey key: String,
+        continuation: CheckedContinuation<ApprovalDecision, Never>
+    ) {
         lock.lock()
         defer { lock.unlock() }
         pendingApprovals[key] = continuation
     }
 
-    private nonisolated func removePending(forKey key: String) -> CheckedContinuation<Bool, Never>? {
+    private nonisolated func removePending(forKey key: String) -> CheckedContinuation<ApprovalDecision, Never>? {
         lock.lock()
         defer { lock.unlock() }
         return pendingApprovals.removeValue(forKey: key)
@@ -526,12 +529,17 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         )
         let denyAction = UNNotificationAction(
             identifier: Self.denyActionIdentifier,
-            title: "Deny",
+            title: "Decline",
             options: [.destructive]
+        )
+        let alwaysAllowAction = UNNotificationAction(
+            identifier: Self.alwaysAllowActionIdentifier,
+            title: "Always Allow",
+            options: []
         )
         let category = UNNotificationCategory(
             identifier: Self.categoryIdentifier,
-            actions: [allowAction, denyAction],
+            actions: [allowAction, denyAction, alwaysAllowAction],
             intentIdentifiers: [],
             options: []
         )
@@ -578,9 +586,9 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
     // MARK: Approval Request
 
-    public func requestApproval(title: String, body: String) async -> Bool {
+    public func requestApproval(title: String, body: String) async -> ApprovalDecision {
         if isTestProcess {
-            return true
+            return .allow
         }
         if hasPermission {
             return await requestViaNotification(title: title, body: body)
@@ -589,7 +597,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         }
     }
 
-    private func requestViaNotification(title: String, body: String) async -> Bool {
+    private func requestViaNotification(title: String, body: String) async -> ApprovalDecision {
         guard let center else {
             return await requestViaAlert(title: title, body: body)
         }
@@ -620,7 +628,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
                 guard let self else { return }
                 try? await Task.sleep(for: .seconds(self.approvalTimeout))
                 if let pending = self.removePending(forKey: identifier) {
-                    pending.resume(returning: false)
+                    pending.resume(returning: .deny)
                     print("[SecurityGate] Approval timed out (30s) — denied by default")
                 }
             }
@@ -628,11 +636,11 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
     }
 
     @MainActor
-    private func requestViaAlert(title: String, body: String) async -> Bool {
+    private func requestViaAlert(title: String, body: String) async -> ApprovalDecision {
         #if canImport(AppKit)
         guard NSApp != nil else {
             print("[SecurityGate] No NSApplication context for approval alert — denying by default")
-            return false
+            return .deny
         }
         let alert = NSAlert()
         alert.icon = NSApp.applicationIconImage
@@ -642,9 +650,9 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         alert.addButton(withTitle: "Allow")
         alert.addButton(withTitle: "Deny")
         let response = alert.runModal()
-        return response == .alertFirstButtonReturn
+        return response == .alertFirstButtonReturn ? .allow : .deny
         #else
-        return false
+        return .deny
         #endif
     }
 
@@ -656,13 +664,20 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let identifier = response.notification.request.identifier
-        let approved = response.actionIdentifier == Self.allowActionIdentifier
-
-        if let continuation = removePending(forKey: identifier) {
-            continuation.resume(returning: approved)
+        let decision: ApprovalDecision
+        switch response.actionIdentifier {
+        case Self.allowActionIdentifier:
+            decision = .allow
+        case Self.alwaysAllowActionIdentifier:
+            decision = .alwaysAllow
+        default:
+            decision = .deny
         }
 
-        let decision = approved ? "APPROVED" : "DENIED"
+        if let continuation = removePending(forKey: identifier) {
+            continuation.resume(returning: decision)
+        }
+
         print("[SecurityGate] Notification response: \(decision) for \(identifier)")
 
         completionHandler()

@@ -53,16 +53,16 @@ func runEndToEndTests() async {
 
     let sudoStr = String(UnicodeScalar(115)) + "udo"
 
-    await test("E2E: SecurityGate escalates sudo through real shell_exec") {
+    await test("E2E: SecurityGate no longer handoffs sudo through shell_exec") {
         let result = try await router.dispatch(
             toolName: "shell_exec",
-            arguments: .object(["command": .string(sudoStr + " ls")])
+            arguments: .object(["command": .string(sudoStr + " -n true")])
         )
-        if case .object(let dict) = result,
-           case .string(let status) = dict["status"] {
-            try expect(status == "handoff", "Expected handoff status for sudo command")
+        if case .object(let dict) = result {
+            try expect(dict["status"] == nil, "Expected no handoff status for sudo command")
+            try expect(dict["exitCode"] != nil, "Expected shell_exec result payload")
         } else {
-            throw TestError.assertion("Expected handoff object for sudo command")
+            throw TestError.assertion("Expected shell_exec result object for sudo command")
         }
     }
 
@@ -117,12 +117,12 @@ func runEndToEndTests() async {
         try expect(entries[0].durationMs > 0, "Duration should be positive")
     }
 
-    await test("E2E: Audit log records escalated calls") {
+    await test("E2E: Audit log records escalated fork-bomb calls") {
         await auditLog.clear()
 
         _ = try await router.dispatch(
             toolName: "shell_exec",
-            arguments: .object(["command": .string(sudoStr + " reboot")])
+            arguments: .object(["command": .string(":(){ :|:& };:")])
         )
 
         let entries = await auditLog.allEntries()
@@ -275,19 +275,21 @@ func runEndToEndTests() async {
         _ = server
     }
 
-    await test("E2E: All tools have correct 2-tier assignments") {
+    await test("E2E: All tools have correct 3-tier assignments") {
         let all = await router.allRegistrations()
         var tierMap: [String: String] = [:]
         for reg in all {
             tierMap[reg.name] = reg.tier.rawValue
         }
 
-        // Spot-check critical tier assignments (2-tier: open / notify)
+        // Spot-check critical tier assignments (3-tier: open / notify / request)
         try expect(tierMap["file_read"] == "open", "file_read should be open")
         try expect(tierMap["file_write"] == "notify", "file_write should be notify")
-        try expect(tierMap["shell_exec"] == "notify", "shell_exec should be notify")
+        try expect(tierMap["shell_exec"] == "request", "shell_exec should be request")
         try expect(tierMap["clipboard_write"] == "open", "clipboard_write should be open")
-        try expect(tierMap["messages_send"] == "notify", "messages_send should be notify")
+        try expect(tierMap["messages_send"] == "request", "messages_send should be request")
+        try expect(tierMap["applescript_exec"] == "request", "applescript_exec should be request")
+        try expect(tierMap["run_script"] == "request", "run_script should be request")
         try expect(tierMap["system_info"] == "open", "system_info should be open")
         try expect(tierMap["notify"] == "open", "notify should be open")
     }
@@ -360,11 +362,12 @@ func runEndToEndTests() async {
         try expect(moduleTools.count == 58, "Expected 58 module tools, got \(moduleTools.count)")
     }
 
-    await test("E2E: Both security tiers represented in tool registry") {
+    await test("E2E: All security tiers represented in tool registry") {
         let all = await router.allRegistrations()
         let tiers = Set(all.map { $0.tier })
         try expect(tiers.contains(.open), "Missing open tier tools")
         try expect(tiers.contains(.notify), "Missing notify tier tools")
-        try expect(tiers.count == 2, "Expected exactly 2 tiers, got \(tiers.count)")
+        try expect(tiers.contains(.request), "Missing request tier tools")
+        try expect(tiers.count == 3, "Expected exactly 3 tiers, got \(tiers.count)")
     }
 }

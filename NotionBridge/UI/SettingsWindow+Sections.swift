@@ -74,6 +74,9 @@ extension SettingsView {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            refreshLearnedAllowPrefixes()
+        }
     }
 
     // MARK: - Permissions
@@ -314,10 +317,42 @@ extension SettingsView {
             }
 
             Section("Security Model") {
-                LabeledContent("Model", value: "2-Tier (Open / Notify)")
-                Text("Open tier: read operations execute immediately. Notify tier: destructive operations require approval via notification.")
+                LabeledContent("Model", value: "3-Tier (Open / Notify / Request)")
+                Text("Open executes immediately, Notify executes and alerts, Request asks approval before running. Notification actions support Allow, Deny, and Always Allow.")
                     .font(.caption)
                     .foregroundStyle(BridgeColors.secondary)
+            }
+
+            Section("Learned Command Allows") {
+                if learnedAllowPrefixes.isEmpty {
+                    Text("No learned command prefixes yet. Use \"Always Allow\" from a Request-tier approval to add one.")
+                        .font(.caption)
+                        .foregroundStyle(BridgeColors.secondary)
+                } else {
+                    ForEach(learnedAllowPrefixes, id: \.self) { prefix in
+                        HStack(spacing: BridgeSpacing.xs) {
+                            Text(prefix)
+                                .font(.system(.caption, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Spacer()
+                            Button(role: .destructive) {
+                                removeLearnedAllowPrefix(prefix)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+
+                    Button(role: .destructive) {
+                        ConfigManager.shared.clearLearnedAllowPrefixes()
+                        refreshLearnedAllowPrefixes()
+                    } label: {
+                        Text("Clear All")
+                    }
+                    .disabled(learnedAllowPrefixes.isEmpty)
+                }
             }
 
             Section("Logging") {
@@ -334,15 +369,8 @@ extension SettingsView {
                 }
             }
 
-            Section("Security") {
-                Toggle("Trusted Mode", isOn: $trustedMode)
-                Text("When enabled, Notify-tier commands execute without approval prompts. Use with caution.")
-                    .font(.caption)
-                    .foregroundStyle(BridgeColors.secondary)
-            }
-
             Section("Nuclear Handoff") {
-                Text("System-critical commands (such as disk formatting or SIP configuration) are never executed directly. The exact terminal command is returned for you to run manually.")
+                Text("Fork-bomb command patterns are never executed directly. The exact terminal command is returned for manual execution.")
                     .font(.caption)
                     .foregroundStyle(BridgeColors.secondary)
             }
@@ -439,7 +467,7 @@ extension SettingsView {
             "Server Running: \(statusBar.isServerRunning)",
             "Tools Registered: \(statusBar.registeredToolCount)",
             "Uptime: \(statusBar.uptimeString)",
-            "Trusted Mode: \(trustedMode)",
+            "Learned Allow Prefixes: \(learnedAllowPrefixes.count)",
             "",
             "Permissions:",
             "  Accessibility: \(permissionManager.accessibilityStatus)",
@@ -451,6 +479,15 @@ extension SettingsView {
         ].joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(lines, forType: .string)
+    }
+
+    func refreshLearnedAllowPrefixes() {
+        learnedAllowPrefixes = ConfigManager.shared.learnedAllowPrefixes.sorted()
+    }
+
+    func removeLearnedAllowPrefix(_ prefix: String) {
+        ConfigManager.shared.removeLearnedAllowPrefix(prefix)
+        refreshLearnedAllowPrefixes()
     }
 
     // MARK: - Permissions Helpers

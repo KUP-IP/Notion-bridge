@@ -1,7 +1,7 @@
 // ToolRegistryView.swift — Tool Registry Tab
 // NotionBridge · UI
 // Displays all registered MCP tools grouped by module with enable/disable toggles.
-// V1.3.0: PKT-366 F1/F4/F5 — Tappable tier toggle, Reset to Defaults, search removed.
+// V1.3.0 + PKT-376: 3-state tier toggle, Reset to Defaults, search removed.
 //
 // History:
 // PKT-350 F2: Original tool registry with grouped modules and toggles.
@@ -14,8 +14,8 @@ import SwiftUI
 /// Tool Registry tab for Settings window.
 /// Shows all MCP tools grouped by module with toggle controls and tier overrides.
 ///
-/// PKT-366 additions:
-/// - F1: Tappable Open/Notify toggle per tool. Persisted to `com.notionbridge.tierOverrides`.
+/// PKT-366/PKT-376 additions:
+/// - Tappable Open/Notify/Request toggle per tool. Persisted to `com.notionbridge.tierOverrides`.
 /// - F4: "Reset to Defaults" clears all tier overrides.
 /// - F5: Search bar removed.
 struct ToolRegistryView: View {
@@ -30,7 +30,7 @@ struct ToolRegistryView: View {
         UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? []
     )
 
-    /// F1: User tier overrides. Keys are tool names, values are tier raw values ("open"/"notify").
+    /// User tier overrides. Keys are tool names, values are tier raw values.
     /// Tools not in this map inherit their registered default tier.
     @State private var tierOverrides: [String: String] = (
         UserDefaults.standard.dictionary(forKey: "com.notionbridge.tierOverrides") as? [String: String]
@@ -60,9 +60,34 @@ struct ToolRegistryView: View {
         tierOverrides[tool.name] ?? tool.tier
     }
 
-    /// F7: Whether any tool is set to Notify tier (via override or default).
-    private var hasNotifyTierTools: Bool {
-        tools.contains { effectiveTier(for: $0) == "notify" }
+    /// Whether any tool is set to a tier that emits notifications.
+    private var hasNotificationTierTools: Bool {
+        tools.contains {
+            let tier = effectiveTier(for: $0)
+            return tier == "notify" || tier == "request"
+        }
+    }
+
+    private func nextTier(after current: String) -> String {
+        switch current {
+        case "open":
+            return "notify"
+        case "notify":
+            return "request"
+        default:
+            return "open"
+        }
+    }
+
+    private func tierColor(_ tier: String) -> Color {
+        switch tier {
+        case "open":
+            return .green
+        case "notify":
+            return .orange
+        default:
+            return .red
+        }
     }
 
     var body: some View {
@@ -84,9 +109,9 @@ struct ToolRegistryView: View {
         } else {
             Form {
                 // F7: Cross-dependency warning — notifications denied + Notify-tier tools exist
-                if notificationDenied && hasNotifyTierTools {
+                if notificationDenied && hasNotificationTierTools {
                     Section {
-                        Label("Notification permission is not granted. Tools set to Notify tier won’t produce alerts.",
+                        Label("Notification permission is not granted. Notify/Request tiers cannot prompt or alert.",
                               systemImage: "exclamationmark.triangle.fill")
                             .font(.callout)
                             .foregroundStyle(.orange)
@@ -162,10 +187,9 @@ struct ToolRegistryView: View {
                     Text(tool.name)
                         .fontWeight(.medium)
 
-                    // F1: Tappable Open/Notify tier toggle (capsule style)
-                    // Green = Open, Orange = Notify. Click to toggle.
+                    // Tappable 3-state tier toggle (Open -> Notify -> Request).
                     Button {
-                        let newTier = currentTier == "open" ? "notify" : "open"
+                        let newTier = nextTier(after: currentTier)
                         if newTier == tool.tier {
                             // Reverted to registered default — remove override
                             tierOverrides.removeValue(forKey: tool.name)
@@ -179,10 +203,8 @@ struct ToolRegistryView: View {
                             .fontWeight(.semibold)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
-                            .background(currentTier == "open"
-                                ? Color.green.opacity(0.15)
-                                : Color.orange.opacity(0.15))
-                            .foregroundStyle(currentTier == "open" ? .green : .orange)
+                            .background(tierColor(currentTier).opacity(0.15))
+                            .foregroundStyle(tierColor(currentTier))
                             .clipShape(Capsule())
                     }
                     .buttonStyle(.plain)
