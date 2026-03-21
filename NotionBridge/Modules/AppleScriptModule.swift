@@ -10,6 +10,7 @@
 
 import Foundation
 import MCP
+import os.log
 
 // MARK: - AppleScriptModule
 
@@ -19,6 +20,10 @@ import MCP
 public enum AppleScriptModule {
 
     public static let moduleName = "applescript"
+    private static let logger = Logger(
+        subsystem: "kup.solutions.notion-bridge",
+        category: "AppleScriptModule"
+    )
 
     /// Register all AppleScriptModule tools on the given router.
     public static func register(on router: ToolRouter) async {
@@ -60,19 +65,40 @@ public enum AppleScriptModule {
                     // actionable guidance. This error means NotionBridge does not have
                     // Automation permission for the target application.
                     if errorNumber == -1743 {
+                        let fallback = executeWithOsascript(script: script)
+                        let preview = scriptPreview(script, limit: 100)
+                        logger.warning(
+                            "applescript_exec TCC fallback triggered preview=\(preview, privacy: .public) nsError=\(errorNumber, privacy: .public) osascriptExit=\(fallback.exitCode, privacy: .public)"
+                        )
+
+                        if fallback.exitCode == 0 {
+                            return .object([
+                                "result": .string(fallback.stdout)
+                            ])
+                        }
+
                         // Attempt to extract the target app name from the script
                         let targetApp = extractTargetApp(from: script) ?? "the target application"
+                        let fallbackDebug = fallback.stderr.isEmpty
+                            ? "osascript did not emit stderr output."
+                            : fallback.stderr
                         return .object([
                             "error": .string(errorMessage),
                             "errorNumber": .int(errorNumber),
                             "tccDenied": .bool(true),
+                            "osascriptFallback": .object([
+                                "exitCode": .int(Int(fallback.exitCode)),
+                                "stderr": .string(fallbackDebug)
+                            ]),
                             "guidance": .string(
                                 "NotionBridge does not have Automation permission for \(targetApp). "
                                 + "This is a macOS TCC (Transparency, Consent, and Control) restriction. "
                                 + "To fix: Open the NotionBridge permission panel — the periodic permission "
                                 + "check will probe \(targetApp) and trigger the macOS consent prompt. "
                                 + "Alternatively, open System Settings > Privacy & Security > Automation "
-                                + "and grant NotionBridge access to \(targetApp)."
+                                + "and grant NotionBridge access to \(targetApp). "
+                                + "Fallback via /usr/bin/osascript also failed (exit \(fallback.exitCode)): "
+                                + "\(fallbackDebug)"
                             )
                         ])
                     }
@@ -107,5 +133,52 @@ public enum AppleScriptModule {
             return nil
         }
         return String(script[range])
+    }
+
+    /// Executes the script via `/usr/bin/osascript` as a fallback when NSAppleScript
+    /// is denied by TCC with error -1743.
+    private static func executeWithOsascript(script: String) -> (
+        exitCode: Int32,
+        stdout: String,
+        stderr: String
+    ) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        task.arguments = ["-e", script]
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        task.standardOutput = stdoutPipe
+        task.standardError = stderrPipe
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+        } catch {
+            return (
+                exitCode: -1,
+                stdout: "",
+                stderr: "Failed to run /usr/bin/osascript fallback: \(error.localizedDescription)"
+            )
+        }
+
+        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+        let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+        let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+
+        return (
+            exitCode: task.terminationStatus,
+            stdout: stdout,
+            stderr: stderr
+        )
+    }
+
+    /// Truncate script content for safe log context.
+    private static func scriptPreview(_ script: String, limit: Int) -> String {
+        let normalized = script.replacingOccurrences(of: "\n", with: "\\n")
+        guard normalized.count > limit else { return normalized }
+        let end = normalized.index(normalized.startIndex, offsetBy: limit)
+        return String(normalized[..<end]) + "..."
     }
 }
