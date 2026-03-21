@@ -248,15 +248,7 @@ public enum ChromeModule {
                    let tabIndexVal = args["tabIndex"],
                    case .int(let windowId) = windowIdVal,
                    case .int(let tabIndex) = tabIndexVal {
-                    tabTarget = """
-                        set targetTab to missing value
-                        repeat with w in windows
-                            if id of w is \(windowId) then
-                                set targetTab to tab \(tabIndex) of w
-                            end if
-                        end repeat
-                        tell targetTab
-                    """
+                    tabTarget = "tell tab \(tabIndex) of (first window whose id is \(windowId))"
                 } else {
                     tabTarget = "tell active tab of front window"
                 }
@@ -327,15 +319,7 @@ public enum ChromeModule {
                    let tabIndexVal = args["tabIndex"],
                    case .int(let windowId) = windowIdVal,
                    case .int(let tabIndex) = tabIndexVal {
-                    tabTarget = """
-                        set targetTab to missing value
-                        repeat with w in windows
-                            if id of w is \(windowId) then
-                                set targetTab to tab \(tabIndex) of w
-                            end if
-                        end repeat
-                        tell targetTab
-                    """
+                    tabTarget = "tell tab \(tabIndex) of (first window whose id is \(windowId))"
                 } else {
                     tabTarget = "tell active tab of front window"
                 }
@@ -370,7 +354,7 @@ public enum ChromeModule {
             name: "chrome_screenshot_tab",
             module: moduleName,
             tier: .open,
-            description: "Capture the visible content of a Chrome tab. Uses ScreenCaptureKit to capture the Chrome window as a PNG. Returns the file path and dimensions.",
+            description: "Capture the visible content of a Chrome tab. Uses ScreenCaptureKit to capture the Chrome window as a PNG. When windowId and tabIndex are provided, activates that tab first. Returns the file path and dimensions.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -396,6 +380,27 @@ public enum ChromeModule {
                 // Use ScreenCaptureKit to capture Chrome window (proven pattern from ScreenModule)
                 guard CGPreflightScreenCaptureAccess() else {
                     return .object(["error": .string("Screen Recording permission not granted. Grant access in System Settings > Privacy & Security > Screen Recording.")])
+                }
+
+                if let windowIdVal = args["windowId"],
+                   let tabIndexVal = args["tabIndex"],
+                   case .int(let windowId) = windowIdVal,
+                   case .int(let tabIndex) = tabIndexVal {
+                    let activateTabScript = """
+                        tell application "Google Chrome"
+                            set active tab index of (first window whose id is \(windowId)) to \(tabIndex)
+                            return "ok"
+                        end tell
+                    """
+                    let activateTabResult = executeAppleScript(activateTabScript)
+                    if let error = activateTabResult.error {
+                        return .object([
+                            "error": .string(error),
+                            "errorNumber": .int(activateTabResult.errorNumber ?? -1)
+                        ])
+                    }
+                    _ = executeAppleScript("tell application \"Google Chrome\" to activate")
+                    try await Task.sleep(nanoseconds: 300_000_000)
                 }
 
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)

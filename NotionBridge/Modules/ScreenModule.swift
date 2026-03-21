@@ -317,9 +317,9 @@ public enum ScreenModule {
                 let fileSize = (try? FileManager.default.attributesOfItem(atPath: filePath)[.size] as? Int) ?? 0
 
                 // Fetch display info for response metadata
-                let displayInfoArray: [Value] = {
-                    guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return [] }
-                    return content.displays.enumerated().map { idx, d in
+                let displayInfoArray: [Value]
+                if let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) {
+                    displayInfoArray = content.displays.enumerated().map { idx, d in
                         .object([
                             "index": .int(idx),
                             "width": .int(d.width),
@@ -327,7 +327,9 @@ public enum ScreenModule {
                             "isMain": .bool(idx == 0)
                         ])
                     }
-                }()
+                } else {
+                    displayInfoArray = []
+                }
 
                 var response: [String: Value] = [
                     "filePath": .string(filePath),
