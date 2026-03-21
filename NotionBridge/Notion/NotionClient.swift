@@ -471,7 +471,7 @@ public actor NotionClient {
     /// PATCH /v1/pages/{id}/markdown
     public func updatePageMarkdown(pageId: String, markdown: String) async throws -> Data {
         let cleanId = pageId.replacingOccurrences(of: "-", with: "")
-        let body: [String: Any] = ["markdown": markdown]
+        let body: [String: Any] = ["type": "markdown", "markdown": markdown]
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await request(method: "PATCH", path: "/pages/\(cleanId)/markdown", body: bodyData)
         guard (200...299).contains(response.statusCode) else {
@@ -555,12 +555,30 @@ public actor NotionClient {
     }
 
     /// A12: Upload a file (single-part ≤ 20MB).
-    /// POST /v1/file_uploads — multipart/form-data
+    /// POST /v1/file_uploads (two-phase: create upload → send content)
     public func uploadFile(fileName: String, fileData: Data, contentType: String = "application/octet-stream") async throws -> Data {
+        // Phase 1: Create the file upload object (JSON metadata only)
+        let createBody: [String: Any] = [
+            "mode": "single_part",
+            "filename": fileName,
+            "content_type": contentType
+        ]
+        let createData = try JSONSerialization.data(withJSONObject: createBody)
+        let (createResponseData, createHttp) = try await request(method: "POST", path: "/file_uploads", body: createData)
+        guard (200...299).contains(createHttp.statusCode) else {
+            let msg = String(data: createResponseData, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(createHttp.statusCode, msg)
+        }
+
+        // Extract upload ID from response
+        guard let createJSON = try? JSONSerialization.jsonObject(with: createResponseData) as? [String: Any],
+              let uploadId = createJSON["id"] as? String else {
+            throw NotionClientError.invalidResponse
+        }
+
+        // Phase 2: Send the file content via multipart form
         let boundary = "NotionBridge-\(UUID().uuidString)"
         var bodyData = Data()
-
-        // Build multipart form body
         bodyData.append("--\(boundary)\r\n".data(using: .utf8)!)
         bodyData.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
         bodyData.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
@@ -569,7 +587,7 @@ public actor NotionClient {
 
         let (data, response) = try await request(
             method: "POST",
-            path: "/file_uploads",
+            path: "/file_uploads/\(uploadId)/send",
             body: bodyData,
             contentType: "multipart/form-data; boundary=\(boundary)"
         )
@@ -580,10 +598,10 @@ public actor NotionClient {
         return data
     }
 
-    /// A13: Introspect the current API token.
-    /// POST /v1/tokens/introspect
+    /// A13: Get bot user identity (token introspection).
+    /// GET /v1/users/me
     public func introspectToken() async throws -> Data {
-        let (data, response) = try await request(method: "POST", path: "/tokens/introspect")
+        let (data, response) = try await request(method: "GET", path: "/users/me")
         guard (200...299).contains(response.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? ""
             throw NotionClientError.httpError(response.statusCode, msg)
