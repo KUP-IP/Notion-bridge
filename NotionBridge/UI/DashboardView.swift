@@ -5,6 +5,7 @@
 // PKT-354: Added Screen Recording permission indicator (green/red).
 // PKT-366 F12: Full TCC permissions display (Accessibility, Screen Recording,
 //   Notifications, Contacts, Full Disk Access).
+// PKT-390: Added Automation permission indicator from PermissionManager status.
 // Previous history: PKT-317, PKT-329, PKT-320, PKT-341, PKT-342, PKT-346
 
 import SwiftUI
@@ -36,6 +37,7 @@ public struct DashboardView: View {
     @State private var notificationsGranted: Bool = false
     @State private var contactsGranted: Bool = false
     @State private var fullDiskAccessGranted: Bool = false
+    @State private var automationGranted: Bool = false
 
     public var body: some View {
         VStack(alignment: .leading, spacing: BridgeSpacing.xs) {
@@ -59,6 +61,12 @@ public struct DashboardView: View {
         screenRecordingGranted = CGPreflightScreenCaptureAccess()
         fullDiskAccessGranted = checkFullDiskAccess()
         contactsGranted = CNContactStore.authorizationStatus(for: .contacts) == .authorized
+        if let appDelegate = NSApp.delegate as? AppDelegate {
+            let automationStatus = appDelegate.permissionManager.status(for: .automation)
+            automationGranted = automationStatus == .granted
+        } else {
+            automationGranted = false
+        }
         Task {
             let settings = await UNUserNotificationCenter.current().notificationSettings()
             await MainActor.run {
@@ -169,6 +177,7 @@ public struct DashboardView: View {
             permissionRow("Notifications", granted: notificationsGranted)
             permissionRow("Contacts", granted: contactsGranted)
             permissionRow("Full Disk Access", granted: fullDiskAccessGranted)
+            permissionRow(PermissionManager.Grant.automation.displayName, granted: automationGranted)
         }
         .bridgeRow()
     }
