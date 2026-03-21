@@ -91,7 +91,8 @@ public enum ScreenModule {
     private static func captureImage(
         target: String,
         windowId: Int?,
-        region: (x: Int, y: Int, w: Int, h: Int)?
+        region: (x: Int, y: Int, w: Int, h: Int)?,
+        displayIndex: Int? = nil
     ) async throws -> CGImage {
         let content = try await getShareableContent()
 
@@ -114,9 +115,15 @@ public enum ScreenModule {
             guard let r = region else {
                 throw ScreenModuleError.missingParameter("region {x,y,w,h} required for region target")
             }
-            guard let display = content.displays.first else {
+            guard !content.displays.isEmpty else {
                 throw ScreenModuleError.noDisplays
             }
+            let regionIdx = displayIndex ?? 0
+            guard regionIdx >= 0, regionIdx < content.displays.count else {
+                let available = content.displays.enumerated().map { "\($0.offset): \($0.element.width)x\($0.element.height)" }.joined(separator: ", ")
+                throw ScreenModuleError.missingParameter("displayIndex \(regionIdx) out of range. Available: [\(available)]")
+            }
+            let display = content.displays[regionIdx]
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
             config.sourceRect = CGRect(x: r.x, y: r.y, width: r.w, height: r.h)
@@ -125,10 +132,49 @@ public enum ScreenModule {
             config.scalesToFit = false
             return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
 
+        case "all_displays":
+            guard content.displays.count > 1 else {
+                throw ScreenModuleError.missingParameter("all_displays requires 2+ displays; found \(content.displays.count)")
+            }
+            var images: [CGImage] = []
+            for disp in content.displays {
+                let f = SCContentFilter(display: disp, excludingWindows: [])
+                let c = SCStreamConfiguration()
+                c.width = disp.width * 2
+                c.height = disp.height * 2
+                c.scalesToFit = false
+                images.append(try await SCScreenshotManager.captureImage(contentFilter: f, configuration: c))
+            }
+            let totalWidth = images.reduce(0) { $0 + $1.width }
+            let maxHeight = images.map { $0.height }.max() ?? 0
+            guard let ctx = CGContext(
+                data: nil, width: totalWidth, height: maxHeight,
+                bitsPerComponent: 8, bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+            ) else {
+                throw ScreenModuleError.captureFailed("Failed to create composite CGContext (\(totalWidth)x\(maxHeight))")
+            }
+            var xOffset = 0
+            for img in images {
+                ctx.draw(img, in: CGRect(x: xOffset, y: maxHeight - img.height, width: img.width, height: img.height))
+                xOffset += img.width
+            }
+            guard let composite = ctx.makeImage() else {
+                throw ScreenModuleError.captureFailed("Failed to finalize composite image")
+            }
+            return composite
+
         default: // "display"
-            guard let display = content.displays.first else {
+            guard !content.displays.isEmpty else {
                 throw ScreenModuleError.noDisplays
             }
+            let dispIdx = displayIndex ?? 0
+            guard dispIdx >= 0, dispIdx < content.displays.count else {
+                let available = content.displays.enumerated().map { "\($0.offset): \($0.element.width)x\($0.element.height)" }.joined(separator: ", ")
+                throw ScreenModuleError.missingParameter("displayIndex \(dispIdx) out of range. Available: [\(available)]")
+            }
+            let display = content.displays[dispIdx]
             let filter = SCContentFilter(display: display, excludingWindows: [])
             let config = SCStreamConfiguration()
             config.width = display.width * 2
@@ -175,8 +221,8 @@ public enum ScreenModule {
                 "properties": .object([
                     "target": .object([
                         "type": .string("string"),
-                        "description": .string("Capture target: 'display', 'window', or 'region' (default: 'display')"),
-                        "enum": .array([.string("display"), .string("window"), .string("region")])
+                        "description": .string("Capture target: 'display', 'window', 'region', or 'all_displays' (default: 'display')"),
+                        "enum": .array([.string("display"), .string("window"), .string("region"), .string("all_displays")])
                     ]),
                     "windowId": .object([
                         "type": .string("integer"),
@@ -196,6 +242,10 @@ public enum ScreenModule {
                         "type": .string("string"),
                         "description": .string("Image format: 'png' or 'jpg' (default: 'png'). JPEG uses 0.8 quality."),
                         "enum": .array([.string("png"), .string("jpg")])
+                    ]),
+                    "displayIndex": .object([
+                        "type": .string("integer"),
+                        "description": .string("Display index to capture (default: 0 = main display). Use to target a specific monitor. Ignored when target is 'window' or 'all_displays'.")
                     ])
                 ]),
                 "required": .array([])
@@ -228,6 +278,10 @@ public enum ScreenModule {
                     if case .string(let f) = args["format"] { return f }
                     return "png"
                 }()
+                let displayIndex: Int? = {
+                    if case .int(let d) = args["displayIndex"] { return d }
+                    return nil
+                }()
 
                 // Cleanup old capture files (best-effort, never blocks)
                 cleanupCaptureFiles()
@@ -235,7 +289,7 @@ public enum ScreenModule {
                 // Capture
                 let cgImage: CGImage
                 do {
-                    cgImage = try await captureImage(target: target, windowId: windowId, region: region)
+                    cgImage = try await captureImage(target: target, windowId: windowId, region: region, displayIndex: displayIndex)
                 } catch let error as ScreenModuleError {
                     return error.toResponse()
                 } catch {
@@ -262,12 +316,27 @@ public enum ScreenModule {
 
                 let fileSize = (try? FileManager.default.attributesOfItem(atPath: filePath)[.size] as? Int) ?? 0
 
+                // Fetch display info for response metadata
+                let displayInfoArray: [Value] = {
+                    guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else { return [] }
+                    return content.displays.enumerated().map { idx, d in
+                        .object([
+                            "index": .int(idx),
+                            "width": .int(d.width),
+                            "height": .int(d.height),
+                            "isMain": .bool(idx == 0)
+                        ])
+                    }
+                }()
+
                 var response: [String: Value] = [
                     "filePath": .string(filePath),
                     "width": .int(cgImage.width),
                     "height": .int(cgImage.height),
                     "bytes": .int(fileSize),
-                    "format": .string(format)
+                    "format": .string(format),
+                    "displayCount": .int(displayInfoArray.count),
+                    "displays": .array(displayInfoArray)
                 ]
                 if resolved.isFallback {
                     response["warning"] = .string("Configured output directory is invalid or not writable — fell back to /tmp")
@@ -287,8 +356,8 @@ public enum ScreenModule {
                 "properties": .object([
                     "target": .object([
                         "type": .string("string"),
-                        "description": .string("Capture target: 'display', 'window', or 'region' (default: 'display')"),
-                        "enum": .array([.string("display"), .string("window"), .string("region")])
+                        "description": .string("Capture target: 'display', 'window', 'region', or 'all_displays' (default: 'display')"),
+                        "enum": .array([.string("display"), .string("window"), .string("region"), .string("all_displays")])
                     ]),
                     "windowId": .object([
                         "type": .string("integer"),
@@ -307,6 +376,10 @@ public enum ScreenModule {
                     "language": .object([
                         "type": .string("string"),
                         "description": .string("OCR recognition language (default: 'en'). Supports ISO 639-1 codes.")
+                    ]),
+                    "displayIndex": .object([
+                        "type": .string("integer"),
+                        "description": .string("Display index for capture (default: 0 = main display). Use to target a specific monitor. Ignored when target is 'window' or 'all_displays'.")
                     ])
                 ]),
                 "required": .array([])
@@ -339,11 +412,15 @@ public enum ScreenModule {
                     if case .string(let l) = args["language"] { return l }
                     return "en"
                 }()
+                let displayIndex: Int? = {
+                    if case .int(let d) = args["displayIndex"] { return d }
+                    return nil
+                }()
 
                 // Capture screen
                 let cgImage: CGImage
                 do {
-                    cgImage = try await captureImage(target: target, windowId: windowId, region: region)
+                    cgImage = try await captureImage(target: target, windowId: windowId, region: region, displayIndex: displayIndex)
                 } catch let error as ScreenModuleError {
                     return error.toResponse()
                 } catch {

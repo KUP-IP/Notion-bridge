@@ -356,8 +356,11 @@ public enum ChromeModule {
                         "errorNumber": .int(result.errorNumber ?? -1)
                     ])
                 }
+                let resultValue = result.value ?? ""
+                let isVoid = result.value == nil
                 return .object([
-                    "result": .string(result.value ?? "")
+                    "result": .string(resultValue),
+                    "resultType": .string(isVoid ? "void" : "string")
                 ])
             }
         ))
@@ -475,6 +478,6 @@ public enum ChromeModule {
             return AppleScriptResult(value: nil, error: errorMessage, errorNumber: errorNumber)
         }
 
-        return AppleScriptResult(value: result?.stringValue ?? "", error: nil, errorNumber: nil)
+        return AppleScriptResult(value: result?.stringValue, error: nil, errorNumber: nil)
     }
 }

@@ -202,8 +202,20 @@ public enum NotionModule {
                 }
 
                 guard let propsData = propsJSON.data(using: .utf8),
-                      let propsObj = try? JSONSerialization.jsonObject(with: propsData) as? [String: Any] else {
+                      var propsObj = try? JSONSerialization.jsonObject(with: propsData) as? [String: Any] else {
                     return .object(["error": .string("Invalid JSON in 'properties' parameter")])
+                }
+
+                // File property sugar: ["id1", "id2"] → {"files": [{"type": "file_upload", "file_upload": {"id": "id1"}}, ...]}
+                for (key, value) in propsObj {
+                    if let arr = value as? [String], !arr.isEmpty,
+                       arr.allSatisfy({ $0.count >= 32 && $0.count <= 36 }) {
+                        // Heuristic: array of UUID-length strings → treat as file upload IDs
+                        let files = arr.map { id in
+                            ["type": "file_upload", "file_upload": ["id": id]] as [String: Any]
+                        }
+                        propsObj[key] = ["files": files] as [String: Any]
+                    }
                 }
 
                 let envelope: [String: Any] = ["properties": propsObj]
@@ -732,6 +744,19 @@ public enum NotionModule {
                     case "txt": return "text/plain"
                     case "json": return "application/json"
                     case "csv": return "text/csv"
+                    case "mp4": return "video/mp4"
+                    case "mov": return "video/quicktime"
+                    case "mp3": return "audio/mpeg"
+                    case "wav": return "audio/wav"
+                    case "m4a": return "audio/mp4"
+                    case "ogg": return "audio/ogg"
+                    case "webm": return "video/webm"
+                    case "webp": return "image/webp"
+                    case "svg": return "image/svg+xml"
+                    case "html", "htm": return "text/html"
+                    case "xml": return "text/xml"
+                    case "zip": return "application/zip"
+                    case "md": return "text/markdown"
                     default: return "application/octet-stream"
                     }
                 }()
