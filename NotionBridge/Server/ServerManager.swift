@@ -26,7 +26,7 @@ public actor ServerManager {
     private var auditLog: AuditLog?
     private var securityGate: SecurityGate?
 
-    /// The configured SSE port (from NOTION_BRIDGE_PORT env var, default 9700).
+    /// The configured SSE port (config.json -> env var -> default).
     public nonisolated let ssePort: Int
 
     /// Callback invoked on the main actor after each successful tool dispatch.
@@ -51,7 +51,7 @@ public actor ServerManager {
         self.onToolCall = onToolCall
         self.onClientConnected = onClientConnected
         self.onClientDisconnected = onClientDisconnected
-        self.ssePort = Int(ProcessInfo.processInfo.environment["NOTION_BRIDGE_PORT"] ?? "") ?? 9700
+        self.ssePort = ConfigManager.shared.ssePort
     }
 
     // MARK: - Setup
@@ -140,7 +140,7 @@ public actor ServerManager {
             return .init(content: [.text(.init(text))], isError: isError)
         }
 
-        // 7. Create SSE server (configurable port via NOTION_BRIDGE_PORT)
+        // 7. Create SSE server (configurable port via config/env fallback chain)
         // V1-QUALITY-C2: Pass onClientConnected callback for client identification
         self.sseServer = SSEServer(
             host: "127.0.0.1",

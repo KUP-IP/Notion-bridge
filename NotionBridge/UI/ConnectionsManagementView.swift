@@ -377,7 +377,6 @@ struct AddConnectionSheet: View {
     @Environment(\.dismiss) private var dismiss
     let onComplete: () -> Void
 
-    @State private var selectedType: ConnectionItem.ConnectionType = .notion
     @State private var connectionName = ""
     @State private var token = ""
     @State private var makePrimary = false
@@ -389,26 +388,16 @@ struct AddConnectionSheet: View {
             Text("Add Connection")
                 .font(.headline)
 
-            // Type selector
-            Picker("Type", selection: $selectedType) {
-                ForEach(ConnectionItem.ConnectionType.allCases) { type in
-                    Label(type.rawValue, systemImage: type.icon).tag(type)
-                }
-            }
-            .pickerStyle(.segmented)
-
             // Name
             TextField("Connection name (e.g. Work, Personal)", text: $connectionName)
                 .textFieldStyle(.roundedBorder)
 
             // Token
-            SecureField(selectedType == .notion ? "Notion API token (ntn_...)" : "Google Drive OAuth2 token", text: $token)
+            SecureField("Notion API token (ntn_...)", text: $token)
                 .textFieldStyle(.roundedBorder)
 
-            if selectedType == .notion {
-                Toggle("Set as primary workspace", isOn: $makePrimary)
-                    .font(.callout)
-            }
+            Toggle("Set as primary workspace", isOn: $makePrimary)
+                .font(.callout)
 
             if let error = errorMessage {
                 Text(error)
@@ -416,21 +405,12 @@ struct AddConnectionSheet: View {
                     .foregroundStyle(.red)
             }
 
-            // Help
-            Group {
-                if selectedType == .notion {
-                    Link(destination: URL(string: "https://www.notion.so/profile/integrations")!) {
-                        HStack(spacing: 4) {
-                            Image(systemName: "globe")
-                                .font(.caption2)
-                            Text("Create an internal integration at notion.so")
-                                .font(.caption)
-                        }
-                    }
-                } else {
-                    Text("Paste a Google Drive OAuth2 access token. Browser OAuth coming in V3.")
+            Link(destination: URL(string: "https://www.notion.so/profile/integrations")!) {
+                HStack(spacing: 4) {
+                    Image(systemName: "globe")
+                        .font(.caption2)
+                    Text("Create an internal integration at notion.so")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -460,13 +440,11 @@ struct AddConnectionSheet: View {
         let trimmedName = connectionName.trimmingCharacters(in: .whitespaces)
 
         do {
-            if selectedType == .notion {
-                try await NotionClientRegistry.shared.addConnection(
-                    name: trimmedName,
-                    token: token,
-                    primary: makePrimary
-                )
-            }
+            try await NotionClientRegistry.shared.addConnection(
+                name: trimmedName,
+                token: token,
+                primary: makePrimary
+            )
             await ConnectionHealthChecker.shared.invalidateAll()
             onComplete()
             dismiss()

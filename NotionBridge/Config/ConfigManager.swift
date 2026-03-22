@@ -24,6 +24,7 @@ public final class ConfigManager: @unchecked Sendable {
     /// Default screen output directory (PKT-375).
     public static let defaultScreenOutputDir = "~/Desktop"
     public static let defaultLearnedAllowPrefixes: [String] = []
+    public static let defaultSSEPort = BridgeConstants.defaultSSEPort
 
     private let configURL: URL
     private let queue = DispatchQueue(label: "com.notionbridge.config", attributes: .concurrent)
@@ -147,6 +148,47 @@ public final class ConfigManager: @unchecked Sendable {
                     try writeConfig(config)
                 } catch {
                     print("[ConfigManager] ⚠️ Failed to write notionAPIToken: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    // MARK: - SSE Port
+
+    /// Read/write the SSE port from config.json.
+    /// Resolution order on read: config.json -> NOTION_BRIDGE_PORT env -> 9700.
+    public var ssePort: Int {
+        get {
+            queue.sync {
+                let config = readConfig()
+                if let port = config["ssePort"] as? Int, (1...65535).contains(port) {
+                    return port
+                }
+                if let portString = config["ssePort"] as? String,
+                   let port = Int(portString),
+                   (1...65535).contains(port) {
+                    return port
+                }
+                if let envValue = ProcessInfo.processInfo.environment["NOTION_BRIDGE_PORT"],
+                   let envPort = Int(envValue),
+                   (1...65535).contains(envPort) {
+                    return envPort
+                }
+                return Self.defaultSSEPort
+            }
+        }
+        set {
+            queue.sync(flags: .barrier) {
+                var config = readConfig()
+                if (1...65535).contains(newValue) {
+                    config["ssePort"] = newValue
+                } else {
+                    config.removeValue(forKey: "ssePort")
+                }
+                do {
+                    try writeConfig(config)
+                } catch {
+                    print("[ConfigManager] ⚠️ Failed to write ssePort: \(error.localizedDescription)")
                 }
             }
         }

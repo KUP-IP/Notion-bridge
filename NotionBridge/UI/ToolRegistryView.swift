@@ -118,22 +118,6 @@ struct ToolRegistryView: View {
                     }
                 }
 
-                // F4: Reset to Defaults — only visible when user overrides exist
-                if !tierOverrides.isEmpty {
-                    Section {
-                        Button {
-                            tierOverrides.removeAll()
-                            persistTierOverrides()
-                        } label: {
-                            HStack {
-                                Image(systemName: "arrow.counterclockwise")
-                                Text("Reset to Defaults")
-                            }
-                        }
-                        .foregroundStyle(.orange)
-                    }
-                }
-
                 ForEach(groupedTools, id: \.module) { group in
                     Section {
                         ForEach(group.tools) { tool in
@@ -148,6 +132,22 @@ struct ToolRegistryView: View {
                                 .font(.caption)
                                 .foregroundStyle(BridgeColors.secondary)
                         }
+                    }
+                }
+
+                // F4: Reset to Defaults — keep this after the tool list.
+                if !tierOverrides.isEmpty {
+                    Section {
+                        Button {
+                            tierOverrides.removeAll()
+                            persistTierOverrides()
+                        } label: {
+                            HStack {
+                                Image(systemName: "arrow.counterclockwise")
+                                Text("Reset to Defaults")
+                            }
+                        }
+                        .foregroundStyle(.orange)
                     }
                 }
             }

@@ -29,6 +29,8 @@ public struct PermissionView: View {
 
     // PKT-357 F14: Timer publisher for auto-refresh
     private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    @State private var previousGrantStatus: [PermissionManager.Grant: PermissionManager.GrantStatus] = [:]
+    @State private var recentlyGranted: Set<PermissionManager.Grant> = []
 
     public init(permissionManager: PermissionManager) {
         self.permissionManager = permissionManager
@@ -50,7 +52,7 @@ public struct PermissionView: View {
             }
 
             // PKT-341: TCC rebuild note — grants are tied to code signature
-            Text("Note: Xcode rebuilds may invalidate TCC grants (tied to code signature). Re-grant in System Settings if indicators turn red after a rebuild.")
+            Text("Note: Xcode rebuilds may invalidate TCC grants (tied to code signature). Re-grant in System Settings if indicators turn orange after a rebuild.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.top, 4)
@@ -58,19 +60,22 @@ public struct PermissionView: View {
         // PKT-357 F14: Check permissions on appear
         // V1-PATCH-003: checkAll() is now async (automation probes off main thread)
         .task {
-            await permissionManager.checkAll()
-        }
-        // PKT-366 F6: Async notification check on appear
-        .task {
-            await permissionManager.checkNotifications()
+            await permissionManager.checkAllAsync()
+            await MainActor.run { captureGrantTransitions() }
         }
         // PKT-369 N3: Auto-refresh every 2s with async variant (includes notifications)
         .onReceive(refreshTimer) { _ in
-            Task { await permissionManager.checkAllAsync() }
+            Task {
+                await permissionManager.checkAllAsync()
+                await MainActor.run { captureGrantTransitions() }
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             // PKT-369 N3: Use async variant for complete permission check
-            Task { await permissionManager.checkAllAsync() }
+            Task {
+                await permissionManager.checkAllAsync()
+                await MainActor.run { captureGrantTransitions() }
+            }
         }
     }
 
@@ -102,6 +107,10 @@ public struct PermissionView: View {
                     Text("Checking\u{2026}")
                         .font(.caption)
                         .foregroundStyle(.yellow)
+                } else if recentlyGranted.contains(grant) {
+                    Text("\u{2713} Granted")
+                        .font(.caption)
+                        .foregroundStyle(.green)
                 } else {
                     Text(permissionManager.statusLabel(for: grant))
                         .font(.caption)
@@ -179,10 +188,29 @@ public struct PermissionView: View {
     private func statusColor(_ status: PermissionManager.GrantStatus) -> Color {
         switch status {
         case .granted: return .green
-        case .denied: return .red
+        case .denied: return .orange
         case .unknown: return .orange
         case .partiallyGranted: return .orange
         case .restartRecommended: return .orange
+        }
+    }
+
+    @MainActor
+    private func captureGrantTransitions() {
+        for grant in PermissionManager.Grant.v1Cases {
+            let current = permissionManager.status(for: grant)
+            if let previous = previousGrantStatus[grant],
+               previous == .denied,
+               current == .granted {
+                recentlyGranted.insert(grant)
+                Task {
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    await MainActor.run {
+                        recentlyGranted.remove(grant)
+                    }
+                }
+            }
+            previousGrantStatus[grant] = current
         }
     }
 
