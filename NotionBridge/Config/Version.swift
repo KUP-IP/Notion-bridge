@@ -25,3 +25,11 @@ public enum AppVersion {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? marketing
     }
 }
+
+/// Protocol and networking constants for NotionBridge.
+public enum BridgeConstants {
+    /// MCP protocol version supported by this build.
+    public static let mcpProtocolVersion = "2024-11-05"
+    /// Default SSE server port.
+    public static let defaultSSEPort = 9700
+}
