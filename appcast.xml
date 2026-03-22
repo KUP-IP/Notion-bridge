@@ -1,0 +1,16 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>NotionBridge</title>
+        <item>
+            <title>1.2.0</title>
+            <pubDate>Sun, 22 Mar 2026 11:13:52 -0500</pubDate>
+            <link>https://github.com/KUP-IP/Notion-bridge/releases</link>
+            <sparkle:version>4</sparkle:version>
+            <sparkle:shortVersionString>1.2.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <enclosure url="https://github.com/KUP-IP/Notion-bridge/releases/download/v1.2.0/notion-bridge-v1.2.0.dmg" length="12937327" type="application/octet-stream" sparkle:edSignature="SdsC4ZpPNoPbR6muG4zldJTu2tS82YOj9OkqUFdr48hmZMNAfnbVRpBz17vbOFRrombjdGY10TnvJpnW2+o8Dg=="/>
+        </item>
+    </channel>
+</rss>

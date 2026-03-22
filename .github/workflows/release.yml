@@ -1,7 +1,7 @@
 # Required repository secrets:
 # - APPLE_CERTIFICATE_BASE64: Base64-encoded .p12 Developer ID Application certificate
 # - APPLE_CERTIFICATE_PASSWORD: Password for the .p12 file
-# - APPLE_ID: Apple ID email for notarytool (isaiah@keepup.club)
+# - APPLE_ID: Apple ID email for notarytool
 # - APPLE_ID_PASSWORD: App-specific password for notarytool
 # - APPLE_TEAM_ID: Apple Team ID (VP24Z9CS22)
 
@@ -9,6 +9,10 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to use for DMG URLs"
+        required: false
   push:
     tags:
       - "v*"
@@ -23,25 +27,29 @@ jobs:
       - name: Run test suite
         run: make test
 
-  build-sign-notarize:
+  build-sign-notarize-dmg:
     runs-on: macos-15
     needs: test
     permissions:
       contents: write
     env:
-      APP_BUNDLE_PATH: .build/NotionBridge.app
-      APP_ZIP_PATH: .build/NotionBridge.zip
       SIGNING_IDENTITY: "Developer ID Application: Isaiah Peters (VP24Z9CS22)"
-      ENTITLEMENTS_PATH: NotionBridge.entitlements
+      NOTARIZE_PROFILE: notarytool-profile
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build release binary
-        run: swift build -c release
+      - name: Capture release metadata
+        run: |
+          echo "VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)" >> "$GITHUB_ENV"
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            echo "RELEASE_TAG=${{ github.event.inputs.release_tag }}" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_TAG=${{ github.ref_name }}" >> "$GITHUB_ENV"
+          fi
 
-      - name: Build app bundle
-        run: make app
+      - name: Install DMG tooling
+        run: brew install create-dmg
 
       - name: Import Apple certificate into temporary keychain
         env:
@@ -68,54 +76,38 @@ jobs:
           security default-keychain -d user -s "$KEYCHAIN_PATH"
 
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
           echo "CERT_PATH=$CERT_PATH" >> "$GITHUB_ENV"
 
-      - name: Code sign app bundle
-        run: |
-          codesign --force --options runtime --timestamp \
-            --entitlements "$ENTITLEMENTS_PATH" \
-            --sign "$SIGNING_IDENTITY" \
-            "$APP_BUNDLE_PATH"
-
-      - name: Verify code signing
-        run: codesign --verify --deep --strict "$APP_BUNDLE_PATH"
-
-      - name: Create ZIP for notarization
-        run: ditto -c -k --keepParent "$APP_BUNDLE_PATH" "$APP_ZIP_PATH"
-
-      - name: Submit app for notarization
+      - name: Store notarytool credentials
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          xcrun notarytool submit "$APP_ZIP_PATH" \
+          xcrun notarytool store-credentials "$NOTARIZE_PROFILE" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_ID_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait
+            --team-id "$APPLE_TEAM_ID"
 
-      - name: Staple notarization ticket
-        run: xcrun stapler staple "$APP_BUNDLE_PATH"
+      - name: Build notarized DMG
+        run: |
+          make dmg \
+            SIGNING_ID="$SIGNING_IDENTITY" \
+            NOTARIZE_PROFILE="$NOTARIZE_PROFILE" \
+            RELEASE_TAG="$RELEASE_TAG" \
+            GENERATE_APPCAST=0
 
-      - name: Final Gatekeeper verification
-        run: spctl --assess --verbose "$APP_BUNDLE_PATH"
-
-      - name: Re-zip stapled app
-        run: ditto -c -k --keepParent "$APP_BUNDLE_PATH" "$APP_ZIP_PATH"
-
-      - name: Upload signed notarized app artifact
+      - name: Upload DMG artifact
         uses: actions/upload-artifact@v4
         with:
-          name: NotionBridge.zip
-          path: ${{ env.APP_ZIP_PATH }}
+          name: notion-bridge-v${{ env.VERSION }}.dmg
+          path: .build/notion-bridge-v${{ env.VERSION }}.dmg
 
-      - name: Publish GitHub Release (tag only)
-        if: github.event_name == 'push' && github.ref_type == 'tag'
+      - name: Publish GitHub release asset
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ env.APP_ZIP_PATH }}
+          files: .build/notion-bridge-v${{ env.VERSION }}.dmg
 
       - name: Cleanup temporary keychain
         if: ${{ always() }}

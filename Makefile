@@ -6,23 +6,38 @@
 # Debug workflow:    make debug
 # Dev app bundle:    make app (unsigned, for local testing)
 
-APP_NAME       = Notion Bridge
-BUNDLE_ID      = kup.solutions.notion-bridge
-BINARY_NAME    = NotionBridge
-BUILD_DIR      = .build
-RELEASE_DIR    = $(BUILD_DIR)/release
-DEBUG_DIR      = $(BUILD_DIR)/debug
-APP_BUNDLE     = $(BUILD_DIR)/NotionBridge.app
-VERSION       := $(shell /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
-DMG_NAME       = notion-bridge-v$(VERSION).dmg
-DMG_STAGING    = $(BUILD_DIR)/dmg-staging
-SIGNING_ID    ?= Developer ID Application: Isaiah Peters (VP24Z9CS22)
-NOTARIZE_PROFILE ?= notionbridge-notarize
+APP_NAME        = Notion Bridge
+DMG_VOLUME_NAME = NotionBridge
+BUNDLE_ID       = kup.solutions.notion-bridge
+BINARY_NAME     = NotionBridge
+BUILD_DIR       = .build
+RELEASE_DIR     = $(BUILD_DIR)/release
+DEBUG_DIR       = $(BUILD_DIR)/debug
+APP_BUNDLE      = $(BUILD_DIR)/NotionBridge.app
+FRAMEWORKS_DIR  = $(APP_BUNDLE)/Contents/Frameworks
+VERSION        := $(shell /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
+DMG_NAME        = notion-bridge-v$(VERSION).dmg
+DMG_PATH        = $(BUILD_DIR)/$(DMG_NAME)
+DMG_STAGING     = $(BUILD_DIR)/dmg-staging
+DMG_BACKGROUND  = $(BUILD_DIR)/dmg-background.png
+APPCAST_PATH   ?= appcast.xml
+APPCAST_ARCHIVES_DIR = $(BUILD_DIR)/sparkle-updates
+RELEASE_TAG    ?= v$(VERSION)
+APPCAST_FEED_URL ?= https://raw.githubusercontent.com/KUP-IP/Notion-bridge/main/appcast.xml
+APPCAST_LINK   ?= https://github.com/KUP-IP/Notion-bridge/releases
+APPCAST_DOWNLOAD_URL_PREFIX ?= https://github.com/KUP-IP/Notion-bridge/releases/download/$(RELEASE_TAG)/
+SIGNING_ID     ?= Developer ID Application: Isaiah Peters (VP24Z9CS22)
+NOTARIZE_PROFILE ?= notarytool-profile
+GENERATE_APPCAST ?= 1
 
-INFO_PLIST     = Info.plist
-RESOURCES_DIR  = NotionBridge/App/Resources
+INFO_PLIST      = Info.plist
+RESOURCES_DIR   = NotionBridge/App/Resources
+DMG_ICON        = $(RESOURCES_DIR)/Assets.xcassets/AppIcon.appiconset/icon_512x512.png
+SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
+SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
+SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test app dmg sign notarize verify release clean install clean-tcc
+.PHONY: debug build test app appcast dmg dmg-background sign notarize verify release clean install clean-tcc
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -50,7 +65,9 @@ app: build
 	@rm -rf $(APP_BUNDLE)
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
+	@mkdir -p $(FRAMEWORKS_DIR)
 	@cp $(RELEASE_DIR)/$(BINARY_NAME) "$(APP_BUNDLE)/Contents/MacOS/$(BINARY_NAME)"
+	@install_name_tool -add_rpath "@executable_path/../Frameworks" "$(APP_BUNDLE)/Contents/MacOS/$(BINARY_NAME)"
 	@cp $(INFO_PLIST) $(APP_BUNDLE)/Contents/Info.plist
 	@test -f $(RESOURCES_DIR)/NotionBridge.icns && \
 		cp $(RESOURCES_DIR)/NotionBridge.icns $(APP_BUNDLE)/Contents/Resources/ || true
@@ -101,6 +118,12 @@ app: build
 			echo "  ↳ Compiled AppIcon into main Contents/Resources" || \
 			echo "  ⚠️  actool AppIcon compile failed"; \
 		fi
+	@if [ -d "$(SPARKLE_FRAMEWORK)" ]; then \
+		cp -R "$(SPARKLE_FRAMEWORK)" "$(FRAMEWORKS_DIR)/"; \
+		echo "  ↳ Embedded Sparkle.framework"; \
+	else \
+		echo "  ⚠️  Sparkle.framework not found at $(SPARKLE_FRAMEWORK)"; \
+	fi
 	@echo "✅ App bundle: $(APP_BUNDLE)"
 
 # ── Install ────────────────────────────────────────────────────────────
@@ -121,24 +144,74 @@ clean-tcc:
 	-tccutil reset All kup.solutions.notion-bridge
 	@echo "✅ TCC reset complete — permissions will be re-requested on next launch"
 
+# ── Appcast ───────────────────────────────────────────────────
+appcast:
+	@command -v "$(SPARKLE_TOOLS_DIR)/generate_appcast" >/dev/null || { echo "❌ Sparkle generate_appcast tool not found"; exit 1; }
+	@test -f "$(DMG_PATH)" || { echo "❌ DMG not found at $(DMG_PATH). Run 'make dmg' or build the DMG first."; exit 1; }
+	@echo "📰 Generating appcast..."
+	@rm -rf "$(APPCAST_ARCHIVES_DIR)"
+	@rm -f "$(APPCAST_PATH)"
+	@mkdir -p "$(APPCAST_ARCHIVES_DIR)"
+	@cp "$(DMG_PATH)" "$(APPCAST_ARCHIVES_DIR)/"
+	@"$(SPARKLE_TOOLS_DIR)/generate_appcast" \
+		--download-url-prefix "$(APPCAST_DOWNLOAD_URL_PREFIX)" \
+		--link "$(APPCAST_LINK)" \
+		-o "$(APPCAST_PATH)" \
+		"$(APPCAST_ARCHIVES_DIR)"
+	@rm -rf "$(APPCAST_ARCHIVES_DIR)"
+	@echo "✅ Appcast: $(APPCAST_PATH)"
+
+# ── DMG Background ────────────────────────────────────────────
+dmg-background:
+	@mkdir -p $(BUILD_DIR)
+	@python3 scripts/generate_dmg_background.py "$(DMG_BACKGROUND)" "$(DMG_ICON)"
+	@echo "🎨 DMG background: $(DMG_BACKGROUND)"
+
 # ── DMG (disk image) ──────────────────────────────────────────
-dmg: app
-	@echo "💿 Creating disk image..."
+dmg: notarize dmg-background
+	@command -v create-dmg >/dev/null || { echo "❌ create-dmg is required. Install it with: brew install create-dmg"; exit 1; }
+	@echo "💿 Creating production DMG..."
 	@rm -rf $(DMG_STAGING)
 	@mkdir -p $(DMG_STAGING)
-	@cp -R $(APP_BUNDLE) $(DMG_STAGING)/
-	@ln -s /Applications $(DMG_STAGING)/Applications
-	@test -f README.md && cp README.md $(DMG_STAGING)/ || true
-	hdiutil create -volname "$(APP_NAME)" \
-		-srcfolder $(DMG_STAGING) \
-		-ov -format UDZO \
-		$(BUILD_DIR)/$(DMG_NAME)
+	@cp -R "$(APP_BUNDLE)" "$(DMG_STAGING)/"
+	@rm -f "$(DMG_PATH)"
+	create-dmg \
+		--volname "$(DMG_VOLUME_NAME)" \
+		--volicon "$(RESOURCES_DIR)/NotionBridge.icns" \
+		--background "$(DMG_BACKGROUND)" \
+		--window-pos 220 140 \
+		--window-size 640 360 \
+		--text-size 14 \
+		--icon-size 128 \
+		--icon "$(notdir $(APP_BUNDLE))" 180 180 \
+		--hide-extension "$(notdir $(APP_BUNDLE))" \
+		--app-drop-link 460 180 \
+		--format UDZO \
+		"$(DMG_PATH)" \
+		"$(DMG_STAGING)"
 	@rm -rf $(DMG_STAGING)
-	@echo "✅ DMG: $(BUILD_DIR)/$(DMG_NAME)"
+	@echo "🔏 Signing DMG..."
+	codesign --force --sign "$(SIGNING_ID)" --timestamp "$(DMG_PATH)"
+	@echo "📤 Notarizing DMG..."
+	xcrun notarytool submit "$(DMG_PATH)" --keychain-profile "$(NOTARIZE_PROFILE)" --wait
+	@echo "📎 Stapling DMG..."
+	xcrun stapler staple "$(DMG_PATH)"
+	@echo "🔍 Verifying DMG..."
+	spctl --assess --type open --context context:primary-signature --verbose "$(DMG_PATH)"
+	@if [ "$(GENERATE_APPCAST)" = "1" ]; then \
+		$(MAKE) appcast RELEASE_TAG="$(RELEASE_TAG)" APPCAST_PATH="$(APPCAST_PATH)" APPCAST_DOWNLOAD_URL_PREFIX="$(APPCAST_DOWNLOAD_URL_PREFIX)" APPCAST_LINK="$(APPCAST_LINK)"; \
+	fi
+	@echo "✅ DMG: $(DMG_PATH)"
 
 # ── Sign ───────────────────────────────────────────────────────
 sign: app
 	@echo "🔏 Signing app bundle..."
+	@if [ -d "$(FRAMEWORKS_DIR)" ]; then \
+		find "$(FRAMEWORKS_DIR)" \( -name "*.framework" -o -name "*.dylib" \) -maxdepth 1 | while read framework; do \
+			codesign --force --deep --options runtime --timestamp --sign "$(SIGNING_ID)" "$$framework"; \
+			echo "  ↳ Signed $$(basename "$$framework")"; \
+		done; \
+	fi
 	codesign --force --deep --sign "$(SIGNING_ID)" \
 		--entitlements NotionBridge.entitlements \
 		--options runtime \
@@ -164,8 +237,8 @@ verify:
 	@echo "✅ Verified"
 
 # ── Release (full pipeline) ────────────────────────────────────
-release: clean test app sign notarize dmg verify
-	@echo "🚀 Release complete: $(BUILD_DIR)/$(DMG_NAME)"
+release: clean test dmg verify
+	@echo "🚀 Release complete: $(DMG_PATH)"
 
 # ── Clean ──────────────────────────────────────────────────────
 clean:

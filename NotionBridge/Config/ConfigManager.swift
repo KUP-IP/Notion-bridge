@@ -94,6 +94,10 @@ public final class ConfigManager: @unchecked Sendable {
                 config["learnedAllowPrefixes"] = Self.defaultLearnedAllowPrefixes
                 didUpdate = true
             }
+            if config["bridgeConnections"] == nil {
+                config["bridgeConnections"] = ["stripe": ["apiKey": ""]]
+                didUpdate = true
+            }
             guard didUpdate else { return }
             do {
                 try writeConfig(config)
@@ -218,7 +222,43 @@ public final class ConfigManager: @unchecked Sendable {
         }
     }
 
-    // MARK: - Generic Config Access (V3-QUALITY A4)
+    // MARK: - Bridge Connections (V2-BRIDGE-CONNECTIONS)
+
+    /// Read/write the Stripe API key from bridgeConnections in config.json.
+    public var stripeAPIKey: String? {
+        get {
+            queue.sync {
+                let config = readConfig()
+                guard let bc = config["bridgeConnections"] as? [String: Any],
+                      let stripe = bc["stripe"] as? [String: Any],
+                      let key = stripe["apiKey"] as? String, !key.isEmpty else {
+                    return nil
+                }
+                return key
+            }
+        }
+        set {
+            queue.sync(flags: .barrier) {
+                var config = readConfig()
+                var bc = config["bridgeConnections"] as? [String: Any] ?? [:]
+                var stripe = bc["stripe"] as? [String: Any] ?? [:]
+                if let value = newValue {
+                    stripe["apiKey"] = value
+                } else {
+                    stripe.removeValue(forKey: "apiKey")
+                }
+                bc["stripe"] = stripe
+                config["bridgeConnections"] = bc
+                do {
+                    try writeConfig(config)
+                } catch {
+                    print("[ConfigManager] ⚠️ Failed to write stripeAPIKey: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+        // MARK: - Generic Config Access (V3-QUALITY A4)
 
     /// The config.json file URL (exposed for callers that need the path).
     public var configFileURL: URL { configURL }
@@ -362,6 +402,14 @@ public final class ConfigManager: @unchecked Sendable {
            !KeychainManager.shared.exists(key: KeychainManager.Key.notionAPIToken) {
             KeychainManager.shared.save(key: KeychainManager.Key.notionAPIToken, value: token)
             print("[ConfigManager] Migrated notion_api_token to Keychain")
+        }
+
+        // Migrate Stripe API key
+        if let stripeKey = stripeAPIKey, !stripeKey.isEmpty,
+           !KeychainManager.shared.exists(key: KeychainManager.Key.stripeAPIKey) {
+            KeychainManager.shared.save(key: KeychainManager.Key.stripeAPIKey, value: stripeKey)
+            stripeAPIKey = nil
+            print("[ConfigManager] Migrated stripe_api_key to Keychain")
         }
 
     }

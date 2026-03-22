@@ -1,141 +1,20 @@
-# ci.yml – NotionBridge · Mac Bridge
-# V1-06 GitHub Actions Pipeline
-#
-# Triggers: push to main, pull requests
-# Pipeline: build → test → sign → notarize → artifact
-
-name: NotionBridge CI/CD
+name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
-
-env:
-  SCHEME: NotionBridge
-  APP_NAME: Notion Bridge
-  SWIFT_VERSION: "6.2"
 
 jobs:
   build-and-test:
-    name: Build & Test
-    runs-on: macos-14  # Apple Silicon runner (M1)
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Swift
-        uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: $ env.SWIFT_VERSION 
-
-      - name: Resolve dependencies
-        run: swift package resolve
-
-      - name: Build (strict concurrency)
-        run: |
-          swift build -c release \
-            -Xswiftc -strict-concurrency=complete
-
-      - name: Run tests
-        run: swift run NotionBridgeTests
-
-  sign-and-notarize:
-    name: Sign & Notarize
-    needs: build-and-test
-    runs-on: macos-14
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Swift
-        uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: $ env.SWIFT_VERSION 
 
       - name: Build release
-        run: swift build -c release -Xswiftc -strict-concurrency=complete
+        run: make build
 
-      - name: Import signing certificate
-        if: env.APPLE_CERTIFICATE_BASE64 != ''
-        env:
-          APPLE_CERTIFICATE_BASE64: $ secrets.APPLE_CERTIFICATE_BASE64 
-          APPLE_CERTIFICATE_PASSWORD: $ secrets.APPLE_CERTIFICATE_PASSWORD 
-        run: |
-          # Decode certificate
-          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
-
-          # Create temporary keychain
-          security create-keychain -p "" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "" build.keychain
-          security set-keychain-settings -t 3600 -u build.keychain
-
-          # Import certificate
-          security import certificate.p12 \
-            -k build.keychain \
-            -P "$APPLE_CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
-
-          # Clean up
-          rm certificate.p12
-
-      - name: Code sign
-        if: env.APPLE_CERTIFICATE_BASE64 != ''
-        env:
-          APPLE_CERTIFICATE_BASE64: $ secrets.APPLE_CERTIFICATE_BASE64 
-          SIGNING_IDENTITY: $ secrets.SIGNING_IDENTITY 
-        run: |
-          codesign --force --sign "$SIGNING_IDENTITY" \
-            --options runtime \
-            --timestamp \
-            .build/release/$ env.SCHEME 
-
-      - name: Notarize
-        if: env.APPLE_CERTIFICATE_BASE64 != '' && env.NOTARY_APPLE_ID != ''
-        env:
-          APPLE_CERTIFICATE_BASE64: $ secrets.APPLE_CERTIFICATE_BASE64 
-          NOTARY_APPLE_ID: $ secrets.NOTARY_APPLE_ID 
-          NOTARY_PASSWORD: $ secrets.NOTARY_PASSWORD 
-          NOTARY_TEAM_ID: $ secrets.NOTARY_TEAM_ID 
-        run: |
-          # Create zip for submission
-          ditto -c -k --keepParent .build/release/$ env.SCHEME  .build/$ env.SCHEME .zip
-
-          # Submit and wait
-          xcrun notarytool submit .build/$ env.SCHEME .zip \
-            --apple-id "$NOTARY_APPLE_ID" \
-            --password "$NOTARY_PASSWORD" \
-            --team-id "$NOTARY_TEAM_ID" \
-            --wait
-
-          # Staple
-          xcrun stapler staple .build/release/$ env.SCHEME 
-
-      - name: Package DMG
-        run: |
-          mkdir -p .build/dmg
-          cp .build/release/$ env.SCHEME  .build/dmg/$ env.APP_NAME 
-          cp README.md .build/dmg/
-          hdiutil create -volname "$ env.APP_NAME " \
-            -srcfolder .build/dmg \
-            -ov -format UDZO \
-            .build/notion-bridge-v1.1.0.dmg
-
-      - name: Verify signature
-        if: env.APPLE_CERTIFICATE_BASE64 != ''
-        env:
-          APPLE_CERTIFICATE_BASE64: $ secrets.APPLE_CERTIFICATE_BASE64 
-        run: |
-          codesign --verify --verbose .build/release/$ env.SCHEME 
-          echo "✅ Signature verified"
-
-      - name: Upload DMG artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: notion-bridge-v1.1.0.dmg
-          path: .build/notion-bridge-v1.1.0.dmg
-          retention-days: 30
+      - name: Run test suite
+        run: make test
