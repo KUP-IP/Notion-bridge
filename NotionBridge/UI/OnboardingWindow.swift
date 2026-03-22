@@ -13,7 +13,8 @@ import SwiftUI
 import AppKit
 
 /// Manages the first-launch onboarding NSWindow.
-/// Shows a multi-step wizard: Welcome → Permissions → Connection → Test Connection.
+/// Shows a multi-step wizard:
+/// Welcome → Auto Permissions → Manual Permissions → Connection → Test Connection.
 /// Checks `UserDefaults.bool(forKey: "hasCompletedOnboarding")` — skips if true.
 @MainActor
 public final class OnboardingWindowController {
@@ -70,35 +71,30 @@ public final class OnboardingWindowController {
 
 // MARK: - Onboarding View
 
-/// Multi-step onboarding wizard: Welcome → Permissions → Connection → Test Connection.
+/// Multi-step onboarding wizard:
+/// Welcome → Auto Permissions → Manual Permissions → Connection → Test Connection.
 struct OnboardingView: View {
     let permissionManager: PermissionManager
     let onComplete: () -> Void
 
-    private let permissionsRefreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
     @State private var currentStep: OnboardingStep = .welcome
     @State private var healthCheckStatus: HealthCheckStatus = .idle
     @State private var showLegacySSE: Bool = false
-    @State private var isRefreshingPermissions: Bool = false
-    @State private var previousPermissionStatuses: [PermissionManager.Grant: PermissionManager.GrantStatus] = [:]
-    @State private var recentlyGrantedPermissions: Set<PermissionManager.Grant> = []
+    @State private var didAutoAdvanceFromAutoStep: Bool = false
 
     enum OnboardingStep: Int, CaseIterable {
         case welcome = 0
-        case permissions = 1
-        case connection = 2
-        case testConnection = 3
+        case autoPermissions = 1
+        case manualPermissions = 2
+        case connection = 3
+        case testConnection = 4
     }
 
     enum HealthCheckStatus {
         case idle
         case checking
-        case success(milliseconds: Int)
+        case success
         case failed(String)
-    }
-
-    private var ssePort: Int {
-        ConfigManager.shared.ssePort
     }
 
     var body: some View {
@@ -115,8 +111,10 @@ struct OnboardingView: View {
                 switch currentStep {
                 case .welcome:
                     welcomeStep
-                case .permissions:
-                    permissionsStep
+                case .autoPermissions:
+                    autoPermissionsStep
+                case .manualPermissions:
+                    manualPermissionsStep
                 case .connection:
                     connectionStep
                 case .testConnection:
@@ -133,21 +131,6 @@ struct OnboardingView: View {
                 .padding(.bottom, 24)
         }
         .frame(width: 520, height: 480)
-        .task {
-            await permissionManager.checkAllAsync()
-            await MainActor.run {
-                capturePermissionTransitions()
-            }
-        }
-        .onChange(of: currentStep) { _, newStep in
-            if newStep == .permissions {
-                refreshPermissionStatus()
-            }
-        }
-        .onReceive(permissionsRefreshTimer) { _ in
-            guard currentStep == .permissions else { return }
-            refreshPermissionStatus()
-        }
     }
 
     // MARK: - Progress Bar
@@ -165,7 +148,6 @@ struct OnboardingView: View {
     // MARK: - Welcome Step (PKT-357: F6, F7, F8)
 
     private var welcomeStep: some View {
-        let isReturningUser = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
         VStack(spacing: 16) {
             // PKT-357 F7: Larger brand icon for visual impact
             Image(systemName: "bridge.fill")
@@ -173,16 +155,13 @@ struct OnboardingView: View {
                 .foregroundStyle(.purple)
 
             // PKT-357 F6: Explicit opacity to prevent animation fade-in
-            Text(isReturningUser ? "Welcome back to Notion Bridge" : "Welcome to Notion Bridge")
+            Text("Welcome to Notion Bridge")
                 .font(.title)
                 .fontWeight(.semibold)
                 .opacity(1)
 
-            Text(
-                isReturningUser
-                ? "Your local bridge to Notion Agents is ready. Recheck permissions, confirm your connection, and continue where you left off."
-                : "Your Mac, fully connected to Notion Agents. Manage files, execute commands, control apps, and automate workflows through a secure local MCP server. Every action requires your explicit permission."
-            )
+            // PKT-357 F8: Power language — direct, confident, concise
+            Text("Your Mac, fully connected to Notion AI. Manage files, execute commands, control apps, and automate workflows through a secure local MCP server. Every action requires your explicit permission.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -191,172 +170,18 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Permissions Step (PKT-357 F10: All permissions always listed)
+    // MARK: - Permissions Steps (PKT-388 split)
 
-    private var permissionsStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Grant Permissions")
-                .font(.title2)
-                .fontWeight(.semibold)
-                .frame(maxWidth: .infinity, alignment: .center)
-
-            Text("Notion Bridge needs these permissions to work. Grant them one at a time in System Settings.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
-
-            if isRefreshingPermissions {
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Checking permissions…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-            }
-
-            // PKT-357 F10: Always show ALL grants, not just the first missing one
-            VStack(spacing: 8) {
-                ForEach(PermissionManager.Grant.onboardingCases) { grant in
-                    onboardingPermissionRow(grant: grant)
-                }
-            }
-            .padding(.top, 8)
-
-            Button("Refresh Status") {
-                refreshPermissionStatus()
-            }
-            .buttonStyle(.plain)
-            .font(.caption)
-            .foregroundStyle(.blue)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 4)
+    private var autoPermissionsStep: some View {
+        AutoPermissionsStepView(permissionManager: permissionManager) {
+            guard currentStep == .autoPermissions, !didAutoAdvanceFromAutoStep else { return }
+            didAutoAdvanceFromAutoStep = true
+            currentStep = .manualPermissions
         }
     }
 
-    private func onboardingPermissionRow(grant: PermissionManager.Grant) -> some View {
-        let status = permissionManager.status(for: grant)
-        HStack(spacing: 12) {
-            Circle()
-                .fill(status == .granted ? .green : .orange)
-                .frame(width: 10, height: 10)
-                .scaleEffect(isRefreshingPermissions && status != .granted ? 1.12 : 1.0)
-                .animation(.easeInOut(duration: 0.45), value: isRefreshingPermissions)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(grant.displayName)
-                    .font(.callout)
-                Text(grantExplanation(grant))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            if status == .granted {
-                if recentlyGrantedPermissions.contains(grant) {
-                    Text("\u{2713} Granted")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                } else {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-            } else {
-                Button("Allow") {
-                    openSystemSettings(for: grant)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func grantExplanation(_ grant: PermissionManager.Grant) -> String {
-        switch grant {
-        case .accessibility: return "Control UI elements and simulate input"
-        case .screenRecording: return "Capture screen content for AI context"
-        case .fullDiskAccess: return "Read files outside the sandbox"
-        case .automation: return "Script other apps via AppleScript (System Events, Messages, Chrome)"
-        case .notifications: return "Security approvals appear as notification banners"
-        case .contacts: return "Search and read your contacts"
-        }
-    }
-
-    // D2: Modified to trigger permission probes before opening System Settings
-    private func openSystemSettings(for grant: PermissionManager.Grant) {
-        let urlString: String
-        switch grant {
-        case .accessibility:
-            _ = permissionManager.requestAccessibilityAccess()
-            Task {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                await permissionManager.recheckAllForTruth()
-                await MainActor.run { capturePermissionTransitions() }
-            }
-            return
-        case .screenRecording:
-            _ = permissionManager.requestScreenRecordingAccess()
-            Task {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                await permissionManager.recheckAllForTruth()
-                await MainActor.run { capturePermissionTransitions() }
-            }
-            return
-        case .fullDiskAccess:
-            urlString = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
-        case .automation:
-            // D2: Fire the NSAppleScript probe first to trigger the macOS Automation
-            // permission prompt, then open Settings after a short delay so the app
-            // appears in the Automation panel.
-            Task {
-                await permissionManager.requestAutomationAccess()
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
-                    NSWorkspace.shared.open(url)
-                }
-                await permissionManager.recheckAllForTruth()
-                await MainActor.run { capturePermissionTransitions() }
-            }
-            return
-        case .notifications:
-            // PKT-364 D3: Probe-then-deep-link for notification permission.
-            // requestAuthorization triggers system prompt if .notDetermined.
-            // If denied, deep link to System Settings > Notifications.
-            Task {
-                let granted = await permissionManager.requestNotificationAccess()
-                if !granted {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                await permissionManager.recheckAllForTruth()
-                await MainActor.run { capturePermissionTransitions() }
-            }
-            return
-        case .contacts:
-            // D2: Request contacts access first to trigger the macOS "NotionBridge
-            // would like to access your contacts" prompt, then open Settings so the
-            // app appears in the Contacts panel.
-            Task {
-                _ = await permissionManager.requestContactsAccess()
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts") {
-                    NSWorkspace.shared.open(url)
-                }
-                await permissionManager.recheckAllForTruth()
-                await MainActor.run { capturePermissionTransitions() }
-            }
-            return
-        }
-        if let url = URL(string: urlString) {
-            NSWorkspace.shared.open(url)
-        }
-        Task {
-            await permissionManager.recheckAllForTruth()
-            await MainActor.run { capturePermissionTransitions() }
-        }
+    private var manualPermissionsStep: some View {
+        ManualPermissionsStepView(permissionManager: permissionManager)
     }
 
     // MARK: - Connection Step (D3)
@@ -383,7 +208,7 @@ struct OnboardingView: View {
                     {
                       "mcpServers": {
                         "notion-bridge": {
-                              "url": "http://localhost:\(ssePort)/mcp"
+                          "url": "http://localhost:9700/mcp"
                         }
                       }
                     }
@@ -401,7 +226,7 @@ struct OnboardingView: View {
                         {
                           "mcpServers": {
                             "notion-bridge": {
-                              "url": "http://localhost:\(ssePort)/sse"
+                              "url": "http://localhost:9700/sse"
                             }
                           }
                         }
@@ -510,8 +335,8 @@ struct OnboardingView: View {
                     Text("Checking health endpoint...")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                case .success(let milliseconds):
-                    Text("Connected \u{2014} \(milliseconds)ms")
+                case .success:
+                    Text("Notion Bridge is running and responding! You\u{2019}re all set.")
                         .font(.caption)
                         .foregroundStyle(.green)
                 case .failed(let reason):
@@ -549,7 +374,7 @@ struct OnboardingView: View {
         switch healthCheckStatus {
         case .idle: return "Test Connection"
         case .checking: return "Checking..."
-        case .success(let milliseconds): return "Connected \u{2014} \(milliseconds)ms"
+        case .success: return "Connected \u{2713}"
         case .failed: return "Retry"
         }
     }
@@ -558,8 +383,7 @@ struct OnboardingView: View {
         healthCheckStatus = .checking
         Task {
             do {
-                let start = Date()
-                let url = URL(string: "http://localhost:\(ssePort)/health")!
+                let url = URL(string: "http://localhost:9700/health")!
                 let (data, response) = try await URLSession.shared.data(from: url)
                 guard let httpResponse = response as? HTTPURLResponse,
                       httpResponse.statusCode == 200 else {
@@ -569,45 +393,13 @@ struct OnboardingView: View {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let status = json["status"] as? String,
                    status == "running" {
-                    let latencyMs = max(1, Int(Date().timeIntervalSince(start) * 1000))
-                    healthCheckStatus = .success(milliseconds: latencyMs)
+                    healthCheckStatus = .success
                 } else {
                     healthCheckStatus = .failed("Unexpected response format")
                 }
             } catch {
                 healthCheckStatus = .failed("Could not reach server \u{2014} is it running?")
             }
-        }
-    }
-
-    private func refreshPermissionStatus() {
-        guard !isRefreshingPermissions else { return }
-        isRefreshingPermissions = true
-        Task {
-            await permissionManager.checkAllAsync()
-            await MainActor.run {
-                capturePermissionTransitions()
-                isRefreshingPermissions = false
-            }
-        }
-    }
-
-    @MainActor
-    private func capturePermissionTransitions() {
-        for grant in PermissionManager.Grant.onboardingCases {
-            let current = permissionManager.status(for: grant)
-            if let previous = previousPermissionStatuses[grant],
-               previous == .denied,
-               current == .granted {
-                recentlyGrantedPermissions.insert(grant)
-                Task {
-                    try? await Task.sleep(nanoseconds: 2_500_000_000)
-                    await MainActor.run {
-                        recentlyGrantedPermissions.remove(grant)
-                    }
-                }
-            }
-            previousPermissionStatuses[grant] = current
         }
     }
 

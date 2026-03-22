@@ -167,6 +167,7 @@ public actor SecurityGate {
     public func enforce(
         toolName: String,
         tier: SecurityTier,
+        neverAutoApprove: Bool = false,
         arguments: Value
     ) async -> GateDecision {
         let allStrings = extractStrings(from: arguments)
@@ -198,10 +199,14 @@ public actor SecurityGate {
         case .notify:
             return .allow
         case .request:
-            if checkLearnedAllow(detail) {
+            if !neverAutoApprove && checkLearnedAllow(detail) {
                 return .allow
             }
-            return await requestApproval(toolName: toolName, detail: detail)
+            return await requestApproval(
+                toolName: toolName,
+                detail: detail,
+                neverAutoApprove: neverAutoApprove
+            )
         }
     }
 
@@ -285,7 +290,8 @@ public actor SecurityGate {
 
                 let decision = await requestApproval(
                     toolName: toolName,
-                    detail: "Access sensitive path: \(sensitive)"
+                    detail: "Access sensitive path: \(sensitive)",
+                    neverAutoApprove: false
                 )
 
                 switch decision {
@@ -304,11 +310,16 @@ public actor SecurityGate {
 
     // MARK: Notification Approval
 
-    private func requestApproval(toolName: String, detail: String) async -> GateDecision {
+    private func requestApproval(
+        toolName: String,
+        detail: String,
+        neverAutoApprove: Bool
+    ) async -> GateDecision {
         let truncated = String(detail.prefix(120))
         let decision = await approvalManager.requestApproval(
             title: "Notion Bridge wants to \(toolName)",
-            body: truncated
+            body: truncated,
+            allowAlwaysAllowAction: !neverAutoApprove
         )
 
         switch decision {
@@ -469,6 +480,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
     private var pendingApprovals: [String: CheckedContinuation<ApprovalDecision, Never>] = [:]
 
     static let categoryIdentifier = "SECURITY_APPROVAL"
+    static let categoryIdentifierNoAlways = "SECURITY_APPROVAL_NO_ALWAYS"
     static let allowActionIdentifier = "ALLOW_ACTION"
     static let denyActionIdentifier = "DENY_ACTION"
     static let alwaysAllowActionIdentifier = "ALWAYS_ALLOW"
@@ -543,7 +555,13 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             intentIdentifiers: [],
             options: []
         )
-        center.setNotificationCategories([category])
+        let categoryNoAlways = UNNotificationCategory(
+            identifier: Self.categoryIdentifierNoAlways,
+            actions: [allowAction, denyAction],
+            intentIdentifiers: [],
+            options: []
+        )
+        center.setNotificationCategories([category, categoryNoAlways])
     }
 
     // MARK: Fire-and-Forget (F2)
@@ -586,18 +604,30 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
     // MARK: Approval Request
 
-    public func requestApproval(title: String, body: String) async -> ApprovalDecision {
+    public func requestApproval(
+        title: String,
+        body: String,
+        allowAlwaysAllowAction: Bool = true
+    ) async -> ApprovalDecision {
         if isTestProcess {
             return .allow
         }
         if hasPermission {
-            return await requestViaNotification(title: title, body: body)
+            return await requestViaNotification(
+                title: title,
+                body: body,
+                allowAlwaysAllowAction: allowAlwaysAllowAction
+            )
         } else {
             return await requestViaAlert(title: title, body: body)
         }
     }
 
-    private func requestViaNotification(title: String, body: String) async -> ApprovalDecision {
+    private func requestViaNotification(
+        title: String,
+        body: String,
+        allowAlwaysAllowAction: Bool
+    ) async -> ApprovalDecision {
         guard let center else {
             return await requestViaAlert(title: title, body: body)
         }
@@ -605,7 +635,9 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         content.title = title
         content.body = body
         content.sound = .default
-        content.categoryIdentifier = Self.categoryIdentifier
+        content.categoryIdentifier = allowAlwaysAllowAction
+            ? Self.categoryIdentifier
+            : Self.categoryIdentifierNoAlways
 
         let identifier = UUID().uuidString
         let request = UNNotificationRequest(

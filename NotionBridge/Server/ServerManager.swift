@@ -80,6 +80,8 @@ public actor ServerManager {
         await AppleScriptModule.register(on: router)
         await ChromeModule.register(on: router)
         await SkillsModule.register(on: router)
+        await CredentialModule.register(on: router)
+        await PaymentModule.register(on: router)
 
         // 3. Register echo tool (backward compatibility from V1-01)
         await router.register(ToolRegistration(

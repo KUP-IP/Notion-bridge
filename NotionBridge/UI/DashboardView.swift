@@ -36,6 +36,7 @@ public struct DashboardView: View {
     @State private var notificationsGranted: Bool = false
     @State private var contactsGranted: Bool = false
     @State private var fullDiskAccessGranted: Bool = false
+    @State private var automationGranted: Bool = false
 
     public var body: some View {
         VStack(alignment: .leading, spacing: BridgeSpacing.xs) {
@@ -61,8 +62,10 @@ public struct DashboardView: View {
         contactsGranted = CNContactStore.authorizationStatus(for: .contacts) == .authorized
         Task {
             let settings = await UNUserNotificationCenter.current().notificationSettings()
+            let automationResult = await checkAutomationAccess()
             await MainActor.run {
                 notificationsGranted = settings.authorizationStatus == .authorized
+                automationGranted = automationResult
             }
         }
     }
@@ -72,6 +75,25 @@ public struct DashboardView: View {
     private func checkFullDiskAccess() -> Bool {
         let protectedPath = "/Library/Application Support/com.apple.TCC/TCC.db"
         return FileManager.default.isReadableFile(atPath: protectedPath)
+    }
+
+    /// Automation probe: test if System Events responds to Apple Events.
+    /// Uses Process-based osascript to avoid main-thread blocking.
+    private func checkAutomationAccess() async -> Bool {
+        await Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", "tell application \"System Events\" to return name of first process whose frontmost is true"]
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+                return process.terminationStatus == 0
+            } catch {
+                return false
+            }
+        }.value
     }
 
     // MARK: - Header
@@ -169,6 +191,7 @@ public struct DashboardView: View {
             permissionRow("Notifications", granted: notificationsGranted)
             permissionRow("Contacts", granted: contactsGranted)
             permissionRow("Full Disk Access", granted: fullDiskAccessGranted)
+            permissionRow("Automation", granted: automationGranted)
         }
         .bridgeRow()
     }

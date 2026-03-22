@@ -115,8 +115,9 @@ install: sign
 
 # ── Clean TCC ──────────────────────────────────────────────────────────
 clean-tcc:
-	@echo "🧹 Resetting TCC for old bundle ID..."
-	@echo "🧹 Resetting TCC for current bundle ID..."
+	@echo "🧹 Resetting TCC for legacy bundle ID (solutions.kup.keepr)..."
+	-tccutil reset All solutions.kup.keepr
+	@echo "🧹 Resetting TCC for current bundle ID (kup.solutions.notion-bridge)..."
 	-tccutil reset All kup.solutions.notion-bridge
 	@echo "✅ TCC reset complete — permissions will be re-requested on next launch"
 

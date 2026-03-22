@@ -103,7 +103,6 @@ public final class KeychainManager: Sendable {
     @discardableResult
     public func update(key: String, value: String) -> Bool {
         guard isAppBundle else { return true }
-        guard isAppBundle else { return true }
         guard let data = value.data(using: .utf8) else { return false }
 
         let query: [String: Any] = [
