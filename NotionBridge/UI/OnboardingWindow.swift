@@ -166,7 +166,7 @@ struct OnboardingView: View {
 
     private var welcomeStep: some View {
         let isReturningUser = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-        VStack(spacing: 16) {
+    return VStack(spacing: 16) {
             // PKT-357 F7: Larger brand icon for visual impact
             Image(systemName: "bridge.fill")
                 .font(.system(size: 56))
@@ -238,7 +238,7 @@ struct OnboardingView: View {
 
     private func onboardingPermissionRow(grant: PermissionManager.Grant) -> some View {
         let status = permissionManager.status(for: grant)
-        HStack(spacing: 12) {
+    return HStack(spacing: 12) {
             Circle()
                 .fill(status == .granted ? .green : .orange)
                 .frame(width: 10, height: 10)
@@ -602,7 +602,7 @@ struct OnboardingView: View {
                 recentlyGrantedPermissions.insert(grant)
                 Task {
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
-                    await MainActor.run {
+                    _ = await MainActor.run {
                         recentlyGrantedPermissions.remove(grant)
                     }
                 }

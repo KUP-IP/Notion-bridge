@@ -205,7 +205,7 @@ public struct PermissionView: View {
                 recentlyGranted.insert(grant)
                 Task {
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
-                    await MainActor.run {
+                    _ = await MainActor.run {
                         recentlyGranted.remove(grant)
                     }
                 }
