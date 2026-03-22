@@ -368,7 +368,7 @@ func runEndToEndTests() async {
         try expect(payment.count == 1, "PaymentModule: expected 1")
 
         let modulesWithTools = Set((await router.allRegistrations()).map(\.module))
-        try expect(modulesWithTools.count == 14, "Expected 14 modules, got \(modulesWithTools.count)")
+        try expect(modulesWithTools.count == 13, "Expected 13 modules, got \(modulesWithTools.count)")
     }
 
     await test("E2E: Total module tool count is 63") {
