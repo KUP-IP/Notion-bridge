@@ -7,6 +7,7 @@
 # Dev app bundle:    make app (unsigned, for local testing)
 
 APP_NAME       = Notion Bridge
+DMG_VOLUME_NAME = NotionBridge
 BUNDLE_ID      = kup.solutions.notion-bridge
 BINARY_NAME    = NotionBridge
 BUILD_DIR      = .build
@@ -15,14 +16,17 @@ DEBUG_DIR      = $(BUILD_DIR)/debug
 APP_BUNDLE     = $(BUILD_DIR)/NotionBridge.app
 VERSION       := $(shell /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
 DMG_NAME       = notion-bridge-v$(VERSION).dmg
+DMG_PATH       = $(BUILD_DIR)/$(DMG_NAME)
 DMG_STAGING    = $(BUILD_DIR)/dmg-staging
+DMG_BACKGROUND = $(BUILD_DIR)/dmg-background.png
 SIGNING_ID    ?= Developer ID Application: Isaiah Peters (VP24Z9CS22)
-NOTARIZE_PROFILE ?= notionbridge-notarize
+NOTARIZE_PROFILE ?= notarytool-profile
 
 INFO_PLIST     = Info.plist
 RESOURCES_DIR  = NotionBridge/App/Resources
+DMG_ICON       = $(RESOURCES_DIR)/Assets.xcassets/AppIcon.appiconset/icon_512x512.png
 
-.PHONY: debug build test app dmg sign notarize verify release clean install clean-tcc
+.PHONY: debug build test app dmg dmg-background sign notarize verify release clean install clean-tcc
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -121,20 +125,44 @@ clean-tcc:
 	-tccutil reset All kup.solutions.notion-bridge
 	@echo "✅ TCC reset complete — permissions will be re-requested on next launch"
 
+# ── DMG Background ────────────────────────────────────────────
+dmg-background:
+	@mkdir -p $(BUILD_DIR)
+	@python3 scripts/generate_dmg_background.py "$(DMG_BACKGROUND)" "$(DMG_ICON)"
+	@echo "🎨 DMG background: $(DMG_BACKGROUND)"
+
 # ── DMG (disk image) ──────────────────────────────────────────
-dmg: app
-	@echo "💿 Creating disk image..."
+dmg: notarize dmg-background
+	@command -v create-dmg >/dev/null || { echo "❌ create-dmg is required. Install it with: brew install create-dmg"; exit 1; }
+	@echo "💿 Creating production DMG..."
 	@rm -rf $(DMG_STAGING)
 	@mkdir -p $(DMG_STAGING)
-	@cp -R $(APP_BUNDLE) $(DMG_STAGING)/
-	@ln -s /Applications $(DMG_STAGING)/Applications
-	@test -f README.md && cp README.md $(DMG_STAGING)/ || true
-	hdiutil create -volname "$(APP_NAME)" \
-		-srcfolder $(DMG_STAGING) \
-		-ov -format UDZO \
-		$(BUILD_DIR)/$(DMG_NAME)
+	@cp -R "$(APP_BUNDLE)" "$(DMG_STAGING)/"
+	@rm -f "$(DMG_PATH)"
+	create-dmg \
+		--volname "$(DMG_VOLUME_NAME)" \
+		--volicon "$(RESOURCES_DIR)/NotionBridge.icns" \
+		--background "$(DMG_BACKGROUND)" \
+		--window-pos 220 140 \
+		--window-size 640 360 \
+		--text-size 14 \
+		--icon-size 128 \
+		--icon "$(notdir $(APP_BUNDLE))" 180 180 \
+		--hide-extension "$(notdir $(APP_BUNDLE))" \
+		--app-drop-link 460 180 \
+		--format UDZO \
+		"$(DMG_PATH)" \
+		"$(DMG_STAGING)"
 	@rm -rf $(DMG_STAGING)
-	@echo "✅ DMG: $(BUILD_DIR)/$(DMG_NAME)"
+	@echo "🔏 Signing DMG..."
+	codesign --force --sign "$(SIGNING_ID)" --timestamp "$(DMG_PATH)"
+	@echo "📤 Notarizing DMG..."
+	xcrun notarytool submit "$(DMG_PATH)" --keychain-profile "$(NOTARIZE_PROFILE)" --wait
+	@echo "📎 Stapling DMG..."
+	xcrun stapler staple "$(DMG_PATH)"
+	@echo "🔍 Verifying DMG..."
+	spctl --assess --type open --context context:primary-signature --verbose "$(DMG_PATH)"
+	@echo "✅ DMG: $(DMG_PATH)"
 
 # ── Sign ───────────────────────────────────────────────────────
 sign: app
@@ -164,8 +192,8 @@ verify:
 	@echo "✅ Verified"
 
 # ── Release (full pipeline) ────────────────────────────────────
-release: clean test app sign notarize dmg verify
-	@echo "🚀 Release complete: $(BUILD_DIR)/$(DMG_NAME)"
+release: clean test dmg verify
+	@echo "🚀 Release complete: $(DMG_PATH)"
 
 # ── Clean ──────────────────────────────────────────────────────
 clean:
