@@ -127,6 +127,7 @@ dmg: app
 	@rm -rf $(DMG_STAGING)
 	@mkdir -p $(DMG_STAGING)
 	@cp -R $(APP_BUNDLE) $(DMG_STAGING)/
+	@ln -s /Applications $(DMG_STAGING)/Applications
 	@test -f README.md && cp README.md $(DMG_STAGING)/ || true
 	hdiutil create -volname "$(APP_NAME)" \
 		-srcfolder $(DMG_STAGING) \
