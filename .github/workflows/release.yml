@@ -1,0 +1,134 @@
+# Required GitHub Secrets:
+# - APPLE_CERTIFICATE_BASE64: Base64-encoded .p12 Developer ID Application certificate
+# - APPLE_CERTIFICATE_PASSWORD: Password for the .p12 file
+# - APPLE_ID: Apple ID for notarytool (isaiah@keepup.club)
+# - APPLE_ID_PASSWORD: App-specific password for notarytool
+# - APPLE_TEAM_ID: Apple Team ID (VP24Z9CS22)
+
+name: NotionBridge Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Optional version/tag label for manual runs (for artifact naming only)
+        required: false
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Test
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run test suite
+        run: swift test
+
+  build-sign-notarize-publish:
+    name: Build, Sign, Notarize, Publish
+    runs-on: macos-15
+    needs: test
+    env:
+      APP_PATH: .build/NotionBridge.app
+      ZIP_PATH: .build/NotionBridge.zip
+      CERT_PATH: ${{ runner.temp }}/developer_id_certificate.p12
+      KEYCHAIN_PATH: ${{ runner.temp }}/notionbridge-build.keychain-db
+      KEYCHAIN_PASSWORD: ${{ github.run_id }}-${{ github.run_attempt }}
+      SIGNING_IDENTITY: "Developer ID Application: Isaiah Peters (VP24Z9CS22)"
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve build tag metadata
+        id: metadata
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == refs/tags/* ]]; then
+            BUILD_TAG="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            BUILD_TAG="${{ github.event.inputs.tag }}"
+          else
+            BUILD_TAG="manual-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "build_tag=${BUILD_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build release binary and app bundle
+        run: |
+          swift build -c release
+          make app
+          test -d "${APP_PATH}"
+
+      - name: Import signing certificate into temporary keychain
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          echo "${APPLE_CERTIFICATE_BASE64}" | base64 --decode > "${CERT_PATH}"
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERT_PATH}" -k "${KEYCHAIN_PATH}" -P "${APPLE_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+
+          # Ensure codesign can find identities in the temporary keychain.
+          EXISTING_KEYCHAINS="$(security list-keychains -d user | tr -d '"')"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}" ${EXISTING_KEYCHAINS}
+          security default-keychain -d user -s "${KEYCHAIN_PATH}"
+
+      - name: Code sign app with entitlements and hardened runtime
+        run: |
+          codesign --force --options runtime --timestamp --entitlements NotionBridge.entitlements --sign "${SIGNING_IDENTITY}" "${APP_PATH}"
+          codesign --force --options runtime --timestamp --deep --sign "${SIGNING_IDENTITY}" "${APP_PATH}"
+
+      - name: Verify code signing and Gatekeeper assessment
+        run: |
+          codesign --verify --deep --strict "${APP_PATH}"
+          spctl --assess --verbose "${APP_PATH}"
+
+      - name: Notarize and staple
+        run: |
+          ditto -c -k --keepParent "${APP_PATH}" "${ZIP_PATH}"
+          xcrun notarytool submit "${ZIP_PATH}" --apple-id "${APPLE_ID}" --password "${APPLE_ID_PASSWORD}" --team-id "${APPLE_TEAM_ID}" --wait
+          xcrun stapler staple "${APP_PATH}"
+          # Rebuild zip so uploaded/released artifact contains stapled app.
+          ditto -c -k --keepParent "${APP_PATH}" "${ZIP_PATH}"
+
+      - name: Upload signed and notarized app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NotionBridge-${{ steps.metadata.outputs.build_tag }}-macos-app
+          path: ${{ env.ZIP_PATH }}
+          retention-days: 30
+
+      - name: Create GitHub Release (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: NotionBridge ${{ github.ref_name }}
+          files: ${{ env.ZIP_PATH }}
+          generate_release_notes: true
+
+      - name: Cleanup temporary keychain
+        if: always()
+        shell: bash
+        run: |
+          security delete-keychain "${KEYCHAIN_PATH}" || true
+          rm -f "${CERT_PATH}"
