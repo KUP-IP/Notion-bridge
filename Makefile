@@ -127,10 +127,11 @@ app: build
 	@echo "✅ App bundle: $(APP_BUNDLE)"
 
 # ── Install ────────────────────────────────────────────────────────────
-install: sign
-	@echo "📲 Installing to /Applications..."
+install: notarize
+	@echo "📲 Installing notarized app to /Applications..."
 	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
-	@cp -R "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
+	@ditto "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
+	@spctl --assess --verbose "/Applications/Notion Bridge.app"
 	@echo "🧹 Clearing launch services cache (preserving TCC grants)..."
 	@echo "🔄 Refreshing icon caches..."
 	@killall Dock 2>/dev/null || true
