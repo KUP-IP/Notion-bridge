@@ -25,7 +25,7 @@ public final class StripeClient: @unchecked Sendable {
     public init(
         session: URLSession = .shared,
         apiKeyProvider: @escaping @Sendable () -> String? = {
-            KeychainManager.shared.read(key: "STRIPE_API_KEY")
+            KeychainManager.shared.read(key: KeychainManager.Key.stripeAPIKey)
         }
     ) {
         self.session = session

@@ -3,6 +3,7 @@
 // NOTE: Tests use a custom executable harness (not XCTest). Run via: swift run NotionBridgeTests
 // PKT-353: Platform bumped to macOS 26 (Tahoe) for Liquid Glass adoption.
 //   swift-tools-version bumped 6.0 → 6.2 (required for .macOS(.v26)).
+// PKT-430: Added Sparkle for auto-update framework
 import PackageDescription
 
 let package = Package(
@@ -15,6 +16,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle.git", from: "2.6.0"),
     ],
     targets: [
         .target(
@@ -24,6 +26,7 @@ let package = Package(
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "NotionBridge",
             exclude: ["App/NotionBridgeApp.swift", "App/Resources", "App/Info.plist"]

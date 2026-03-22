@@ -54,6 +54,10 @@ extension SettingsView {
             }
 
             Section("App Control") {
+                // PKT-430: Manual Sparkle update check
+                Button("Check for Updates", systemImage: "arrow.down.circle") {
+                    (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                }
                 Button("Restart Notion Bridge", systemImage: "arrow.clockwise") {
                     restartApp(reopenSettings: true)
                 }

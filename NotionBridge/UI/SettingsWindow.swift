@@ -97,7 +97,7 @@ public struct SettingsView: View {
 
     enum SettingsSection: String, CaseIterable, Identifiable {
         case general = "General"
-        case connections = "Connections"
+        case connections = "Bridge Connections"
         case permissions = "Permissions"
         case tools = "Tools"
         case skills = "Skills"

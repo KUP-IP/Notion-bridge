@@ -34,5 +34,9 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 KUP Solutions LLC. All rights reserved.</string>
+	<key>SUPublicEDKey</key>
+	<string>AYjKcJUCz34FoCoeCEc17j7pd3enjqd2ttzDEV6F6fg=</string>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/KUP-IP/Notion-bridge/main/appcast.xml</string>
 </dict>
 </plist>

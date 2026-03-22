@@ -413,7 +413,7 @@ public final class CredentialManager: Sendable {
         expYear: Int,
         brand: String?
     ) async throws -> StripeTokenResult {
-        let keychainKey = KeychainManager.shared.read(key: "STRIPE_API_KEY")
+        let keychainKey = KeychainManager.shared.read(key: KeychainManager.Key.stripeAPIKey)
         let testFallbackKey: String? = {
             guard !isAppBundle else { return nil }
             return UserDefaults.standard.string(forKey: "com.notionbridge.tests.stripeApiKey")

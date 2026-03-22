@@ -15,6 +15,7 @@
 
 import AppKit
 import ServiceManagement
+import Sparkle
 
 private let reopenSettingsAfterRestartKey = "reopenSettingsAfterRestart"
 
@@ -71,6 +72,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Observes Settings window lifecycle and toggles .accessory ↔ .regular.
     public let windowTracker = WindowTracker()
 
+    /// PKT-430: Sparkle auto-updater controller for delivering post-launch updates.
+    private let updaterController: SPUStandardUpdaterController
+
     /// V1-QUALITY-C2: Onboarding window controller for first-launch experience.
     private lazy var onboardingController = OnboardingWindowController(
         permissionManager: permissionManager
@@ -83,6 +87,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     public override init() {
+        updaterController = SPUStandardUpdaterController(
+            startingUpdater: true,
+            updaterDelegate: nil,
+            userDriverDelegate: nil
+        )
         super.init()
     }
 
@@ -202,6 +211,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Open the Settings window. Called from DashboardView gear icon.
     public func openSettings() {
         settingsController.show()
+    }
+
+    /// PKT-430: Trigger manual Sparkle update check.
+    public func checkForUpdates() {
+        updaterController.checkForUpdates(nil)
     }
 
     /// Restart app from context menu.
