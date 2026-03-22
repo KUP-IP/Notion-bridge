@@ -13,7 +13,8 @@ import SwiftUI
 import AppKit
 
 /// Manages the first-launch onboarding NSWindow.
-/// Shows a multi-step wizard: Welcome → Permissions → Connection → Test Connection.
+/// Shows a multi-step wizard:
+/// Welcome → Auto Permissions → Manual Permissions → Connection → Test Connection.
 /// Checks `UserDefaults.bool(forKey: "hasCompletedOnboarding")` — skips if true.
 @MainActor
 public final class OnboardingWindowController {
@@ -70,7 +71,8 @@ public final class OnboardingWindowController {
 
 // MARK: - Onboarding View
 
-/// Multi-step onboarding wizard: Welcome → Permissions → Connection → Test Connection.
+/// Multi-step onboarding wizard:
+/// Welcome → Auto Permissions → Manual Permissions → Connection → Test Connection.
 struct OnboardingView: View {
     let permissionManager: PermissionManager
     let onComplete: () -> Void
@@ -82,12 +84,14 @@ struct OnboardingView: View {
     @State private var isRefreshingPermissions: Bool = false
     @State private var previousPermissionStatuses: [PermissionManager.Grant: PermissionManager.GrantStatus] = [:]
     @State private var recentlyGrantedPermissions: Set<PermissionManager.Grant> = []
+    @State private var didAutoAdvanceFromAutoStep: Bool = false
 
     enum OnboardingStep: Int, CaseIterable {
         case welcome = 0
-        case permissions = 1
-        case connection = 2
-        case testConnection = 3
+        case autoPermissions = 1
+        case manualPermissions = 2
+        case connection = 3
+        case testConnection = 4
     }
 
     enum HealthCheckStatus {
@@ -115,8 +119,10 @@ struct OnboardingView: View {
                 switch currentStep {
                 case .welcome:
                     welcomeStep
-                case .permissions:
-                    permissionsStep
+                case .autoPermissions:
+                    autoPermissionsStep
+                case .manualPermissions:
+                    manualPermissionsStep
                 case .connection:
                     connectionStep
                 case .testConnection:
@@ -140,12 +146,12 @@ struct OnboardingView: View {
             }
         }
         .onChange(of: currentStep) { _, newStep in
-            if newStep == .permissions {
+            if newStep == .manualPermissions {
                 refreshPermissionStatus()
             }
         }
         .onReceive(permissionsRefreshTimer) { _ in
-            guard currentStep == .permissions else { return }
+            guard currentStep == .manualPermissions else { return }
             refreshPermissionStatus()
         }
     }
@@ -166,7 +172,7 @@ struct OnboardingView: View {
 
     private var welcomeStep: some View {
         let isReturningUser = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-    return VStack(spacing: 16) {
+        return VStack(spacing: 16) {
             // PKT-357 F7: Larger brand icon for visual impact
             Image(systemName: "bridge.fill")
                 .font(.system(size: 56))
@@ -191,9 +197,17 @@ struct OnboardingView: View {
         }
     }
 
-    // MARK: - Permissions Step (PKT-357 F10: All permissions always listed)
+    // MARK: - Permissions Steps (PKT-388 split)
 
-    private var permissionsStep: some View {
+    private var autoPermissionsStep: some View {
+        AutoPermissionsStepView(permissionManager: permissionManager) {
+            guard currentStep == .autoPermissions, !didAutoAdvanceFromAutoStep else { return }
+            didAutoAdvanceFromAutoStep = true
+            currentStep = .manualPermissions
+        }
+    }
+
+    private var manualPermissionsStep: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Grant Permissions")
                 .font(.title2)
@@ -238,7 +252,7 @@ struct OnboardingView: View {
 
     private func onboardingPermissionRow(grant: PermissionManager.Grant) -> some View {
         let status = permissionManager.status(for: grant)
-    return HStack(spacing: 12) {
+        return HStack(spacing: 12) {
             Circle()
                 .fill(status == .granted ? .green : .orange)
                 .frame(width: 10, height: 10)

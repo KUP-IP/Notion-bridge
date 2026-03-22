@@ -32,14 +32,15 @@ func runEndToEndTests() async {
     await AppleScriptModule.register(on: router)
     await ChromeModule.register(on: router)
     await SkillsModule.register(on: router)
+    await CredentialModule.register(on: router)
 
     // ============================================================
     // E2E-1: Full pipeline — dispatch → security → handler → audit
     // ============================================================
 
-    await test("E2E: router has all registered module tools (58 total)") {
+    await test("E2E: router has all registered module tools (62 total)") {
         let all = await router.allRegistrations()
-        try expect(all.count == 58, "Expected 58 module tools, got \(all.count)")
+        try expect(all.count == 62, "Expected 62 module tools, got \(all.count)")
     }
 
     await test("E2E: router filters by module correctly") {
@@ -292,6 +293,10 @@ func runEndToEndTests() async {
         try expect(tierMap["run_script"] == "request", "run_script should be request")
         try expect(tierMap["system_info"] == "open", "system_info should be open")
         try expect(tierMap["notify"] == "open", "notify should be open")
+        try expect(tierMap["credential_save"] == "request", "credential_save should be request")
+        try expect(tierMap["credential_read"] == "request", "credential_read should be request")
+        try expect(tierMap["credential_list"] == "notify", "credential_list should be notify")
+        try expect(tierMap["credential_delete"] == "request", "credential_delete should be request")
     }
 
     // ============================================================
@@ -328,7 +333,7 @@ func runEndToEndTests() async {
     // E2E-8: Module registration completeness
     // ============================================================
 
-    await test("E2E: All 12 modules registered with correct tool counts") {
+    await test("E2E: All 13 modules registered with correct tool counts") {
         let shell = await router.registrations(forModule: "shell")
         let file = await router.registrations(forModule: "file")
         let session = await router.registrations(forModule: "session")
@@ -353,13 +358,16 @@ func runEndToEndTests() async {
         let skills = await router.registrations(forModule: "skills")
         try expect(chrome.count == 5, "ChromeModule: expected 5")
         try expect(skills.count == 1, "SkillsModule: expected 1")
+
+        let credential = await router.registrations(forModule: "credential")
+        try expect(credential.count == 4, "CredentialModule: expected 4")
     }
 
-    await test("E2E: Total module tool count is 58") {
+    await test("E2E: Total module tool count is 62") {
         let all = await router.allRegistrations()
-        // 58 module tools (this suite does not register builtin echo).
+        // 62 module tools (this suite does not register builtin echo).
         let moduleTools = all.filter { $0.module != "builtin" }
-        try expect(moduleTools.count == 58, "Expected 58 module tools, got \(moduleTools.count)")
+        try expect(moduleTools.count == 62, "Expected 62 module tools, got \(moduleTools.count)")
     }
 
     await test("E2E: All security tiers represented in tool registry") {

@@ -91,9 +91,10 @@ Client → Transport (stdio or SSE) → ServerManager → ToolRouter.dispatch()
 
 **`ToolRouter`** (`NotionBridge/Server/ToolRouter.swift`) — actor. Central registry and dispatch hub. Each `ToolRegistration` carries a name, module, `SecurityTier`, description, JSON input schema, and a `@Sendable` async handler closure. `dispatchFormatted()` is the shared helper used by all transports (returns `(text: String, isError: Bool)` for MCP `CallTool` responses).
 
-**`SecurityGate`** (`NotionBridge/Security/SecurityGate.swift`) — actor. Enforces a 2-tier model:
-- `.open` — execute immediately, no prompt
-- `.notify` — request user approval via `UNUserNotificationCenter` (falls back to `NSAlert`); 30-second timeout defaults to deny
+**`SecurityGate`** (`NotionBridge/Security/SecurityGate.swift`) — actor. Enforces a 3-tier model:
+- `.open` — execute immediately, no user interaction
+- `.notify` — execute immediately, then send a fire-and-forget notification via `UNUserNotificationCenter`
+- `.request` — request explicit user approval before execution; 30-second timeout defaults to deny
 
 Three decision outcomes: `.allow`, `.reject(reason:)`, `.handoff(command:explanation:warning:)`. Handoff is **not an error** — it returns a JSON response to the caller with instructions to run the command manually. Nuclear patterns (e.g., `diskutil erasedisk`, `csrutil disable`, `dd if=`, fork bomb, recursive delete of `/`) always produce handoff regardless of tier or trusted mode. `sudo` is always a handoff. **Trusted mode** (UserDefaults key `com.notionbridge.security.trustedMode`) auto-allows all `.notify` tier calls; nuclear and dangerous command patterns are still enforced.
 

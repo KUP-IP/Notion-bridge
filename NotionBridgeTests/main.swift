@@ -365,6 +365,8 @@ await runBuiltinModuleTests()
 await runConfigManagerTests()
 await runChromeModuleTests()
 await runSkillsModuleTests()
+await runCredentialManagerTests()
+await runCredentialModuleTests()
 
 
 // ============================================================

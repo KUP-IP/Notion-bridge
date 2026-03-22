@@ -11,6 +11,9 @@ import MCP
 import ScreenCaptureKit
 import CoreMedia
 import AVFoundation
+import os.log
+
+private let recLog = Logger(subsystem: "kup.solutions.notion-bridge", category: "ScreenRecording")
 
 // MARK: - ScreenModule Recording Extension
 
@@ -110,6 +113,8 @@ private enum RecordingError: Error {
     case recordingAlreadyActive
     case noActiveRecording
     case writerSetupFailed(String)
+    case noFramesCaptured
+    case finalizationFailed(String)
 
     func toResponse() -> Value {
         switch self {
@@ -138,6 +143,16 @@ private enum RecordingError: Error {
                 "error":   .string("writer_setup_failed"),
                 "message": .string("AVAssetWriter setup failed: \(detail)")
             ])
+        case .noFramesCaptured:
+            return .object([
+                "error":   .string("no_frames_captured"),
+                "message": .string("Recording stopped but no video frames were captured. The output file has been removed.")
+            ])
+        case .finalizationFailed(let detail):
+            return .object([
+                "error":   .string("finalization_failed"),
+                "message": .string("AVAssetWriter finalization failed: \(detail). The output file has been removed.")
+            ])
         }
     }
 }
@@ -145,12 +160,36 @@ private enum RecordingError: Error {
 // MARK: - Recording Delegate
 
 /// SCStreamOutput delegate that receives sample buffers and writes them to AVAssetWriter.
-/// Thread safety: uses NSLock for the session-start flag (delegate runs on a GCD queue).
+/// Thread safety: uses NSLock for the session-start flag and frame counter (delegate runs on a GCD queue).
 private class RecordingDelegate: NSObject, SCStreamOutput, @unchecked Sendable {
     let writerInput: AVAssetWriterInput
     let writer: AVAssetWriter
     private var sessionStarted = false
+    private var _framesWritten: Int = 0
+    private var _appendFailures: Int = 0
+    private var _skippedFrames: Int = 0
     private let lock = NSLock()
+
+    /// Thread-safe count of frames successfully appended to the writer input.
+    var framesWritten: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _framesWritten
+    }
+
+    /// Thread-safe count of append failures.
+    var appendFailures: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _appendFailures
+    }
+
+    /// Thread-safe count of skipped (non-complete) frames.
+    var skippedFrames: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _skippedFrames
+    }
 
     init(writerInput: AVAssetWriterInput, writer: AVAssetWriter) {
         self.writerInput = writerInput
@@ -162,17 +201,70 @@ private class RecordingDelegate: NSObject, SCStreamOutput, @unchecked Sendable {
         guard type == .screen else { return }
         guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
 
-        // Start AVAssetWriter session at first frame's timestamp
+        // ── FIX: Check SCStream frame status ──────────────────────────────
+        // SCStream delivers non-video frames (idle, blank, suspended, started, stopped)
+        // that do NOT contain valid pixel data. Appending these to AVAssetWriter
+        // causes the writer to transition to .failed state. Only append .complete frames.
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+           let statusRaw = attachments.first?[.status] as? Int {
+            if statusRaw != SCFrameStatus.complete.rawValue {
+                lock.lock()
+                let skipCount = _skippedFrames
+                _skippedFrames += 1
+                lock.unlock()
+                if skipCount == 0 {
+                    recLog.info("Skipping first non-complete frame: status=\(statusRaw, privacy: .public)")
+                }
+                return
+            }
+        }
+
         lock.lock()
+        let frameNum = _framesWritten
         if !sessionStarted {
             let ts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+            if let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) {
+                let mediaSubType = CMFormatDescriptionGetMediaSubType(formatDesc)
+                let dims = CMVideoFormatDescriptionGetDimensions(formatDesc)
+                let fourCC = String(format: "%c%c%c%c",
+                    (mediaSubType >> 24) & 0xFF,
+                    (mediaSubType >> 16) & 0xFF,
+                    (mediaSubType >> 8) & 0xFF,
+                    mediaSubType & 0xFF)
+                recLog.info("First frame: pixelFormat=\(fourCC, privacy: .public) dims=\(dims.width)x\(dims.height) pts=\(ts.seconds, privacy: .public)s writerStatus=\(self.writer.status.rawValue)")
+            }
             writer.startSession(atSourceTime: ts)
             sessionStarted = true
         }
         lock.unlock()
 
+        // Check writer health before appending
+        guard writer.status == .writing else {
+            lock.lock()
+            if _appendFailures == 0 {
+                recLog.error("Writer NOT in .writing state at frame \(frameNum): status=\(self.writer.status.rawValue) error=\(self.writer.error?.localizedDescription ?? "nil", privacy: .public)")
+            }
+            _appendFailures += 1
+            lock.unlock()
+            return
+        }
+
         guard writerInput.isReadyForMoreMediaData else { return }
-        writerInput.append(sampleBuffer)
+        let ok = writerInput.append(sampleBuffer)
+
+        lock.lock()
+        if ok {
+            _framesWritten += 1
+            if _framesWritten == 1 {
+                recLog.info("First frame appended OK. writerStatus=\(self.writer.status.rawValue)")
+            }
+        } else {
+            _appendFailures += 1
+            if _appendFailures <= 3 {
+                recLog.error("Append FAILED at frame \(frameNum). writerStatus=\(self.writer.status.rawValue) error=\(self.writer.error?.localizedDescription ?? "nil", privacy: .public)")
+            }
+        }
+        lock.unlock()
     }
 }
 
@@ -239,6 +331,7 @@ private actor RecordingManager {
         input.expectsMediaDataInRealTime = true
         writer.add(input)
         writer.startWriting()
+        recLog.info("Writer started. status=\(writer.status.rawValue) path=\(outputPath, privacy: .public) dims=\(width)x\(height)")
         // Note: startSession(atSourceTime:) is called by RecordingDelegate on first frame
 
         // SCStream configuration
@@ -256,14 +349,20 @@ private actor RecordingManager {
                                     sampleHandlerQueue: .global(qos: .userInitiated))
 
         try await stream.startCapture()
+        recLog.info("SCStream capture started. display=\(width)x\(height)")
 
         // Safety cap: auto-stop after safetyCap seconds
         let safetyTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(safetyCap))
+            guard !Task.isCancelled else { return }
             guard let self else { return }
             if await self.isRecording {
-                _ = try? await self.stop()
-                print("[ScreenModule] Recording auto-stopped after \(Int(safetyCap))s safety cap")
+                do {
+                    _ = try await self.stop()
+                    recLog.info("Recording auto-stopped after \(Int(safetyCap))s safety cap")
+                } catch {
+                    recLog.error("Safety-cap auto-stop failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
 
@@ -284,14 +383,47 @@ private actor RecordingManager {
         recording = nil
         rec.safetyTask?.cancel()
 
-        // Stop capture, finalize writer
+        // Stop capture
         try await rec.stream.stopCapture()
+
+        // Diagnostic logging
+        let frames = rec.delegate.framesWritten
+        let failures = rec.delegate.appendFailures
+        let skipped = rec.delegate.skippedFrames
+        let status = rec.writer.status
+        let writerErr = rec.writer.error?.localizedDescription ?? "nil"
+        recLog.info("stop() — frames=\(frames) failures=\(failures) skipped=\(skipped) status=\(status.rawValue) error=\(writerErr, privacy: .public)")
+
+        // Zero-frame guard: if no frames were captured, clean up and throw
+        if frames == 0 {
+            rec.input.markAsFinished()
+            await rec.writer.finishWriting()
+            try? FileManager.default.removeItem(atPath: rec.outputPath)
+            throw RecordingError.noFramesCaptured
+        }
+
+        // Verify writer is still in writing state before finalization
+        guard status == .writing else {
+            let detail = rec.writer.error?.localizedDescription ?? "status=\(status.rawValue)"
+            try? FileManager.default.removeItem(atPath: rec.outputPath)
+            throw RecordingError.finalizationFailed("Writer not in writing state: \(detail)")
+        }
+
         rec.input.markAsFinished()
         await rec.writer.finishWriting()
+
+        // Verify finalization completed successfully (moov atom written)
+        guard rec.writer.status == .completed else {
+            let detail = rec.writer.error?.localizedDescription ?? "status=\(rec.writer.status.rawValue)"
+            recLog.error("finishWriting() failed. status=\(rec.writer.status.rawValue) error=\(detail, privacy: .public)")
+            try? FileManager.default.removeItem(atPath: rec.outputPath)
+            throw RecordingError.finalizationFailed(detail)
+        }
 
         let duration = Date().timeIntervalSince(rec.startTime)
         let attrs = try FileManager.default.attributesOfItem(atPath: rec.outputPath)
         let bytes = (attrs[.size] as? Int64) ?? 0
+        recLog.info("Recording OK. duration=\(String(format: "%.2f", duration), privacy: .public)s bytes=\(bytes) frames=\(frames) skipped=\(skipped)")
 
         return (path: rec.outputPath, duration: duration, bytes: bytes)
     }

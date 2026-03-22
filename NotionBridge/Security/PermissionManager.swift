@@ -9,6 +9,9 @@
 // V1-PATCH-003: Offloaded NSAppleScript automation probes to background thread via
 //   Task.detached to eliminate main-thread blocking that caused macOS to sever the
 //   Dock/WindowServer connection. checkAll() and checkAutomation() are now async.
+// PKT-391 (V1-PATCH-003 v3): Replaced Process/osascript probe with NSAppleScript on
+//   DispatchQueue.global() to fix TCC identity mismatch. Probes now use the same
+//   binary identity (NotionBridge.app) as applescript_exec, eliminating -1743 errors.
 // PKT-362 D5: Added systemSettingsURL to Grant for deep links in post-reset sheet.
 // PKT-362 D6: Added needsRestart flag and restart transition tracking.
 //
@@ -54,9 +57,19 @@ public final class PermissionManager {
 
         public var id: String { rawValue }
 
-        /// V1 grants — Contacts is deferred to expansion (no V1 tool uses it)
+        /// V1 grants used by current onboarding/settings surfaces.
         public static var v1Cases: [Grant] {
-            allCases.filter { $0 != .contacts }
+            allCases
+        }
+
+        /// PKT-388 D1-1: Grants that can be prompted directly via API.
+        public var isAutoGrantable: Bool {
+            switch self {
+            case .contacts, .notifications, .automation:
+                return true
+            case .accessibility, .screenRecording, .fullDiskAccess:
+                return false
+            }
         }
 
         /// Grants surfaced during onboarding.
@@ -692,27 +705,55 @@ public final class PermissionManager {
 
     // MARK: - Internal probes
 
-    /// V1-PATCH-003 v2: Runs osascript in a child Process to completely isolate
-    /// Security framework calls (code signing, TCC validation) from our process's
-    /// main thread. NSAppleScript.executeAndReturnError() internally dispatches
-    /// TCC validation to the main thread even from Task.detached — Process-based
-    /// approach eliminates this entirely.
+    /// PKT-391 (V1-PATCH-003 v3): Use NSAppleScript in-process on DispatchQueue.global()
+    /// to align TCC identity with applescript_exec. Both now use NotionBridge.app's
+    /// TCC entry, eliminating the identity split where probes authorized /usr/bin/osascript
+    /// but execution ran as NotionBridge.app (causing runtime -1743 errors).
+    ///
+    /// V1-PATCH-003 v2 used Process("/usr/bin/osascript") to avoid main-thread blocking.
+    /// V1-PATCH-003 v3 returns to NSAppleScript but on DispatchQueue.global(qos:) instead
+    /// of Task.detached. NSAppleScript's internal dispatch_sync to main thread for TCC
+    /// validation is brief (<100ms) — the full execution runs on the GCD thread.
+    /// 10s timeout per probe guards against hangs (V1-PATCH-003 regression gate).
     private func runAppleScriptProbe(_ source: String) async -> Bool {
         let probeSource = source
-        return await Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", probeSource]
-            // Suppress stdout/stderr — we only care about exit code
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                process.waitUntilExit()
-                return process.terminationStatus == 0
-            } catch {
-                return false
+        return await withCheckedContinuation { continuation in
+            // Thread-safe one-shot guard — ensures continuation is resumed exactly once
+            // even if both the timeout and the probe complete near-simultaneously.
+            let resumed = NSLock()
+            var didResume = false
+
+            // Safety timeout: 10s per probe (guards against main-thread deadlock
+            // or target app hang). Returns false (denied) on timeout.
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+                resumed.lock()
+                defer { resumed.unlock() }
+                guard !didResume else { return }
+                didResume = true
+                continuation.resume(returning: false)
             }
-        }.value
+
+            // Run NSAppleScript on GCD global queue (not Swift cooperative pool).
+            // NSAppleScript.executeAndReturnError() may dispatch_sync to main for
+            // TCC validation — this is a brief check, not the full execution.
+            // The @MainActor caller (checkAutomation) has `await`-suspended,
+            // so main thread is free to service the dispatch_sync.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let appleScript = NSAppleScript(source: probeSource)
+                var errorInfo: NSDictionary?
+                let _ = appleScript?.executeAndReturnError(&errorInfo)
+
+                resumed.lock()
+                defer { resumed.unlock() }
+                guard !didResume else { return }
+                didResume = true
+
+                if errorInfo != nil {
+                    continuation.resume(returning: false)
+                } else {
+                    continuation.resume(returning: true)
+                }
+            }
+        }
     }
 }

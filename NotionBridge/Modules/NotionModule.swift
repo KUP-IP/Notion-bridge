@@ -202,8 +202,20 @@ public enum NotionModule {
                 }
 
                 guard let propsData = propsJSON.data(using: .utf8),
-                      let propsObj = try? JSONSerialization.jsonObject(with: propsData) as? [String: Any] else {
+                      var propsObj = try? JSONSerialization.jsonObject(with: propsData) as? [String: Any] else {
                     return .object(["error": .string("Invalid JSON in 'properties' parameter")])
+                }
+
+                // File property sugar: ["id1", "id2"] → {"files": [{"type": "file_upload", "file_upload": {"id": "id1"}}, ...]}
+                for (key, value) in propsObj {
+                    if let arr = value as? [String], !arr.isEmpty,
+                       arr.allSatisfy({ $0.count >= 32 && $0.count <= 36 }) {
+                        // Heuristic: array of UUID-length strings → treat as file upload IDs
+                        let files = arr.map { id in
+                            ["type": "file_upload", "file_upload": ["id": id]] as [String: Any]
+                        }
+                        propsObj[key] = ["files": files] as [String: Any]
+                    }
                 }
 
                 let envelope: [String: Any] = ["properties": propsObj]
@@ -290,23 +302,23 @@ public enum NotionModule {
             name: "notion_query",
             module: moduleName,
             tier: .open,
-            description: "Query a Notion database with optional filter and sort. Returns matching pages.",
+            description: "Query a Notion data source with optional filter and sort. Returns matching pages.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "databaseId": .object(["type": .string("string"), "description": .string("Database ID to query")]),
+                    "dataSourceId": .object(["type": .string("string"), "description": .string("Data source ID to query")]),
                     "filter": .object(["type": .string("string"), "description": .string("Optional JSON string of filter object")]),
                     "sorts": .object(["type": .string("string"), "description": .string("Optional JSON string of sorts array")]),
                     "pageSize": .object(["type": .string("integer"), "description": .string("Max results (default: 100)")]),
                     "startCursor": .object(["type": .string("string"), "description": .string("Pagination cursor from previous query")]),
                     "workspace": workspaceParam
                 ]),
-                "required": .array([.string("databaseId")])
+                "required": .array([.string("dataSourceId")])
             ]),
             handler: { arguments in
                 guard case .object(let args) = arguments,
-                      case .string(let dbId) = args["databaseId"] else {
-                    throw ToolRouterError.invalidArguments(toolName: "notion_query", reason: "missing 'databaseId'")
+                      case .string(let dsId) = args["dataSourceId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_query", reason: "missing 'dataSourceId'")
                 }
 
                 let pageSize: Int = { if case .int(let ps) = args["pageSize"] { return min(ps, 100) }; return 100 }()
@@ -318,8 +330,8 @@ public enum NotionModule {
                 if case .string(let s) = args["sorts"] { sortsData = s.data(using: .utf8) }
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                let data = try await client.queryDatabase(
-                    databaseId: dbId,
+                let data = try await client.queryDataSource(
+                    dataSourceId: dsId,
                     filter: filterData,
                     sorts: sortsData,
                     pageSize: pageSize,
@@ -732,6 +744,19 @@ public enum NotionModule {
                     case "txt": return "text/plain"
                     case "json": return "application/json"
                     case "csv": return "text/csv"
+                    case "mp4": return "video/mp4"
+                    case "mov": return "video/quicktime"
+                    case "mp3": return "audio/mpeg"
+                    case "wav": return "audio/wav"
+                    case "m4a": return "audio/mp4"
+                    case "ogg": return "audio/ogg"
+                    case "webm": return "video/webm"
+                    case "webp": return "image/webp"
+                    case "svg": return "image/svg+xml"
+                    case "html", "htm": return "text/html"
+                    case "xml": return "text/xml"
+                    case "zip": return "application/zip"
+                    case "md": return "text/markdown"
                     default: return "application/octet-stream"
                     }
                 }()
@@ -833,7 +858,7 @@ private final class NotionRegistryHolder: @unchecked Sendable {
     private var registry: NotionClientRegistry?
     private let lock = NSLock()
 
-    private func ensureRegistry() throws -> NotionClientRegistry {
+    private func ensureRegistry() -> NotionClientRegistry {
         lock.lock()
         defer { lock.unlock() }
 
@@ -841,18 +866,18 @@ private final class NotionRegistryHolder: @unchecked Sendable {
             return existing
         }
 
-        let newRegistry = try NotionClientRegistry()
+        let newRegistry = NotionClientRegistry()
         registry = newRegistry
         return newRegistry
     }
 
     func getClient(workspace: String?) async throws -> NotionClient {
-        let reg = try ensureRegistry()
+        let reg = ensureRegistry()
         return try await reg.getClient(workspace: workspace)
     }
 
     func listConnections() async throws -> [NotionConnectionInfo] {
-        let reg = try ensureRegistry()
+        let reg = ensureRegistry()
         return try await reg.listConnections()
     }
 }

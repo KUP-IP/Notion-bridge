@@ -51,6 +51,16 @@ func runPermissionManagerTests() async {
         try expect(ids.count == uniqueIds.count, "All grant IDs should be unique")
     }
 
+    await test("Grant auto/manual classification is correct") {
+        try expect(PermissionManager.Grant.contacts.isAutoGrantable)
+        try expect(PermissionManager.Grant.notifications.isAutoGrantable)
+        try expect(PermissionManager.Grant.automation.isAutoGrantable)
+
+        try expect(PermissionManager.Grant.accessibility.isAutoGrantable == false)
+        try expect(PermissionManager.Grant.screenRecording.isAutoGrantable == false)
+        try expect(PermissionManager.Grant.fullDiskAccess.isAutoGrantable == false)
+    }
+
     await test("GrantStatus equality works correctly") {
         try expect(PermissionManager.GrantStatus.granted == .granted)
         try expect(PermissionManager.GrantStatus.denied == .denied)

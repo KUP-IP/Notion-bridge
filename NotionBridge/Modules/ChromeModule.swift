@@ -236,7 +236,7 @@ public enum ChromeModule {
                 let jsElement = selector.isEmpty
                     ? "document.body"
                     : "document.querySelector('\(selector)')"
-                let js = "(\(jsElement) || {}).\\(prop) || ''"
+                let js = "(\(jsElement) || {}).\(prop) || ''"
 
                 let escapedJS = js.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
 
@@ -245,14 +245,7 @@ public enum ChromeModule {
                    let tabIndexVal = args["tabIndex"],
                    case .int(let windowId) = windowIdVal,
                    case .int(let tabIndex) = tabIndexVal {
-                    tabTarget = """
-                        repeat with w in windows
-                            if id of w is \(windowId) then
-                                set targetTab to tab \(tabIndex) of w
-                            end if
-                        end repeat
-                        tell targetTab
-                    """
+                    tabTarget = "tell tab \(tabIndex) of (first window whose id is \(windowId))"
                 } else {
                     tabTarget = "tell active tab of front window"
                 }
@@ -323,14 +316,7 @@ public enum ChromeModule {
                    let tabIndexVal = args["tabIndex"],
                    case .int(let windowId) = windowIdVal,
                    case .int(let tabIndex) = tabIndexVal {
-                    tabTarget = """
-                        repeat with w in windows
-                            if id of w is \(windowId) then
-                                set targetTab to tab \(tabIndex) of w
-                            end if
-                        end repeat
-                        tell targetTab
-                    """
+                    tabTarget = "tell tab \(tabIndex) of (first window whose id is \(windowId))"
                 } else {
                     tabTarget = "tell active tab of front window"
                 }
@@ -351,8 +337,11 @@ public enum ChromeModule {
                         "errorNumber": .int(result.errorNumber ?? -1)
                     ])
                 }
+                let resultValue = result.value ?? ""
+                let isVoid = result.value == nil
                 return .object([
-                    "result": .string(result.value ?? "")
+                    "result": .string(resultValue),
+                    "resultType": .string(isVoid ? "void" : "string")
                 ])
             }
         ))
@@ -362,7 +351,7 @@ public enum ChromeModule {
             name: "chrome_screenshot_tab",
             module: moduleName,
             tier: .open,
-            description: "Capture the visible content of a Chrome tab. Uses JavaScript to capture the viewport as a PNG data URL, then saves to a temporary file. Returns the file path and dimensions.",
+            description: "Capture the visible content of a Chrome tab as a PNG. Uses AppleScript for Chrome window bounds and macOS screencapture for the region. When windowId and tabIndex are provided, activates that tab first. Returns the file path and dimensions.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -385,117 +374,98 @@ public enum ChromeModule {
                     args = [:]
                 }
 
-                // Use html2canvas-style JS to capture viewport as data URL
-                let captureJS = """
-                    (async function() {
-                        try {
-                            const canvas = document.createElement('canvas');
-                            const ctx = canvas.getContext('2d');
-                            canvas.width = window.innerWidth;
-                            canvas.height = window.innerHeight;
-                            // Use foreignObject SVG approach for same-origin capture
-                            const data = '<svg xmlns="http://www.w3.org/2000/svg" width="' + canvas.width + '" height="' + canvas.height + '">' +
-                                '<foreignObject width="100%" height="100%">' +
-                                '<div xmlns="http://www.w3.org/1999/xhtml">' +
-                                document.documentElement.outerHTML +
-                                '</div></foreignObject></svg>';
-                            const blob = new Blob([data], {type: 'image/svg+xml'});
-                            const url = URL.createObjectURL(blob);
-                            const img = new Image();
-                            return await new Promise((resolve) => {
-                                img.onload = function() {
-                                    ctx.drawImage(img, 0, 0);
-                                    URL.revokeObjectURL(url);
-                                    resolve(JSON.stringify({width: canvas.width, height: canvas.height, dataUrl: canvas.toDataURL('image/png')}));
-                                };
-                                img.onerror = function() {
-                                    resolve(JSON.stringify({error: 'Canvas rendering failed'}));
-                                };
-                                img.src = url;
-                            });
-                        } catch(e) {
-                            return JSON.stringify({error: e.message});
-                        }
-                    })()
-                    """.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: " ")
-
-                let tabTarget: String
+                let targetBoundsExpression: String
                 if let windowIdVal = args["windowId"],
                    let tabIndexVal = args["tabIndex"],
                    case .int(let windowId) = windowIdVal,
                    case .int(let tabIndex) = tabIndexVal {
-                    tabTarget = """
-                        repeat with w in windows
-                            if id of w is \(windowId) then
-                                set targetTab to tab \(tabIndex) of w
-                            end if
-                        end repeat
-                        tell targetTab
-                    """
-                } else {
-                    tabTarget = "tell active tab of front window"
-                }
-
-                let script = """
-                    tell application "Google Chrome"
-                        \(tabTarget)
-                            set captureResult to execute javascript "\(captureJS)"
+                    let activateTabScript = """
+                        tell application "Google Chrome"
+                            set active tab index of (first window whose id is \(windowId)) to \(tabIndex)
+                            return "ok"
                         end tell
-                        return captureResult
-                    end tell
-                """
-
-                let result = executeAppleScript(script)
-                if let error = result.error {
-                    return .object([
-                        "error": .string(error),
-                        "errorNumber": .int(result.errorNumber ?? -1)
-                    ])
-                }
-
-                // Parse the JSON result from JS
-                guard let jsonString = result.value,
-                      let jsonData = jsonString.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-                    return .object([
-                        "error": .string("Failed to parse screenshot result")
-                    ])
-                }
-
-                if let jsError = json["error"] as? String {
-                    return .object([
-                        "error": .string(jsError)
-                    ])
-                }
-
-                guard let dataUrl = json["dataUrl"] as? String,
-                      let width = json["width"] as? Int,
-                      let height = json["height"] as? Int else {
-                    return .object([
-                        "error": .string("Missing screenshot data in result")
-                    ])
-                }
-
-                // Save data URL to temp file
-                let prefix = "data:image/png;base64,"
-                if dataUrl.hasPrefix(prefix) {
-                    let base64 = String(dataUrl.dropFirst(prefix.count))
-                    if let imageData = Data(base64Encoded: base64) {
-                        let tempDir = FileManager.default.temporaryDirectory
-                        let filename = "chrome_screenshot_\(Int(Date().timeIntervalSince1970)).png"
-                        let filePath = tempDir.appendingPathComponent(filename)
-                        try? imageData.write(to: filePath)
+                    """
+                    let activateTabResult = executeAppleScript(activateTabScript)
+                    if let error = activateTabResult.error {
                         return .object([
-                            "path": .string(filePath.path),
-                            "width": .int(width),
-                            "height": .int(height),
-                            "size": .int(imageData.count)
+                            "error": .string(error),
+                            "errorNumber": .int(activateTabResult.errorNumber ?? -1)
                         ])
                     }
+                    targetBoundsExpression = "bounds of (first window whose id is \(windowId))"
+                } else {
+                    targetBoundsExpression = "bounds of front window"
                 }
 
+                let boundsScript = """
+                    tell application "Google Chrome"
+                        set b to \(targetBoundsExpression)
+                        return (item 1 of b as string) & "," & (item 2 of b as string) & "," & (item 3 of b as string) & "," & (item 4 of b as string)
+                    end tell
+                """
+                let boundsResult = executeAppleScript(boundsScript)
+                if let error = boundsResult.error {
+                    return .object([
+                        "error": .string(error),
+                        "errorNumber": .int(boundsResult.errorNumber ?? -1)
+                    ])
+                }
+
+                let boundsParts = (boundsResult.value ?? "")
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                guard boundsParts.count == 4,
+                      let x1 = Int(boundsParts[0]),
+                      let y1 = Int(boundsParts[1]),
+                      let x2 = Int(boundsParts[2]),
+                      let y2 = Int(boundsParts[3]) else {
+                    return .object([
+                        "error": .string("Failed to parse Chrome window bounds")
+                    ])
+                }
+
+                let width = x2 - x1
+                let height = y2 - y1
+                guard width > 0, height > 0 else {
+                    return .object([
+                        "error": .string("Invalid Chrome window bounds")
+                    ])
+                }
+
+                _ = executeAppleScript("tell application \"Google Chrome\" to activate")
+                try await Task.sleep(nanoseconds: 300_000_000)
+
+                let tempDir = FileManager.default.temporaryDirectory
+                let filename = "chrome_screenshot_\(Int(Date().timeIntervalSince1970)).png"
+                let filePath = tempDir.appendingPathComponent(filename).path
+
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                process.arguments = ["-R", "\(x1),\(y1),\(width),\(height)", "-x", filePath]
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                } catch {
+                    return .object([
+                        "error": .string("Failed to run screencapture: \(error.localizedDescription)")
+                    ])
+                }
+
+                guard process.terminationStatus == 0 else {
+                    return .object([
+                        "error": .string("screencapture exited with status \(process.terminationStatus)")
+                    ])
+                }
+
+                let attributes = try? FileManager.default.attributesOfItem(atPath: filePath)
+                let fileSize = (attributes?[.size] as? NSNumber)?.intValue ?? 0
+
                 return .object([
-                    "error": .string("Failed to decode screenshot data")
+                    "path": .string(filePath),
+                    "width": .int(width),
+                    "height": .int(height),
+                    "size": .int(fileSize)
                 ])
             }
         ))
@@ -520,6 +490,6 @@ public enum ChromeModule {
             return AppleScriptResult(value: nil, error: errorMessage, errorNumber: errorNumber)
         }
 
-        return AppleScriptResult(value: result?.stringValue ?? "", error: nil, errorNumber: nil)
+        return AppleScriptResult(value: result?.stringValue, error: nil, errorNumber: nil)
     }
 }
