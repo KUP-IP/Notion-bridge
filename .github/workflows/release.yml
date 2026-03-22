@@ -1,0 +1,128 @@
+# Required repository secrets:
+# - APPLE_CERTIFICATE_BASE64: Base64-encoded .p12 Developer ID Application certificate
+# - APPLE_CERTIFICATE_PASSWORD: Password for the .p12 file
+# - APPLE_ID: Apple ID email for notarytool (isaiah@keepup.club)
+# - APPLE_ID_PASSWORD: App-specific password for notarytool
+# - APPLE_TEAM_ID: Apple Team ID (VP24Z9CS22)
+
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run test suite
+        run: make test
+
+  build-sign-notarize:
+    runs-on: macos-15
+    needs: test
+    permissions:
+      contents: write
+    env:
+      APP_BUNDLE_PATH: .build/NotionBridge.app
+      APP_ZIP_PATH: .build/NotionBridge.zip
+      SIGNING_IDENTITY: "Developer ID Application: Isaiah Peters (VP24Z9CS22)"
+      ENTITLEMENTS_PATH: NotionBridge.entitlements
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build release binary
+        run: swift build -c release
+
+      - name: Build app bundle
+        run: make app
+
+      - name: Import Apple certificate into temporary keychain
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/notionbridge-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          CERT_PATH="$RUNNER_TEMP/notionbridge-developer-id.p12"
+
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" \
+            -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/xcrun \
+            -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          security default-keychain -d user -s "$KEYCHAIN_PATH"
+
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          echo "CERT_PATH=$CERT_PATH" >> "$GITHUB_ENV"
+
+      - name: Code sign app bundle
+        run: |
+          codesign --force --options runtime --timestamp \
+            --entitlements "$ENTITLEMENTS_PATH" \
+            --sign "$SIGNING_IDENTITY" \
+            "$APP_BUNDLE_PATH"
+
+      - name: Verify code signing
+        run: codesign --verify --deep --strict "$APP_BUNDLE_PATH"
+
+      - name: Create ZIP for notarization
+        run: ditto -c -k --keepParent "$APP_BUNDLE_PATH" "$APP_ZIP_PATH"
+
+      - name: Submit app for notarization
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcrun notarytool submit "$APP_ZIP_PATH" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+      - name: Staple notarization ticket
+        run: xcrun stapler staple "$APP_BUNDLE_PATH"
+
+      - name: Final Gatekeeper verification
+        run: spctl --assess --verbose "$APP_BUNDLE_PATH"
+
+      - name: Re-zip stapled app
+        run: ditto -c -k --keepParent "$APP_BUNDLE_PATH" "$APP_ZIP_PATH"
+
+      - name: Upload signed notarized app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NotionBridge.zip
+          path: ${{ env.APP_ZIP_PATH }}
+
+      - name: Publish GitHub Release (tag only)
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.APP_ZIP_PATH }}
+
+      - name: Cleanup temporary keychain
+        if: ${{ always() }}
+        run: |
+          if [ -n "${KEYCHAIN_PATH:-}" ]; then
+            security delete-keychain "$KEYCHAIN_PATH" || true
+          fi
+          if [ -n "${CERT_PATH:-}" ]; then
+            rm -f "$CERT_PATH"
+          fi
