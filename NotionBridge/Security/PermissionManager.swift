@@ -188,6 +188,15 @@ public final class PermissionManager {
                 end tell
             """
         ),
+        AutomationTarget(
+            bundleID: "com.apple.reminders",
+            name: "Reminders",
+            probe: """
+                tell application "Reminders"
+                    return name
+                end tell
+            """
+        ),
     ]
 
     // MARK: - State
@@ -214,6 +223,9 @@ public final class PermissionManager {
     }
     public var automationContactsGranted: Bool {
         automationTargetGrants["com.apple.AddressBook"] ?? false
+    }
+    public var automationRemindersGranted: Bool {
+        automationTargetGrants["com.apple.reminders"] ?? false
     }
 
     public private(set) var lastCheckedAt: Date?
