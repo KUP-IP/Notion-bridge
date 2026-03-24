@@ -190,7 +190,7 @@ extension SettingsView {
                 }
             }
 
-            Section("Workspace Connections & Notion API") {
+            Section("Workspace Connections") {
                 ConnectionsManagementView()
 
                 if isEditingToken {

@@ -143,9 +143,9 @@ public struct NotionFileUpload: Sendable {
 
 /// A named workspace connection for the multi-token registry.
 public struct NotionConnection: Sendable, Codable {
-    public let name: String
+    public var name: String
     public let token: String
-    public let primary: Bool
+    public var primary: Bool
 
     public init(name: String, token: String, primary: Bool = false) {
         self.name = name

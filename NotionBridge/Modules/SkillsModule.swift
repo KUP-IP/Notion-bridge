@@ -179,6 +179,284 @@ public enum SkillsModule {
                 }
             }
         ))
+
+        // Register manage_skill tool (PKT-477 Feature 3)
+        await registerManageSkill(on: router)
+    }
+
+    // MARK: - manage_skill Tool (PKT-477 Feature 3)
+
+    /// Register the `manage_skill` tool on the given router.
+    public static func registerManageSkill(on router: ToolRouter) async {
+
+        await router.register(ToolRegistration(
+            name: "manage_skill",
+            module: moduleName,
+            tier: .orange,
+            description: "Manage NotionBridge skills configuration. Actions: list, add, delete, toggle, rename, update_url, bulk_add. Skills are persisted in Settings → Skills.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "action": .object([
+                        "type": .string("string"),
+                        "description": .string("Action to perform: list, add, delete, toggle, rename, update_url, bulk_add"),
+                        "enum": .array([.string("list"), .string("add"), .string("delete"), .string("toggle"), .string("rename"), .string("update_url"), .string("bulk_add")])
+                    ]),
+                    "name": .object([
+                        "type": .string("string"),
+                        "description": .string("Skill name (required for add, delete, toggle, rename, update_url)")
+                    ]),
+                    "url": .object([
+                        "type": .string("string"),
+                        "description": .string("Notion page ID or URL (required for add, update_url)")
+                    ]),
+                    "newName": .object([
+                        "type": .string("string"),
+                        "description": .string("New name for rename action")
+                    ]),
+                    "skills": .object([
+                        "type": .string("array"),
+                        "description": .string("Array of {name, url} objects for bulk_add action"),
+                        "items": .object([
+                            "type": .string("object"),
+                            "properties": .object([
+                                "name": .object(["type": .string("string")]),
+                                "url": .object(["type": .string("string")])
+                            ])
+                        ])
+                    ])
+                ]),
+                "required": .array([.string("action")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let action) = args["action"] else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "manage_skill",
+                        reason: "missing required 'action' parameter"
+                    )
+                }
+
+                switch action {
+                case "list":
+                    let skills = readAllSkills()
+                    let items: [Value] = skills.map { skill in
+                        .object([
+                            "name": .string(skill.name),
+                            "url": .string(skill.notionPageId),
+                            "enabled": .bool(skill.enabled)
+                        ])
+                    }
+                    return .object([
+                        "skills": .array(items),
+                        "count": .int(skills.count)
+                    ])
+
+                case "add":
+                    guard case .string(let name) = args["name"],
+                          case .string(let url) = args["url"] else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "manage_skill",
+                            reason: "'add' requires 'name' and 'url' parameters"
+                        )
+                    }
+                    let success = writeAddSkill(name: name, pageId: url)
+                    return .object([
+                        "success": .bool(success),
+                        "action": .string("add"),
+                        "name": .string(name),
+                        "message": .string(success ? "Skill '\(name)' added." : "Failed — name may be empty or duplicate.")
+                    ])
+
+                case "delete":
+                    guard case .string(let name) = args["name"] else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "manage_skill",
+                            reason: "'delete' requires 'name' parameter"
+                        )
+                    }
+                    let success = writeDeleteSkill(named: name)
+                    return .object([
+                        "success": .bool(success),
+                        "action": .string("delete"),
+                        "name": .string(name),
+                        "message": .string(success ? "Skill '\(name)' deleted." : "Skill '\(name)' not found.")
+                    ])
+
+                case "toggle":
+                    guard case .string(let name) = args["name"] else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "manage_skill",
+                            reason: "'toggle' requires 'name' parameter"
+                        )
+                    }
+                    let result = writeToggleSkill(named: name)
+                    return .object([
+                        "success": .bool(result.found),
+                        "action": .string("toggle"),
+                        "name": .string(name),
+                        "enabled": .bool(result.newState),
+                        "message": .string(result.found ? "Skill '\(name)' is now \(result.newState ? "enabled" : "disabled")." : "Skill '\(name)' not found.")
+                    ])
+
+                case "rename":
+                    guard case .string(let name) = args["name"],
+                          case .string(let newName) = args["newName"] else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "manage_skill",
+                            reason: "'rename' requires 'name' and 'newName' parameters"
+                        )
+                    }
+                    let success = writeRenameSkill(named: name, to: newName)
+                    return .object([
+                        "success": .bool(success),
+                        "action": .string("rename"),
+                        "oldName": .string(name),
+                        "newName": .string(newName),
+                        "message": .string(success ? "Skill renamed '\(name)' → '\(newName)'." : "Failed — skill not found or name conflict.")
+                    ])
+
+                case "update_url":
+                    guard case .string(let name) = args["name"],
+                          case .string(let url) = args["url"] else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "manage_skill",
+                            reason: "'update_url' requires 'name' and 'url' parameters"
+                        )
+                    }
+                    let success = writeUpdateSkillURL(named: name, newPageId: url)
+                    return .object([
+                        "success": .bool(success),
+                        "action": .string("update_url"),
+                        "name": .string(name),
+                        "message": .string(success ? "Skill '\(name)' URL updated." : "Skill '\(name)' not found.")
+                    ])
+
+                case "bulk_add":
+                    guard case .array(let skillsArray) = args["skills"] else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "manage_skill",
+                            reason: "'bulk_add' requires 'skills' array parameter"
+                        )
+                    }
+                    var pairs: [(name: String, pageId: String)] = []
+                    for item in skillsArray {
+                        if case .object(let obj) = item,
+                           case .string(let name) = obj["name"],
+                           case .string(let url) = obj["url"] {
+                            pairs.append((name: name, pageId: url))
+                        }
+                    }
+                    let result = writeBulkAdd(skills: pairs)
+                    return .object([
+                        "action": .string("bulk_add"),
+                        "added": .int(result.added),
+                        "skipped": .int(result.skipped),
+                        "total": .int(pairs.count),
+                        "message": .string("Bulk add complete: \(result.added) added, \(result.skipped) skipped.")
+                    ])
+
+                default:
+                    return .object([
+                        "error": .string("Unknown action: '\(action)'"),
+                        "hint": .string("Valid actions: list, add, delete, toggle, rename, update_url, bulk_add")
+                    ])
+                }
+            }
+        ))
+    }
+
+    // MARK: - UserDefaults Write Helpers (non-MainActor safe)
+
+    /// Read all skills from UserDefaults (thread-safe).
+    private static func readAllSkills() -> [SkillConfig] {
+        guard let data = UserDefaults.standard.data(forKey: "com.notionbridge.skills"),
+              let skills = try? JSONDecoder().decode([SkillConfig].self, from: data) else {
+            return []
+        }
+        return skills
+    }
+
+    /// Write skills array back to UserDefaults.
+    private static func writeSkills(_ skills: [SkillConfig]) {
+        guard let data = try? JSONEncoder().encode(skills) else { return }
+        UserDefaults.standard.set(data, forKey: "com.notionbridge.skills")
+    }
+
+    /// Add a skill via UserDefaults. Returns true on success.
+    private static func writeAddSkill(name: String, pageId: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        var skills = readAllSkills()
+        guard !skills.contains(where: { $0.name.lowercased() == trimmed.lowercased() }) else { return false }
+        skills.append(SkillConfig(name: trimmed, notionPageId: pageId, enabled: true))
+        writeSkills(skills)
+        return true
+    }
+
+    /// Delete a skill by name. Returns true if found and removed.
+    private static func writeDeleteSkill(named name: String) -> Bool {
+        var skills = readAllSkills()
+        let before = skills.count
+        skills.removeAll { $0.name.lowercased() == name.lowercased() }
+        guard skills.count < before else { return false }
+        writeSkills(skills)
+        return true
+    }
+
+    /// Toggle a skill's enabled state. Returns (found, newState).
+    private static func writeToggleSkill(named name: String) -> (found: Bool, newState: Bool) {
+        var skills = readAllSkills()
+        if let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
+            skills[idx] = SkillConfig(name: skills[idx].name, notionPageId: skills[idx].notionPageId, enabled: !skills[idx].enabled)
+            let newState = skills[idx].enabled
+            writeSkills(skills)
+            return (true, newState)
+        }
+        return (false, false)
+    }
+
+    /// Rename a skill. Returns true on success.
+    private static func writeRenameSkill(named oldName: String, to newName: String) -> Bool {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        var skills = readAllSkills()
+        guard !skills.contains(where: { $0.name.lowercased() == trimmed.lowercased() }) else { return false }
+        if let idx = skills.firstIndex(where: { $0.name.lowercased() == oldName.lowercased() }) {
+            skills[idx] = SkillConfig(name: trimmed, notionPageId: skills[idx].notionPageId, enabled: skills[idx].enabled)
+            writeSkills(skills)
+            return true
+        }
+        return false
+    }
+
+    /// Update a skill's page ID. Returns true on success.
+    private static func writeUpdateSkillURL(named name: String, newPageId: String) -> Bool {
+        var skills = readAllSkills()
+        if let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
+            skills[idx] = SkillConfig(name: skills[idx].name, notionPageId: newPageId, enabled: skills[idx].enabled)
+            writeSkills(skills)
+            return true
+        }
+        return false
+    }
+
+    /// Bulk add skills. Returns (added, skipped) counts.
+    private static func writeBulkAdd(skills newSkills: [(name: String, pageId: String)]) -> (added: Int, skipped: Int) {
+        var existing = readAllSkills()
+        var added = 0, skipped = 0
+        for s in newSkills {
+            let trimmed = s.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { skipped += 1; continue }
+            if existing.contains(where: { $0.name.lowercased() == trimmed.lowercased() }) {
+                skipped += 1
+            } else {
+                existing.append(SkillConfig(name: trimmed, notionPageId: s.pageId, enabled: true))
+                added += 1
+            }
+        }
+        writeSkills(existing)
+        return (added, skipped)
     }
 
     // MARK: - Config Helpers
@@ -206,6 +484,6 @@ public enum SkillsModule {
               let skills = try? JSONDecoder().decode([SkillConfig].self, from: data) else {
             return []
         }
-        return skills.map(\.name)
+        return skills.filter(\.enabled).map(\.name) // Only enabled skills
     }
 }

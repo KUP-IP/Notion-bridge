@@ -12,6 +12,13 @@ import Foundation
 
 // MARK: - NotionClientRegistry
 
+/// Result of a preflight remove check.
+public enum RemoveResult: Sendable {
+    case removed
+    case lastConnectionWarning
+    case primaryBlocked(message: String)
+}
+
 /// Thread-safe manager for multiple Notion workspace connections.
 /// Each connection has its own `NotionClient` instance with independent rate limiting.
 public actor NotionClientRegistry {
@@ -94,7 +101,17 @@ public actor NotionClientRegistry {
         try persistConfig()
     }
 
+    /// Preflight check before removing a connection. Returns the guard result.
+    public func preflightRemove(name: String) -> RemoveResult {
+        if connectionConfigs.count == 1 { return .lastConnectionWarning }
+        if primaryName == name && connectionConfigs.count > 1 {
+            return .primaryBlocked(message: "Set a new primary before deleting this one.")
+        }
+        return .removed
+    }
+
     /// Remove a named connection. Persists to config.json.
+    /// Use preflightRemove() first to check for guard conditions.
     public func removeConnection(name: String) throws {
         clients.removeValue(forKey: name)
         connectionConfigs.removeAll { $0.name == name }
@@ -102,6 +119,45 @@ public actor NotionClientRegistry {
             primaryName = connectionConfigs.first?.name
         }
         try persistConfig()
+        // Post notification so UI refreshes
+        NotificationCenter.default.post(name: .notionTokenDidChange, object: nil)
+    }
+
+    /// Set a connection as primary. Persists to config.json.
+    public func setPrimary(name: String) throws {
+        guard clients[name] != nil else {
+            throw NotionClientError.connectionNotFound(name)
+        }
+        for i in connectionConfigs.indices {
+            connectionConfigs[i].primary = (connectionConfigs[i].name == name)
+        }
+        primaryName = name
+        try persistConfig()
+        print("[NotionClientRegistry] Primary set to '\(name)'")
+    }
+
+    /// Rename a connection in-place. Handles primary rename case. Persists to config.json.
+    public func renameConnection(from oldName: String, to newName: String) throws {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw NotionClientError.connectionNotFound(oldName)
+        }
+        guard clients[oldName] != nil else {
+            throw NotionClientError.connectionNotFound(oldName)
+        }
+        guard clients[trimmed] == nil else {
+            throw NotionClientError.connectionNotFound(oldName) // name collision
+        }
+        // Move client to new key
+        clients[trimmed] = clients.removeValue(forKey: oldName)
+        // Update config entry
+        if let idx = connectionConfigs.firstIndex(where: { $0.name == oldName }) {
+            connectionConfigs[idx].name = trimmed
+        }
+        // Update primary if renamed connection was primary
+        if primaryName == oldName { primaryName = trimmed }
+        try persistConfig()
+        print("[NotionClientRegistry] Renamed '\(oldName)' → '\(trimmed)'")
     }
 
     // MARK: - Config Loading & Migration

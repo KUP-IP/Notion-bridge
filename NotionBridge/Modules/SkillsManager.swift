@@ -75,6 +75,51 @@ public final class SkillsManager {
         skills.filter(\.enabled)
     }
 
+    // MARK: - Extended CRUD (PKT-477 Feature 3)
+
+    /// Rename a skill. Returns false if name is empty, not unique, or not found.
+    @discardableResult
+    public func renameSkill(named oldName: String, to newName: String) -> Bool {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard !skills.contains(where: { $0.name.lowercased() == trimmed.lowercased() }) else { return false }
+        if let idx = skills.firstIndex(where: { $0.name.lowercased() == oldName.lowercased() }) {
+            skills[idx].name = trimmed
+            save()
+            return true
+        }
+        return false
+    }
+
+    /// Update a skill's Notion page ID. Returns false if not found.
+    @discardableResult
+    public func updateSkillURL(named name: String, newPageId: String) -> Bool {
+        if let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
+            skills[idx].notionPageId = newPageId
+            save()
+            return true
+        }
+        return false
+    }
+
+    /// Bulk add multiple skills at once. Skips duplicates.
+    public func bulkAdd(skills newSkills: [(name: String, pageId: String)]) -> (added: Int, skipped: Int) {
+        var added = 0, skipped = 0
+        for s in newSkills {
+            if addSkill(name: s.name, notionPageId: s.pageId) {
+                added += 1
+            } else {
+                skipped += 1
+            }
+        }
+        return (added, skipped)
+    }
+
+    /// Return all skills (for manage tool).
+    public func listSkills() -> [Skill] {
+        return skills
+    }
+
     // MARK: - Persistence
 
     private func load() {

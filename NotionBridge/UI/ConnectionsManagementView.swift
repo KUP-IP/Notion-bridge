@@ -45,6 +45,9 @@ public struct ConnectionsManagementView: View {
     @State private var renameTarget: ConnectionItem?
     @State private var renameText = ""
     @State private var expandedConnectionId: String?
+    @State private var showLastConnectionWarning = false
+    @State private var showPrimaryBlockedAlert = false
+    @State private var primaryBlockedMessage = ""
 
     public init() {}
 
@@ -127,18 +130,54 @@ public struct ConnectionsManagementView: View {
                 Task { await loadConnections() }
             }
         }
-        // D3: Delete confirmation
+        // D3: Delete confirmation with preflight guard
         .alert("Remove Connection", isPresented: $showDeleteAlert) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
                 if let conn = connectionToDelete {
-                    Task { await removeConnection(conn) }
+                    Task {
+                        let preflight = await NotionClientRegistry.shared.preflightRemove(name: conn.name)
+                        switch preflight {
+                        case .primaryBlocked(let msg):
+                            primaryBlockedMessage = msg
+                            showPrimaryBlockedAlert = true
+                        case .lastConnectionWarning:
+                            showLastConnectionWarning = true
+                        case .removed:
+                            await removeConnection(conn)
+                        }
+                    }
                 }
             }
         } message: {
             if let conn = connectionToDelete {
                 Text("Remove \"\(conn.name)\"? The stored token will be deleted.")
             }
+        }
+        // Primary blocked alert
+        .alert("Cannot Delete Primary", isPresented: $showPrimaryBlockedAlert) {
+            Button("OK") {}
+        } message: {
+            Text(primaryBlockedMessage)
+        }
+        // Last connection warning
+        .alert("Delete Last Connection?", isPresented: $showLastConnectionWarning) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete Anyway", role: .destructive) {
+                if let conn = connectionToDelete {
+                    Task {
+                        do {
+                            try await NotionClientRegistry.shared.removeConnection(name: conn.name)
+                        } catch {
+                            print("[ConnectionsManagement] Last-connection remove failed: \(error)")
+                        }
+                        await ConnectionHealthChecker.shared.invalidateAll()
+                        await loadConnections()
+                    }
+                }
+            }
+        } message: {
+            Text("You\u{2019}re about to delete your only connection. Nothing will work until you add a new one. Are you sure?")
         }
         // D4: Rename alert
         .alert("Rename Connection", isPresented: $showRenameAlert) {
@@ -325,9 +364,24 @@ public struct ConnectionsManagementView: View {
 
     // MARK: - Actions
 
-    /// D3: Remove a connection
+    /// D3: Remove a connection with guard logic
     private func removeConnection(_ conn: ConnectionItem) async {
         if conn.type == .notion {
+            // Preflight check
+            let result = await NotionClientRegistry.shared.preflightRemove(name: conn.name)
+            switch result {
+            case .primaryBlocked(let message):
+                primaryBlockedMessage = message
+                showPrimaryBlockedAlert = true
+                return
+            case .lastConnectionWarning:
+                // Show last-connection warning — caller handles via showLastConnectionWarning
+                // If we got here from the last-connection confirmation, proceed
+                break
+            case .removed:
+                break
+            }
+
             do {
                 try await NotionClientRegistry.shared.removeConnection(name: conn.name)
             } catch {
@@ -341,19 +395,26 @@ public struct ConnectionsManagementView: View {
     /// D4: Rename a connection (Notion only — config name update)
     private func renameConnection(_ conn: ConnectionItem, to newName: String) async {
         if conn.type == .notion {
-            // Remove + re-add with new name (NotionClientRegistry doesn't have rename yet)
-            // For now, log the intent — full rename requires registry API extension
-            print("[ConnectionsManagement] Rename '\(conn.name)' → '\(newName)' — requires registry extension")
+            do {
+                try await NotionClientRegistry.shared.renameConnection(from: conn.name, to: newName)
+                await ConnectionHealthChecker.shared.invalidateAll()
+            } catch {
+                print("[ConnectionsManagement] Rename failed: \(error)")
+            }
         }
         await loadConnections()
     }
 
     /// D6: Set a Notion connection as primary
     private func setPrimary(_ conn: ConnectionItem) async {
-        // This would require a setPrimary() method on NotionClientRegistry
-        // For now, log the intent
-        print("[ConnectionsManagement] Set primary: '\(conn.name)' — requires registry extension")
-        await loadConnections()
+        do {
+            let registryName = conn.type == .notion ? conn.name : conn.name
+            try await NotionClientRegistry.shared.setPrimary(name: registryName)
+            await ConnectionHealthChecker.shared.invalidateAll()
+            await loadConnections()
+        } catch {
+            print("[ConnectionsManagement] Set primary failed: \(error)")
+        }
     }
 
     // MARK: - Helpers
