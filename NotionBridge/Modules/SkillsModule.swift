@@ -56,7 +56,7 @@ public enum SkillsModule {
             name: "fetch_skill",
             module: moduleName,
             tier: .open,
-            description: "Fetch a named skill (Notion page) by name. Returns the page title, properties, and block content as text. Skills are configured in Settings \u{2192} Skills. Results are cached for 10 minutes.",
+            description: "Fetch a named skill by name (case-insensitive). Returns {title, properties, blocks} from the linked Notion page. Results cached 10 minutes. Configure skills in Settings",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -193,7 +193,7 @@ public enum SkillsModule {
             name: "manage_skill",
             module: moduleName,
             tier: .request, // was .orange — no such SecurityTier member
-            description: "Manage NotionBridge skills configuration. Actions: list, add, delete, toggle, rename, update_url, bulk_add. Skills are persisted in Settings → Skills.",
+            description: "Manage the skills registry. Supported actions: list, add, delete, toggle, rename, update_url, bulk_add. Returns the updated skills list. Skills persist in Settings",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

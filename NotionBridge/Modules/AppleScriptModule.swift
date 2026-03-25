@@ -28,7 +28,7 @@ public enum AppleScriptModule {
             name: "applescript_exec",
             module: moduleName,
             tier: .request,
-            description: "Execute AppleScript code in-process via NSAppleScript. Avoids TCC re-prompting by running as NotionBridge.app (not /usr/bin/osascript). Use for controlling apps (Chrome, Finder, System Events, etc.). Returns the result string or error info.",
+            description: "Execute AppleScript in-process via NSAppleScript. Runs as NotionBridge.app to avoid TCC re-prompting (unlike /usr/bin/osascript). Returns the result string or error info. Use for controlling apps like Chrome, Finder, System Events.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

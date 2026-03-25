@@ -33,7 +33,7 @@ public enum ChromeModule {
             name: "chrome_tabs",
             module: moduleName,
             tier: .open,
-            description: "List all open tabs in Google Chrome. Returns tab title, URL, window ID, and tab index for every open tab across all windows.",
+            description: "List all open Chrome tabs across all windows. Returns an array of {title, url, windowId, tabIndex} per tab. Use windowId + tabIndex to target a tab in other chrome_* tools.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -97,7 +97,7 @@ public enum ChromeModule {
             name: "chrome_navigate",
             module: moduleName,
             tier: .notify,
-            description: "Navigate a Chrome tab to a URL, or open a new tab. If windowId and tabIndex are omitted, navigates the active tab of the front window. Set newTab to true to open a new tab instead.",
+            description: "Navigate a Chrome tab to a URL, or open a new tab. Omit windowId/tabIndex to target the active tab of the front window. Set newTab=true to open in a new tab instead. Returns the final URL.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -235,7 +235,7 @@ public enum ChromeModule {
             name: "chrome_read_page",
             module: moduleName,
             tier: .open,
-            description: "Extract page content from a Chrome tab via JavaScript. By default returns document.body.innerText. Optionally pass a CSS selector to target a specific element, or set mode to 'html' for full HTML.",
+            description: "Extract page content from a Chrome tab. Returns innerText by default. Use selector to target a specific element, mode='html' for raw HTML. Prefer over chrome_execute_js for simple content reads.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -329,7 +329,7 @@ public enum ChromeModule {
             name: "chrome_execute_js",
             module: moduleName,
             tier: .notify,
-            description: "Execute arbitrary JavaScript in a Chrome tab and return the result. Use for dynamic page interaction, form filling, DOM manipulation, etc.",
+            description: "Execute arbitrary JavaScript in a Chrome tab and return the result as a string. Use for DOM manipulation, form filling, or dynamic interaction. Prefer chrome_read_page for simple content extraction.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -399,7 +399,7 @@ public enum ChromeModule {
             name: "chrome_screenshot_tab",
             module: moduleName,
             tier: .open,
-            description: "Capture the visible content of a Chrome tab as a PNG. Uses AppleScript for Chrome window bounds and macOS screencapture for the region. When windowId and tabIndex are provided, activates that tab first. Returns the file path and dimensions.",
+            description: "Capture the visible Chrome tab as a PNG screenshot. When windowId/tabIndex are provided, activates that tab first. Returns {filePath, width, height}. Use screen_capture for non-Chrome windows.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

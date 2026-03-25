@@ -215,7 +215,7 @@ public enum ScreenModule {
             name: "screen_capture",
             module: moduleName,
             tier: .open,
-            description: "Capture a screenshot of the display, a specific window, or a region. Returns the file path, dimensions, and file size. Uses ScreenCaptureKit (requires Screen Recording permission).",
+            description: "Capture a screenshot of a display, window, or region. Returns {filePath, width, height, fileSize}. Targets: 'display' (default), 'window' (requires windowId), 'region' (requires {x,y,w,h}), 'all_displays'.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -352,7 +352,7 @@ public enum ScreenModule {
             name: "screen_ocr",
             module: moduleName,
             tier: .open,
-            description: "Capture the screen and extract text via OCR (Vision framework). Returns recognized text with confidence scores and bounding boxes. Uses ScreenCaptureKit for capture + VNRecognizeTextRequest for text recognition.",
+            description: "Capture the screen and extract text via OCR (Vision framework). Returns recognized text with confidence scores and bounding boxes. Same target options as screen_capture. Default language is English.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

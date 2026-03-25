@@ -24,7 +24,7 @@ public enum ShellModule {
             name: "shell_exec",
             module: moduleName,
             tier: .request,
-            description: "Execute a shell command with optional timeout and working directory. Returns stdout, stderr, exit code, and duration in seconds. SecurityGate enforces auto-escalation patterns and forbidden path restrictions.",
+            description: "Execute a shell command with optional timeout and working directory. Returns {stdout, stderr, exitCode, duration}. Commands matching auto-escalation patterns (e.g. sudo, rm -rf) require elevated confirmation.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -114,7 +114,7 @@ public enum ShellModule {
             name: "run_script",
             module: moduleName,
             tier: .request,
-            description: "Execute a pre-approved script from the scripts directory. Only scripts listed in the approved scripts file can run. Returns stdout, stderr, and exit code.",
+            description: "Execute a pre-approved script from the scripts directory. Only scripts in the approved list are allowed. Returns {stdout, stderr, exitCode}.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

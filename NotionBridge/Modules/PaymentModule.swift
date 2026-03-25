@@ -17,7 +17,7 @@ public enum PaymentModule {
             module: moduleName,
             tier: .request,
             neverAutoApprove: true,
-            description: "Execute a Stripe payment intent using a stored payment method credential (pm_ token). Requires explicit approval and biometric authentication.",
+            description: "Execute a Stripe payment using a stored pm_ token from credential_save. Requires user approval + Touch ID. Pass amount in cents (e.g. 2500 = $25). Returns the PaymentIntent object. Always provide an idempotency_key.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

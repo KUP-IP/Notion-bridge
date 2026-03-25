@@ -478,7 +478,7 @@ public enum MessagesModule {
             name: "messages_search",
             module: moduleName,
             tier: .open,
-            description: "Search iMessage/SMS messages by keyword. Returns matching messages with sender, date, and chat context. Uses native SQLite on chat.db (read-only).",
+            description: "Search iMessage/SMS messages by keyword. Returns matching messages with sender, date, text, and chat context. Read-only query on chat.db.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -516,7 +516,7 @@ public enum MessagesModule {
             name: "messages_recent",
             module: moduleName,
             tier: .open,
-            description: "List recent conversations with last message preview, ordered by recency.",
+            description: "List recent iMessage/SMS conversations ordered by recency. Returns an array of {chatIdentifier, lastMessage, date} previews. Use limit to cap results.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -557,7 +557,7 @@ public enum MessagesModule {
             name: "messages_chat",
             module: moduleName,
             tier: .open,
-            description: "Get message thread with a specific contact (phone number or email).",
+            description: "Get the message thread with a specific contact (phone number or email). Returns messages in chronological order with sender, text, and date. Use limit to cap results.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -595,7 +595,7 @@ public enum MessagesModule {
             name: "messages_content",
             module: moduleName,
             tier: .open,
-            description: "Get a single message by its ROWID with full metadata.",
+            description: "Get a single message by its ROWID. Returns full metadata including text, sender, date, attachments, and read status.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -627,7 +627,7 @@ public enum MessagesModule {
             name: "messages_participants",
             module: moduleName,
             tier: .open,
-            description: "List participants (handles) in a chat identified by chat_identifier.",
+            description: "List participants in a chat by chat_identifier. Returns an array of handles (phone numbers or emails) in the conversation.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -657,7 +657,7 @@ public enum MessagesModule {
             name: "messages_send",
             module: moduleName,
             tier: .request,
-            description: "Send an iMessage or SMS/RCS message via AppleScript. Auto-detects service type from chat history. Requires explicit confirm='SEND' parameter. SecurityGate enforces red-tier confirmation.",
+            description: "Send an iMessage or SMS/RCS message. Auto-detects service type from chat history. You must pass confirm='SEND' (exact string) or the call is rejected. Returns confirmation with message details.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

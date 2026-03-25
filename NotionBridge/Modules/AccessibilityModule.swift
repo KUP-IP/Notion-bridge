@@ -297,7 +297,7 @@ public enum AccessibilityModule {
             name: "ax_focused_app",
             module: moduleName,
             tier: .open,
-            description: "Return the frontmost application's name, bundleId, PID, and focused UI element.",
+            description: "Get the frontmost application info. Returns {name, bundleId, pid, focusedElement}. Use the returned pid in other ax_* tools to target this app.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:])
@@ -327,7 +327,7 @@ public enum AccessibilityModule {
             name: "ax_tree",
             module: moduleName,
             tier: .open,
-            description: "Dump the AX element hierarchy for an app. Specify PID or omit for frontmost. Configurable depth (default 5) and format (tree or flat).",
+            description: "Dump the accessibility element hierarchy for an app. Returns a nested tree or flat array of UI elements. Omit pid to target the frontmost app. Use maxDepth to limit traversal depth.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -368,7 +368,7 @@ public enum AccessibilityModule {
             name: "ax_find_element",
             module: moduleName,
             tier: .open,
-            description: "Search the AX tree for elements matching role, title, and/or label. Returns matching elements with paths, positions, and sizes.",
+            description: "Search the AX tree for elements matching role, title, and/or label (case-insensitive substrings). Returns matches with paths, positions, and sizes. Use the returned path in ax_perform_action.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -413,7 +413,7 @@ public enum AccessibilityModule {
             name: "ax_element_info",
             module: moduleName,
             tier: .open,
-            description: "Deep inspect a single AX element. Find by path, or by role/title. Returns all attributes, actions, position, size, and state.",
+            description: "Deep-inspect a single AX element by path, role, or title. Returns all attributes, available actions, position, size, and state. Use after ax_find_element to get full element details.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -439,7 +439,7 @@ public enum AccessibilityModule {
             name: "ax_perform_action",
             module: moduleName,
             tier: .notify,
-            description: "Perform an action on an AX element: press a button, set a value, focus, confirm, cancel, increment, or decrement. Accepts friendly names or raw AX action strings.",
+            description: "Perform an action on an AX element (press, focus, setValue, confirm, cancel, increment, decrement). Locate by path or role+title. For setValue, include the value parameter. Returns confirmation.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

@@ -29,7 +29,7 @@ public enum CredentialModule {
             name: "credential_save",
             module: moduleName,
             tier: .request,
-            description: "Store or update a credential in the macOS Keychain. Supports password and card types. Card credentials are tokenized via Stripe before storage — raw card numbers never persist. Requires biometric (Touch ID) authentication.",
+            description: "Store or update a credential in the macOS Keychain. Supports 'password' and 'card' types -- cards are Stripe-tokenized before storage, raw numbers never persist. Triggers Touch ID prompt. Returns confirmation.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -132,7 +132,7 @@ public enum CredentialModule {
             name: "credential_read",
             module: moduleName,
             tier: .request,
-            description: "Retrieve a stored credential by service and account. Returns the password or token along with type and metadata. No biometric required — SecurityGate approval is sufficient.",
+            description: "Retrieve a stored credential by service + account key. Returns {password, type, metadata}. No biometric prompt -- SecurityGate approval is sufficient.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -189,7 +189,7 @@ public enum CredentialModule {
             name: "credential_list",
             module: moduleName,
             tier: .notify,
-            description: "List stored credentials (metadata only — no passwords or tokens exposed). Optionally filter by type ('password' or 'card') or service name.",
+            description: "List stored credentials (metadata only -- no secrets exposed). Returns an array of {service, account, type, metadata} entries. Filter by type or service substring.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -271,7 +271,7 @@ public enum CredentialModule {
             name: "credential_delete",
             module: moduleName,
             tier: .request,
-            description: "Remove a stored credential from the macOS Keychain. Requires biometric (Touch ID) authentication before deletion.",
+            description: "Remove a credential from the macOS Keychain by service + account key. Triggers Touch ID prompt before deletion. Returns confirmation.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

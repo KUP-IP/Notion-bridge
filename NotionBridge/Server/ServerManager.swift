@@ -88,7 +88,7 @@ public actor ServerManager {
             name: "echo",
             module: "builtin",
             tier: .open,
-            description: "Echoes back the input message. Useful for connectivity testing.",
+            description: "Echoes back the input message unchanged. Returns {message: string}. Use to verify MCP connectivity.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

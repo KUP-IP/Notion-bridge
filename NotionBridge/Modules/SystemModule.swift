@@ -24,7 +24,7 @@ public enum SystemModule {
             name: "system_info",
             module: moduleName,
             tier: .open,
-            description: "Returns macOS system information: OS version, hardware model, CPU, memory, hostname, and uptime.",
+            description: "Get macOS system info. Returns {osVersion, model, cpu, memory, hostname, uptime}. Use for environment diagnostics.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -90,7 +90,7 @@ public enum SystemModule {
             name: "process_list",
             module: moduleName,
             tier: .open,
-            description: "List running processes. Supports optional filter by name and limit on results. Returns PID, name, CPU%, MEM%, and user.",
+            description: "List running macOS processes. Returns an array of {pid, name, cpu, mem, user} sorted by sortBy (default: cpu). Use filter for name substring matching.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -182,7 +182,7 @@ public enum SystemModule {
             name: "notify",
             module: moduleName,
             tier: .open,
-            description: "Send a local macOS notification via UNUserNotificationCenter. Displays a system notification with title and body text.",
+            description: "Send a local macOS notification banner. Returns confirmation. Optionally specify a sound name (e.g. 'Glass', 'Ping').",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -230,7 +230,7 @@ public enum SystemModule {
             name: "contacts_search",
             module: moduleName,
             tier: .open,
-            description: "Search for contacts by name, phone, or email. Returns matching contacts with name, phone numbers, email addresses, and postal addresses. Uses CNContactStore (Contacts.framework).",
+            description: "Search macOS Contacts by name, phone, or email. Returns matching contacts with name, phones, emails, and addresses. Specify fields to control which fields are searched (default: name only).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

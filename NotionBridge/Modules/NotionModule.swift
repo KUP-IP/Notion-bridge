@@ -40,7 +40,7 @@ public enum NotionModule {
             name: "notion_search",
             module: moduleName,
             tier: .open,
-            description: "Search the Notion workspace for pages and databases by query. Returns matching results with titles and URLs. Requires NOTION_API_TOKEN.",
+            description: "Search the Notion workspace for pages and databases by text query. Returns an array of {id, title, url, object_type} matches. Requires a configured NOTION_API_TOKEN.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -99,7 +99,7 @@ public enum NotionModule {
             name: "notion_page_read",
             module: moduleName,
             tier: .open,
-            description: "Read a Notion page's properties and child blocks by page ID. Returns page metadata and content blocks.",
+            description: "Read a Notion page's properties and optionally its child blocks. Returns {properties, blocks[]} with block types, content, and nesting. Set includeBlocks=false to fetch only properties.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -184,7 +184,7 @@ public enum NotionModule {
             name: "notion_page_update",
             module: moduleName,
             tier: .notify,
-            description: "Update a Notion page's properties. Accepts a JSON string of property updates. SecurityGate enforces orange-tier confirmation.",
+            description: "Update a Notion page's properties. Pass a JSON string of Notion API property objects. Returns the updated page object. Requires user confirmation before execution.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -244,7 +244,7 @@ public enum NotionModule {
             name: "notion_page_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a new Notion page under a parent page or database. Returns the created page ID and URL.",
+            description: "Create a new Notion page under a parent page or database. Pass properties as a JSON string; optionally include children blocks. Returns {id, url} of the created page.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -302,7 +302,7 @@ public enum NotionModule {
             name: "notion_query",
             module: moduleName,
             tier: .open,
-            description: "Query a Notion data source with optional filter and sort. Returns matching pages.",
+            description: "Query a Notion database with optional filter, sort, and pagination. Returns {results[], has_more, next_cursor}. Filter and sorts must be JSON strings in Notion API format.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -377,7 +377,7 @@ public enum NotionModule {
             name: "notion_blocks_append",
             module: moduleName,
             tier: .notify,
-            description: "Append child blocks to a page or block. Supports position control (after specific block).",
+            description: "Append child blocks to a Notion page or block. Pass children as a JSON string array of block objects. Use afterBlock to insert after a specific block ID. Returns the appended blocks.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -424,7 +424,7 @@ public enum NotionModule {
             name: "notion_block_delete",
             module: moduleName,
             tier: .notify,
-            description: "Delete (trash) a Notion block by ID.",
+            description: "Move a Notion block to trash by its ID. Returns confirmation. Deletion is reversible from the Notion UI.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -459,7 +459,7 @@ public enum NotionModule {
             name: "notion_page_markdown_read",
             module: moduleName,
             tier: .open,
-            description: "Get page content as markdown. Returns the page body in markdown format.",
+            description: "Read a Notion page body as markdown. Returns {markdown: string}. Faster than notion_page_read when you only need content, not properties or block structure.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -492,7 +492,7 @@ public enum NotionModule {
             name: "notion_page_markdown_write",
             module: moduleName,
             tier: .notify,
-            description: "Update page content from markdown. Replaces the page body with the provided markdown.",
+            description: "Overwrite a Notion page body with new markdown -- this is a full replacement, existing content is deleted first. Returns confirmation. Use notion_blocks_append for non-destructive additions.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -521,7 +521,7 @@ public enum NotionModule {
             name: "notion_comments_list",
             module: moduleName,
             tier: .open,
-            description: "List comments on a Notion page or block.",
+            description: "List comments on a Notion page or block. Returns an array of {id, text, author, created_time} comments, newest first. Accepts pageSize for pagination.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -578,7 +578,7 @@ public enum NotionModule {
             name: "notion_comment_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a comment on a Notion page.",
+            description: "Create a page-level comment on a Notion page. Returns the created comment object with id and timestamp.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -614,7 +614,7 @@ public enum NotionModule {
             name: "notion_users_list",
             module: moduleName,
             tier: .open,
-            description: "List all users in the Notion workspace.",
+            description: "List all users in the Notion workspace. Returns an array of {id, name, email, type, avatar_url} entries. Supports pageSize for pagination.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -667,7 +667,7 @@ public enum NotionModule {
             name: "notion_page_move",
             module: moduleName,
             tier: .notify,
-            description: "Move a Notion page to a new parent page or database.",
+            description: "Move a Notion page to a new parent (page or database). Specify parentType as 'page_id' or 'database_id'. Returns the updated page object.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -710,7 +710,7 @@ public enum NotionModule {
             name: "notion_file_upload",
             module: moduleName,
             tier: .notify,
-            description: "Upload a local file to Notion (single-part, max 20MB). Returns the file upload object.",
+            description: "Upload a local file to Notion file storage (single-part, max 20 MB). Returns the file upload object with a URL usable in page content or properties.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -781,7 +781,7 @@ public enum NotionModule {
             name: "notion_token_introspect",
             module: moduleName,
             tier: .open,
-            description: "Introspect the current Notion API token. Returns token info including bot details and workspace.",
+            description: "Introspect the active Notion API token. Returns {bot, owner, workspace} metadata. Use to verify which integration and workspace are connected.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -820,7 +820,7 @@ public enum NotionModule {
             name: "notion_connections_list",
             module: moduleName,
             tier: .open,
-            description: "List all configured Notion workspace connections with health status.",
+            description: "List all configured Notion workspace connections. Returns an array of {name, workspace, status} entries showing connection health.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
