@@ -67,7 +67,7 @@ app: build
 	@mkdir -p $(APP_BUNDLE)/Contents/Resources
 	@mkdir -p $(FRAMEWORKS_DIR)
 	@cp $(RELEASE_DIR)/$(BINARY_NAME) "$(APP_BUNDLE)/Contents/MacOS/$(BINARY_NAME)"
-	@install_name_tool -add_rpath "@executable_path/../Frameworks" "$(APP_BUNDLE)/Contents/MacOS/$(BINARY_NAME)"
+	@install_name_tool -add_rpath "@loader_path/../Frameworks" "$(APP_BUNDLE)/Contents/MacOS/$(BINARY_NAME)"
 	@cp $(INFO_PLIST) $(APP_BUNDLE)/Contents/Info.plist
 	@test -f $(RESOURCES_DIR)/NotionBridge.icns && \
 		cp $(RESOURCES_DIR)/NotionBridge.icns $(APP_BUNDLE)/Contents/Resources/ || true

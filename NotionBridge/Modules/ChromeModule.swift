@@ -15,6 +15,7 @@
 
 import Foundation
 import MCP
+import ScreenCaptureKit
 
 // MARK: - ChromeModule
 
@@ -39,6 +40,7 @@ public enum ChromeModule {
                 "required": .array([])
             ]),
             handler: { _ in
+                let visibleIDs = await visibleChromeWindowIDs()
                 let script = """
                     tell application "Google Chrome"
                         set output to ""
@@ -73,11 +75,13 @@ public enum ChromeModule {
                 for line in lines {
                     let parts = line.components(separatedBy: "\t")
                     if parts.count >= 4 {
+                        let isOnScreen = visibleIDs.contains(Int(parts[0]) ?? -1)
                         tabs.append(.object([
                             "windowId": .string(parts[0]),
                             "tabIndex": .string(parts[1]),
                             "title": .string(parts[2]),
-                            "url": .string(parts[3])
+                            "url": .string(parts[3]),
+                            "onScreen": .bool(isOnScreen)
                         ]))
                     }
                 }
@@ -132,6 +136,48 @@ public enum ChromeModule {
                     newTab = false
                 }
 
+                // Check if Chrome is visible on the current Space
+                let chromeVisible = await visibleChromeWindowID() != nil
+
+                let hasWindowTarget = args["windowId"] != nil || args["tabIndex"] != nil
+
+                // If Chrome not visible and specific window/tab requested, return error
+                if !chromeVisible && hasWindowTarget {
+                    return .object([
+                        "error": .string("Chrome is not visible on the current Space. Cannot target a specific window or tab. Use chrome_tabs to find windows with onScreen: true."),
+                        "navigated_via": .string("none")
+                    ])
+                }
+
+                // If Chrome not visible, fall back to macOS `open` command
+                if !chromeVisible {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                    process.arguments = [url]
+                    do {
+                        try process.run()
+                        process.waitUntilExit()
+                    } catch {
+                        return .object([
+                            "error": .string("Failed to open URL via fallback: \(error.localizedDescription)"),
+                            "navigated_via": .string("open_fallback")
+                        ])
+                    }
+                    guard process.terminationStatus == 0 else {
+                        return .object([
+                            "error": .string("open command exited with status \(process.terminationStatus)"),
+                            "navigated_via": .string("open_fallback")
+                        ])
+                    }
+                    return .object([
+                        "result": .string("ok"),
+                        "navigatedTo": .string(url),
+                        "navigated_via": .string("open_fallback"),
+                        "newTab": .bool(newTab)
+                    ])
+                }
+
+                // Chrome IS visible on current Space — use existing AppleScript navigation
                 let escapedURL = url.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
 
                 let script: String
@@ -172,12 +218,14 @@ public enum ChromeModule {
                 if let error = result.error {
                     return .object([
                         "error": .string(error),
-                        "errorNumber": .int(result.errorNumber ?? -1)
+                        "errorNumber": .int(result.errorNumber ?? -1),
+                        "navigated_via": .string("applescript")
                     ])
                 }
                 return .object([
                     "result": .string(result.value ?? "ok"),
-                    "navigatedTo": .string(url)
+                    "navigatedTo": .string(url),
+                    "navigated_via": .string("applescript")
                 ])
             }
         ))
@@ -492,4 +540,28 @@ public enum ChromeModule {
 
         return AppleScriptResult(value: result?.stringValue, error: nil, errorNumber: nil)
     }
+
+    /// Returns the window ID of the first on-screen Chrome window, or nil if none visible on current Space.
+    private static func visibleChromeWindowID() async -> Int? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else {
+            return nil
+        }
+        let chromeWindow = content.windows.first {
+            $0.owningApplication?.bundleIdentifier == "com.google.Chrome"
+        }
+        guard let window = chromeWindow else { return nil }
+        return Int(window.windowID)
+    }
+
+    /// Returns the set of all on-screen Chrome window IDs on the current Space.
+    private static func visibleChromeWindowIDs() async -> Set<Int> {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true) else {
+            return []
+        }
+        let ids = content.windows
+            .filter { $0.owningApplication?.bundleIdentifier == "com.google.Chrome" }
+            .map { Int($0.windowID) }
+        return Set(ids)
+    }
+
 }
