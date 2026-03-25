@@ -51,6 +51,12 @@ public struct PermissionView: View {
                     .padding(.top, 4)
             }
 
+            // PKT-484: csreq mismatch banner — shown when TCC says granted but probe fails
+            if permissionManager.hasCsreqMismatch {
+                csreqMismatchBanner
+                    .padding(.top, 4)
+            }
+
             // PKT-341: TCC rebuild note — grants are tied to code signature
             Text("Note: Xcode rebuilds may invalidate TCC grants (tied to code signature). Re-grant in System Settings if indicators turn orange after a rebuild.")
                 .font(.caption2)
@@ -180,6 +186,46 @@ public struct PermissionView: View {
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(allGranted ? Color.green.opacity(0.1) : Color.yellow.opacity(0.1))
+        )
+    }
+
+    // MARK: - PKT-484 csreq Mismatch Banner
+
+    /// PKT-484: Shows warning when TCC csreq mismatch is detected.
+    /// Explains the issue and offers "Reset & Re-authorize" button.
+    @ViewBuilder
+    private var csreqMismatchBanner: some View {
+        let targets = permissionManager.csreqMismatchTargets.map(\.name).joined(separator: ", ")
+
+        VStack(spacing: 6) {
+            Label("Automation mismatch detected", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+
+            Text("\(targets): TCC database shows granted but runtime probe fails. This happens when macOS stores a stale code signature (csreq) from a previous build.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            Text("⚠️ This will reset ALL automation permissions. You will be prompted to re-authorize each app.")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .multilineTextAlignment(.center)
+
+            Button("Reset & Re-authorize") {
+                Task {
+                    await permissionManager.resetAndReauthorizeAutomation()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+            .controlSize(.small)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.orange.opacity(0.1))
         )
     }
 

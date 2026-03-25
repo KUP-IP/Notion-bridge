@@ -118,6 +118,18 @@ struct ToolRegistryView: View {
                     }
                 }
 
+                Section {
+                    HStack(spacing: 12) {
+                        tierHintDot(.green, label: "Open", desc: "Runs without prompts")
+                        tierHintDot(.orange, label: "Notify", desc: "Shows a notification")
+                        tierHintDot(.red, label: "Request", desc: "Requires approval")
+                    }
+                    .font(.caption)
+                } header: {
+                    Text("Security Tiers")
+                        .font(.headline)
+                }
+
                 ForEach(groupedTools, id: \.module) { group in
                     Section {
                         ForEach(group.tools) { tool in
@@ -225,6 +237,17 @@ struct ToolRegistryView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func tierHintDot(_ color: Color, label: String, desc: String) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text("**\(label)** — \(desc)")
+                .foregroundStyle(BridgeColors.secondary)
+        }
     }
 
     private func persistDisabledTools() {

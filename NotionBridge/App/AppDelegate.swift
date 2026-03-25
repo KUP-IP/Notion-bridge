@@ -96,6 +96,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        // PKT-487: Override process name for dock label (executable is "NotionBridge" but display should be "Notion Bridge")
+        ProcessInfo.processInfo.processName = "Notion Bridge"
+
         // PKT-332: Single-instance guard — prevent duplicate processes from
         // SMAppService login item + Terminal session restore + manual launch
         guard ensureSingleInstance() else {

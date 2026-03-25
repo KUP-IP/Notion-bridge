@@ -1,6 +1,8 @@
 // SkillsManager.swift — Skills Configuration Manager
 // NotionBridge · Modules
 // PKT-366 F9: Manages named Notion page skills stored in UserDefaults.
+// PKT-485: Added defaultSkills array + resetToDefaults() for factory reset.
+// PKT-487: Added moveSkill(from:to:) and sortAlphabetically() for ordering.
 
 import Foundation
 import Observation
@@ -29,6 +31,14 @@ public final class SkillsManager {
     }
 
     private static let defaultsKey = "com.notionbridge.skills"
+
+    /// PKT-485: Default skills restored after factory reset.
+    /// Structural defaults with empty page IDs — configured during onboarding.
+    public static let defaultSkills: [Skill] = [
+        Skill(name: "MAC AG", notionPageId: "", enabled: true),
+        Skill(name: "sk mac dev", notionPageId: "", enabled: true),
+        Skill(name: "sk executor", notionPageId: "", enabled: true),
+    ]
 
     public private(set) var skills: [Skill] = []
 
@@ -118,6 +128,36 @@ public final class SkillsManager {
     /// Return all skills (for manage tool).
     public func listSkills() -> [Skill] {
         return skills
+    }
+
+    // MARK: - Ordering (PKT-487)
+
+    /// Move a skill from one position to another. Persists immediately.
+    /// Returns false if either index is out of bounds or indices are equal.
+    @discardableResult
+    public func moveSkill(from source: Int, to destination: Int) -> Bool {
+        guard source >= 0, source < skills.count,
+              destination >= 0, destination < skills.count,
+              source != destination else { return false }
+        let skill = skills.remove(at: source)
+        skills.insert(skill, at: destination)
+        save()
+        return true
+    }
+
+    /// Sort all skills alphabetically by name (case-insensitive). Persists immediately.
+    public func sortAlphabetically() {
+        skills.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        save()
+    }
+
+    // MARK: - Factory Reset (PKT-485)
+
+    /// Replace all skills with the default set and persist to UserDefaults.
+    /// Called by factory reset to restore a known-good starting state.
+    public func resetToDefaults() {
+        skills = Self.defaultSkills
+        save()
     }
 
     // MARK: - Persistence

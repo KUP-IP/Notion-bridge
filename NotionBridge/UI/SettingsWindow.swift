@@ -90,6 +90,7 @@ public struct SettingsView: View {
     @State var isApplyingLaunchAtLoginChange = false
     @State var ssePortInput = String(ConfigManager.shared.ssePort)
     @State var ssePortError: String?
+    @State var ssePortSaveSuccess = false
     @State var factoryResetMessage: String?
     @State var showTCCResetDialog = false
     // PKT-362 D5: Post-reset guided instruction sheet
@@ -112,7 +113,7 @@ public struct SettingsView: View {
             case .permissions: return "lock.shield"
             case .connections: return "network"
             case .tools: return "hammer"
-            case .skills: return "arrow.up.right"
+            case .skills: return "book.closed"
             case .credentials: return "key.fill"
             case .advanced: return "wrench.and.screwdriver"
             }

@@ -245,6 +245,14 @@ public final class PermissionManager {
     /// Reset on app launch (init default = false).
     public private(set) var needsRestart: Bool = false
 
+
+    /// PKT-484: Automation targets with detected TCC csreq mismatch.
+    /// Non-empty when TCC.db shows auth_value=2 but probe returns false.
+    public private(set) var csreqMismatchTargets: [AutomationTarget] = []
+
+    /// PKT-484: True when csreq mismatch is detected and user action is recommended.
+    public var hasCsreqMismatch: Bool { !csreqMismatchTargets.isEmpty }
+
     /// PKT-362 D6: Grants that require an app restart to take full effect.
     public static let restartRequiredGrants: Set<Grant> = [.screenRecording, .fullDiskAccess]
 
@@ -502,6 +510,9 @@ public final class PermissionManager {
                 + "Probing a target for the first time triggers the macOS permission prompt.",
             checkedAt: Date()
         )
+
+        // PKT-484: Check for csreq mismatches after probing
+        detectCsreqMismatch()
     }
 
     /// Request Automation permission by re-probing all targets.
@@ -518,6 +529,124 @@ public final class PermissionManager {
         // Each un-granted target will show a macOS TCC consent dialog.
         try? await Task.sleep(nanoseconds: 300_000_000)
         await checkAutomation()
+    }
+
+    // MARK: - PKT-484: TCC csreq Mismatch Detection
+
+    /// PKT-484: Detect TCC csreq mismatch — entries where auth_value=2 (granted)
+    /// but the NSAppleScript probe returns false (denied at runtime).
+    /// Root cause: auth_reason=4 (Settings toggle) stores a stale csreq blob
+    /// from a previous code signature. macOS validates csreq on every Apple Event
+    /// dispatch — signature mismatch = silent denial (-1743).
+    public func detectCsreqMismatch() {
+        // Compare TCC-reported grants with actual probe results
+        var mismatched: [AutomationTarget] = []
+
+        // Query TCC.db for our bundle's AppleEvents entries
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let tccPath = home + "/Library/Application Support/com.apple.TCC/TCC.db"
+        guard FileManager.default.isReadableFile(atPath: tccPath) else {
+            // Cannot read TCC.db (no Full Disk Access) — skip detection
+            csreqMismatchTargets = []
+            return
+        }
+
+        // Read TCC entries for our bundle
+        let tccGrants = queryTCCAutomationGrants(dbPath: tccPath)
+
+        for target in Self.automationTargets {
+            let probeGranted = automationTargetGrants[target.bundleID] ?? false
+            let tccGranted = tccGrants[target.bundleID] ?? false
+
+            // Mismatch: TCC says granted (auth_value=2) but probe says denied
+            if tccGranted && !probeGranted {
+                mismatched.append(target)
+            }
+        }
+
+        csreqMismatchTargets = mismatched
+        if !mismatched.isEmpty {
+            let names = mismatched.map(\.name).joined(separator: ", ")
+            print("[PermissionManager] csreq mismatch detected for: \(names)")
+        }
+    }
+
+    /// PKT-484: Query TCC.db for AppleEvents grants for our bundle.
+    /// Returns a map of indirect_object_identifier (target bundle ID) to granted.
+    /// auth_value=2 means granted; anything else means not granted.
+    private func queryTCCAutomationGrants(dbPath: String) -> [String: Bool] {
+        var results: [String: Bool] = [:]
+
+        let query = """
+            SELECT indirect_object_identifier, auth_value
+            FROM access
+            WHERE service = 'kTCCServiceAppleEvents'
+            AND client = 'kup.solutions.notion-bridge'
+            """
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = ["-separator", "|", dbPath, query]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+
+            if let data = try? pipe.fileHandleForReading.readToEnd(),
+               let output = String(data: data, encoding: .utf8) {
+                for line in output.components(separatedBy: "\n") where !line.isEmpty {
+                    let parts = line.components(separatedBy: "|")
+                    if parts.count >= 2,
+                       let authValue = Int(parts[1]) {
+                        results[parts[0]] = (authValue == 2)
+                    }
+                }
+            }
+        } catch {
+            print("[PermissionManager] TCC.db query failed: \(error.localizedDescription)")
+        }
+
+        return results
+    }
+
+    /// PKT-484: Reset all AppleEvents TCC grants and re-probe.
+    /// WARNING: tccutil resets ALL AppleEvents grants for our bundle (not per-target).
+    /// All automation targets will need re-authorization via consent prompts.
+    /// This must be an explicit user action — never called automatically.
+    public func resetAndReauthorizeAutomation() async {
+        print("[PermissionManager] Resetting AppleEvents TCC grants via tccutil...")
+
+        // Step 1: tccutil reset
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        process.arguments = ["reset", "AppleEvents", "kup.solutions.notion-bridge"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            print("[PermissionManager] tccutil reset exit code: \(process.terminationStatus)")
+        } catch {
+            print("[PermissionManager] tccutil reset failed: \(error.localizedDescription)")
+            return
+        }
+
+        // Step 2: Wait for tccd cache invalidation
+        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        // Step 3: Re-probe all targets (triggers fresh consent prompts)
+        await checkAutomation()
+
+        // Step 4: Log per-target results
+        for target in Self.automationTargets {
+            let granted = automationTargetGrants[target.bundleID] ?? false
+            print("[PermissionManager] Post-reset: \(target.name) = \(granted ? "granted" : "pending re-auth")")
+        }
     }
 
     /// Contacts: CNContactStore.authorizationStatus(for:) — direct API.

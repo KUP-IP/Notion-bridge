@@ -2,14 +2,19 @@
 // NotionBridge · UI
 // PKT-366 F9: Skills configuration UI with add/remove/toggle.
 // PKT-366 F11: Cross-tab dependency guard (fetch_skill disabled warning).
+// PKT-487: Clickable names, inline URL edit, reorder, sort alphabetically.
 
 import SwiftUI
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Skills tab for the Settings window.
 ///
 /// PKT-366 F9: Each row shows skill name + Notion page ID + on/off toggle.
 /// "Add Skill" inline form with unique name enforcement.
 /// PKT-366 F11: Warning banner if `fetch_skill` is disabled in Tools AND skills exist.
+/// PKT-487: Interactive management — clickable names, inline URL edit, reorder, sort.
 struct SkillsView: View {
     let skillsManager: SkillsManager
 
@@ -19,6 +24,10 @@ struct SkillsView: View {
     @State private var newSkillName: String = ""
     @State private var newSkillPageId: String = ""
     @State private var addError: String?
+
+    // PKT-487: Inline URL editing state
+    @State private var editingSkillName: String?
+    @State private var editingURL: String = ""
 
     var body: some View {
         Form {
@@ -52,14 +61,25 @@ struct SkillsView: View {
                 }
             } else {
                 Section {
-                    ForEach(skillsManager.skills) { skill in
-                        skillRow(skill)
+                    ForEach(Array(skillsManager.skills.enumerated()), id: \.element.id) { index, skill in
+                        skillRow(skill, at: index)
                     }
                 } header: {
                     HStack {
                         Text("Skills")
                             .font(.headline)
                         Spacer()
+                        // PKT-487: Sort alphabetically action
+                        Button {
+                            commitPendingEdit()
+                            skillsManager.sortAlphabetically()
+                        } label: {
+                            Image(systemName: "arrow.up.arrow.down")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Sort alphabetically")
                         Text("\(skillsManager.enabledSkills.count)/\(skillsManager.skills.count) enabled")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -94,7 +114,7 @@ struct SkillsView: View {
     // MARK: - Skill Row
 
     @ViewBuilder
-    private func skillRow(_ skill: SkillsManager.Skill) -> some View {
+    private func skillRow(_ skill: SkillsManager.Skill, at index: Int) -> some View {
         HStack(spacing: 12) {
             Toggle("", isOn: Binding(
                 get: { skill.enabled },
@@ -104,15 +124,76 @@ struct SkillsView: View {
             .labelsHidden()
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(skill.name)
-                    .fontWeight(.medium)
-                Text(skill.notionPageId)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                // PKT-487 F1: Clickable skill name — opens Notion page URL in browser
+                Button {
+                    openSkillURL(skill.notionPageId)
+                } label: {
+                    Text(skill.name)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.primary)
+                        .underline(false)
+                }
+                .buttonStyle(.plain)
+                .onHover { hovering in
+                    if hovering {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+
+                // PKT-487 F2: Inline URL edit — tap to edit, save on Enter/focus loss
+                if editingSkillName == skill.name {
+                    TextField("Notion Page URL", text: $editingURL)
+                        .font(.caption)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit {
+                            commitURLEdit(for: skill.name)
+                        }
+                        .onExitCommand {
+                            editingSkillName = nil
+                        }
+                } else {
+                    Text(skill.notionPageId.isEmpty ? "No URL set" : skill.notionPageId)
+                        .font(.caption)
+                        .foregroundStyle(skill.notionPageId.isEmpty ? .tertiary : .secondary)
+                        .lineLimit(1)
+                        .onTapGesture {
+                            commitPendingEdit()
+                            editingSkillName = skill.name
+                            editingURL = skill.notionPageId
+                        }
+                }
             }
 
             Spacer()
+
+            // PKT-487 F3: Reorder buttons — up/down chevrons
+            VStack(spacing: 0) {
+                Button {
+                    commitPendingEdit()
+                    skillsManager.moveSkill(from: index, to: index - 1)
+                } label: {
+                    Image(systemName: "chevron.up")
+                        .font(.caption2)
+                        .frame(width: 16, height: 14)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(index == 0)
+
+                Button {
+                    commitPendingEdit()
+                    skillsManager.moveSkill(from: index, to: index + 1)
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.caption2)
+                        .frame(width: 16, height: 14)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .disabled(index == skillsManager.skills.count - 1)
+            }
 
             Button(role: .destructive) {
                 skillsManager.removeSkill(named: skill.name)
@@ -124,6 +205,37 @@ struct SkillsView: View {
             .foregroundStyle(.red.opacity(0.7))
         }
         .padding(.vertical, 2)
+    }
+
+    // MARK: - Actions (PKT-487)
+
+    /// Open a skill's Notion page URL in the default browser.
+    private func openSkillURL(_ urlString: String) {
+        let candidate: String
+        if urlString.hasPrefix("http://") || urlString.hasPrefix("https://") {
+            candidate = urlString
+        } else if !urlString.isEmpty {
+            // Treat bare page IDs as Notion URLs
+            candidate = "https://www.notion.so/\(urlString)"
+        } else {
+            return
+        }
+        guard let url = URL(string: candidate) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Commit the current inline URL edit, if any.
+    private func commitPendingEdit() {
+        if let name = editingSkillName {
+            commitURLEdit(for: name)
+        }
+    }
+
+    /// Save the inline URL edit for a specific skill.
+    private func commitURLEdit(for skillName: String) {
+        let trimmed = editingURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        skillsManager.updateSkillURL(named: skillName, newPageId: trimmed)
+        editingSkillName = nil
     }
 
     // MARK: - Add Skill

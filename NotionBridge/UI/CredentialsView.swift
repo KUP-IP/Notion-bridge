@@ -1,17 +1,43 @@
 // CredentialsView.swift — Credentials Settings Tab
 // PKT-372: Type-grouped credential display (Passwords, Cards)
+// PKT-486: Manual credential creation forms (Add Password, Add Card)
 // Scope IN D5: "Credentials" tab in SettingsWindow — grouped by type
 
 import SwiftUI
 
+// MARK: - FormFeedback
+
+/// Inline feedback message for credential forms.
+private struct FormFeedback {
+    let message: String
+    let isError: Bool
+}
+
 /// Settings tab showing stored credentials grouped by type (Passwords, Cards).
 /// Cards display last4 + brand + expiry. All entries support delete.
+/// PKT-486: Collapsible forms for adding passwords and cards inline.
 struct CredentialsView: View {
     @State private var credentials: [CredentialEntry] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var entryToDelete: (service: String, account: String)?
     @State private var showDeleteConfirmation = false
+
+    // Add Password form state
+    @State private var showAddPassword = false
+    @State private var pwService = ""
+    @State private var pwAccount = ""
+    @State private var pwPassword = ""
+    @State private var pwSaving = false
+    @State private var pwFeedback: FormFeedback?
+
+    // Add Card form state
+    @State private var showAddCard = false
+    @State private var cardNumber = ""
+    @State private var cardExpiry = ""
+    @State private var cardCVC = ""
+    @State private var cardSaving = false
+    @State private var cardFeedback: FormFeedback?
 
     private let manager = CredentialManager.shared
 
@@ -25,8 +51,9 @@ struct CredentialsView: View {
 
     var body: some View {
         Form {
+            // MARK: Passwords
             Section("Passwords") {
-                if passwords.isEmpty {
+                if passwords.isEmpty && !showAddPassword {
                     Text("No saved passwords")
                         .foregroundStyle(BridgeColors.secondary)
                         .font(.caption)
@@ -35,10 +62,16 @@ struct CredentialsView: View {
                         passwordRow(passwords[idx])
                     }
                 }
+
+                DisclosureGroup("Add Password", isExpanded: $showAddPassword) {
+                    addPasswordForm
+                }
+                .font(.caption)
             }
 
+            // MARK: Cards
             Section("Cards") {
-                if cards.isEmpty {
+                if cards.isEmpty && !showAddCard {
                     Text("No saved cards")
                         .foregroundStyle(BridgeColors.secondary)
                         .font(.caption)
@@ -47,8 +80,14 @@ struct CredentialsView: View {
                         cardRow(cards[idx])
                     }
                 }
+
+                DisclosureGroup("Add Card", isExpanded: $showAddCard) {
+                    addCardForm
+                }
+                .font(.caption)
             }
 
+            // MARK: Footer
             Section {
                 if let errorMessage {
                     Text(errorMessage)
@@ -68,7 +107,7 @@ struct CredentialsView: View {
                     }
                 }
 
-                Text("Credentials are stored in macOS Keychain using kSecClassGenericPassword. Manage credentials via MCP tools (credential_save, credential_read, credential_delete).")
+                Text("Credentials are stored in macOS Keychain with biometric protection. Cards are tokenized via Stripe before storage.")
                     .font(.caption2)
                     .foregroundStyle(BridgeColors.muted)
             }
@@ -95,6 +134,101 @@ struct CredentialsView: View {
                 Text("Delete \"\(target.service) / \(target.account)\"? This cannot be undone.")
             }
         }
+    }
+
+    // MARK: - Add Password Form
+
+    @ViewBuilder
+    private var addPasswordForm: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("Service", text: $pwService)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+
+            TextField("Account", text: $pwAccount)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+
+            SecureField("Password", text: $pwPassword)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+
+            if let feedback = pwFeedback {
+                feedbackLabel(feedback)
+            }
+
+            HStack {
+                Button("Save Password") {
+                    Task { await savePassword() }
+                }
+                .disabled(pwSaving || pwService.trimmingCharacters(in: .whitespaces).isEmpty
+                          || pwAccount.trimmingCharacters(in: .whitespaces).isEmpty
+                          || pwPassword.isEmpty)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
+                if pwSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - Add Card Form
+
+    @ViewBuilder
+    private var addCardForm: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("Card Number", text: $cardNumber)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+
+            HStack(spacing: 8) {
+                TextField("MM/YY", text: $cardExpiry)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .frame(maxWidth: 80)
+
+                TextField("CVC", text: $cardCVC)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .frame(maxWidth: 60)
+            }
+
+            if let feedback = cardFeedback {
+                feedbackLabel(feedback)
+            }
+
+            HStack {
+                Button("Save Card") {
+                    Task { await saveCard() }
+                }
+                .disabled(cardSaving || cardNumber.isEmpty
+                          || cardExpiry.isEmpty || cardCVC.isEmpty)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
+                if cardSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - Feedback Label
+
+    @ViewBuilder
+    private func feedbackLabel(_ feedback: FormFeedback) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: feedback.isError ? "xmark.circle.fill" : "checkmark.circle.fill")
+            Text(feedback.message)
+        }
+        .font(.caption)
+        .foregroundStyle(feedback.isError ? BridgeColors.error : .green)
     }
 
     // MARK: - Row Views
@@ -159,6 +293,131 @@ struct CredentialsView: View {
             }
             .buttonStyle(.borderless)
         }
+    }
+
+    // MARK: - Save Actions
+
+    private func savePassword() async {
+        pwFeedback = nil
+        pwSaving = true
+        defer { pwSaving = false }
+
+        let service = pwService.trimmingCharacters(in: .whitespaces)
+        let account = pwAccount.trimmingCharacters(in: .whitespaces)
+
+        do {
+            _ = try await manager.save(
+                service: service,
+                account: account,
+                password: pwPassword,
+                type: .password
+            )
+            pwFeedback = FormFeedback(message: "Password saved.", isError: false)
+            pwService = ""
+            pwAccount = ""
+            pwPassword = ""
+            loadCredentials()
+        } catch {
+            pwFeedback = FormFeedback(message: error.localizedDescription, isError: true)
+        }
+    }
+
+    private func saveCard() async {
+        cardFeedback = nil
+
+        // Strip spaces/dashes from card number
+        let cleanNumber = cardNumber
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "-", with: "")
+
+        // Validate card number via Luhn
+        guard luhnCheck(cleanNumber) else {
+            cardFeedback = FormFeedback(message: "Invalid card number.", isError: true)
+            return
+        }
+
+        // Parse and validate expiry (MM/YY)
+        guard let (expMonth, expYear) = parseExpiry(cardExpiry) else {
+            cardFeedback = FormFeedback(message: "Invalid expiry. Use MM/YY.", isError: true)
+            return
+        }
+        guard !isExpiryPast(month: expMonth, year: expYear) else {
+            cardFeedback = FormFeedback(message: "Card is expired.", isError: true)
+            return
+        }
+
+        // Validate CVC (3–4 digits)
+        let cleanCVC = cardCVC.filter { $0.isNumber }
+        guard cleanCVC.count >= 3, cleanCVC.count <= 4 else {
+            cardFeedback = FormFeedback(message: "CVC must be 3 or 4 digits.", isError: true)
+            return
+        }
+
+        cardSaving = true
+        defer { cardSaving = false }
+
+        let metadata = CredentialMetadata(expMonth: expMonth, expYear: expYear)
+
+        do {
+            // CredentialManager.save() handles Stripe tokenization internally
+            // for .card type — raw card number is never stored in Keychain.
+            _ = try await manager.save(
+                service: "card",
+                account: "card-\(cleanNumber.suffix(4))",
+                password: cleanNumber,
+                type: .card,
+                metadata: metadata
+            )
+            cardFeedback = FormFeedback(message: "Card saved and tokenized.", isError: false)
+            cardNumber = ""
+            cardExpiry = ""
+            cardCVC = ""
+            loadCredentials()
+        } catch {
+            cardFeedback = FormFeedback(message: error.localizedDescription, isError: true)
+        }
+    }
+
+    // MARK: - Validation Helpers
+
+    /// Luhn algorithm check for card number validity.
+    private func luhnCheck(_ number: String) -> Bool {
+        guard number.count >= 13, number.count <= 19,
+              number.allSatisfy({ $0.isNumber }) else { return false }
+        var sum = 0
+        let reversed = Array(number.reversed())
+        for (i, ch) in reversed.enumerated() {
+            guard let digit = ch.wholeNumberValue else { return false }
+            if i % 2 == 1 {
+                let doubled = digit * 2
+                sum += doubled > 9 ? doubled - 9 : doubled
+            } else {
+                sum += digit
+            }
+        }
+        return sum % 10 == 0
+    }
+
+    /// Parse "MM/YY" string into (month, four-digit year).
+    private func parseExpiry(_ raw: String) -> (Int, Int)? {
+        let parts = raw.split(separator: "/")
+        guard parts.count == 2,
+              let month = Int(parts[0]),
+              let shortYear = Int(parts[1]),
+              (1...12).contains(month) else { return nil }
+        let year = shortYear < 100 ? 2000 + shortYear : shortYear
+        return (month, year)
+    }
+
+    /// Returns true if the given month/year is in the past.
+    private func isExpiryPast(month: Int, year: Int) -> Bool {
+        let cal = Calendar.current
+        let now = Date()
+        let currentMonth = cal.component(.month, from: now)
+        let currentYear = cal.component(.year, from: now)
+        if year < currentYear { return true }
+        if year == currentYear && month < currentMonth { return true }
+        return false
     }
 
     // MARK: - Data Loading

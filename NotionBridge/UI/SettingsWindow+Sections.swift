@@ -331,17 +331,30 @@ extension SettingsView {
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 100)
+                        .onChange(of: ssePortInput) { _, _ in
+                            ssePortSaveSuccess = false
+                        }
                     Button("Save") {
                         saveSSEPort()
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                 }
-                Text("Applied on next app restart. Port resolution order: config.json → NOTION_BRIDGE_PORT → \(BridgeConstants.defaultSSEPort).")
+                Text("Applied on next app restart. Port resolution order: config.json → NOTION_BRIDGE_PORT → \(String(BridgeConstants.defaultSSEPort)).")
                     .font(.caption2)
                     .foregroundStyle(BridgeColors.muted)
                 if let ssePortError {
                     Text(ssePortError)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
+                if ssePortSaveSuccess {
+                    Text("Port saved. Restart Notion Bridge to apply.")
+                        .font(.caption2)
+                        .foregroundStyle(BridgeColors.success)
+                }
+                if let port = Int(ssePortInput.trimmingCharacters(in: .whitespacesAndNewlines)), port >= 1, port < 1024 {
+                    Label("Well-known port — may require elevated privileges on macOS.", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
@@ -444,7 +457,7 @@ extension SettingsView {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("This clears app preferences, removes config.json, deletes stored keychain tokens, and resets macOS permissions for Notion Bridge.")
+                    Text("This will clear: SSE port, learned command allows, skills (restored to defaults), stored credentials, onboarding state, and macOS permissions for Notion Bridge.")
                 }
 
                 if let factoryResetMessage {
@@ -530,6 +543,7 @@ extension SettingsView {
         ConfigManager.shared.ssePort = port
         ssePortInput = String(ConfigManager.shared.ssePort)
         ssePortError = nil
+        ssePortSaveSuccess = true
     }
 
     /// Full local reset for pre-ship recovery/testing.
@@ -542,6 +556,9 @@ extension SettingsView {
         } else {
             failures.append("user defaults")
         }
+
+        // PKT-485: Restore default skills after clearing UserDefaults.
+        skillsManager.resetToDefaults()
 
         // 2) Remove config file.
         let configURL = ConfigManager.shared.configFileURL
@@ -567,6 +584,9 @@ extension SettingsView {
         await permissionManager.recheckAllForTruth()
         NotificationCenter.default.post(name: .notionTokenDidChange, object: nil)
         UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
+
+        // PKT-485: Trigger onboarding window after factory reset.
+        NotificationCenter.default.post(name: .resetOnboarding, object: nil)
 
         if failures.isEmpty {
             return ("Factory reset complete. Restart Notion Bridge, then re-grant permissions.", false)
