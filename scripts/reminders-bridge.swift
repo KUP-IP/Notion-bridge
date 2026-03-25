@@ -1,7 +1,7 @@
 #!/usr/bin/env swift
 // ============================================================
 // reminders-bridge.swift — Full EventKit CLI for Apple Reminders
-// Version: 1.0.1 | Author: MAC Keepr | Date: 2026-03-25
+// Version: 1.1.0 | Author: MAC Keepr | Date: 2026-03-25
 // Invocation: swift reminders-bridge.swift '<json>'
 //
 // Commands: list-lists, create-list, create, read, update,
@@ -309,8 +309,13 @@ func cmdCreate(params: [String: Any]) -> Never {
     let reminder = EKReminder(eventStore: store)
     reminder.title = name
 
-    // List assignment
-    if let listName = params["list"] as? String {
+    // List assignment (listId UUID > list name > default)
+    if let listId = params["listId"] as? String {
+        guard let cal = store.calendar(withIdentifier: listId) else {
+            outputError("List not found for listId: \(listId)")
+        }
+        reminder.calendar = cal
+    } else if let listName = params["list"] as? String {
         guard let cal = findList(named: listName) else {
             outputError("List not found: \(listName)")
         }
@@ -319,9 +324,9 @@ func cmdCreate(params: [String: Any]) -> Never {
         reminder.calendar = store.defaultCalendarForNewReminders()
     }
 
-    // Body/notes
-    if let body = params["body"] as? String {
-        reminder.notes = body
+    // Body/notes (accepts "notes" or "body")
+    if let notes = params["notes"] as? String ?? params["body"] as? String {
+        reminder.notes = notes
     }
 
     // Due date
@@ -413,7 +418,7 @@ func cmdUpdate(params: [String: Any]) -> Never {
 
     // Update fields
     if let name = params["name"] as? String { reminder.title = name }
-    if let body = params["body"] as? String { reminder.notes = body }
+    if let notes = params["notes"] as? String ?? params["body"] as? String { reminder.notes = notes }
     if let priority = params["priority"] as? Int { reminder.priority = priority }
 
     if let urlStr = params["url"] as? String {
@@ -432,8 +437,13 @@ func cmdUpdate(params: [String: Any]) -> Never {
         )
     }
 
-    // Move to different list
-    if let listName = params["list"] as? String, let cal = findList(named: listName) {
+    // Move to different list (listId UUID > list name)
+    if let listId = params["listId"] as? String {
+        guard let cal = store.calendar(withIdentifier: listId) else {
+            outputError("List not found for listId: \(listId)")
+        }
+        reminder.calendar = cal
+    } else if let listName = params["list"] as? String, let cal = findList(named: listName) {
         reminder.calendar = cal
     }
 
