@@ -192,7 +192,7 @@ public enum SkillsModule {
         await router.register(ToolRegistration(
             name: "manage_skill",
             module: moduleName,
-            tier: .orange,
+            tier: .request, // was .orange — no such SecurityTier member
             description: "Manage NotionBridge skills configuration. Actions: list, add, delete, toggle, rename, update_url, bulk_add. Skills are persisted in Settings → Skills.",
             inputSchema: .object([
                 "type": .string("object"),

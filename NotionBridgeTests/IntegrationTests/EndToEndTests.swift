@@ -41,7 +41,7 @@ func runEndToEndTests() async {
 
     await test("E2E: router has all registered module tools (63 total)") {
         let all = await router.allRegistrations()
-        try expect(all.count == 63, "Expected 63 module tools, got \(all.count)")
+        try expect(all.count == 65, "Expected 65 module tools, got \(all.count)")
     }
 
     await test("E2E: router filters by module correctly") {
@@ -371,11 +371,11 @@ func runEndToEndTests() async {
         try expect(modulesWithTools.count == 13, "Expected 13 modules, got \(modulesWithTools.count)")
     }
 
-    await test("E2E: Total module tool count is 63") {
+    await test("E2E: Total module tool count is 65") {
         let all = await router.allRegistrations()
         // 63 module tools (this suite does not register builtin echo).
         let moduleTools = all.filter { $0.module != "builtin" }
-        try expect(moduleTools.count == 63, "Expected 63 module tools, got \(moduleTools.count)")
+        try expect(moduleTools.count == 65, "Expected 65 module tools, got \(moduleTools.count)")
     }
 
     await test("E2E: All security tiers represented in tool registry") {

@@ -37,7 +37,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test app appcast dmg dmg-background sign notarize verify release clean install clean-tcc
+.PHONY: debug build test app appcast dmg dmg-background sign notarize verify release clean install clean-tcc patch-deps
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -248,3 +248,17 @@ clean:
 	@rm -rf $(APP_BUNDLE) $(DMG_STAGING)
 	@rm -f $(BUILD_DIR)/*.zip $(BUILD_DIR)/*.dmg
 	@echo "✅ Clean"
+
+# ── Patch Dependencies (Swift 6.3 compat) ─────────────────────
+# Workaround: MCP swift-sdk v0.11.0 has #SendingRisksDataRace errors
+# under Swift 6.3 strict concurrency. This creates a local editable
+# override with Swift 5 language mode for the MCP target.
+# Ref: github.com/swiftlang/swift/issues/87523
+patch-deps:
+	@echo "🔧 Patching swift-sdk for Swift 6.3 compatibility..."
+	@if [ ! -d "Packages/swift-sdk" ]; then \
+		swift package edit swift-sdk; \
+	fi
+	@sed -i '' '/swiftSettings: \[/{ n; s|.*|                .swiftLanguageMode(.v5), // Swift 6.3 compat — #SendingRisksDataRace|; }' \
+		Packages/swift-sdk/Package.swift
+	@echo "✅ swift-sdk patched (swiftLanguageMode .v5)"
