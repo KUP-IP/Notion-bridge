@@ -18,7 +18,7 @@ func runSystemModuleTests() async {
     // Registration tests
     await test("SystemModule registers 3 tools") {
         let tools = await router.registrations(forModule: "system")
-        try expect(tools.count == 3, "Expected 3 system tools, got \(tools.count)")
+        try expect(tools.count == 4, "Expected 4 system tools, got \(tools.count)")
         let names = Set(tools.map(\.name))
         try expect(names.contains("system_info"), "Missing system_info")
         try expect(names.contains("process_list"), "Missing process_list")

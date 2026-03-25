@@ -25,7 +25,7 @@ func runSkillsModuleTests() async {
 
     await test("SkillsModule registers 1 tool") {
         let tools = await router.registrations(forModule: "skills")
-        try expect(tools.count == 1, "Expected 1 skills tool, got \(tools.count)")
+        try expect(tools.count == 2, "Expected 2 skills tools, got \(tools.count)")
     }
 
     await test("Tool fetch_skill is registered") {

@@ -350,7 +350,7 @@ func runEndToEndTests() async {
         try expect(file.count == 12, "FileModule: expected 12")
         try expect(session.count == 3, "SessionModule: expected 3")
         try expect(messages.count == 6, "MessagesModule: expected 6")
-        try expect(system.count == 3, "SystemModule: expected 3")
+        try expect(system.count == 4, "SystemModule: expected 4")
         try expect(notion.count == 16, "NotionModule: expected 16")
         try expect(screen.count == 4, "ScreenModule: expected 4")
         try expect(accessibility.count == 5, "AccessibilityModule: expected 5")
@@ -359,7 +359,7 @@ func runEndToEndTests() async {
         let chrome = await router.registrations(forModule: "chrome")
         let skills = await router.registrations(forModule: "skills")
         try expect(chrome.count == 5, "ChromeModule: expected 5")
-        try expect(skills.count == 1, "SkillsModule: expected 1")
+        try expect(skills.count == 2, "SkillsModule: expected 2")
 
         let credential = await router.registrations(forModule: "credential")
         try expect(credential.count == 4, "CredentialModule: expected 4")
