@@ -1,0 +1,43 @@
+# Changelog
+
+All notable changes to NotionBridge will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.4.0] — 2026-03-24
+
+### Added
+- **ChromeModule Space-awareness** — Tab listing now reports which macOS Space each Chrome window occupies via ScreenCaptureKit `onScreen` field. `chrome_navigate` falls back to `open` when the target window isn't on the active Space.
+- `.cursor/rules` for Cursor agent project context.
+- `RELEASE_HANDOFF.md` with build/sign/notarize instructions.
+
+### Fixed
+- **Makefile rpath** — Corrected `@executable_path` → `@loader_path` for proper framework resolution.
+- **Stripe payment tests** — Refactored `StripeTokenizationTests` to use shared `readRequestBody()` helper instead of inline body parsing.
+
+### Changed
+- **Swift 6.3 compatibility** — Compiler fixes, SkillsModule fix, added `patch-deps` Makefile target.
+- **Module/tool count reconciliation** — Audited and corrected counts: 63 → 65 tools, 14 → 13 modules. Updated AGENTS.md and all E2E test assertions.
+- Version bump: 1.2.0 → 1.4.0, build 4 → 5.
+- DMG size reduced from ~12.9 MB to ~10.2 MB.
+
+## [1.3.0] — 2026-03-20
+
+### Added
+- `contacts_search` tool via CNContactStore (#51).
+- Reminders (`com.apple.reminders`) as 5th automation target.
+
+## [1.2.0] — 2026-03-22
+
+### Added
+- Settings tweaks, `manage_skill` tool, Connection Manager guards.
+
+## [1.1.5] — 2026-03-15
+
+_Initial tracked release._
+
+[1.4.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.1.5...v1.2.0
+[1.1.5]: https://github.com/KUP-IP/Notion-bridge/releases/tag/v1.1.5
