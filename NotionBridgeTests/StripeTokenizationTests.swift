@@ -4,6 +4,23 @@
 import Foundation
 import NotionBridgeLib
 
+/// Read request body — URLSession converts httpBody to httpBodyStream in URLProtocol handlers
+private func readRequestBody(_ request: URLRequest) -> Data? {
+    if let body = request.httpBody { return body }
+    guard let stream = request.httpBodyStream else { return nil }
+    stream.open()
+    defer { stream.close() }
+    var data = Data()
+    let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
+    defer { buffer.deallocate() }
+    while stream.hasBytesAvailable {
+        let read = stream.read(buffer, maxLength: 4096)
+        if read > 0 { data.append(buffer, count: read) }
+        else { break }
+    }
+    return data.isEmpty ? nil : data
+}
+
 func runStripeTokenizationTests() async {
     print("\n🧪 Stripe Tokenization Tests")
 
@@ -86,26 +103,8 @@ func runStripeTokenizationTests() async {
     await test("credential_save(card) sends form-urlencoded card fields") {
         TokenizationMockURLProtocol.reset()
         TokenizationMockURLProtocol.requestHandler = { request in
-            // URLSession.shared converts httpBody to httpBodyStream before passing to URLProtocol
-            let bodyData: Data
-            if let body = request.httpBody {
-                bodyData = body
-            } else if let stream = request.httpBodyStream {
-                stream.open()
-                var data = Data()
-                let buf = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
-                defer { buf.deallocate(); stream.close() }
-                while stream.hasBytesAvailable {
-                    let read = stream.read(buf, maxLength: 4096)
-                    if read <= 0 { break }
-                    data.append(buf, count: read)
-                }
-                bodyData = data
-            } else {
+            guard let body = readRequestBody(request), let bodyString = String(data: body, encoding: .utf8) else {
                 throw TestError.assertion("Missing request body")
-            }
-            guard let bodyString = String(data: bodyData, encoding: .utf8) else {
-                throw TestError.assertion("Could not decode request body as UTF-8")
             }
             try expect(bodyString.contains("type=card"), "Expected card type in body")
             try expect(bodyString.contains("card[number]=4242424242424242"), "Expected card number in body")

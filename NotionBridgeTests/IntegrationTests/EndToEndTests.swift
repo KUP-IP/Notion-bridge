@@ -335,7 +335,7 @@ func runEndToEndTests() async {
     // E2E-8: Module registration completeness
     // ============================================================
 
-    await test("E2E: All 14 modules registered with correct tool counts") {
+    await test("E2E: All 13 modules registered with correct tool counts") {
         let shell = await router.registrations(forModule: "shell")
         let file = await router.registrations(forModule: "file")
         let session = await router.registrations(forModule: "session")
