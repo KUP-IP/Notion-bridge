@@ -8,13 +8,14 @@
 // D6: Dynamic notification status on welcome page
 // PKT-357: F6 welcome header opacity, F7 brand icon, F8 power copy,
 //   F9 test connection text, F10 all permissions listed, F11 notification test
+// PKT-491: Legal acceptance step — Privacy Policy + ToS summary with checkbox gate
 
 import SwiftUI
 import AppKit
 
 /// Manages the first-launch onboarding NSWindow.
 /// Shows a multi-step wizard:
-/// Welcome → Auto Permissions → Manual Permissions → Connection → Test Connection.
+/// Welcome → Legal Acceptance → Auto Permissions → Manual Permissions → Connection → Test Connection.
 /// Checks `UserDefaults.bool(forKey: "hasCompletedOnboarding")` — skips if true.
 @MainActor
 public final class OnboardingWindowController {
@@ -72,7 +73,7 @@ public final class OnboardingWindowController {
 // MARK: - Onboarding View
 
 /// Multi-step onboarding wizard:
-/// Welcome → Auto Permissions → Manual Permissions → Connection → Test Connection.
+/// Welcome → Legal Acceptance → Auto Permissions → Manual Permissions → Connection → Test Connection.
 struct OnboardingView: View {
     let permissionManager: PermissionManager
     let onComplete: () -> Void
@@ -81,13 +82,15 @@ struct OnboardingView: View {
     @State private var healthCheckStatus: HealthCheckStatus = .idle
     @State private var showLegacySSE: Bool = false
     @State private var didAutoAdvanceFromAutoStep: Bool = false
+    @State private var hasAcceptedLegal: Bool = false
 
     enum OnboardingStep: Int, CaseIterable {
         case welcome = 0
-        case autoPermissions = 1
-        case manualPermissions = 2
-        case connection = 3
-        case testConnection = 4
+        case legalAcceptance = 1
+        case autoPermissions = 2
+        case manualPermissions = 3
+        case connection = 4
+        case testConnection = 5
     }
 
     enum HealthCheckStatus {
@@ -111,6 +114,8 @@ struct OnboardingView: View {
                 switch currentStep {
                 case .welcome:
                     welcomeStep
+                case .legalAcceptance:
+                    legalAcceptanceStep
                 case .autoPermissions:
                     autoPermissionsStep
                 case .manualPermissions:
@@ -167,6 +172,95 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
 
+        }
+    }
+
+    // MARK: - Legal Acceptance Step (PKT-491)
+
+    private var legalAcceptanceStep: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "doc.text.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(.purple)
+
+            Text("Privacy & Terms")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("Before we set up permissions, please review how NotionBridge handles your data.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 8)
+
+            // Key points summary
+            VStack(alignment: .leading, spacing: 10) {
+                legalBullet(
+                    icon: "lock.shield.fill",
+                    color: .green,
+                    text: "All data stays on your Mac — zero servers, zero telemetry"
+                )
+                legalBullet(
+                    icon: "network.slash",
+                    color: .blue,
+                    text: "No data transmitted to us — outbound connections only to services you configure (Notion, Stripe, Cloudflare)"
+                )
+                legalBullet(
+                    icon: "hand.raised.fill",
+                    color: .orange,
+                    text: "You control all permissions — deny or revoke any macOS grant at any time"
+                )
+                legalBullet(
+                    icon: "doc.on.doc.fill",
+                    color: .purple,
+                    text: "One-time $14.99 purchase — 7-day refund policy"
+                )
+            }
+            .padding(12)
+            .background(Color.gray.opacity(0.05))
+            .cornerRadius(8)
+
+            // Full document links
+            HStack(spacing: 16) {
+                Link(destination: URL(string: "https://kup.solutions/privacy")!) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.right.square")
+                        Text("Privacy Policy")
+                    }
+                    .font(.caption)
+                }
+                Link(destination: URL(string: "https://kup.solutions/terms")!) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.right.square")
+                        Text("Terms of Service")
+                    }
+                    .font(.caption)
+                }
+            }
+            .foregroundStyle(.purple)
+
+            // Acceptance checkbox
+            HStack(alignment: .top, spacing: 8) {
+                Toggle(isOn: $hasAcceptedLegal) {
+                    Text("I have read and agree to the **Privacy Policy** and **Terms of Service**")
+                        .font(.callout)
+                        .multilineTextAlignment(.leading)
+                }
+                .toggleStyle(.checkbox)
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private func legalBullet(icon: String, color: Color, text: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .foregroundStyle(color)
+                .frame(width: 20)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -437,11 +531,19 @@ struct OnboardingView: View {
                 .tint(.purple)
             } else {
                 Button("Continue") {
+                    // PKT-491: Record legal acceptance when advancing past legal step
+                    if currentStep == .legalAcceptance {
+                        UserDefaults.standard.set(true, forKey: "hasAcceptedLegalTerms")
+                        UserDefaults.standard.set(Date().ISO8601Format(), forKey: "legalAcceptanceDate")
+                        print("[Onboarding] Legal terms accepted at \(Date().ISO8601Format())")
+                    }
                     // PKT-357 F6: No animation — prevents welcome header opacity fade
                     currentStep = OnboardingStep(rawValue: currentStep.rawValue + 1) ?? .testConnection
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.purple)
+                // PKT-491: Gate Continue on legal acceptance
+                .disabled(currentStep == .legalAcceptance && !hasAcceptedLegal)
             }
         }
     }

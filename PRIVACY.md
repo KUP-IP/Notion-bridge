@@ -1,7 +1,7 @@
 # Privacy Policy — NotionBridge
 
 **Effective Date:** March 25, 2026
-**Last Updated:** 2026-03-25
+**Last Updated:** 2026-03-26
 
 ---
 
@@ -102,6 +102,7 @@ NotionBridge uses the **Sparkle framework** for automatic updates. Update checks
 | **Stripe** | Payment processing for direct purchases and PaymentModule | [stripe.com/privacy](https://stripe.com/privacy) |
 | **Cloudflare** | Optional tunnel for remote MCP access | [cloudflare.com/privacypolicy](https://www.cloudflare.com/privacypolicy/) |
 | **Sparkle** | Auto-update framework | [sparkle-project.org](https://sparkle-project.org) |
+| **Lemon Squeezy** | Payment processing and license key management (Merchant of Record) | [lemonsqueezy.com/privacy](https://www.lemonsqueezy.com/privacy) |
 
 We do not share, sell, or provide your data to any third party. The connections listed above are initiated by you or your configured agents, and the data flows directly between your Mac and the third-party service.
 
@@ -113,15 +114,60 @@ NotionBridge is a developer and productivity tool and is not directed at childre
 
 ---
 
-## 11. Changes to This Policy
+## 11. GDPR Compliance (European Economic Area)
+
+If you are located in the European Economic Area (EEA), the following applies under the General Data Protection Regulation (EU) 2016/679 ("GDPR"):
+
+**Legal basis for processing:** NotionBridge does not collect or process personal data on our servers. All data processing occurs locally on your device under your control. To the extent any processing occurs (e.g., Sparkle update checks transmitting your app version), the legal basis is **legitimate interest** (Article 6(1)(f)) — specifically, delivering software updates to maintain security and functionality.
+
+**Data controller:** For any data processed by NotionBridge on your Mac, **you are the data controller**. KUP Solutions does not have access to, store, or process your personal data.
+
+**Your rights under GDPR:**
+
+- **Right of access** — We hold no personal data about you. Your purchase data is held by Lemon Squeezy (our Merchant of Record) under their own privacy policy.
+- **Right to erasure** — Uninstalling NotionBridge removes all locally stored configuration, audit logs, and cached data. No data persists on our servers because we operate none.
+- **Right to data portability** — Your configuration file (`~/.config/notion-bridge/config.json`) and audit logs are stored in standard formats on your Mac and are fully portable.
+- **Right to object** — You can disable Sparkle auto-update checks in Settings to stop the only outbound connection initiated by the Software itself.
+- **Right to lodge a complaint** — You may contact your local Data Protection Authority.
+
+**Data transfers:** NotionBridge does not transfer your data to any country or jurisdiction. Network connections you initiate (Notion API, Stripe, Cloudflare) are governed by those services' respective data transfer policies.
+
+**Data Protection Officer:** Given the nature of our processing (zero data collection), we have not appointed a DPO. For inquiries, contact isaiah@kup.solutions.
+
+---
+
+## 12. CCPA Compliance (California)
+
+If you are a California resident, the following applies under the California Consumer Privacy Act ("CCPA") as amended by the California Privacy Rights Act ("CPRA"):
+
+**Categories of personal information collected:** None. NotionBridge does not collect, sell, share, or use personal information as defined by the CCPA. We do not collect categories of personal information enumerated in Cal. Civ. Code § 1798.140(v).
+
+**Sale or sharing of personal information:** We do **not** sell or share your personal information. We have not sold or shared personal information in the preceding 12 months.
+
+**Your rights under CCPA/CPRA:**
+
+- **Right to know** — We collect no personal information. Your purchase information is held by Lemon Squeezy as Merchant of Record.
+- **Right to delete** — Uninstalling NotionBridge removes all local data. We hold nothing to delete.
+- **Right to opt out of sale/sharing** — Not applicable; we do not sell or share personal information.
+- **Right to non-discrimination** — We will not discriminate against you for exercising your CCPA rights.
+- **Right to correct** — Not applicable; we hold no personal information to correct.
+- **Right to limit use of sensitive personal information** — Not applicable; we do not collect sensitive personal information.
+
+**Do Not Sell or Share My Personal Information:** NotionBridge does not sell or share personal information. No opt-out mechanism is required or provided because no sale or sharing occurs.
+
+**Authorized agents:** You may designate an authorized agent to make requests on your behalf by contacting isaiah@kup.solutions.
+
+---
+
+## 13. Changes to This Policy
 
 We may update this Privacy Policy from time to time. Changes will be posted at [kup.solutions/privacy](https://kup.solutions/privacy) and noted in the app's release notes. Your continued use of NotionBridge after changes constitutes acceptance.
 
 ---
 
-## 12. Contact
+## 14. Contact
 
-For questions about this Privacy Policy:
+For questions about this Privacy Policy or to exercise your rights under GDPR, CCPA, or other applicable privacy laws:
 
 **Email:** [isaiah@kup.solutions](mailto:isaiah@kup.solutions)
 **Web:** [kup.solutions](https://kup.solutions)
