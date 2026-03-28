@@ -63,6 +63,22 @@ public enum ShellModule {
                 process.executableURL = URL(fileURLWithPath: "/bin/bash")
                 process.arguments = ["-c", command]
 
+                // Deterministic PATH bootstrap so common developer tools (node/npm, brew, etc.)
+                // are discoverable when running from a GUI app context that may not inherit a login shell.
+                var env = ProcessInfo.processInfo.environment
+                let defaultPathParts = [
+                    "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+                    "/opt/homebrew/bin", "/opt/homebrew/sbin",
+                    "/usr/local/bin", "/usr/local/sbin"
+                ]
+                let defaultPath = defaultPathParts.joined(separator: ":")
+                if let existing = env["PATH"], !existing.isEmpty {
+                    env["PATH"] = defaultPath + ":" + existing
+                } else {
+                    env["PATH"] = defaultPath
+                }
+                process.environment = env
+
                 if let dir = workingDir {
                     process.currentDirectoryURL = URL(fileURLWithPath: dir)
                 }
