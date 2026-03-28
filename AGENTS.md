@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-NotionBridge is a native macOS menu bar app (Swift 6, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **65 module tools** across **13 modules** via both stdio and SSE transports (plus optional built-in tools when registered), routing every call through a security gate with an append-only audit log.
+NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **72 tools** across **15 modules** over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log.
 
 Bundle ID: `kup.solutions.notion-bridge` (legacy: `solutions.kup.keepr`)
 
@@ -53,7 +53,7 @@ make clean-tcc  # Reset TCC permissions for both legacy (solutions.kup.keepr) an
 
 ### Configuration
 
-Set the SSE port (default 9700):
+Set the HTTP/SSE port (default 9700):
 ```bash
 NOTION_BRIDGE_PORT=9701 .build/release/NotionBridge
 ```
