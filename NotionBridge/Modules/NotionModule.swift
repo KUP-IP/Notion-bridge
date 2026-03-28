@@ -249,7 +249,7 @@ public enum NotionModule {
                 "type": .string("object"),
                 "properties": .object([
                     "parentId": .object(["type": .string("string"), "description": .string("Parent page or database ID")]),
-                    "parentType": .object(["type": .string("string"), "description": .string("Parent type: 'page_id' or 'database_id' (default: page_id)")]),
+                    "parentType": .object(["type": .string("string"), "description": .string("Parent type: 'page_id', 'database_id', or 'data_source_id' (default: page_id)")]),
                     "properties": .object(["type": .string("string"), "description": .string("JSON string of page properties")]),
                     "children": .object(["type": .string("string"), "description": .string("Optional JSON string of child blocks")]),
                     "workspace": workspaceParam
@@ -673,7 +673,7 @@ public enum NotionModule {
                 "properties": .object([
                     "pageId": .object(["type": .string("string"), "description": .string("Page ID to move")]),
                     "newParentId": .object(["type": .string("string"), "description": .string("New parent page or database ID")]),
-                    "parentType": .object(["type": .string("string"), "description": .string("Parent type: 'page_id' or 'database_id' (default: page_id)")]),
+                    "parentType": .object(["type": .string("string"), "description": .string("Parent type: 'page_id', 'database_id', or 'data_source_id' (default: page_id)")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("pageId"), .string("newParentId")])
