@@ -34,14 +34,15 @@ func runEndToEndTests() async {
     await SkillsModule.register(on: router)
     await CredentialModule.register(on: router)
     await PaymentModule.register(on: router)
+    await ConnectionsModule.register(on: router)
 
     // ============================================================
     // E2E-1: Full pipeline — dispatch → security → handler → audit
     // ============================================================
 
-    await test("E2E: router has all registered module tools (65 total)") {
+    await test("E2E: router has all registered module tools (70 total)") {
         let all = await router.allRegistrations()
-        try expect(all.count == 65, "Expected 65 module tools, got \(all.count)")
+        try expect(all.count == 70, "Expected 70 module tools, got \(all.count)")
     }
 
     await test("E2E: router filters by module correctly") {
@@ -335,7 +336,7 @@ func runEndToEndTests() async {
     // E2E-8: Module registration completeness
     // ============================================================
 
-    await test("E2E: All 13 modules registered with correct tool counts") {
+    await test("E2E: All 14 modules registered with correct tool counts") {
         let shell = await router.registrations(forModule: "shell")
         let file = await router.registrations(forModule: "file")
         let session = await router.registrations(forModule: "session")
@@ -367,15 +368,18 @@ func runEndToEndTests() async {
         let payment = await router.registrations(forModule: "payment")
         try expect(payment.count == 1, "PaymentModule: expected 1")
 
+        let connections = await router.registrations(forModule: "connections")
+        try expect(connections.count == 5, "ConnectionsModule: expected 5")
+
         let modulesWithTools = Set((await router.allRegistrations()).map(\.module))
-        try expect(modulesWithTools.count == 13, "Expected 13 modules, got \(modulesWithTools.count)")
+        try expect(modulesWithTools.count == 14, "Expected 14 modules, got \(modulesWithTools.count)")
     }
 
-    await test("E2E: Total module tool count is 65") {
+    await test("E2E: Total module tool count is 70") {
         let all = await router.allRegistrations()
-        // 65 module tools (this suite does not register builtin echo).
+        // 70 module tools (this suite does not register builtin echo).
         let moduleTools = all.filter { $0.module != "builtin" }
-        try expect(moduleTools.count == 65, "Expected 65 module tools, got \(moduleTools.count)")
+        try expect(moduleTools.count == 70, "Expected 70 module tools, got \(moduleTools.count)")
     }
 
     await test("E2E: All security tiers represented in tool registry") {

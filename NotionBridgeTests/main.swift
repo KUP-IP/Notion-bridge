@@ -372,6 +372,7 @@ await runCredentialManagerTests()
 await runCredentialModuleTests()
 await runStripeClientTests()
 await runPaymentModuleTests()
+await runConnectionsModuleTests()
 await runStripeTokenizationTests()
 
 

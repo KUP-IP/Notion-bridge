@@ -16,6 +16,22 @@ public struct PaymentIntentResult: Sendable, Equatable {
     }
 }
 
+public struct StripeAccountInfo: Sendable, Equatable {
+    public let id: String
+    public let email: String?
+    public let displayName: String?
+    public let country: String?
+    public let chargesEnabled: Bool
+
+    public init(id: String, email: String?, displayName: String?, country: String?, chargesEnabled: Bool) {
+        self.id = id
+        self.email = email
+        self.displayName = displayName
+        self.country = country
+        self.chargesEnabled = chargesEnabled
+    }
+}
+
 public final class StripeClient: @unchecked Sendable {
     public static let shared = StripeClient()
 
@@ -82,7 +98,36 @@ public final class StripeClient: @unchecked Sendable {
         return try await executePaymentIntentRequest(request)
     }
 
+    public func retrieveAccountInfo() async throws -> StripeAccountInfo {
+        let request = try authorizedRequest(method: "GET", endpoint: "account")
+        let data = try await performRequest(request)
+        guard
+            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let id = json["id"] as? String
+        else {
+            throw StripeError.invalidResponse
+        }
+
+        let businessProfile = json["business_profile"] as? [String: Any]
+        let displayName = businessProfile?["name"] as? String
+            ?? json["display_name"] as? String
+            ?? json["business_type"] as? String
+
+        return StripeAccountInfo(
+            id: id,
+            email: json["email"] as? String,
+            displayName: displayName,
+            country: json["country"] as? String,
+            chargesEnabled: json["charges_enabled"] as? Bool ?? false
+        )
+    }
+
     private func executePaymentIntentRequest(_ request: URLRequest) async throws -> PaymentIntentResult {
+        let data = try await performRequest(request)
+        return try Self.parsePaymentIntent(data: data)
+    }
+
+    private func performRequest(_ request: URLRequest) async throws -> Data {
         let data: Data
         let response: URLResponse
         do {
@@ -97,7 +142,7 @@ public final class StripeClient: @unchecked Sendable {
         guard (200...299).contains(http.statusCode) else {
             throw Self.parseStripeError(statusCode: http.statusCode, data: data)
         }
-        return try Self.parsePaymentIntent(data: data)
+        return data
     }
 
     private func authorizedRequest(

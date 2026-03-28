@@ -245,6 +245,10 @@ extension SettingsView {
                 }
             }
 
+            Section("API Connections") {
+                APIConnectionsManagementView()
+            }
+
             Section("Setup Instructions") {
                 Link(destination: URL(string: "https://www.notion.so/profile/integrations")!) {
                     HStack {
@@ -274,7 +278,7 @@ extension SettingsView {
                 }
             }
 
-            Section("Tunnel") {
+            Section("Remote Access") {
                 ConnectionSetupView()
             }
         }
