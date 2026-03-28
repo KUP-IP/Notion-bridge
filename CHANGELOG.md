@@ -5,6 +5,15 @@ All notable changes to NotionBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] — 2026-03-26
+
+### Added
+- **`screen_analyze` tool** — Dominant color extraction from screenshot files using CoreGraphics pixel sampling. Returns hex colors with percentages, average luminance (0-1), dark/light theme detection, and image dimensions. Open tier (read-only). Input: file path from `screen_capture`. Algorithm: 5-bit RGB quantization → frequency sort → top-N.
+
+### Changed
+- Version bump: 1.5.0 → 1.5.1, build 6 → 7.
+- ServerManager: Added `ScreenModule.registerAnalyze(on:)` registration.
+
 ## [1.5.0] — 2026-03-25
 
 ### Added
