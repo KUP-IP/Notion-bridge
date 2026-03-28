@@ -83,6 +83,7 @@ public actor ServerManager {
         await SkillsModule.register(on: router)
         await CredentialModule.register(on: router)
         await PaymentModule.register(on: router)
+        await ConnectionsModule.register(on: router)
 
         // 3. Register echo tool (backward compatibility from V1-01)
         await router.register(ToolRegistration(

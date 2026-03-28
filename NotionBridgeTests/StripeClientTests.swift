@@ -89,6 +89,31 @@ func runStripeClientTests() async {
         try expect(result.id == "pi_auth")
     }
 
+    await test("retrieveAccountInfo parses Stripe account metadata") {
+        StripeMockURLProtocol.reset()
+        StripeMockURLProtocol.requestHandler = { request in
+            try expect(request.url?.absoluteString == "https://api.stripe.com/v1/account")
+            let payload = """
+            {"id":"acct_123","email":"ops@example.com","country":"US","charges_enabled":true,"business_profile":{"name":"KEEP Ops"}}
+            """
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data(payload.utf8))
+        }
+
+        let client = StripeClient(session: makeStripeMockSession(), apiKeyProvider: { "sk_test_account" })
+        let account = try await client.retrieveAccountInfo()
+        try expect(account.id == "acct_123")
+        try expect(account.email == "ops@example.com")
+        try expect(account.displayName == "KEEP Ops")
+        try expect(account.country == "US")
+        try expect(account.chargesEnabled == true)
+    }
+
     await test("createPaymentIntent maps card_declined to StripeError.cardDeclined") {
         StripeMockURLProtocol.reset()
         StripeMockURLProtocol.requestHandler = { _ in
