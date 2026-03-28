@@ -674,6 +674,10 @@ See [AGENTS.md](AGENTS.md) for detailed agent development guidelines.
 
 ## License
 
-Copyright © 2026 Isaiah Peters. All rights reserved.
+Copyright © 2026 KUP Solutions. All rights reserved.
 
-This software is proprietary. Distribution is available via direct purchase and Setapp.
+NotionBridge is proprietary software. Distribution is available via direct purchase at [kup.solutions](https://kup.solutions) and Setapp.
+
+See [PRIVACY.md](PRIVACY.md) for our Privacy Policy and [TERMS.md](TERMS.md) for the Terms of Service.
+
+By downloading, installing, or using NotionBridge, you agree to our [Privacy Policy](https://kup.solutions/privacy) and [Terms of Service](https://kup.solutions/terms).
