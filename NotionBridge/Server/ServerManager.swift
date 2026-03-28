@@ -76,6 +76,7 @@ public actor ServerManager {
         await NotionModule.register(on: router)
         await ScreenModule.register(on: router)
         await ScreenModule.registerRecording(on: router)
+        await ScreenModule.registerAnalyze(on: router)
         await AccessibilityModule.register(on: router)
         await AppleScriptModule.register(on: router)
         await ChromeModule.register(on: router)

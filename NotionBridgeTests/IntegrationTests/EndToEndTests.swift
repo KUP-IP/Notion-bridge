@@ -28,6 +28,7 @@ func runEndToEndTests() async {
     await NotionModule.register(on: router)
     await ScreenModule.register(on: router)
     await ScreenModule.registerRecording(on: router)
+    await ScreenModule.registerAnalyze(on: router)
     await AccessibilityModule.register(on: router)
     await AppleScriptModule.register(on: router)
     await ChromeModule.register(on: router)
@@ -39,9 +40,9 @@ func runEndToEndTests() async {
     // E2E-1: Full pipeline — dispatch → security → handler → audit
     // ============================================================
 
-    await test("E2E: router has all registered module tools (65 total)") {
+    await test("E2E: router has all registered module tools (66 total)") {
         let all = await router.allRegistrations()
-        try expect(all.count == 65, "Expected 65 module tools, got \(all.count)")
+        try expect(all.count == 66, "Expected 66 module tools, got \(all.count)")
     }
 
     await test("E2E: router filters by module correctly") {
@@ -352,7 +353,7 @@ func runEndToEndTests() async {
         try expect(messages.count == 6, "MessagesModule: expected 6")
         try expect(system.count == 4, "SystemModule: expected 4")
         try expect(notion.count == 16, "NotionModule: expected 16")
-        try expect(screen.count == 4, "ScreenModule: expected 4")
+        try expect(screen.count == 5, "ScreenModule: expected 5")
         try expect(accessibility.count == 5, "AccessibilityModule: expected 5")
         try expect(applescript.count == 1, "AppleScriptModule: expected 1")
 
@@ -371,11 +372,11 @@ func runEndToEndTests() async {
         try expect(modulesWithTools.count == 13, "Expected 13 modules, got \(modulesWithTools.count)")
     }
 
-    await test("E2E: Total module tool count is 65") {
+    await test("E2E: Total module tool count is 66") {
         let all = await router.allRegistrations()
-        // 65 module tools (this suite does not register builtin echo).
+        // 66 module tools (this suite does not register builtin echo).
         let moduleTools = all.filter { $0.module != "builtin" }
-        try expect(moduleTools.count == 65, "Expected 65 module tools, got \(moduleTools.count)")
+        try expect(moduleTools.count == 66, "Expected 66 module tools, got \(moduleTools.count)")
     }
 
     await test("E2E: All security tiers represented in tool registry") {
