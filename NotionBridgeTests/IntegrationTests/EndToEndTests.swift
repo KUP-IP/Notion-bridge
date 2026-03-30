@@ -41,6 +41,7 @@ func runEndToEndTests() async {
     // E2E-1: Full pipeline — dispatch → security → handler → audit
     // ============================================================
 
+    // Module-only count: ServerManager also registers builtin `echo`, so full MCP surface is 72 + 1 = 73 tools.
     await test("E2E: router has all registered module tools (72 total)") {
         let all = await router.allRegistrations()
         try expect(all.count == 72, "Expected 72 module tools, got \(all.count)")

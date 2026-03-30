@@ -37,7 +37,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test app appcast dmg dmg-background sign notarize verify release clean install clean-tcc patch-deps
+.PHONY: debug build test app appcast dmg dmg-background sign notarize verify verify-sparkle-feed release clean install clean-tcc patch-deps
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -236,6 +236,11 @@ verify:
 	codesign --verify --deep --verbose $(APP_BUNDLE)
 	spctl --assess --verbose $(APP_BUNDLE) || echo "⚠️  spctl may require notarization"
 	@echo "✅ Verified"
+
+# ── Sparkle feed (public availability) ─────────────────────────
+verify-sparkle-feed:
+	@chmod +x scripts/verify_sparkle_feed.sh
+	@./scripts/verify_sparkle_feed.sh "$(INFO_PLIST)"
 
 # ── Release (full pipeline) ────────────────────────────────────
 release: clean test dmg verify

@@ -1,0 +1,23 @@
+name: Feature request
+description: Suggest an improvement or new capability
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or goal
+      description: What workflow or limitation are you trying to address?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should happen instead? MCP tool ideas welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context (optional)
+      description: Clients used (Cursor, Notion, etc.), tunnel usage, etc.

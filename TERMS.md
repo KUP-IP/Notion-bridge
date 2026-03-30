@@ -1,7 +1,7 @@
 # Terms of Service — NotionBridge
 
 **Effective Date:** March 25, 2026
-**Last Updated:** 2026-03-25
+**Last Updated:** 2026-03-30
 
 ---
 
@@ -33,7 +33,7 @@ Subject to these Terms, KUP Solutions ("we," "us") grants you a **non-exclusive,
 
 ## 3. Purchase and Payment
 
-NotionBridge is available for a **one-time purchase of $14.99 USD** (or regional equivalent) via [kup.solutions](https://kup.solutions). Payment is processed securely by **Stripe**. We do not store your payment card information — all payment data is handled by Stripe in accordance with PCI-DSS standards.
+NotionBridge is available for a **one-time purchase of $14.99 USD** (or regional equivalent) via [kup.solutions](https://kup.solutions). **Stripe** is the primary payment processor. Some storefront or regional flows may use **Lemon Squeezy** (or another provider) as **merchant of record**; your order confirmation or receipt identifies which processor applied. We do not store your full payment card number — card data is handled by the applicable processor under PCI-DSS standards.
 
 **Refund Policy:** If you are not satisfied with NotionBridge, you may request a full refund within **7 days** of purchase by emailing [isaiah@kup.solutions](mailto:isaiah@kup.solutions) with your order confirmation. After 7 days, refunds are at our sole discretion.
 

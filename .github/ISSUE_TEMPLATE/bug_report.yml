@@ -1,0 +1,44 @@
+name: Bug report
+description: Something is broken in NotionBridge
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For **security** issues, do not use this form — see [SECURITY.md](https://github.com/KUP-IP/Notion-bridge/blob/main/SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: NotionBridge version
+      description: App menu or Settings — About, or `Notion Bridge` → version string.
+      placeholder: e.g. 1.5.2 (8)
+    validations:
+      required: true
+  - type: dropdown
+    id: chip
+    attributes:
+      label: Hardware
+      options:
+        - Apple Silicon (M1 or later)
+        - Intel (unsupported — note expected limitations)
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: e.g. 26.0
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots (optional)
+      description: Relevant excerpt from `~/Library/Logs/NotionBridge/notion-bridge.log` if applicable.

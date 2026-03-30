@@ -41,10 +41,10 @@ NotionBridge currently ships the following module surface:
 | ChromeModule | 5 | tabs, navigation, page reads, JS, screenshots |
 | CredentialModule | 4 | Keychain-backed credential storage |
 | PaymentModule | 1 | Stripe payment execution |
-| SkillsModule | 2 | skill fetch and local skill registry management |
+| SkillsModule | 3 | `fetch_skill`, `list_routing_skills`, `manage_skill` |
 | ConnectionsModule | 5 | connection inventory, health, validation |
-| BuiltinModule | 1 | echo |
-| **Total** | **72** | |
+| BuiltinModule | 1 | `echo` (registered in `ServerManager`, not a Swift `*Module` type) |
+| **Total** | **73** | 72 from feature modules + 1 builtin `echo` |
 
 Core product traits:
 - Native macOS menu-bar app with onboarding, settings, and a status popover
@@ -199,10 +199,24 @@ Notion-bridge/
 ├── Package.swift
 ├── Makefile
 ├── README.md
+├── SECURITY.md
 └── AGENTS.md
 ```
 
 ---
+
+## Security disclosures
+
+Report security issues per [SECURITY.md](SECURITY.md) (scope, out-of-scope, and contact).
+
+## Public updates (Sparkle)
+
+The app’s `SUFeedURL` (see `Info.plist`) points at the **Sparkle appcast** (`appcast.xml`). For automatic updates to work for end users, that URL must return valid XML **without** logging into GitHub:
+
+- **Option A — Public GitHub repo:** Keep the default `https://raw.githubusercontent.com/KUP-IP/Notion-bridge/main/appcast.xml` and set the repository to **public** (anonymous `curl` / incognito browser must show XML).
+- **Option B — Private repo:** Host `appcast.xml` at any **public HTTPS** URL you control (e.g. CDN or static site), then set `SUFeedURL` to that URL and ship a new build. The file must match the repo’s generated appcast (`make dmg` / `make appcast`); **`length`** and **`sparkle:edSignature`** must match the exact DMG you publish.
+
+Verify locally: `make verify-sparkle-feed` (reads `SUFeedURL` from `Info.plist`).
 
 ## License and distribution
 

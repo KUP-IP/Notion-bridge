@@ -1,7 +1,7 @@
 # Privacy Policy — NotionBridge
 
 **Effective Date:** March 25, 2026
-**Last Updated:** 2026-03-26
+**Last Updated:** 2026-03-30
 
 ---
 
@@ -99,10 +99,10 @@ NotionBridge uses the **Sparkle framework** for automatic updates. Update checks
 | Service | Purpose | Their Privacy Policy |
 |---|---|---|
 | **Notion** | API integration for reading/writing Notion workspace data | [notion.so/privacy](https://www.notion.so/privacy) |
-| **Stripe** | Payment processing for direct purchases and PaymentModule | [stripe.com/privacy](https://stripe.com/privacy) |
+| **Stripe** | Primary payment processor for [kup.solutions](https://kup.solutions) checkout and for PaymentModule (tokenized payment methods) | [stripe.com/privacy](https://stripe.com/privacy) |
 | **Cloudflare** | Optional tunnel for remote MCP access | [cloudflare.com/privacypolicy](https://www.cloudflare.com/privacypolicy/) |
 | **Sparkle** | Auto-update framework | [sparkle-project.org](https://sparkle-project.org) |
-| **Lemon Squeezy** | Payment processing and license key management (Merchant of Record) | [lemonsqueezy.com/privacy](https://www.lemonsqueezy.com/privacy) |
+| **Lemon Squeezy** | May appear as **merchant of record** for certain storefront or regional purchase flows on kup.solutions; your order confirmation or receipt identifies the processor | [lemonsqueezy.com/privacy](https://www.lemonsqueezy.com/privacy) |
 
 We do not share, sell, or provide your data to any third party. The connections listed above are initiated by you or your configured agents, and the data flows directly between your Mac and the third-party service.
 
