@@ -5,18 +5,27 @@ All notable changes to NotionBridge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.5.3] — 2026-03-30
+## [1.5.2] — 2026-03-30
+
+### Removed
+- **Skill visibility `adminOnly`** — Same behavior as Standard for MCP discovery; removed from UI and tool schema. Persisted registry entries and MCP calls using `adminOnly` are read as **standard**.
 
 ### Added
 - **[SECURITY.md](SECURITY.md)** — Vulnerability reporting scope, out-of-scope items, Sparkle channel guidance.
 - **GitHub issue templates** — Bug and feature forms under `.github/ISSUE_TEMPLATE/`.
 - **`make verify-sparkle-feed`** and **`scripts/verify_sparkle_feed.sh`** — Confirms `SUFeedURL` from `Info.plist` returns HTTP 200 and XML-shaped content (run before/after publishing `appcast.xml`).
+- **Skills MCP metadata** — `summary`, `triggerPhrases`, and `antiTriggerPhrases` stored with each skill (UserDefaults); Notion `rich_text` mirror properties **`Bridge Summary`**, **`Bridge Triggers`**, **`Bridge Anti-triggers`**. New `manage_skill` actions: `set_metadata`, `sync_metadata_to_notion`, `sync_metadata_from_notion`. `list_routing_skills`, `manage_skill list`, and `fetch_skill` expose metadata; `fetch_skill` cache key includes a metadata fingerprint.
+- **SkillNotionMetadata** — Shared encode/decode for Notion page property patches (2000-char rich_text chunks).
 
 ### Changed
 - **[README.md](README.md)** — Canonical tool counts (**73** = 72 module + `echo`); SkillsModule **3** tools; **Public updates (Sparkle)** and **Security disclosures** sections.
 - **[AGENTS.md](AGENTS.md)** — Aligned MCP tool count with runtime (`echo` as builtin).
 - **[PRIVACY.md](PRIVACY.md)**, **[TERMS.md](TERMS.md)** — Stripe as primary processor; Lemon Squeezy described only where applicable as merchant of record.
-- **[Version.swift](NotionBridge/Config/Version.swift)** — Build constant aligned with `Info.plist` (8).
+- **[Version.swift](NotionBridge/Config/Version.swift)** — Build constant kept in sync with `Info.plist`.
+- **Settings → Connections** — Sections clarified: Notion workspaces vs API connections (Stripe); footers explain tunnel vs tokens. **API connections** list uses `ConnectionRegistry` `kind: .api` with provider badges.
+- **Settings → Skills** — Footer explains Standard / Routing visibility; optional summary line in skill rows.
+- **Settings → Advanced → Network** — Copy explains local SSE port vs remote tunnel; tunnel must forward to the same port after changes.
+- **Permissions → Notifications** — `PermissionManager` maps `UNAuthorizationStatus` consistently; one-shot `requestAuthorization` when still `notDetermined` to sync System Settings–only grants; remediation text when status is unknown.
 
 ### Notes (distribution)
 - Sparkle requires the appcast URL to be **publicly readable** (e.g. public GitHub repo for `raw.githubusercontent.com/.../appcast.xml`, or host `appcast.xml` on your own HTTPS origin and set `SUFeedURL`). See README.
@@ -25,22 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Notes (UEP closeout)
 - Documentation and tooling delivered in-repo; sync **Status** / **Summary** on any linked Notion packet or project if this work was tracked in KUP·OS DOCS.
 
-## [1.5.2] — 2026-03-30
-
-### Added
-- **Skills MCP metadata** — `summary`, `triggerPhrases`, and `antiTriggerPhrases` stored with each skill (UserDefaults); Notion `rich_text` mirror properties **`Bridge Summary`**, **`Bridge Triggers`**, **`Bridge Anti-triggers`**. New `manage_skill` actions: `set_metadata`, `sync_metadata_to_notion`, `sync_metadata_from_notion`. `list_routing_skills`, `manage_skill list`, and `fetch_skill` expose metadata; `fetch_skill` cache key includes a metadata fingerprint.
-- **SkillNotionMetadata** — Shared encode/decode for Notion page property patches (2000-char rich_text chunks).
-
-### Changed
-- **Settings → Connections** — Sections clarified: Notion workspaces vs API connections (Stripe); footers explain tunnel vs tokens. **API connections** list uses `ConnectionRegistry` `kind: .api` with provider badges.
-- **Settings → Skills** — Footer explains Standard / Routing / Admin visibility; optional summary line in skill rows.
-- **Settings → Advanced → Network** — Copy explains local SSE port vs remote tunnel; tunnel must forward to the same port after changes.
-- **Permissions → Notifications** — `PermissionManager` maps `UNAuthorizationStatus` consistently; one-shot `requestAuthorization` when still `notDetermined` to sync System Settings–only grants; remediation text when status is unknown.
-
 ### Changed (release)
-- Version bump: 1.5.1 → **1.5.2**, build 7 → **8** (`Version.swift`, `Info.plist`).
-- **Sparkle (`appcast.xml`)** — Item for 1.5.2 (build 8). If the release DMG from `make dmg` differs in size from the committed appcast, run `sign_update` on the exact uploaded `.dmg` and update `length` / `sparkle:edSignature` before publishing the GitHub release.
-- **Purchase download (kup.solutions)** — In the `kup.solutions` repo, `workers/nb-fulfillment/wrangler.toml` `DMG_OBJECT_KEY` is set to `notion-bridge-v1.5.2.dmg`. Upload that file to R2 bucket `nb-downloads`, then deploy the `nb-fulfillment` worker.
+- Version: marketing **1.5.2**; build **7 → 8 → 9** (`Version.swift`, `Info.plist`). Build **9** is the current shipping binary for 1.5.2 (includes `adminOnly` removal and doc/tooling updates above).
+- **Sparkle (`appcast.xml`)** — Item for 1.5.2 (build **9**). If the release DMG from `make dmg` differs in size from the committed appcast, run `sign_update` / `generate_appcast` on the exact uploaded `.dmg` and update `length` / `sparkle:edSignature` before publishing the GitHub release.
+- **Purchase download (kup.solutions)** — In the `kup.solutions` repo, `workers/nb-fulfillment/wrangler.toml` `DMG_OBJECT_KEY` is set to `notion-bridge-v1.5.2.dmg`. Re-upload that object after each new DMG build (same filename), then deploy the `nb-fulfillment` worker if needed.
 
 ## [1.5.1] — 2026-03-26
 

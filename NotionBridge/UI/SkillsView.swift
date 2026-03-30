@@ -99,7 +99,6 @@ struct SkillsView: View {
                 Picker("Visibility", selection: $newSkillVisibility) {
                     Text("Standard (fetch only)").tag(SkillVisibility.standard)
                     Text("Routing (discovery list)").tag(SkillVisibility.routing)
-                    Text("Admin only (same as standard for MCP list)").tag(SkillVisibility.adminOnly)
                 }
 
                 if let error = addError {
@@ -122,7 +121,6 @@ struct SkillsView: View {
                         .fontWeight(.semibold)
                     Text("Standard — Skill text is fetched with fetch_skill when the skill is enabled. It does not appear in the lightweight discovery list (list_routing_skills).")
                     Text("Routing — The skill is listed by list_routing_skills so agents can discover it by name without downloading the full page first.")
-                    Text("Admin only — Same fetch behavior as Standard. Use when you want the skill in Settings but not in routine routing discovery.")
                     Divider()
                         .padding(.vertical, 4)
                     Text("Skills are Notion pages. Add the page URL or ID above; routing vs standard only affects how MCP clients discover the skill, not Notion sharing.")
@@ -209,7 +207,6 @@ struct SkillsView: View {
             )) {
                 Text("standard").tag(SkillVisibility.standard)
                 Text("routing").tag(SkillVisibility.routing)
-                Text("adminOnly").tag(SkillVisibility.adminOnly)
             }
             .labelsHidden()
             .frame(minWidth: 100)

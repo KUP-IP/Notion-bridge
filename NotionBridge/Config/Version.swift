@@ -15,7 +15,7 @@ public enum AppVersion {
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
-    public static let build = "8"
+    public static let build = "9"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

@@ -292,7 +292,7 @@ public enum SkillsModule {
                     ]),
                     "visibility": .object([
                         "type": .string("string"),
-                        "description": .string("SkillVisibility for add/set_visibility: routing | standard | adminOnly")
+                        "description": .string("SkillVisibility for add/set_visibility: routing | standard (legacy adminOnly accepted as standard)")
                     ]),
                     "summary": .object([
                         "type": .string("string"),
@@ -440,7 +440,7 @@ public enum SkillsModule {
                     guard let vis = parseVisibilityArg(args) else {
                         throw ToolRouterError.invalidArguments(
                             toolName: "manage_skill",
-                            reason: "'set_visibility' requires valid visibility: routing, standard, or adminOnly"
+                            reason: "'set_visibility' requires valid visibility: routing or standard"
                         )
                     }
                     let success = writeSetVisibility(named: name, visibility: vis)
@@ -727,7 +727,13 @@ public enum SkillsModule {
 
     private static func parseVisibilityArg(_ args: [String: Value]) -> SkillVisibility? {
         guard case .string(let raw) = args["visibility"] else { return nil }
-        return SkillVisibility(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch t {
+        case "routing": return .routing
+        case "standard": return .standard
+        case "adminOnly": return .standard
+        default: return nil
+        }
     }
 
     private static func writeSetVisibility(named name: String, visibility: SkillVisibility) -> Bool {

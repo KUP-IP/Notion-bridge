@@ -39,13 +39,30 @@ public struct SkillMetadataLimits: Sendable {
 }
 
 /// Visibility for MCP discovery vs fetch-only registry entries.
-public enum SkillVisibility: String, Codable, Sendable, CaseIterable, Equatable {
+public enum SkillVisibility: String, Sendable, CaseIterable, Equatable {
     /// Listed by `list_routing_skills` when enabled (lightweight discovery).
     case routing
     /// Fetchable via `fetch_skill` only; omitted from routing list.
     case standard
-    /// Same as standard for listing; still visible in Settings and `manage_skill list`.
-    case adminOnly
+}
+
+extension SkillVisibility: Codable {
+    /// Decodes legacy persisted value `adminOnly` as `.standard`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        let raw = try c.decode(String.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        switch raw {
+        case "routing": self = .routing
+        case "adminOnly": self = .standard
+        case "standard": self = .standard
+        default: self = .standard
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
 }
 
 /// Manages the Skills configuration — named Notion pages that can be
