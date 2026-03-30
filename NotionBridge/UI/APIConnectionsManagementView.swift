@@ -1,7 +1,8 @@
 import SwiftUI
 
+/// API keys and service accounts (Stripe, future providers). Not Notion workspace tokens.
 public struct APIConnectionsManagementView: View {
-    @State private var stripeConnection: BridgeConnection?
+    @State private var apiConnections: [BridgeConnection] = []
     @State private var isLoading = true
     @State private var isSaving = false
     @State private var apiKey = ""
@@ -23,44 +24,48 @@ public struct APIConnectionsManagementView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 8)
-            } else if let stripeConnection {
-                connectionRow(stripeConnection)
-
-                if showApiKeyEditor {
-                    SecureField("Paste Stripe secret key", text: $apiKey)
-                        .textFieldStyle(.roundedBorder)
-
-                    if let saveError {
-                        Text(saveError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    }
-
-                    if let saveSuccessMessage {
-                        Text(saveSuccessMessage)
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    }
-
-                    HStack {
-                        Button("Save") {
-                            Task { await saveStripeKey() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
-
-                        Button("Cancel") {
-                            apiKey = ""
-                            saveError = nil
-                            saveSuccessMessage = nil
-                            showApiKeyEditor = false
-                        }
-                    }
-                }
-            } else {
-                Text("Stripe connection unavailable")
+            } else if apiConnections.isEmpty {
+                Text("No API connections configured")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+            } else {
+                ForEach(apiConnections) { connection in
+                    connectionRow(connection)
+                }
+            }
+
+            if let saveError {
+                Text(saveError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            if let saveSuccessMessage {
+                Text(saveSuccessMessage)
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+
+            if showApiKeyEditor {
+                SecureField("Paste Stripe secret key", text: $apiKey)
+                    .textFieldStyle(.roundedBorder)
+
+                HStack {
+                    Button("Save Stripe key") {
+                        Task { await saveStripeKey() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
+
+                    Button("Cancel") {
+                        apiKey = ""
+                        saveError = nil
+                        saveSuccessMessage = nil
+                        showApiKeyEditor = false
+                    }
+                }
             }
 
             HStack {
@@ -69,7 +74,7 @@ public struct APIConnectionsManagementView: View {
                     saveError = nil
                     saveSuccessMessage = nil
                 } label: {
-                    Label(showApiKeyEditor ? "Hide Editor" : "Set API Key", systemImage: "key.horizontal")
+                    Label(showApiKeyEditor ? "Hide Stripe key editor" : "Set Stripe API key", systemImage: "key.horizontal")
                         .font(.callout)
                 }
                 .buttonStyle(.borderless)
@@ -96,8 +101,17 @@ public struct APIConnectionsManagementView: View {
                     .font(.system(size: 10))
                     .foregroundStyle(statusColor(connection.status))
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(connection.name)
-                        .font(.callout)
+                    HStack(spacing: 6) {
+                        Text(connection.provider.displayName)
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                        Text(connection.name)
+                            .font(.callout)
+                    }
                     HStack(spacing: 6) {
                         Text(connection.authType.uppercased())
                             .font(.caption2)
@@ -136,11 +150,12 @@ public struct APIConnectionsManagementView: View {
 
     private func loadConnections() async {
         isLoading = true
+        saveError = nil
         do {
-            let connections = try await ConnectionRegistry.shared.listConnections(provider: .stripe, validateLive: true)
-            stripeConnection = connections.first
+            apiConnections = try await ConnectionRegistry.shared.listConnections(kind: .api, validateLive: true)
         } catch {
             saveError = error.localizedDescription
+            apiConnections = []
         }
         isLoading = false
     }
@@ -151,10 +166,11 @@ public struct APIConnectionsManagementView: View {
         saveSuccessMessage = nil
 
         do {
-            stripeConnection = try await ConnectionRegistry.shared.configureStripeAPIKey(apiKey)
+            _ = try await ConnectionRegistry.shared.configureStripeAPIKey(apiKey)
             apiKey = ""
             saveSuccessMessage = "Stripe API key saved and validated."
             showApiKeyEditor = false
+            await loadConnections()
         } catch {
             saveError = error.localizedDescription
         }

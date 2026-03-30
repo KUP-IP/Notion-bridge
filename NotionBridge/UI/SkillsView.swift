@@ -90,7 +90,7 @@ struct SkillsView: View {
             }
 
             // Add Skill form
-            Section("Add Skill") {
+            Section {
                 TextField("Skill Name", text: $newSkillName)
                     .textFieldStyle(.roundedBorder)
                 TextField("Notion Page ID or URL", text: $newSkillPageId)
@@ -113,6 +113,24 @@ struct SkillsView: View {
                 }
                 .disabled(newSkillName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                           || newSkillPageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } header: {
+                Text("Add Skill")
+            } footer: {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Visibility", systemImage: "eye")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                    Text("Standard — Skill text is fetched with fetch_skill when the skill is enabled. It does not appear in the lightweight discovery list (list_routing_skills).")
+                    Text("Routing — The skill is listed by list_routing_skills so agents can discover it by name without downloading the full page first.")
+                    Text("Admin only — Same fetch behavior as Standard. Use when you want the skill in Settings but not in routine routing discovery.")
+                    Divider()
+                        .padding(.vertical, 4)
+                    Text("Skills are Notion pages. Add the page URL or ID above; routing vs standard only affects how MCP clients discover the skill, not Notion sharing.")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .formStyle(.grouped)
@@ -176,6 +194,12 @@ struct SkillsView: View {
                             editingSkillName = skill.name
                             editingURL = skill.notionPageId
                         }
+                }
+                if !skill.summary.isEmpty {
+                    Text(skill.summary)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(2)
                 }
             }
 

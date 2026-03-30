@@ -89,7 +89,7 @@ public struct ConnectionSetupView: View {
 
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("A tunnel gives Notion Agents a secure URL to reach your local Notion Bridge server when they are not running on your Mac.")
+            Text("A tunnel gives remote MCP clients (e.g. Notion Agents) an HTTPS URL that forwards to your Mac. This is separate from API Connections (Stripe keys) and Notion workspace tokens.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

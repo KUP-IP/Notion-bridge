@@ -190,7 +190,7 @@ extension SettingsView {
                 }
             }
 
-            Section("Workspace Connections") {
+            Section {
                 ConnectionsManagementView()
 
                 if isEditingToken {
@@ -243,10 +243,22 @@ extension SettingsView {
                             .foregroundStyle(BridgeColors.secondary)
                     }
                 }
+            } header: {
+                Text("Notion workspaces")
+            } footer: {
+                Text("Only Notion integrations (workspace tokens) belong here. API keys for Stripe and other services are in API Connections below; remote URLs (e.g. Cloudflare tunnel) are under Remote Access.")
+                    .font(.caption2)
+                    .foregroundStyle(BridgeColors.muted)
             }
 
-            Section("API Connections") {
+            Section {
                 APIConnectionsManagementView()
+            } header: {
+                Text("API connections")
+            } footer: {
+                Text("Third-party API keys used by bridge tools (e.g. Stripe). This is separate from your Notion workspace tokens above.")
+                    .font(.caption2)
+                    .foregroundStyle(BridgeColors.muted)
             }
 
             Section("Setup Instructions") {
@@ -357,6 +369,9 @@ extension SettingsView {
                         .font(.caption2)
                         .foregroundStyle(BridgeColors.success)
                 }
+                Text("This value sets the TCP port for the local MCP HTTP/SSE server (127.0.0.1). Notion in the cloud does not connect to it directly. Remote agents use the URL under Connections → Remote Access; your tunnel forwards that HTTPS URL to this localhost port. If you change the port, update cloudflared or Tailscale to forward to the same port.")
+                    .font(.caption2)
+                    .foregroundStyle(BridgeColors.muted)
                 if let port = Int(ssePortInput.trimmingCharacters(in: .whitespacesAndNewlines)), port >= 1, port < 1024 {
                     Label("Well-known port — may require elevated privileges on macOS.", systemImage: "exclamationmark.triangle.fill")
                         .font(.caption2)

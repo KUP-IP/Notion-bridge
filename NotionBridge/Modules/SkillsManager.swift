@@ -12,6 +12,32 @@ extension Notification.Name {
     public static let notionBridgeSkillsStorageDidChange = Notification.Name("com.notionbridge.skillsStorageDidChange")
 }
 
+/// Limits for MCP skill metadata stored in UserDefaults (`summary`, trigger / anti phrase lists).
+public struct SkillMetadataLimits: Sendable {
+    public static let maxSummaryCharacters = 4000
+    public static let maxPhraseListCount = 64
+    public static let maxPhraseCharacterCount = 500
+
+    public static func clampedSummary(_ raw: String) -> String {
+        String(raw.prefix(maxSummaryCharacters))
+    }
+
+    public static func clampedPhraseList(_ raw: [String]) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for p in raw {
+            let t = p.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { continue }
+            let clipped = String(t.prefix(maxPhraseCharacterCount))
+            let key = clipped.lowercased()
+            if seen.insert(key).inserted, out.count < maxPhraseListCount {
+                out.append(clipped)
+            }
+        }
+        return out
+    }
+}
+
 /// Visibility for MCP discovery vs fetch-only registry entries.
 public enum SkillVisibility: String, Codable, Sendable, CaseIterable, Equatable {
     /// Listed by `list_routing_skills` when enabled (lightweight discovery).
@@ -38,21 +64,31 @@ public final class SkillsManager {
         public var notionPageId: String
         public var enabled: Bool
         public var visibility: SkillVisibility
+        /// MCP-facing summary (authoritative in UserDefaults; sync to Notion via `manage_skill`).
+        public var summary: String
+        public var triggerPhrases: [String]
+        public var antiTriggerPhrases: [String]
 
         enum CodingKeys: String, CodingKey {
-            case name, notionPageId, enabled, visibility
+            case name, notionPageId, enabled, visibility, summary, triggerPhrases, antiTriggerPhrases
         }
 
         public init(
             name: String,
             notionPageId: String,
             enabled: Bool = true,
-            visibility: SkillVisibility = .standard
+            visibility: SkillVisibility = .standard,
+            summary: String = "",
+            triggerPhrases: [String] = [],
+            antiTriggerPhrases: [String] = []
         ) {
             self.name = name
             self.notionPageId = notionPageId
             self.enabled = enabled
             self.visibility = visibility
+            self.summary = SkillMetadataLimits.clampedSummary(summary)
+            self.triggerPhrases = SkillMetadataLimits.clampedPhraseList(triggerPhrases)
+            self.antiTriggerPhrases = SkillMetadataLimits.clampedPhraseList(antiTriggerPhrases)
         }
 
         public init(from decoder: Decoder) throws {
@@ -61,6 +97,12 @@ public final class SkillsManager {
             notionPageId = try c.decode(String.self, forKey: .notionPageId)
             enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
             visibility = try c.decodeIfPresent(SkillVisibility.self, forKey: .visibility) ?? .standard
+            let rawSummary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+            let rawTriggers = try c.decodeIfPresent([String].self, forKey: .triggerPhrases) ?? []
+            let rawAnti = try c.decodeIfPresent([String].self, forKey: .antiTriggerPhrases) ?? []
+            summary = SkillMetadataLimits.clampedSummary(rawSummary)
+            triggerPhrases = SkillMetadataLimits.clampedPhraseList(rawTriggers)
+            antiTriggerPhrases = SkillMetadataLimits.clampedPhraseList(rawAnti)
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -69,6 +111,9 @@ public final class SkillsManager {
             try c.encode(notionPageId, forKey: .notionPageId)
             try c.encode(enabled, forKey: .enabled)
             try c.encode(visibility, forKey: .visibility)
+            try c.encode(summary, forKey: .summary)
+            try c.encode(triggerPhrases, forKey: .triggerPhrases)
+            try c.encode(antiTriggerPhrases, forKey: .antiTriggerPhrases)
         }
     }
 
@@ -186,6 +231,24 @@ public final class SkillsManager {
             return true
         }
         return false
+    }
+
+    /// Set MCP metadata for a skill (clamped). Returns false if not found.
+    @discardableResult
+    public func setMetadata(
+        named name: String,
+        summary: String,
+        triggerPhrases: [String],
+        antiTriggerPhrases: [String]
+    ) -> Bool {
+        guard let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) else {
+            return false
+        }
+        skills[idx].summary = SkillMetadataLimits.clampedSummary(summary)
+        skills[idx].triggerPhrases = SkillMetadataLimits.clampedPhraseList(triggerPhrases)
+        skills[idx].antiTriggerPhrases = SkillMetadataLimits.clampedPhraseList(antiTriggerPhrases)
+        save()
+        return true
     }
 
     /// Bulk add multiple skills at once. Skips duplicates.

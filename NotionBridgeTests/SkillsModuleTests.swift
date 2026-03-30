@@ -95,6 +95,23 @@ func runSkillsModuleTests() async {
         }
     }
 
+    await test("manage_skill action enum includes metadata sync actions") {
+        let tools = await router.registrations(forModule: "skills")
+        let tool = tools.first(where: { $0.name == "manage_skill" })
+        try expect(tool != nil, "manage_skill not found")
+        if case .object(let schema) = tool!.inputSchema,
+           case .object(let props) = schema["properties"],
+           case .object(let actionSchema) = props["action"],
+           case .array(let enums) = actionSchema["enum"] {
+            let actions = Set(enums.compactMap { if case .string(let s) = $0 { return s } else { return nil } })
+            try expect(actions.contains("set_metadata"), "expected set_metadata action")
+            try expect(actions.contains("sync_metadata_to_notion"), "expected sync_metadata_to_notion")
+            try expect(actions.contains("sync_metadata_from_notion"), "expected sync_metadata_from_notion")
+        } else {
+            throw TestError.assertion("manage_skill action enum not found in schema")
+        }
+    }
+
     // ============================================================
     // MARK: - P2-3: Handler-Level Error Handling Tests (PKT-373)
     // ============================================================

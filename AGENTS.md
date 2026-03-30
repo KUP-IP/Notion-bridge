@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **73 tools** across **15 modules** over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log.
+NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **72 tools** across **14 modules** over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log.
 
 Bundle ID: `kup.solutions.notion-bridge` (legacy: `solutions.kup.keepr`)
 
@@ -117,9 +117,11 @@ Every module exposes a `static func register(on router: ToolRouter) async` metho
 
 ### Skills MCP tools (`SkillsModule`)
 
-- **`list_routing_skills`** (`.open`) — Returns enabled skills with `visibility == routing` and a non-empty Notion page id. Host-agnostic discovery; does not fetch page bodies.
-- **`fetch_skill`** (`.open`) — Loads a configured skill page: paginates all direct children, optionally nested blocks (`includeNested`, default true), returns `truncated` / `truncationReason` when caps apply. Cached per name + options.
-- **`manage_skill`** (`.request`) — Full registry CRUD plus `set_visibility` (`routing` \| `standard` \| `adminOnly`). Not a secrecy boundary: approved calls still see all skills.
+MCP metadata (`summary`, `triggerPhrases`, `antiTriggerPhrases`) is **authoritative** in app storage (`com.notionbridge.skills`). Optional Notion page `rich_text` properties mirror it for humans: **`Bridge Summary`**, **`Bridge Triggers`**, **`Bridge Anti-triggers`** (one phrase per line in the latter two). Use `manage_skill` **`sync_metadata_to_notion`** / **`sync_metadata_from_notion`** to copy in either direction; create those properties on the skill page if missing.
+
+- **`list_routing_skills`** (`.open`) — Returns enabled skills with `visibility == routing` and a non-empty Notion page id, including MCP metadata fields. Does not fetch page bodies.
+- **`fetch_skill`** (`.open`) — Loads a configured skill page: paginates blocks, returns `summary` / `triggerPhrases` / `antiTriggerPhrases` next to `content`. Cache key includes a metadata fingerprint so metadata edits do not reuse stale fetches.
+- **`manage_skill`** (`.request`) — Registry CRUD, `set_visibility`, **`set_metadata`** (partial updates), and Notion sync actions above. Not a secrecy boundary: approved calls still see all skills.
 
 `notion_page_read` uses the same block collection as skills: paginated siblings; optional nesting via `includeNested` (default false). Prefer `notion_page_markdown_read` for full prose when block structure is unnecessary.
 

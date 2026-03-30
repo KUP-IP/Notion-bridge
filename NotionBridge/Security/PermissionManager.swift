@@ -236,6 +236,9 @@ public final class PermissionManager {
     public private(set) var contactsEvidence: GrantEvidence?
     public private(set) var notificationEvidence: GrantEvidence?
 
+    /// One-shot per process: requestAuthorization when status is still notDetermined (syncs System Settings–only grants).
+    private var notificationAuthorizationSyncAttempted = false
+
     /// PKT-362 D3: Per-grant checking state for animated re-check feedback.
     /// Key = grant, value = true while that row is in "Checking…" state.
     public private(set) var grantCheckingState: [Grant: Bool] = [:]
@@ -708,19 +711,22 @@ public final class PermissionManager {
             print("[PermissionManager] Skipping notification check — no bundle context (CLI/test runner)")
             return
         }
-        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        let center = UNUserNotificationCenter.current()
+        var settings = await center.notificationSettings()
+        // If the user enabled alerts in System Settings but never ran an in-app request, macOS can leave
+        // authorizationStatus at notDetermined until requestAuthorization runs once.
+        if settings.authorizationStatus == .notDetermined, !notificationAuthorizationSyncAttempted {
+            notificationAuthorizationSyncAttempted = true
+            do {
+                _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+            } catch {
+                print("[PermissionManager] requestAuthorization during checkNotifications: \(error.localizedDescription)")
+            }
+            settings = await center.notificationSettings()
+        }
         // PKT-369 N1: Diagnostic probe — log raw authorization status
         print("[PermissionManager] N1 diagnostic: authorizationStatus=\(settings.authorizationStatus.rawValue) (0=notDetermined, 1=denied, 2=authorized, 3=provisional, 4=ephemeral)")
-        switch settings.authorizationStatus {
-        case .authorized, .provisional, .ephemeral:
-            notificationStatus = .granted
-        case .denied:
-            notificationStatus = .denied
-        case .notDetermined:
-            notificationStatus = .unknown
-        @unknown default:
-            notificationStatus = .unknown
-        }
+        applyNotificationAuthorizationStatus(settings.authorizationStatus)
         notificationEvidence = .init(
             source: "UNUserNotificationCenter.notificationSettings()",
             observed: "authorizationStatus=\(settings.authorizationStatus.rawValue)",
@@ -744,23 +750,30 @@ public final class PermissionManager {
         // N2: Source of truth — notificationSettings() reflects actual macOS grant state
         let settings = await center.notificationSettings()
         print("[PermissionManager] N2 source-of-truth: authorizationStatus=\(settings.authorizationStatus.rawValue)")
-        let granted: Bool
-        switch settings.authorizationStatus {
-        case .authorized, .provisional, .ephemeral:
-            granted = true
-        default:
-            granted = false
-        }
-        notificationStatus = granted ? .granted : .denied
+        applyNotificationAuthorizationStatus(settings.authorizationStatus)
+        let granted = notificationStatus == .granted
         notificationEvidence = .init(
             source: "requestAuthorization + notificationSettings() [N2 source-of-truth]",
             observed: "authorizationStatus=\(settings.authorizationStatus.rawValue)",
             detail: granted
                 ? "Notification authorization confirmed via notificationSettings()."
-                : "Not authorized. authorizationStatus=\(settings.authorizationStatus.rawValue).",
+                : "Not fully authorized. authorizationStatus=\(settings.authorizationStatus.rawValue).",
             checkedAt: Date()
         )
         return granted
+    }
+
+    private func applyNotificationAuthorizationStatus(_ auth: UNAuthorizationStatus) {
+        switch auth {
+        case .authorized, .provisional, .ephemeral:
+            notificationStatus = .granted
+        case .denied:
+            notificationStatus = .denied
+        case .notDetermined:
+            notificationStatus = .unknown
+        @unknown default:
+            notificationStatus = .unknown
+        }
     }
 
     // MARK: - UX helpers
@@ -797,6 +810,9 @@ public final class PermissionManager {
             }
             return "Enable Automation targets used by tools (System Events, Messages, Chrome, Contacts)."
         case .notifications:
+            if notificationStatus == .unknown {
+                return "If alerts are already on in System Settings, quit and reopen Notion Bridge. Otherwise click Allow once so macOS can register this app for notifications."
+            }
             return "Allow Notifications when prompted or enable in System Settings > Notifications."
         case .contacts:
             return "Allow Contacts access when prompted or in System Settings > Privacy & Security > Contacts."

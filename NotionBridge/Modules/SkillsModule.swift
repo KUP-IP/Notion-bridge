@@ -35,6 +35,10 @@ private actor SkillCache {
     func set(_ key: String, content: Value) {
         cache[key] = CachedSkill(content: content, fetchedAt: Date())
     }
+
+    func clear() {
+        cache.removeAll()
+    }
 }
 
 // MARK: - SkillsModule
@@ -56,7 +60,7 @@ public enum SkillsModule {
             name: "fetch_skill",
             module: moduleName,
             tier: .open,
-            description: "Fetch a named skill by name (case-insensitive). Returns page title, URL, flattened block text (paginated + optional nested blocks), blockCount, truncated. Results cached 10 minutes. Configure skills in Settings",
+            description: "Fetch a named skill by name (case-insensitive). Returns page title, URL, MCP metadata (summary, triggers), flattened block text, blockCount, truncated. Cache key includes metadata. Configure skills in Settings",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -103,14 +107,7 @@ public enum SkillsModule {
                     return 10
                 }()
 
-                let cacheKey = "\(name.lowercased())|n=\(includeNested)|mb=\(maxBlocks)|md=\(maxDepth)"
-
-                // Check cache first
-                if let cached = await cache.get(cacheKey) {
-                    return cached
-                }
-
-                // Look up skill in UserDefaults config
+                // Look up skill in UserDefaults config (cache key includes metadata fingerprint)
                 guard let skillConfig = lookupSkill(named: name) else {
                     return .object([
                         "error": .string("Skill not found: '\(name)'"),
@@ -119,6 +116,12 @@ public enum SkillsModule {
                             listAvailableSkillNames().map { .string($0) }
                         )
                     ])
+                }
+
+                let cacheKey = "\(name.lowercased())|n=\(includeNested)|mb=\(maxBlocks)|md=\(maxDepth)|meta=\(skillConfig.metadataCacheToken)"
+
+                if let cached = await cache.get(cacheKey) {
+                    return cached
                 }
 
                 guard skillConfig.enabled else {
@@ -156,14 +159,16 @@ public enum SkillsModule {
                     let truncationReason = collected.truncationReason
 
                     if blockResults.isEmpty {
-                        let result: Value = .object([
+                        var base: [String: Value] = [
                             "name": .string(skillConfig.name),
                             "title": .string(title),
                             "url": .string(url),
                             "blockCount": .int(0),
                             "truncated": .bool(false),
                             "content": .string("(no blocks)")
-                        ])
+                        ]
+                        base.merge(Self.mcpMetadataObject(skillConfig)) { _, new in new }
+                        let result: Value = .object(base)
                         await cache.set(cacheKey, content: result)
                         return result
                     }
@@ -184,6 +189,7 @@ public enum SkillsModule {
                         "truncated": .bool(truncated),
                         "content": .string(textParts.joined(separator: "\n"))
                     ]
+                    resultObj.merge(Self.mcpMetadataObject(skillConfig)) { _, new in new }
                     if let r = truncationReason {
                         resultObj["truncationReason"] = .string(r)
                     }
@@ -218,8 +224,7 @@ public enum SkillsModule {
 
         await registerListRoutingSkills(on: router)
 
-        // Register manage_skill tool (PKT-477 Feature 3)
-        await registerManageSkill(on: router)
+        await registerManageSkill(on: router, skillCache: cache)
     }
 
     // MARK: - list_routing_skills
@@ -229,7 +234,7 @@ public enum SkillsModule {
             name: "list_routing_skills",
             module: moduleName,
             tier: .open,
-            description: "List skills enabled for routing discovery: visibility routing, non-empty Notion page id. Does not fetch page bodies — use fetch_skill.",
+            description: "List skills enabled for routing discovery: visibility routing, non-empty Notion page id. Includes MCP metadata (summary, triggers). Does not fetch page bodies — use fetch_skill.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -241,10 +246,7 @@ public enum SkillsModule {
                         && !$0.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 }
                 let items: [Value] = skills.map { s in
-                    .object([
-                        "name": .string(s.name),
-                        "notionPageId": .string(s.notionPageId)
-                    ])
+                    .object(Self.skillRowFields(s))
                 }
                 return .object([
                     "skills": .array(items),
@@ -257,27 +259,28 @@ public enum SkillsModule {
     // MARK: - manage_skill Tool (PKT-477 Feature 3)
 
     /// Register the `manage_skill` tool on the given router.
-    public static func registerManageSkill(on router: ToolRouter) async {
+    private static func registerManageSkill(on router: ToolRouter, skillCache: SkillCache) async {
 
         await router.register(ToolRegistration(
             name: "manage_skill",
             module: moduleName,
             tier: .request, // was .orange — no such SecurityTier member
-            description: "Manage the skills registry. Actions: list, add, delete, toggle, rename, update_url, set_visibility, bulk_add. Skills persist in Settings",
+            description: "Manage the skills registry. Actions: list, add, delete, toggle, rename, update_url, set_visibility, bulk_add, set_metadata, sync_metadata_to_notion, sync_metadata_from_notion. MCP metadata is authoritative; sync copies to/from Notion properties Bridge Summary, Bridge Triggers, Bridge Anti-triggers",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "action": .object([
                         "type": .string("string"),
-                        "description": .string("Action: list, add, delete, toggle, rename, update_url, set_visibility, bulk_add"),
+                        "description": .string("Action: list, add, delete, toggle, rename, update_url, set_visibility, bulk_add, set_metadata, sync_metadata_to_notion, sync_metadata_from_notion"),
                         "enum": .array([
                             .string("list"), .string("add"), .string("delete"), .string("toggle"), .string("rename"),
-                            .string("update_url"), .string("set_visibility"), .string("bulk_add")
+                            .string("update_url"), .string("set_visibility"), .string("bulk_add"),
+                            .string("set_metadata"), .string("sync_metadata_to_notion"), .string("sync_metadata_from_notion")
                         ])
                     ]),
                     "name": .object([
                         "type": .string("string"),
-                        "description": .string("Skill name (required for add, delete, toggle, rename, update_url)")
+                        "description": .string("Skill name (required for most actions)")
                     ]),
                     "url": .object([
                         "type": .string("string"),
@@ -290,6 +293,20 @@ public enum SkillsModule {
                     "visibility": .object([
                         "type": .string("string"),
                         "description": .string("SkillVisibility for add/set_visibility: routing | standard | adminOnly")
+                    ]),
+                    "summary": .object([
+                        "type": .string("string"),
+                        "description": .string("MCP summary text (set_metadata); optional if other metadata fields provided")
+                    ]),
+                    "triggerPhrases": .object([
+                        "type": .string("array"),
+                        "description": .string("Trigger phrases (set_metadata); array of strings"),
+                        "items": .object(["type": .string("string")])
+                    ]),
+                    "antiTriggerPhrases": .object([
+                        "type": .string("array"),
+                        "description": .string("Anti-trigger phrases (set_metadata); array of strings"),
+                        "items": .object(["type": .string("string")])
                     ]),
                     "skills": .object([
                         "type": .string("array"),
@@ -318,12 +335,14 @@ public enum SkillsModule {
                 case "list":
                     let skills = readAllSkills()
                     let items: [Value] = skills.map { skill in
-                        .object([
+                        var row: [String: Value] = [
                             "name": .string(skill.name),
                             "url": .string(skill.notionPageId),
                             "enabled": .bool(skill.enabled),
                             "visibility": .string(skill.visibility.rawValue)
-                        ])
+                        ]
+                        row.merge(Self.mcpMetadataObject(skill)) { _, new in new }
+                        return .object(row)
                     }
                     return .object([
                         "skills": .array(items),
@@ -457,10 +476,212 @@ public enum SkillsModule {
                         "message": .string("Bulk add complete: \(result.added) added, \(result.skipped) skipped.")
                     ])
 
+                case "set_metadata":
+                    guard case .string(let name) = args["name"] else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "manage_skill",
+                            reason: "'set_metadata' requires 'name' parameter"
+                        )
+                    }
+                    let hasSummary = args["summary"] != nil
+                    let hasTrig = args["triggerPhrases"] != nil
+                    let hasAnti = args["antiTriggerPhrases"] != nil
+                    guard hasSummary || hasTrig || hasAnti else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "manage_skill",
+                            reason: "'set_metadata' requires at least one of: summary, triggerPhrases, antiTriggerPhrases"
+                        )
+                    }
+                    var skills = readAllSkills()
+                    guard let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) else {
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("set_metadata"),
+                            "message": .string("Skill not found.")
+                        ])
+                    }
+                    let cur = skills[idx]
+                    let newSummary: String = {
+                        if case .string(let s) = args["summary"] { return SkillMetadataLimits.clampedSummary(s) }
+                        return cur.summary
+                    }()
+                    let newTrig: [String] = {
+                        if let v = args["triggerPhrases"] {
+                            return SkillMetadataLimits.clampedPhraseList(Self.parseStringArrayValue(v))
+                        }
+                        return cur.triggerPhrases
+                    }()
+                    let newAnti: [String] = {
+                        if let v = args["antiTriggerPhrases"] {
+                            return SkillMetadataLimits.clampedPhraseList(Self.parseStringArrayValue(v))
+                        }
+                        return cur.antiTriggerPhrases
+                    }()
+                    skills[idx] = SkillConfig(
+                        name: cur.name,
+                        notionPageId: cur.notionPageId,
+                        enabled: cur.enabled,
+                        visibility: cur.visibility,
+                        summary: newSummary,
+                        triggerPhrases: newTrig,
+                        antiTriggerPhrases: newAnti
+                    )
+                    writeSkills(skills)
+                    await skillCache.clear()
+                    return .object([
+                        "success": .bool(true),
+                        "action": .string("set_metadata"),
+                        "name": .string(name),
+                        "message": .string("Metadata updated.")
+                    ])
+
+                case "sync_metadata_to_notion":
+                    guard case .string(let name) = args["name"] else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "manage_skill",
+                            reason: "'sync_metadata_to_notion' requires 'name' parameter"
+                        )
+                    }
+                    guard let skill = lookupSkill(named: name) else {
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("sync_metadata_to_notion"),
+                            "message": .string("Skill not found.")
+                        ])
+                    }
+                    let pageId = skill.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !pageId.isEmpty else {
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("sync_metadata_to_notion"),
+                            "message": .string("Skill has no Notion page id.")
+                        ])
+                    }
+                    do {
+                        let client = try NotionClient()
+                        let patch = try SkillNotionMetadata.buildPagePropertiesPatchData(
+                            summary: skill.summary,
+                            triggerPhrases: skill.triggerPhrases,
+                            antiTriggerPhrases: skill.antiTriggerPhrases
+                        )
+                        _ = try await client.updatePage(pageId: pageId, properties: patch)
+                        await skillCache.clear()
+                        return .object([
+                            "success": .bool(true),
+                            "action": .string("sync_metadata_to_notion"),
+                            "name": .string(name),
+                            "message": .string("Notion page properties updated from MCP metadata.")
+                        ])
+                    } catch let error as NotionClientError {
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("sync_metadata_to_notion"),
+                            "error": .string(error.localizedDescription)
+                        ])
+                    } catch {
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("sync_metadata_to_notion"),
+                            "error": .string(error.localizedDescription)
+                        ])
+                    }
+
+                case "sync_metadata_from_notion":
+                    guard case .string(let name) = args["name"] else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "manage_skill",
+                            reason: "'sync_metadata_from_notion' requires 'name' parameter"
+                        )
+                    }
+                    guard let skill = lookupSkill(named: name) else {
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("sync_metadata_from_notion"),
+                            "message": .string("Skill not found.")
+                        ])
+                    }
+                    let pageId = skill.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !pageId.isEmpty else {
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("sync_metadata_from_notion"),
+                            "message": .string("Skill has no Notion page id.")
+                        ])
+                    }
+                    do {
+                        let client = try NotionClient()
+                        let pageData = try await client.getPage(pageId: pageId)
+                        guard let pageJSON = try? JSONSerialization.jsonObject(with: pageData) as? [String: Any],
+                              let properties = pageJSON["properties"] as? [String: Any] else {
+                            return .object([
+                                "success": .bool(false),
+                                "action": .string("sync_metadata_from_notion"),
+                                "message": .string("Failed to parse Notion page.")
+                            ])
+                        }
+                        let sum = SkillNotionMetadata.richTextPlain(
+                            propertyName: SkillBridgeNotionPropertyNames.summary,
+                            properties: properties
+                        )
+                        let trigText = SkillNotionMetadata.richTextPlain(
+                            propertyName: SkillBridgeNotionPropertyNames.triggers,
+                            properties: properties
+                        )
+                        let antiText = SkillNotionMetadata.richTextPlain(
+                            propertyName: SkillBridgeNotionPropertyNames.antiTriggers,
+                            properties: properties
+                        )
+                        let trig = SkillMetadataLimits.clampedPhraseList(
+                            SkillNotionMetadata.phrasesFromStoredText(trigText)
+                        )
+                        let anti = SkillMetadataLimits.clampedPhraseList(
+                            SkillNotionMetadata.phrasesFromStoredText(antiText)
+                        )
+                        let newSummary = SkillMetadataLimits.clampedSummary(sum)
+                        var skills = readAllSkills()
+                        guard let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) else {
+                            return .object([
+                                "success": .bool(false),
+                                "action": .string("sync_metadata_from_notion"),
+                                "message": .string("Skill not found.")
+                            ])
+                        }
+                        let cur = skills[idx]
+                        skills[idx] = SkillConfig(
+                            name: cur.name,
+                            notionPageId: cur.notionPageId,
+                            enabled: cur.enabled,
+                            visibility: cur.visibility,
+                            summary: newSummary,
+                            triggerPhrases: trig,
+                            antiTriggerPhrases: anti
+                        )
+                        writeSkills(skills)
+                        await skillCache.clear()
+                        return .object([
+                            "success": .bool(true),
+                            "action": .string("sync_metadata_from_notion"),
+                            "name": .string(name),
+                            "message": .string("MCP metadata updated from Notion.")
+                        ])
+                    } catch let error as NotionClientError {
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("sync_metadata_from_notion"),
+                            "error": .string(error.localizedDescription)
+                        ])
+                    } catch {
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("sync_metadata_from_notion"),
+                            "error": .string(error.localizedDescription)
+                        ])
+                    }
+
                 default:
                     return .object([
                         "error": .string("Unknown action: '\(action)'"),
-                        "hint": .string("Valid actions: list, add, delete, toggle, rename, update_url, set_visibility, bulk_add")
+                        "hint": .string("Valid actions: list, add, delete, toggle, rename, update_url, set_visibility, bulk_add, set_metadata, sync_metadata_to_notion, sync_metadata_from_notion")
                     ])
                 }
             }
@@ -491,7 +712,15 @@ public enum SkillsModule {
         guard !trimmed.isEmpty else { return false }
         var skills = readAllSkills()
         guard !skills.contains(where: { $0.name.lowercased() == trimmed.lowercased() }) else { return false }
-        skills.append(SkillConfig(name: trimmed, notionPageId: pageId, enabled: true, visibility: visibility))
+        skills.append(SkillConfig(
+            name: trimmed,
+            notionPageId: pageId,
+            enabled: true,
+            visibility: visibility,
+            summary: "",
+            triggerPhrases: [],
+            antiTriggerPhrases: []
+        ))
         writeSkills(skills)
         return true
     }
@@ -505,7 +734,15 @@ public enum SkillsModule {
         var skills = readAllSkills()
         if let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
             let s = skills[idx]
-            skills[idx] = SkillConfig(name: s.name, notionPageId: s.notionPageId, enabled: s.enabled, visibility: visibility)
+            skills[idx] = SkillConfig(
+                name: s.name,
+                notionPageId: s.notionPageId,
+                enabled: s.enabled,
+                visibility: visibility,
+                summary: s.summary,
+                triggerPhrases: s.triggerPhrases,
+                antiTriggerPhrases: s.antiTriggerPhrases
+            )
             writeSkills(skills)
             return true
         }
@@ -527,7 +764,15 @@ public enum SkillsModule {
         var skills = readAllSkills()
         if let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
             let s = skills[idx]
-            skills[idx] = SkillConfig(name: s.name, notionPageId: s.notionPageId, enabled: !s.enabled, visibility: s.visibility)
+            skills[idx] = SkillConfig(
+                name: s.name,
+                notionPageId: s.notionPageId,
+                enabled: !s.enabled,
+                visibility: s.visibility,
+                summary: s.summary,
+                triggerPhrases: s.triggerPhrases,
+                antiTriggerPhrases: s.antiTriggerPhrases
+            )
             let newState = skills[idx].enabled
             writeSkills(skills)
             return (true, newState)
@@ -543,7 +788,15 @@ public enum SkillsModule {
         guard !skills.contains(where: { $0.name.lowercased() == trimmed.lowercased() }) else { return false }
         if let idx = skills.firstIndex(where: { $0.name.lowercased() == oldName.lowercased() }) {
             let s = skills[idx]
-            skills[idx] = SkillConfig(name: trimmed, notionPageId: s.notionPageId, enabled: s.enabled, visibility: s.visibility)
+            skills[idx] = SkillConfig(
+                name: trimmed,
+                notionPageId: s.notionPageId,
+                enabled: s.enabled,
+                visibility: s.visibility,
+                summary: s.summary,
+                triggerPhrases: s.triggerPhrases,
+                antiTriggerPhrases: s.antiTriggerPhrases
+            )
             writeSkills(skills)
             return true
         }
@@ -555,7 +808,15 @@ public enum SkillsModule {
         var skills = readAllSkills()
         if let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
             let s = skills[idx]
-            skills[idx] = SkillConfig(name: s.name, notionPageId: newPageId, enabled: s.enabled, visibility: s.visibility)
+            skills[idx] = SkillConfig(
+                name: s.name,
+                notionPageId: newPageId,
+                enabled: s.enabled,
+                visibility: s.visibility,
+                summary: s.summary,
+                triggerPhrases: s.triggerPhrases,
+                antiTriggerPhrases: s.antiTriggerPhrases
+            )
             writeSkills(skills)
             return true
         }
@@ -572,7 +833,15 @@ public enum SkillsModule {
             if existing.contains(where: { $0.name.lowercased() == trimmed.lowercased() }) {
                 skipped += 1
             } else {
-                existing.append(SkillConfig(name: trimmed, notionPageId: s.pageId, enabled: true, visibility: .standard))
+                existing.append(SkillConfig(
+                    name: trimmed,
+                    notionPageId: s.pageId,
+                    enabled: true,
+                    visibility: .standard,
+                    summary: "",
+                    triggerPhrases: [],
+                    antiTriggerPhrases: []
+                ))
                 added += 1
             }
         }
@@ -582,23 +851,37 @@ public enum SkillsModule {
 
     // MARK: - Config Helpers
 
-    /// Lightweight Codable struct matching SkillsManager.Skill layout.
+    /// Lightweight Codable struct matching `SkillsManager.Skill` layout.
     /// Used to read directly from UserDefaults without requiring @MainActor.
     private struct SkillConfig: Codable {
         let name: String
         let notionPageId: String
         let enabled: Bool
         let visibility: SkillVisibility
+        let summary: String
+        let triggerPhrases: [String]
+        let antiTriggerPhrases: [String]
 
         enum CodingKeys: String, CodingKey {
-            case name, notionPageId, enabled, visibility
+            case name, notionPageId, enabled, visibility, summary, triggerPhrases, antiTriggerPhrases
         }
 
-        init(name: String, notionPageId: String, enabled: Bool, visibility: SkillVisibility = .standard) {
+        init(
+            name: String,
+            notionPageId: String,
+            enabled: Bool,
+            visibility: SkillVisibility = .standard,
+            summary: String = "",
+            triggerPhrases: [String] = [],
+            antiTriggerPhrases: [String] = []
+        ) {
             self.name = name
             self.notionPageId = notionPageId
             self.enabled = enabled
             self.visibility = visibility
+            self.summary = SkillMetadataLimits.clampedSummary(summary)
+            self.triggerPhrases = SkillMetadataLimits.clampedPhraseList(triggerPhrases)
+            self.antiTriggerPhrases = SkillMetadataLimits.clampedPhraseList(antiTriggerPhrases)
         }
 
         init(from decoder: Decoder) throws {
@@ -607,6 +890,12 @@ public enum SkillsModule {
             notionPageId = try c.decode(String.self, forKey: .notionPageId)
             enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
             visibility = try c.decodeIfPresent(SkillVisibility.self, forKey: .visibility) ?? .standard
+            let rawSummary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+            let rawTriggers = try c.decodeIfPresent([String].self, forKey: .triggerPhrases) ?? []
+            let rawAnti = try c.decodeIfPresent([String].self, forKey: .antiTriggerPhrases) ?? []
+            summary = SkillMetadataLimits.clampedSummary(rawSummary)
+            triggerPhrases = SkillMetadataLimits.clampedPhraseList(rawTriggers)
+            antiTriggerPhrases = SkillMetadataLimits.clampedPhraseList(rawAnti)
         }
 
         func encode(to encoder: Encoder) throws {
@@ -615,6 +904,49 @@ public enum SkillsModule {
             try c.encode(notionPageId, forKey: .notionPageId)
             try c.encode(enabled, forKey: .enabled)
             try c.encode(visibility, forKey: .visibility)
+            try c.encode(summary, forKey: .summary)
+            try c.encode(triggerPhrases, forKey: .triggerPhrases)
+            try c.encode(antiTriggerPhrases, forKey: .antiTriggerPhrases)
+        }
+
+        /// Stable token for `fetch_skill` cache invalidation when metadata changes.
+        var metadataCacheToken: String {
+            let raw = "\(summary)\u{1e}\(triggerPhrases.joined(separator: "\u{1f}"))\u{1e}\(antiTriggerPhrases.joined(separator: "\u{1f}"))"
+            var h: UInt64 = 14695981039346656037
+            for b in raw.utf8 {
+                h ^= UInt64(b)
+                h &*= 1099511628211
+            }
+            return String(h, radix: 16)
+        }
+    }
+
+    private static func mcpMetadataObject(_ s: SkillConfig) -> [String: Value] {
+        [
+            "summary": .string(s.summary),
+            "triggerPhrases": .array(s.triggerPhrases.map { .string($0) }),
+            "antiTriggerPhrases": .array(s.antiTriggerPhrases.map { .string($0) })
+        ]
+    }
+
+    private static func skillRowFields(_ s: SkillConfig) -> [String: Value] {
+        var row = mcpMetadataObject(s)
+        row["name"] = .string(s.name)
+        row["notionPageId"] = .string(s.notionPageId)
+        return row
+    }
+
+    private static func parseStringArrayValue(_ v: Value) -> [String] {
+        switch v {
+        case .array(let arr):
+            return arr.compactMap { item in
+                if case .string(let s) = item { return s }
+                return nil
+            }
+        case .string(let s):
+            return s.split(whereSeparator: \.isNewline).map { String($0) }
+        default:
+            return []
         }
     }
 
