@@ -4,7 +4,7 @@
 
 NotionBridge exposes local Mac capabilities and connected services as MCP tools over **Streamable HTTP**, **legacy SSE**, and **stdio**. It is built in Swift 6.2 for macOS 26+ on Apple Silicon and is designed to be always-on, auto-launched, and safe enough for daily operator use.
 
-**72 tools across 15 modules** · **3 transports** · **3-tier security model** · **Customer-owned Cloudflare Tunnel support**
+**73 tools across 15 modules** · **3 transports** · **3-tier security model** · **Customer-owned Cloudflare Tunnel support**
 
 **Product page:** https://kup.solutions/notion-bridge
 

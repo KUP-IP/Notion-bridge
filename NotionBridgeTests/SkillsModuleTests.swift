@@ -20,18 +20,31 @@ func runSkillsModuleTests() async {
     await SkillsModule.register(on: router)
 
     // ============================================================
-    // MARK: - Tool Registration (1 tool)
+    // MARK: - Tool Registration (fetch_skill, list_routing_skills, manage_skill)
     // ============================================================
 
-    await test("SkillsModule registers 1 tool") {
+    await test("SkillsModule registers 3 tools") {
         let tools = await router.registrations(forModule: "skills")
-        try expect(tools.count == 2, "Expected 2 skills tools, got \(tools.count)")
+        try expect(tools.count == 3, "Expected 3 skills tools, got \(tools.count)")
     }
 
     await test("Tool fetch_skill is registered") {
         let tools = await router.registrations(forModule: "skills")
         let names = Set(tools.map(\.name))
         try expect(names.contains("fetch_skill"), "Missing fetch_skill")
+    }
+
+    await test("Tool list_routing_skills is registered") {
+        let tools = await router.registrations(forModule: "skills")
+        let names = Set(tools.map(\.name))
+        try expect(names.contains("list_routing_skills"), "Missing list_routing_skills")
+    }
+
+    await test("list_routing_skills has open tier") {
+        let tools = await router.registrations(forModule: "skills")
+        let tool = tools.first(where: { $0.name == "list_routing_skills" })
+        try expect(tool != nil, "list_routing_skills not found")
+        try expect(tool!.tier == .open, "list_routing_skills should be .open")
     }
 
     // ============================================================

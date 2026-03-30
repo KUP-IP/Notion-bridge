@@ -198,6 +198,19 @@ public enum NotionJSON {
         return richText.compactMap { $0["plain_text"] as? String }.joined()
     }
 
+    /// Plain text from a Notion block object (`results[]` item), for common block types with `rich_text` / `caption`.
+    public static func extractPlainTextFromBlock(_ block: [String: Any]) -> String {
+        let type = block["type"] as? String ?? ""
+        guard let typeData = block[type] as? [String: Any] else { return "" }
+        if let richText = typeData["rich_text"] as? [[String: Any]], !richText.isEmpty {
+            return extractPlainText(from: richText)
+        }
+        if let caption = typeData["caption"] as? [[String: Any]], !caption.isEmpty {
+            return extractPlainText(from: caption)
+        }
+        return ""
+    }
+
     /// Pretty-print a JSON object to string.
     public static func prettyPrint(_ obj: Any) -> String {
         guard let data = try? JSONSerialization.data(

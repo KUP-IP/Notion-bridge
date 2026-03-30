@@ -167,6 +167,30 @@ public enum NotionTokenResolver {
     }
 }
 
+// MARK: - Append block children (API 2026-03-11)
+
+/// Insert position for `PATCH /v1/blocks/{id}/children`.
+/// Use `.end` to omit `position` (Notion appends to the end). Use `.afterBlock` for `position.type == "after_block"`.
+public enum AppendBlocksPosition: Sendable {
+    case end
+    case afterBlock(id: String)
+}
+
+// MARK: - Block collection result
+
+/// Result of depth-first block collection (`@unchecked` — JSON dictionaries from Notion API).
+public struct CollectedBlocks: @unchecked Sendable {
+    public let blocks: [[String: Any]]
+    public let truncated: Bool
+    public let truncationReason: String?
+
+    public init(blocks: [[String: Any]], truncated: Bool, truncationReason: String?) {
+        self.blocks = blocks
+        self.truncated = truncated
+        self.truncationReason = truncationReason
+    }
+}
+
 // MARK: - NotionClient Actor
 
 /// Thread-safe Notion REST API client with rate limiting and retry logic.
@@ -337,18 +361,90 @@ public actor NotionClient {
         return data
     }
 
-    /// Retrieve child blocks of a page or block.
+    /// Retrieve child blocks of a page or block (single API page — up to `page_size` results).
     public func getBlocks(blockId: String, pageSize: Int = 100) async throws -> Data {
+        try await fetchChildBlocksRaw(blockId: blockId, startCursor: nil, pageSize: pageSize)
+    }
+
+    /// One page of `GET /blocks/{id}/children` with optional cursor (Notion pagination).
+    public func fetchChildBlocksRaw(blockId: String, startCursor: String?, pageSize: Int = 100) async throws -> Data {
         let cleanId = blockId.replacingOccurrences(of: "-", with: "")
-        let (data, response) = try await request(
-            method: "GET",
-            path: "/blocks/\(cleanId)/children?page_size=\(pageSize)"
-        )
+        var path = "/blocks/\(cleanId)/children?page_size=\(pageSize)"
+        if let cursor = startCursor, !cursor.isEmpty {
+            let encoded =
+                cursor.addingPercentEncoding(withAllowedCharacters: CharacterSet.urlQueryAllowed) ?? cursor
+            path += "&start_cursor=\(encoded)"
+        }
+        let (data, response) = try await request(method: "GET", path: path)
         guard (200...299).contains(response.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? ""
             throw NotionClientError.httpError(response.statusCode, msg)
         }
         return data
+    }
+
+    /// All direct children of a block or page, following `has_more` / `next_cursor` until exhausted.
+    public func fetchAllSiblingBlocks(blockId: String, pageSize: Int = 100) async throws -> [[String: Any]] {
+        var all: [[String: Any]] = []
+        var cursor: String? = nil
+        while true {
+            let data = try await fetchChildBlocksRaw(blockId: blockId, startCursor: cursor, pageSize: pageSize)
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let results = json["results"] as? [[String: Any]] else {
+                throw NotionClientError.invalidResponse
+            }
+            all.append(contentsOf: results)
+            let hasMore = json["has_more"] as? Bool ?? false
+            guard hasMore, let next = json["next_cursor"] as? String, !next.isEmpty else {
+                break
+            }
+            cursor = next
+        }
+        return all
+    }
+
+    /// Depth-first collection: root is typically a **page** id. `depth` starts at 1 for page-level children.
+    /// Stops when `maxBlocks` or `maxDepth` would be exceeded (`truncated` true).
+    public func collectBlocksDepthFirst(
+        rootBlockId: String,
+        includeNested: Bool,
+        maxBlocks: Int,
+        maxDepth: Int
+    ) async throws -> CollectedBlocks {
+        final class State: @unchecked Sendable {
+            var collected: [[String: Any]] = []
+            var truncated = false
+            var truncationReason: String? = nil
+            var count = 0
+        }
+        let state = State()
+
+        func visit(_ parentId: String, depth: Int, state: State) async throws {
+            let siblings = try await fetchAllSiblingBlocks(blockId: parentId, pageSize: 100)
+            for block in siblings {
+                if state.count >= maxBlocks {
+                    state.truncated = true
+                    state.truncationReason = "maxBlocks"
+                    return
+                }
+                state.collected.append(block)
+                state.count += 1
+
+                let hasChildren = block["has_children"] as? Bool ?? false
+                let bid = block["id"] as? String
+                if includeNested, hasChildren, let bid, depth < maxDepth {
+                    try await visit(bid, depth: depth + 1, state: state)
+                    if state.truncated { return }
+                }
+            }
+        }
+
+        try await visit(rootBlockId, depth: 1, state: state)
+        return CollectedBlocks(
+            blocks: state.collected,
+            truncated: state.truncated,
+            truncationReason: state.truncationReason
+        )
     }
 
     /// Update page properties.
@@ -421,19 +517,47 @@ public actor NotionClient {
         return data
     }
 
-    /// A5: Append child blocks to a parent block/page with optional position.
-    /// PATCH /v1/blocks/{id}/children
-    public func appendBlocks(blockId: String, children: Data, position: [String: String]? = nil) async throws -> Data {
-        let cleanId = blockId.replacingOccurrences(of: "-", with: "")
+    /// Builds the JSON body for append-block-children. Public for unit tests; matches Notion API `2026-03-11` (`position`, not deprecated `after`).
+    nonisolated public static func buildAppendBlocksRequestBody(children: Data, position: AppendBlocksPosition) throws -> [String: Any] {
         var body: [String: Any] = [:]
+        let childrenObj = try JSONSerialization.jsonObject(with: children)
+        body["children"] = childrenObj
 
-        if let childrenObj = try? JSONSerialization.jsonObject(with: children) {
-            body["children"] = childrenObj
+        switch position {
+        case .end:
+            break
+        case .afterBlock(let rawId):
+            let id = Self.normalizeNotionIdForJSONBody(rawId)
+            body["position"] = [
+                "type": "after_block",
+                "after_block": [
+                    "id": id
+                ]
+            ]
         }
-        if let pos = position {
-            body["after"] = pos  // v2026-03-11 position object
-        }
+        return body
+    }
 
+    /// Normalizes a block/page UUID for JSON bodies (8-4-4-4-12). Accepts dashed or 32-char hex.
+    nonisolated private static func normalizeNotionIdForJSONBody(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hex = trimmed.replacingOccurrences(of: "-", with: "").lowercased()
+        guard hex.count == 32, hex.allSatisfy(\.isHexDigit) else {
+            return trimmed
+        }
+        let s = String(hex)
+        let i8 = s.index(s.startIndex, offsetBy: 8)
+        let i12 = s.index(s.startIndex, offsetBy: 12)
+        let i16 = s.index(s.startIndex, offsetBy: 16)
+        let i20 = s.index(s.startIndex, offsetBy: 20)
+        return "\(s[..<i8])-\(s[i8..<i12])-\(s[i12..<i16])-\(s[i16..<i20])-\(s[i20...])"
+    }
+
+    /// A5: Append child blocks to a parent block/page with optional position.
+    /// PATCH /v1/blocks/{id}/children — uses `position` per API 2026-03-11 (deprecated `after` is not sent).
+    public func appendBlocks(blockId: String, children: Data, position: AppendBlocksPosition = .end) async throws -> Data {
+        let cleanId = blockId.replacingOccurrences(of: "-", with: "")
+        let body = try Self.buildAppendBlocksRequestBody(children: children, position: position)
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await request(method: "PATCH", path: "/blocks/\(cleanId)/children", body: bodyData)
         guard (200...299).contains(response.statusCode) else {

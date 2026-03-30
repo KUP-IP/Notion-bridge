@@ -369,6 +369,38 @@ func runNotionModuleTests() async {
     }
 
     // ============================================================
+    // MARK: - Append block children body (API 2026-03-11)
+    // ============================================================
+
+    await test("buildAppendBlocksRequestBody end omits position and after") {
+        let children = "[{\"object\":\"block\",\"type\":\"paragraph\",\"paragraph\":{\"rich_text\":[]}}]".data(using: .utf8)!
+        let body = try NotionClient.buildAppendBlocksRequestBody(children: children, position: .end)
+        try expect(body["children"] != nil, "Expected children")
+        try expect(body["position"] == nil, "Expected no position for append-to-end")
+        try expect(body["after"] == nil, "Must not send deprecated after key")
+    }
+
+    await test("buildAppendBlocksRequestBody afterBlock uses position.after_block.id") {
+        let children = "[{\"object\":\"block\",\"type\":\"paragraph\",\"paragraph\":{\"rich_text\":[]}}]".data(using: .utf8)!
+        let rawAfter = "333cbb58889e8140aba3f4b29693b38f"
+        let body = try NotionClient.buildAppendBlocksRequestBody(children: children, position: .afterBlock(id: rawAfter))
+        try expect(body["after"] == nil, "Must not send deprecated after key")
+        guard let pos = body["position"] as? [String: Any] else {
+            throw TestError.assertion("Expected position dict")
+        }
+        try expect(pos["type"] as? String == "after_block", "Expected type after_block")
+        guard let ab = pos["after_block"] as? [String: Any] else {
+            throw TestError.assertion("Expected after_block object")
+        }
+        let id = ab["id"] as? String ?? ""
+        try expect(id.contains("-"), "Expected dashed UUID in id field")
+        try expect(
+            id.replacingOccurrences(of: "-", with: "").lowercased() == rawAfter.lowercased(),
+            "Normalized id should match 32-char input"
+        )
+    }
+
+    // ============================================================
     // MARK: - NotionClientError Tests
     // ============================================================
 

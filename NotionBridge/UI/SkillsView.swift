@@ -5,6 +5,7 @@
 // PKT-487: Clickable names, inline URL edit, reorder, sort alphabetically.
 
 import SwiftUI
+import Combine
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -23,6 +24,7 @@ struct SkillsView: View {
 
     @State private var newSkillName: String = ""
     @State private var newSkillPageId: String = ""
+    @State private var newSkillVisibility: SkillVisibility = .standard
     @State private var addError: String?
 
     // PKT-487: Inline URL editing state
@@ -94,6 +96,11 @@ struct SkillsView: View {
                 TextField("Notion Page ID or URL", text: $newSkillPageId)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
+                Picker("Visibility", selection: $newSkillVisibility) {
+                    Text("Standard (fetch only)").tag(SkillVisibility.standard)
+                    Text("Routing (discovery list)").tag(SkillVisibility.routing)
+                    Text("Admin only (same as standard for MCP list)").tag(SkillVisibility.adminOnly)
+                }
 
                 if let error = addError {
                     Text(error)
@@ -109,6 +116,12 @@ struct SkillsView: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear {
+            skillsManager.reloadFromUserDefaults()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .notionBridgeSkillsStorageDidChange)) { _ in
+            skillsManager.reloadFromUserDefaults()
+        }
     }
 
     // MARK: - Skill Row
@@ -165,6 +178,18 @@ struct SkillsView: View {
                         }
                 }
             }
+
+            Picker("", selection: Binding(
+                get: { skill.visibility },
+                set: { skillsManager.setVisibility(named: skill.name, to: $0) }
+            )) {
+                Text("standard").tag(SkillVisibility.standard)
+                Text("routing").tag(SkillVisibility.routing)
+                Text("adminOnly").tag(SkillVisibility.adminOnly)
+            }
+            .labelsHidden()
+            .frame(minWidth: 100)
+            .help("MCP visibility: routing appears in list_routing_skills")
 
             Spacer()
 
@@ -247,10 +272,11 @@ struct SkillsView: View {
 
         let cleanPageId = extractPageId(from: pageId)
 
-        let success = skillsManager.addSkill(name: name, notionPageId: cleanPageId)
+        let success = skillsManager.addSkill(name: name, notionPageId: cleanPageId, visibility: newSkillVisibility)
         if success {
             newSkillName = ""
             newSkillPageId = ""
+            newSkillVisibility = .standard
         } else {
             addError = "A skill with this name already exists."
         }

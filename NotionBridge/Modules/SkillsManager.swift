@@ -7,26 +7,68 @@
 import Foundation
 import Observation
 
+/// Posted after `com.notionbridge.skills` is written by MCP (`manage_skill`) so the Settings UI can reload.
+extension Notification.Name {
+    public static let notionBridgeSkillsStorageDidChange = Notification.Name("com.notionbridge.skillsStorageDidChange")
+}
+
+/// Visibility for MCP discovery vs fetch-only registry entries.
+public enum SkillVisibility: String, Codable, Sendable, CaseIterable, Equatable {
+    /// Listed by `list_routing_skills` when enabled (lightweight discovery).
+    case routing
+    /// Fetchable via `fetch_skill` only; omitted from routing list.
+    case standard
+    /// Same as standard for listing; still visible in Settings and `manage_skill list`.
+    case adminOnly
+}
+
 /// Manages the Skills configuration — named Notion pages that can be
 /// fetched at runtime via the `fetch_skill` MCP tool.
 ///
 /// Persistence: JSON-encoded array in UserDefaults under `com.notionbridge.skills`.
-/// Each skill has a unique name, a Notion page ID (URL), and an enabled flag.
+/// Each skill has a unique name, a Notion page ID (URL), enabled flag, and visibility.
 @MainActor
 @Observable
 public final class SkillsManager {
 
-    /// A single skill definition: name + Notion page ID + enabled flag.
+    /// A single skill definition: name + Notion page ID + enabled + visibility.
     public struct Skill: Codable, Identifiable, Sendable, Equatable {
         public var id: String { name }
         public var name: String
         public var notionPageId: String
         public var enabled: Bool
+        public var visibility: SkillVisibility
 
-        public init(name: String, notionPageId: String, enabled: Bool = true) {
+        enum CodingKeys: String, CodingKey {
+            case name, notionPageId, enabled, visibility
+        }
+
+        public init(
+            name: String,
+            notionPageId: String,
+            enabled: Bool = true,
+            visibility: SkillVisibility = .standard
+        ) {
             self.name = name
             self.notionPageId = notionPageId
             self.enabled = enabled
+            self.visibility = visibility
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            name = try c.decode(String.self, forKey: .name)
+            notionPageId = try c.decode(String.self, forKey: .notionPageId)
+            enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
+            visibility = try c.decodeIfPresent(SkillVisibility.self, forKey: .visibility) ?? .standard
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(name, forKey: .name)
+            try c.encode(notionPageId, forKey: .notionPageId)
+            try c.encode(enabled, forKey: .enabled)
+            try c.encode(visibility, forKey: .visibility)
         }
     }
 
@@ -35,14 +77,19 @@ public final class SkillsManager {
     /// PKT-485: Default skills restored after factory reset.
     /// Structural defaults with empty page IDs — configured during onboarding.
     public static let defaultSkills: [Skill] = [
-        Skill(name: "MAC AG", notionPageId: "", enabled: true),
-        Skill(name: "sk mac dev", notionPageId: "", enabled: true),
-        Skill(name: "sk executor", notionPageId: "", enabled: true),
+        Skill(name: "MAC AG", notionPageId: "", enabled: true, visibility: .standard),
+        Skill(name: "sk mac dev", notionPageId: "", enabled: true, visibility: .standard),
+        Skill(name: "sk executor", notionPageId: "", enabled: true, visibility: .standard),
     ]
 
     public private(set) var skills: [Skill] = []
 
     public init() {
+        load()
+    }
+
+    /// Reloads from `UserDefaults` (same key as MCP `manage_skill`). Use after external writes while the app stays open.
+    public func reloadFromUserDefaults() {
         load()
     }
 
@@ -56,7 +103,20 @@ public final class SkillsManager {
         guard !skills.contains(where: { $0.name.lowercased() == trimmed.lowercased() }) else {
             return false
         }
-        skills.append(Skill(name: trimmed, notionPageId: notionPageId))
+        skills.append(Skill(name: trimmed, notionPageId: notionPageId, visibility: .standard))
+        save()
+        return true
+    }
+
+    /// Add with explicit visibility (e.g. routing tier).
+    @discardableResult
+    public func addSkill(name: String, notionPageId: String, visibility: SkillVisibility) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        guard !skills.contains(where: { $0.name.lowercased() == trimmed.lowercased() }) else {
+            return false
+        }
+        skills.append(Skill(name: trimmed, notionPageId: notionPageId, visibility: visibility))
         save()
         return true
     }
@@ -85,6 +145,11 @@ public final class SkillsManager {
         skills.filter(\.enabled)
     }
 
+    /// Enabled skills marked `routing` with a non-empty page id (for `list_routing_skills`).
+    public var routingSkillsForDiscovery: [Skill] {
+        skills.filter { $0.enabled && $0.visibility == .routing && !$0.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
     // MARK: - Extended CRUD (PKT-477 Feature 3)
 
     /// Rename a skill. Returns false if name is empty, not unique, or not found.
@@ -106,6 +171,17 @@ public final class SkillsManager {
     public func updateSkillURL(named name: String, newPageId: String) -> Bool {
         if let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
             skills[idx].notionPageId = newPageId
+            save()
+            return true
+        }
+        return false
+    }
+
+    /// Set visibility tier. Returns false if not found.
+    @discardableResult
+    public func setVisibility(named name: String, to visibility: SkillVisibility) -> Bool {
+        if let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
+            skills[idx].visibility = visibility
             save()
             return true
         }

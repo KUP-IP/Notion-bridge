@@ -99,12 +99,15 @@ public enum NotionModule {
             name: "notion_page_read",
             module: moduleName,
             tier: .open,
-            description: "Read a Notion page's properties and optionally its child blocks. Returns {properties, blocks[]} with block types, content, and nesting. Set includeBlocks=false to fetch only properties.",
+            description: "Read a Notion page's properties and optionally child blocks (paginated). includeNested=false (default): direct children only, all pages. includeNested=true: depth-first nested blocks; optional maxBlocks (default 5000), maxDepth (default 10). Returns truncated if capped.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "pageId": .object(["type": .string("string"), "description": .string("Notion page ID (with or without dashes)")]),
                     "includeBlocks": .object(["type": .string("boolean"), "description": .string("Whether to also fetch child blocks (default: true)")]),
+                    "includeNested": .object(["type": .string("boolean"), "description": .string("Include nested block children (default false). When false, still paginates all direct children.")]),
+                    "maxBlocks": .object(["type": .string("number"), "description": .string("Max blocks to collect (default 5000)")]),
+                    "maxDepth": .object(["type": .string("number"), "description": .string("Max nesting depth when includeNested true (default 10)")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("pageId")])
@@ -117,6 +120,20 @@ public enum NotionModule {
                 let includeBlocks: Bool = {
                     if case .bool(let b) = args["includeBlocks"] { return b }
                     return true
+                }()
+                let includeNested: Bool = {
+                    if case .bool(let b) = args["includeNested"] { return b }
+                    return false
+                }()
+                let maxBlocks: Int = {
+                    if case .int(let n) = args["maxBlocks"], n > 0 { return n }
+                    if case .double(let d) = args["maxBlocks"], d > 0 { return Int(d) }
+                    return 5000
+                }()
+                let maxDepth: Int = {
+                    if case .int(let n) = args["maxDepth"], n > 0 { return n }
+                    if case .double(let d) = args["maxDepth"], d > 0 { return Int(d) }
+                    return 10
                 }()
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
@@ -144,35 +161,41 @@ public enum NotionModule {
                 ]
 
                 if includeBlocks {
-                    let blocksData = try await client.getBlocks(blockId: pageId)
-                    guard let blocksJSON = try? JSONSerialization.jsonObject(with: blocksData) as? [String: Any],
-                          let blockResults = blocksJSON["results"] as? [[String: Any]] else {
-                        result["blocks"] = .string("Failed to parse blocks")
-                        return .object(result)
-                    }
+                    do {
+                        let collected = try await client.collectBlocksDepthFirst(
+                            rootBlockId: pageId,
+                            includeNested: includeNested,
+                            maxBlocks: maxBlocks,
+                            maxDepth: maxDepth
+                        )
+                        let blockResults = collected.blocks
+                        let truncated = collected.truncated
+                        let truncReason = collected.truncationReason
 
-                    var blocks: [Value] = []
-                    for block in blockResults {
-                        let blockId = block["id"] as? String ?? ""
-                        let blockType = block["type"] as? String ?? ""
-                        let hasChildren = block["has_children"] as? Bool ?? false
+                        var blocks: [Value] = []
+                        for block in blockResults {
+                            let bid = block["id"] as? String ?? ""
+                            let blockType = block["type"] as? String ?? ""
+                            let hasChildren = block["has_children"] as? Bool ?? false
+                            let textContent = NotionJSON.extractPlainTextFromBlock(block)
 
-                        var textContent = ""
-                        if let typeData = block[blockType] as? [String: Any],
-                           let richText = typeData["rich_text"] as? [[String: Any]] {
-                            textContent = NotionJSON.extractPlainText(from: richText)
+                            blocks.append(.object([
+                                "id": .string(bid),
+                                "type": .string(blockType),
+                                "hasChildren": .bool(hasChildren),
+                                "text": .string(textContent)
+                            ]))
                         }
 
-                        blocks.append(.object([
-                            "id": .string(blockId),
-                            "type": .string(blockType),
-                            "hasChildren": .bool(hasChildren),
-                            "text": .string(textContent)
-                        ]))
+                        result["blocks"] = .array(blocks)
+                        result["blockCount"] = .int(blocks.count)
+                        result["truncated"] = .bool(truncated)
+                        if let r = truncReason {
+                            result["truncationReason"] = .string(r)
+                        }
+                    } catch {
+                        result["blocks"] = .string("Failed to fetch blocks: \(error.localizedDescription)")
                     }
-
-                    result["blocks"] = .array(blocks)
-                    result["blockCount"] = .int(blocks.count)
                 }
 
                 return .object(result)
@@ -373,11 +396,12 @@ public enum NotionModule {
         ))
 
         // MARK: 6. notion_blocks_append – notify (A5)
+        // After changing registration or behavior, reload NotionBridge (sk mac ops) so MCP clients list the updated tool.
         await router.register(ToolRegistration(
             name: "notion_blocks_append",
             module: moduleName,
             tier: .notify,
-            description: "Append child blocks to a Notion page or block. Pass children as a JSON string array of block objects. Use afterBlock to insert after a specific block ID. Returns the appended blocks.",
+            description: "Append child blocks to a Notion page or block. Pass children as a JSON string array of block objects. Use afterBlock to insert after a specific block ID (Notion API 2026-03-11 position). Returns success, blocksAppended, and results [{id, type}, ...].",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -399,22 +423,35 @@ public enum NotionModule {
                     return .object(["error": .string("Invalid JSON in 'children'")])
                 }
 
-                var position: [String: String]? = nil
-                if case .string(let afterId) = args["afterBlock"] {
-                    position = ["type": "after_block", "block_id": afterId]
-                }
+                let insertPosition: AppendBlocksPosition = {
+                    if case .string(let afterId) = args["afterBlock"], !afterId.isEmpty {
+                        return .afterBlock(id: afterId)
+                    }
+                    return .end
+                }()
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                let data = try await client.appendBlocks(blockId: blockId, children: childrenData, position: position)
+                let data = try await client.appendBlocks(blockId: blockId, children: childrenData, position: insertPosition)
 
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let results = json["results"] as? [[String: Any]] else {
                     return .object(["error": .string("Failed to parse append response")])
                 }
 
+                var resultItems: [Value] = []
+                for block in results {
+                    let bid = block["id"] as? String ?? ""
+                    let btype = block["type"] as? String ?? ""
+                    resultItems.append(.object([
+                        "id": .string(bid),
+                        "type": .string(btype)
+                    ]))
+                }
+
                 return .object([
                     "success": .bool(true),
-                    "blocksAppended": .int(results.count)
+                    "blocksAppended": .int(results.count),
+                    "results": .array(resultItems)
                 ])
             }
         ))

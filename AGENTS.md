@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **72 tools** across **15 modules** over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log.
+NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **73 tools** across **15 modules** over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log.
 
 Bundle ID: `kup.solutions.notion-bridge` (legacy: `solutions.kup.keepr`)
 
@@ -114,6 +114,14 @@ For `shell_exec`/`cli_exec` tools, commands matching `safeCommandPatterns` (read
 ### Module Registration Pattern
 
 Every module exposes a `static func register(on router: ToolRouter) async` method (some take additional parameters, e.g., `SessionModule.register(on:auditLog:)`). `ServerManager.setup()` calls all of them in sequence. Adding a new tool means adding a `ToolRegistration` inside the module's `register` method.
+
+### Skills MCP tools (`SkillsModule`)
+
+- **`list_routing_skills`** (`.open`) — Returns enabled skills with `visibility == routing` and a non-empty Notion page id. Host-agnostic discovery; does not fetch page bodies.
+- **`fetch_skill`** (`.open`) — Loads a configured skill page: paginates all direct children, optionally nested blocks (`includeNested`, default true), returns `truncated` / `truncationReason` when caps apply. Cached per name + options.
+- **`manage_skill`** (`.request`) — Full registry CRUD plus `set_visibility` (`routing` \| `standard` \| `adminOnly`). Not a secrecy boundary: approved calls still see all skills.
+
+`notion_page_read` uses the same block collection as skills: paginated siblings; optional nesting via `includeNested` (default false). Prefer `notion_page_markdown_read` for full prose when block structure is unnecessary.
 
 ### Notion Token Configuration
 
