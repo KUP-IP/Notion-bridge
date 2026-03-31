@@ -187,7 +187,7 @@ public actor ConnectionRegistry {
                 status: .notConfigured,
                 authType: "api_key",
                 maskedCredential: nil,
-                capabilities: ["payment_execute", "card_tokenization"],
+                capabilities: ["payment_execute", "card_tokenization", "stripe_product_read", "stripe_product_update", "stripe_price_read", "stripe_prices_list"],
                 summary: "Configure a Stripe API key to enable payment and tokenization flows"
             )
         }
@@ -201,7 +201,7 @@ public actor ConnectionRegistry {
                 status: .checking,
                 authType: "api_key",
                 maskedCredential: maskedCredential,
-                capabilities: ["payment_execute", "card_tokenization"],
+                capabilities: ["payment_execute", "card_tokenization", "stripe_product_read", "stripe_product_update", "stripe_price_read", "stripe_prices_list"],
                 summary: "Stripe API connection"
             )
         }
@@ -217,7 +217,7 @@ public actor ConnectionRegistry {
                 status: status,
                 authType: "api_key",
                 maskedCredential: maskedCredential,
-                capabilities: ["payment_execute", "card_tokenization"],
+                capabilities: ["payment_execute", "card_tokenization", "stripe_product_read", "stripe_product_update", "stripe_price_read", "stripe_prices_list"],
                 lastValidatedAt: formatter.string(from: Date()),
                 summary: account.email ?? account.id,
                 metadata: [
@@ -235,7 +235,7 @@ public actor ConnectionRegistry {
                 status: .disconnected,
                 authType: "api_key",
                 maskedCredential: maskedCredential,
-                capabilities: ["payment_execute", "card_tokenization"],
+                capabilities: ["payment_execute", "card_tokenization", "stripe_product_read", "stripe_product_update", "stripe_price_read", "stripe_prices_list"],
                 lastValidatedAt: formatter.string(from: Date()),
                 summary: error.localizedDescription
             )

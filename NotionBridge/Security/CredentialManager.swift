@@ -280,7 +280,25 @@ public final class CredentialManager: Sendable {
             throw CredentialError.keychainError(status)
         }
 
-        return try parseKeychainItem(item, includePassword: true)
+        do {
+            return try parseKeychainItem(item, includePassword: true)
+        } catch CredentialError.invalidType {
+            // Bridge: Allow reading KeychainManager infrastructure keys (com.notionbridge service)
+            let itemService = item[kSecAttrService as String] as? String ?? ""
+            guard itemService == "com.notionbridge" else { throw CredentialError.invalidType(itemService) }
+            let account = item[kSecAttrAccount as String] as? String ?? ""
+            var password: String? = nil
+            if let data = item[kSecValueData as String] as? Data {
+                password = String(data: data, encoding: .utf8)
+            }
+            let createdAt = item[kSecAttrCreationDate as String] as? Date
+            let modifiedAt = item[kSecAttrModificationDate as String] as? Date
+            return CredentialEntry(
+                service: itemService, account: account, type: .password,
+                metadata: .empty, password: password,
+                createdAt: createdAt, modifiedAt: modifiedAt
+            )
+        }
     }
 
     /// List credentials, optionally filtered by type.
@@ -309,10 +327,25 @@ public final class CredentialManager: Sendable {
         }
 
         // Filter to items with a valid CredentialType label.
-        // Excludes KeychainManager items which don't set kSecAttrLabel
-        // to a CredentialType value.
+        // Bridge: Also includes KeychainManager infrastructure items (com.notionbridge service)
+        // as password-type entries with metadata-only visibility (no secrets exposed).
         return items.compactMap { item in
-            try? parseKeychainItem(item, includePassword: false)
+            if let entry = try? parseKeychainItem(item, includePassword: false) {
+                return entry
+            }
+            // Fallback: surface com.notionbridge infrastructure keys as password-type entries
+            guard let service = item[kSecAttrService as String] as? String,
+                  service == "com.notionbridge",
+                  let account = item[kSecAttrAccount as String] as? String else {
+                return nil
+            }
+            let createdAt = item[kSecAttrCreationDate as String] as? Date
+            let modifiedAt = item[kSecAttrModificationDate as String] as? Date
+            return CredentialEntry(
+                service: service, account: account, type: .password,
+                metadata: .empty, password: nil,
+                createdAt: createdAt, modifiedAt: modifiedAt
+            )
         }
     }
 

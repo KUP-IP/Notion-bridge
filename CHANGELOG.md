@@ -1,9 +1,47 @@
 # Changelog
 
+## [1.5.5] — 2026-03-31
+
+### Added
+- **StripeModule** — 4 new Stripe catalog MCP tools (`stripe_product_read`, `stripe_product_update`, `stripe_price_read`, `stripe_prices_list`). Separate module from PaymentModule.
+- **StripeClient** — 4 new methods: `retrieveProduct`, `updateProduct`, `retrievePrice`, `listPrices`. Reuses existing `authorizedRequest` helper.
+- **StripeProduct** and **StripePrice** response structs for type-safe Stripe catalog data.
+- Stripe connection capabilities expanded: `stripe_product_read`, `stripe_product_update`, `stripe_price_read`, `stripe_prices_list`.
+
+### Fixed
+- **Credential namespace bridge** — `CredentialManager.read()` now returns infrastructure keys (service `com.notionbridge`) instead of throwing `invalidType`. Enables agents to access Stripe API key and other infrastructure credentials via `credential_read` MCP tool.
+- **Credential list visibility** — `CredentialManager.list()` now surfaces `com.notionbridge` infrastructure keys as metadata-only entries. No secrets exposed in list results.
+
 All notable changes to NotionBridge will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.5.4] — 2026-03-31
+
+### Fixed
+- **KI-07: notion_page_markdown_write HTTP 400** — Changed API request body format from `page_content` to `replace_content` to match Notion API 2026-03-11 spec. Full page markdown replacement now works correctly.
+
+### Added
+- **Parent field in notion_page_read** — Response now includes `parent` object from the Notion API, enabling data source ID resolution from any page without additional API calls.
+
+## [1.5.3] — 2026-03-30
+
+### Added
+- **Streamable HTTP tunnel compatibility** — When **Settings → Connections → Remote access** has a non-empty **tunnel URL** (`tunnelURL` in app storage), `POST /mcp` validation extends the default localhost-only **Origin** / **Host** allowlist to include that tunnel’s hostname (e.g. Cloudflare quick tunnels). The server still binds to **127.0.0.1** only; traffic must reach the app via a tunnel or reverse proxy to loopback. No `0.0.0.0` bind.
+- **Mandatory MCP bearer when tunnel is active** — If the tunnel URL **parses** (same condition as the extended allowlist) and **no** MCP bearer is configured, Streamable HTTP **`POST /mcp`** is rejected (**401**). When a bearer is set (**Keychain** `mcp_bearer_token`, with **`com.notionbridge.mcpBearerToken`** as legacy/migration read), clients must send **`Authorization: Bearer …`**. With an **empty** tunnel URL, bearer is optional (setting a token still enforces it for localhost clients).
+- **Remote access UI** — **MCP remote token** field (SecureField) with Generate / Copy / Clear when a tunnel URL is present; persists to Keychain + UserDefaults mirror.
+- **`MCPHTTPValidation`** — Shared builder for the Streamable HTTP `StandardValidationPipeline` used by session creation in `SSETransport`; exposes **`streamableHTTPBearerPhase()`** for tests and diagnostics.
+- **Tests** — `MCPHTTPValidationTests` for tunnel URL → host/origin allowlist parsing and bearer phase (remote missing token / bearer required / local optional).
+- **Operator doc** — `docs/operator/cloudflare-access-notion-bridge.md` (Cloudflare Access in front of the tunnel; no secrets).
+
+### Changed
+- **`SSETransport` `createSession`** — Uses `MCPHTTPValidation.streamableHTTPPipeline(ssePort:)` instead of only `OriginValidator.localhost()`.
+
+### Notes (distribution)
+- After **`make dmg`**, confirm **`make verify-sparkle-feed`** and that **`length`** / **`sparkle:edSignature`** in `appcast.xml` match the uploaded GitHub release asset (regenerate with **`make appcast`** if the DMG changed).
+- **Version / Sparkle** — Marketing **1.5.3**, build **10** (`Version.swift`, `Info.plist`). **`appcast.xml`** includes **1.5.3** (newest) plus prior **1.5.2** / **1.5.1** items. Upload **`notion-bridge-v1.5.3.dmg`** to the **v1.5.3** GitHub release so the enclosure URL resolves.
+- **Purchase download (kup.solutions)** — When publishing this build to paid fulfillment, set `workers/nb-fulfillment/wrangler.toml` **`DMG_OBJECT_KEY`** to **`notion-bridge-v1.5.3.dmg`** (or keep the prior filename if you intentionally reuse it), re-upload the object, then deploy the worker if needed.
 
 ## [1.5.2] — 2026-03-30
 
