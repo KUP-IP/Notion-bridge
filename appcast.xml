@@ -3,34 +3,14 @@
     <channel>
         <title>NotionBridge</title>
         <item>
-            <title>1.5.3</title>
-            <pubDate>Mon, 30 Mar 2026 18:24:45 -0500</pubDate>
+            <title>1.6.0</title>
+            <pubDate>Wed, 01 Apr 2026 08:40:55 -0500</pubDate>
             <link>https://github.com/KUP-IP/Notion-bridge/releases</link>
-            <sparkle:version>10</sparkle:version>
-            <sparkle:shortVersionString>1.5.3</sparkle:shortVersionString>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>1.6.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/KUP-IP/Notion-bridge/releases/download/v1.5.3/notion-bridge-v1.5.3.dmg" length="10389736" type="application/octet-stream" sparkle:edSignature="zWEZUY/eRqFdYvOu//yPndx/H+mnGMpUKO/CT4dcAOwAUd3ulrjQDKIom8H6z39ZGDQSrUWnKF2OqWi6gkEcDw=="/>
-        </item>
-        <item>
-            <title>1.5.2</title>
-            <pubDate>Mon, 30 Mar 2026 17:47:32 -0500</pubDate>
-            <link>https://github.com/KUP-IP/Notion-bridge/releases</link>
-            <sparkle:version>9</sparkle:version>
-            <sparkle:shortVersionString>1.5.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/KUP-IP/Notion-bridge/releases/download/v1.5.2/notion-bridge-v1.5.2.dmg" length="10384938" type="application/octet-stream" sparkle:edSignature="YAzJ2BlJV+WAOkFqR+hzRRXlM69QZqCYWyhEN7wbhcAJyMKW7lZVISLfm3+0ag2/91tFvHA0MbFz1BWNMmiTBw=="/>
-        </item>
-        <item>
-            <title>1.5.1</title>
-            <pubDate>Sun, 29 Mar 2026 14:07:12 -0500</pubDate>
-            <link>https://github.com/KUP-IP/Notion-bridge/releases</link>
-            <sparkle:version>7</sparkle:version>
-            <sparkle:shortVersionString>1.5.1</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
-            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/KUP-IP/Notion-bridge/releases/download/v1.5.1/notion-bridge-v1.5.1.dmg" length="10348802" type="application/octet-stream" sparkle:edSignature="dHelUX+INTwCiA7vp+HCU0plYSqNxAtaTjg7CgSa3RFRrqr8WVsJ4kXsoOGSDT2rUfrtWBCdYUCTyeIPUezTDA=="/>
+            <enclosure url="https://github.com/KUP-IP/Notion-bridge/releases/download/v1.6.0/notion-bridge-v1.6.0.dmg" length="10421770" type="application/octet-stream" sparkle:edSignature="jWrF6YPSH6Lr5VEUcWN1oNBfrmPg8u8LBvcnABeEmcMc57kRlSkc+zQTKqmYe9uH7JTt5ZBcKUXhjgzjvA2xBA=="/>
         </item>
     </channel>
 </rss>
