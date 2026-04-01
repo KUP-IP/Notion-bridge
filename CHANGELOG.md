@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.6.0] — 2026-03-31
+
+### Changed
+- **Stripe MCP Proxy architecture** — Replaced hardcoded `StripeModule` (4 tools) with `StripeMcpProxy` + `StripeMcpModule`. Tools are now discovered dynamically from Stripe's remote MCP server (`mcp.stripe.com`) at registration time via HTTP `initialize` + `tools/list`. All discovered tools are registered with SecurityGate tiering (read → 🟢, write → 🟡, delete → 🔴).
+- **StripeClient cleaned** — Removed `StripeProduct`, `StripePrice` structs and 6 catalog methods (`retrieveProduct`, `updateProduct`, `retrievePrice`, `listPrices`, `parseProduct`, `parsePrice`). Retained payment intent and account info methods only.
+- **ConnectionRegistry** — Stripe capabilities updated from hardcoded catalog tool names to `["payment_execute", "card_tokenization", "stripe_mcp_proxy"]`.
+- **ServerManager** — Registration call updated from `StripeModule.register` to `StripeMcpModule.register`.
+
+### Removed
+- **StripeModule.swift** — Replaced by `StripeMcpModule.swift` (dynamic proxy registration).
+
+### Added
+- **StripeMcpProxy.swift** — HTTP transport client for Stripe MCP server. Handles `initialize`, `tools/list`, and `tools/call` JSON-RPC methods. Bearer auth via Stripe API key from Keychain. Includes retry logic, timeout handling, and structured error responses.
+- **StripeMcpModule.swift** — Registers proxy-discovered tools with the MCP tool router. Maps Stripe tool input schemas to SecurityGate tiers. Passes tool calls through to `StripeMcpProxy.callTool()` at runtime.
+
+### Notes
+- Tool count is now dynamic — base 72 NotionBridge tools + N Stripe MCP tools discovered at startup.
+- Version: marketing **1.6.0**, build **13** (`Version.swift`, `Info.plist`).
+
 ## [1.5.5] — 2026-03-31
 
 ### Added

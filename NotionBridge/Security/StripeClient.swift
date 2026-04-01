@@ -32,57 +32,6 @@ public struct StripeAccountInfo: Sendable, Equatable {
     }
 }
 
-
-public struct StripeProduct: Sendable, Equatable {
-    public let id: String
-    public let name: String
-    public let description: String?
-    public let active: Bool
-    public let metadata: [String: String]
-    public let marketingFeatures: [[String: String]]
-    public let defaultPrice: String?
-    public let created: Int
-    public let updated: Int
-
-    public init(id: String, name: String, description: String?, active: Bool,
-                metadata: [String: String], marketingFeatures: [[String: String]],
-                defaultPrice: String?, created: Int, updated: Int) {
-        self.id = id
-        self.name = name
-        self.description = description
-        self.active = active
-        self.metadata = metadata
-        self.marketingFeatures = marketingFeatures
-        self.defaultPrice = defaultPrice
-        self.created = created
-        self.updated = updated
-    }
-}
-
-public struct StripePrice: Sendable, Equatable {
-    public let id: String
-    public let product: String
-    public let active: Bool
-    public let currency: String
-    public let unitAmount: Int?
-    public let type: String
-    public let recurring: [String: String]?
-    public let nickname: String?
-
-    public init(id: String, product: String, active: Bool, currency: String,
-                unitAmount: Int?, type: String, recurring: [String: String]?,
-                nickname: String?) {
-        self.id = id
-        self.product = product
-        self.active = active
-        self.currency = currency
-        self.unitAmount = unitAmount
-        self.type = type
-        self.recurring = recurring
-        self.nickname = nickname
-    }
-}
-
 public final class StripeClient: @unchecked Sendable {
     public static let shared = StripeClient()
 
@@ -171,76 +120,6 @@ public final class StripeClient: @unchecked Sendable {
             country: json["country"] as? String,
             chargesEnabled: json["charges_enabled"] as? Bool ?? false
         )
-    }
-
-
-    // MARK: - Product Catalog
-
-    public func retrieveProduct(id: String) async throws -> StripeProduct {
-        let request = try authorizedRequest(method: "GET", endpoint: "products/\(id)")
-        let data = try await performRequest(request)
-        return try Self.parseProduct(data: data)
-    }
-
-    public func updateProduct(
-        id: String,
-        name: String? = nil,
-        description: String? = nil,
-        metadata: [String: String]? = nil,
-        marketingFeatures: [[String: String]]? = nil,
-        active: Bool? = nil
-    ) async throws -> StripeProduct {
-        var formFields: [String: String] = [:]
-        if let name, !name.isEmpty { formFields["name"] = name }
-        if let description { formFields["description"] = description }
-        if let active { formFields["active"] = active ? "true" : "false" }
-        if let metadata {
-            for (key, value) in metadata {
-                formFields["metadata[\(key)]"] = value
-            }
-        }
-        if let marketingFeatures {
-            for (index, feature) in marketingFeatures.enumerated() {
-                for (key, value) in feature {
-                    formFields["marketing_features[\(index)][\(key)]"] = value
-                }
-            }
-        }
-
-        let bodyString = Self.formURLEncoded(formFields)
-        var request = try authorizedRequest(method: "POST", endpoint: "products/\(id)")
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = bodyString.data(using: .utf8)
-        let data = try await performRequest(request)
-        return try Self.parseProduct(data: data)
-    }
-
-    public func retrievePrice(id: String) async throws -> StripePrice {
-        let request = try authorizedRequest(method: "GET", endpoint: "prices/\(id)")
-        let data = try await performRequest(request)
-        return try Self.parsePrice(data: data)
-    }
-
-    public func listPrices(
-        productId: String? = nil,
-        active: Bool? = nil,
-        limit: Int = 10
-    ) async throws -> [StripePrice] {
-        var queryItems: [String] = ["limit=\(min(limit, 100))"]
-        if let productId { queryItems.append("product=\(productId)") }
-        if let active { queryItems.append("active=\(active ? "true" : "false")") }
-        let queryString = queryItems.joined(separator: "&")
-        let request = try authorizedRequest(method: "GET", endpoint: "prices?\(queryString)")
-        let data = try await performRequest(request)
-
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataArray = json["data"] as? [[String: Any]] else {
-            throw StripeError.invalidResponse
-        }
-        return try dataArray.map { item in
-            let itemData = try JSONSerialization.data(withJSONObject: item)
-            return try Self.parsePrice(data: itemData)
-        }
     }
 
     private func executePaymentIntentRequest(_ request: URLRequest) async throws -> PaymentIntentResult {
@@ -332,65 +211,6 @@ public final class StripeClient: @unchecked Sendable {
             currency: currency,
             status: status,
             created: created
-        )
-    }
-
-
-    public static func parseProduct(data: Data) throws -> StripeProduct {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = json["id"] as? String,
-              let name = json["name"] as? String else {
-            throw StripeError.invalidResponse
-        }
-        let metadata = json["metadata"] as? [String: String] ?? [:]
-        let rawFeatures = json["marketing_features"] as? [[String: Any]] ?? []
-        let marketingFeatures: [[String: String]] = rawFeatures.map { feature in
-            var result: [String: String] = [:]
-            if let name = feature["name"] as? String { result["name"] = name }
-            return result
-        }
-        return StripeProduct(
-            id: id,
-            name: name,
-            description: json["description"] as? String,
-            active: json["active"] as? Bool ?? true,
-            metadata: metadata,
-            marketingFeatures: marketingFeatures,
-            defaultPrice: json["default_price"] as? String,
-            created: json["created"] as? Int ?? 0,
-            updated: json["updated"] as? Int ?? 0
-        )
-    }
-
-    public static func parsePrice(data: Data) throws -> StripePrice {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = json["id"] as? String else {
-            throw StripeError.invalidResponse
-        }
-        let product: String
-        if let p = json["product"] as? String {
-            product = p
-        } else if let pObj = json["product"] as? [String: Any], let pId = pObj["id"] as? String {
-            product = pId
-        } else {
-            product = ""
-        }
-        let recurring: [String: String]? = {
-            guard let r = json["recurring"] as? [String: Any] else { return nil }
-            var result: [String: String] = [:]
-            if let interval = r["interval"] as? String { result["interval"] = interval }
-            if let count = r["interval_count"] as? Int { result["interval_count"] = String(count) }
-            return result.isEmpty ? nil : result
-        }()
-        return StripePrice(
-            id: id,
-            product: product,
-            active: json["active"] as? Bool ?? true,
-            currency: json["currency"] as? String ?? "usd",
-            unitAmount: json["unit_amount"] as? Int,
-            type: json["type"] as? String ?? "one_time",
-            recurring: recurring,
-            nickname: json["nickname"] as? String
         )
     }
 

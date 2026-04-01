@@ -141,3 +141,12 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 **Resolution:** Added StripeModule (4 tools: `stripe_product_read`, `stripe_product_update`, `stripe_price_read`, `stripe_prices_list`). Added credential namespace bridge for `com.notionbridge` service in `CredentialManager.read()` and `list()`. Tool count: 73 → 77.
 
 **Impact:** Eliminates Stripe dashboard context-switching for all catalog operations. Every NotionBridge customer selling via Stripe benefits.
+
+### 2026-03-31 | Agent: MAC Keepr | Session: stripe-mcp-proxy-sprint
+
+**Category:** Enhancement
+**Tool:** StripeMcpProxy (new), StripeMcpModule (new)
+**Severity:** N/A (feature delivery)
+**Description:** Replaced hardcoded StripeModule (4 static tools) with dynamic MCP proxy architecture. StripeMcpProxy discovers tools from Stripe's remote MCP server at registration time, StripeMcpModule registers them with SecurityGate. StripeClient cleaned to payment-only. Tool count is now dynamic rather than hardcoded.
+**Context:** Production sprint to migrate from static Stripe tool catalog to dynamic MCP proxy pattern. Enables automatic adoption of new Stripe MCP tools without code changes.
+**Suggested Fix:** N/A — delivered as designed.
