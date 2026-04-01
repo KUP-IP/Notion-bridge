@@ -128,6 +128,8 @@ public final class KeychainManager: Sendable {
     public enum Key {
         public static let notionAPIToken = "notion_api_token"
         public static let stripeAPIKey = "stripe_api_key"
+        /// Bearer secret for `POST /mcp` when remote tunnel URL is configured (Streamable HTTP).
+        public static let mcpBearerToken = "mcp_bearer_token"
     }
 
     /// List all keys stored under this service.

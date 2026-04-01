@@ -34,6 +34,7 @@ struct NotionBridgeApp: App {
         MenuBarExtra {
             DashboardView(
                 statusBar: appDelegate.statusBar,
+                permissionManager: appDelegate.permissionManager,
                 onOpenSettings: {
                     appDelegate.openSettings()
                 }

@@ -1,0 +1,65 @@
+# Cloudflare Zero Trust Access in front of NotionBridge (tunnel)
+
+This runbook is for **operators** who expose NotionBridge’s Streamable HTTP endpoint through an HTTPS tunnel (for example Cloudflare Tunnel to `127.0.0.1`). It contains **no secrets** — generate tokens and policies only in the Cloudflare dashboard or your identity provider.
+
+## Why use Access
+
+NotionBridge listens on **loopback** only; a tunnel publishes a public hostname. **Cloudflare Access** adds an identity layer at the edge so arbitrary internet clients cannot reach your tunnel origin without meeting your policy.
+
+Use Access **together with** the app’s **mandatory MCP bearer** when a tunnel URL is configured (see [SECURITY.md](../../SECURITY.md) and the in-app **Remote access** settings).
+
+## Prerequisites
+
+- A Cloudflare account and a **hostname** routed through Cloudflare (tunnel or proxied DNS).
+- NotionBridge **tunnel URL** set to that HTTPS base URL, and an **MCP remote token** generated in the app.
+
+## 1. Create an Access application
+
+1. In the Cloudflare dashboard, open **Zero Trust** → **Access** → **Applications**.
+2. **Add an application** → **Self-hosted** (or the template that matches your hostname).
+3. Set the **application domain** to the same host you use in NotionBridge’s tunnel URL (for example `bridge.example.com` or a `*.trycloudflare.com` hostname if applicable to your setup).
+4. Configure a **default deny** posture: only identities or **non-identity** rules you add should grant access.
+
+Official reference: [Cloudflare Access documentation](https://developers.cloudflare.com/cloudflare-one/policies/access/).
+
+## 2. Choose how Cursor (or the MCP client) authenticates
+
+Access supports several patterns. Pick one that matches your client:
+
+- **Service token (recommended for automation)** — Cloudflare issues a **client ID** and **client secret** used as HTTP headers on each request. Suitable when the MCP client lets you set **custom headers** for the remote URL.
+- **Identity / SSO** — Users sign in through your IdP; the browser or client must complete the Access login flow. Viability depends on whether your MCP runtime supports interactive auth or stored cookies.
+
+Document your choice in your internal wiki; rotate service tokens on the same schedule as other machine credentials.
+
+## 3. Headers for service tokens
+
+When using a **service token**, Cloudflare expects (names may vary slightly by dashboard version):
+
+- `CF-Access-Client-Id: <client id>`
+- `CF-Access-Client-Secret: <client secret>`
+
+Create the service token under **Zero Trust** → **Access** → **Service auth** (or **Service tokens**). See [Service tokens](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/).
+
+## 4. Cursor MCP headers
+
+In Cursor, configure the **remote MCP** URL to your tunnel’s **`POST /mcp`** endpoint (as documented in the product README). Add headers:
+
+1. **Cloudflare Access** — `CF-Access-Client-Id` and `CF-Access-Client-Secret` if you use a service token (see above).
+2. **NotionBridge** — `Authorization: Bearer <token>` using the **MCP remote token** from NotionBridge **Settings → Connections → Remote access**.
+
+If a client cannot send custom headers, you cannot combine that client with both Access service-token auth and NotionBridge bearer in the intended way; use a client that supports headers or adjust edge policy with your security team.
+
+## 5. Verification
+
+- With tunnel URL set and **no** MCP token in the app, **`initialize`** over Streamable HTTP should **fail** (HTTP **401** from NotionBridge).
+- After setting the token in the app and matching **`Authorization`** in the client (plus Access headers if used), **`initialize`** should **succeed**.
+
+## 6. Health endpoint
+
+`GET /health` is informational and is **not** gated by this app release. If you need it private, protect it with Access path rules or a separate hostname.
+
+## Related links
+
+- [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/)
+- [Access policies](https://developers.cloudflare.com/cloudflare-one/policies/access/)
+- NotionBridge [SECURITY.md](../../SECURITY.md)

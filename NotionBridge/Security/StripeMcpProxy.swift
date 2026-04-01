@@ -219,6 +219,10 @@ public actor StripeMcpProxy {
         case .double(let d): return d
         case .bool(let b): return b
         case .null: return NSNull()
+        case .data(let mimeType, let data):
+            var dict: [String: Any] = ["base64": data.base64EncodedString()]
+            if let mimeType { dict["mimeType"] = mimeType }
+            return dict
         case .array(let arr): return arr.map { valueToFoundation($0) }
         case .object(let obj): return obj.mapValues { valueToFoundation($0) }
         @unknown default: return NSNull()

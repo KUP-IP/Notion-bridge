@@ -1,0 +1,6 @@
+Use the notion-bridge MCP server. Organize my Desktop safely:
+
+1) file_list path to my Desktop (absolute path, non-recursive).
+2) dir_create "$HOME/Desktop/Organized" if it does not exist (use absolute path).
+3) Move loose FILES only (skip .app bundles, directories, and dotfiles) into "$HOME/Desktop/Organized/inbox-YYYY-MM-DD" using file_move; create the dated folder first with dir_create.
+4) Return a concise summary of paths moved.

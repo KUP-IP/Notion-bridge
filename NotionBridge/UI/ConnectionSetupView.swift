@@ -2,6 +2,8 @@
 // Notion Bridge v1: Minimal tunnel status display with provider selection
 // PKT-329: V1-14b Connection Setup UI
 
+import AppKit
+import Security
 import SwiftUI
 
 // MARK: - Tunnel Provider
@@ -40,6 +42,8 @@ public struct ConnectionSetupView: View {
     @AppStorage("tunnelProvider") private var selectedProvider: String = TunnelProvider.cloudflare.rawValue
     @AppStorage("tunnelURL") private var tunnelURL: String = ""
     @State private var isExpanded: Bool = false
+    @State private var mcpBearerToken: String = ""
+    @State private var saveBearerTask: Task<Void, Never>?
 
     /// SSE port resolution: config.json -> env var -> default.
     private var ssePort: Int {
@@ -126,6 +130,11 @@ public struct ConnectionSetupView: View {
                     .font(.caption)
             }
 
+            if !tunnelURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Divider()
+                mcpBearerSection
+            }
+
             // Help text
             if activeProvider == .cloudflare {
                 Text(verbatim: "Run in Terminal: cloudflared tunnel --url http://localhost:\(ssePort)")
@@ -144,6 +153,81 @@ public struct ConnectionSetupView: View {
             }
         }
         .padding(.top, 4)
+        .onAppear {
+            refreshMCPBearerFromStorage()
+        }
+        .onChange(of: tunnelURL) { _, _ in
+            refreshMCPBearerFromStorage()
+        }
+    }
+
+    // MARK: - MCP remote bearer (Streamable HTTP POST /mcp)
+
+    private var mcpBearerSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("MCP REMOTE TOKEN")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+            Text("Required while a tunnel URL is set. In Cursor (or your MCP client), add a header: Authorization: Bearer <token>.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                SecureField("Bearer token", text: $mcpBearerToken)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .onChange(of: mcpBearerToken) { _, newValue in
+                        schedulePersistMCPBearer(newValue)
+                    }
+                Button("Generate") {
+                    let token = Self.makeRandomBearerToken()
+                    mcpBearerToken = token
+                    persistMCPBearerImmediate(token)
+                }
+                .controlSize(.small)
+                Button("Copy") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(mcpBearerToken, forType: .string)
+                }
+                .controlSize(.small)
+                .disabled(mcpBearerToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Clear") {
+                    mcpBearerToken = ""
+                    persistMCPBearerImmediate("")
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func refreshMCPBearerFromStorage() {
+        mcpBearerToken = MCPHTTPValidation.resolveMCPBearerToken()
+    }
+
+    private func schedulePersistMCPBearer(_ value: String) {
+        saveBearerTask?.cancel()
+        saveBearerTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            guard !Task.isCancelled else { return }
+            persistMCPBearerImmediate(value)
+        }
+    }
+
+    private func persistMCPBearerImmediate(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            _ = KeychainManager.shared.delete(key: KeychainManager.Key.mcpBearerToken)
+            UserDefaults.standard.removeObject(forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey)
+        } else {
+            _ = KeychainManager.shared.save(key: KeychainManager.Key.mcpBearerToken, value: trimmed)
+            UserDefaults.standard.set(trimmed, forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey)
+        }
+    }
+
+    private static func makeRandomBearerToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let st = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        precondition(st == errSecSuccess, "SecRandomCopyBytes failed: \(st)")
+        return Data(bytes).base64EncodedString()
     }
 
     // MARK: - Provider Row

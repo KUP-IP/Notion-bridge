@@ -21,6 +21,7 @@
 //   - Full Disk Access: Probe Messages chat.db readability — no direct API
 //   - Automation: Probe via NSAppleScript to each target app — no direct API
 //   - Contacts: CNContactStore.authorizationStatus(for:) — direct API
+//     (.limited = user chose “Selected Contacts…”; counts as granted for UI/tools)
 //
 // Warning: macOS 15+ (Sequoia): Screen Recording permission expires weekly.
 // Apple enforces a 7-day re-authorization window for Screen Recording.
@@ -37,16 +38,25 @@ import Contacts
 import UserNotifications
 
 /// Detects TCC (Transparency, Consent, and Control) grant status
-/// for all 5 required macOS permissions.
+/// for all six macOS permissions surfaced in Settings (v1 grants).
 @MainActor
 @Observable
 public final class PermissionManager {
 
     public init() {}
 
+    /// True when Contacts allows reads: full access (`.authorized`) or user-selected subset (`.limited`).
+    public nonisolated static func isContactsAuthorizationSufficient(_ status: CNAuthorizationStatus) -> Bool {
+        switch status {
+        case .authorized, .limited: return true
+        case .notDetermined, .denied, .restricted: return false
+        @unknown default: return false
+        }
+    }
+
     // MARK: - Types
 
-    /// The 5 TCC grants required by NotionBridge.
+    /// The six TCC-related grants surfaced in Settings and the menu bar Dashboard.
     public enum Grant: String, CaseIterable, Identifiable, Sendable {
         case accessibility
         case screenRecording
@@ -653,23 +663,24 @@ public final class PermissionManager {
     }
 
     /// Contacts: CNContactStore.authorizationStatus(for:) — direct API.
-    /// Returns .granted, .denied, or .unknown based on authorization state.
+    /// Maps `.authorized` and `.limited` to `.granted` (limited = user picked specific contacts).
     public func checkContacts() {
         let authStatus = CNContactStore.authorizationStatus(for: .contacts)
-        switch authStatus {
-        case .authorized:
+        if Self.isContactsAuthorizationSufficient(authStatus) {
             contactsStatus = .granted
-        case .denied, .restricted:
-            contactsStatus = .denied
-        case .notDetermined, .limited:
-            contactsStatus = .unknown
-        @unknown default:
-            contactsStatus = .unknown
+        } else {
+            switch authStatus {
+            case .denied, .restricted:
+                contactsStatus = .denied
+            default:
+                contactsStatus = .unknown
+            }
         }
         contactsEvidence = .init(
             source: "CNContactStore.authorizationStatus(for: .contacts)",
             observed: "status=\(String(describing: authStatus))",
-            detail: "Contacts status comes directly from Contacts framework authorization API.",
+            detail:
+                "authorized/limited both allow contact reads; limited means the user chose Selected Contacts.",
             checkedAt: Date()
         )
     }
@@ -678,9 +689,13 @@ public final class PermissionManager {
     /// Call before opening System Settings so the app appears in the Contacts panel.
     /// PKT-346 D2: Added to support permission triggering on Grant tap.
     public func requestContactsAccess() async -> Bool {
-        let store = CNContactStore()
+        await MainActor.run {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
         do {
-            let granted = try await store.requestAccess(for: .contacts)
+            let granted = try await Task { @MainActor in
+                try await CNContactStore().requestAccess(for: .contacts)
+            }.value
             contactsStatus = granted ? .granted : .denied
             contactsEvidence = .init(
                 source: "CNContactStore.requestAccess(for: .contacts)",
@@ -877,16 +892,23 @@ public final class PermissionManager {
         return await withCheckedContinuation { continuation in
             // Thread-safe one-shot guard — ensures continuation is resumed exactly once
             // even if both the timeout and the probe complete near-simultaneously.
-            let resumed = NSLock()
-            var didResume = false
+            final class ResumeOnce: @unchecked Sendable {
+                private let lock = NSLock()
+                private var didResume = false
+                func tryResume() -> Bool {
+                    lock.lock()
+                    defer { lock.unlock() }
+                    if didResume { return false }
+                    didResume = true
+                    return true
+                }
+            }
+            let resumeOnce = ResumeOnce()
 
             // Safety timeout: 10s per probe (guards against main-thread deadlock
             // or target app hang). Returns false (denied) on timeout.
             DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
-                resumed.lock()
-                defer { resumed.unlock() }
-                guard !didResume else { return }
-                didResume = true
+                guard resumeOnce.tryResume() else { return }
                 continuation.resume(returning: false)
             }
 
@@ -900,10 +922,7 @@ public final class PermissionManager {
                 var errorInfo: NSDictionary?
                 let _ = appleScript?.executeAndReturnError(&errorInfo)
 
-                resumed.lock()
-                defer { resumed.unlock() }
-                guard !didResume else { return }
-                didResume = true
+                guard resumeOnce.tryResume() else { return }
 
                 if errorInfo != nil {
                     continuation.resume(returning: false)

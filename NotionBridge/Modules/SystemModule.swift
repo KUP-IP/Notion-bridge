@@ -4,6 +4,7 @@
 // Three tools: system_info (open), process_list (open), notify (open).
 // Uses sw_vers, sysctl, ps, and UserNotifications for macOS integration.
 
+import AppKit
 import Foundation
 import MCP
 import UserNotifications
@@ -259,24 +260,30 @@ public enum SystemModule {
                     return ["name"]
                 }()
 
-                let store = CNContactStore()
-
-                // Check authorization
+                // Check authorization. TCC prompt for Contacts only appears when requestAccess
+                // runs on the main actor with the app activated — MCP tool handlers may be off-main.
                 let status = CNContactStore.authorizationStatus(for: .contacts)
                 if status == .notDetermined {
-                    // Request access (blocks until user responds to TCC prompt)
+                    await MainActor.run {
+                        NSApplication.shared.activate(ignoringOtherApps: true)
+                    }
                     let granted: Bool
                     do {
-                        granted = try await store.requestAccess(for: .contacts)
+                        // Fresh store on MainActor only — avoids Sendable cross-actor capture issues.
+                        granted = try await Task { @MainActor in
+                            try await CNContactStore().requestAccess(for: .contacts)
+                        }.value
                     } catch {
                         return .object(["error": .string("Contacts access request failed: \(error.localizedDescription)")])
                     }
                     if !granted {
                         return .object(["error": .string("Contacts access denied. Enable in System Settings > Privacy & Security > Contacts.")])
                     }
-                } else if status != .authorized {
+                } else if !PermissionManager.isContactsAuthorizationSufficient(status) {
                     return .object(["error": .string("Contacts access not granted (status: \(status.rawValue)). Enable in System Settings > Privacy & Security > Contacts.")])
                 }
+
+                let store = CNContactStore()
 
                 // Keys to fetch
                 let keysToFetch: [CNKeyDescriptor] = [

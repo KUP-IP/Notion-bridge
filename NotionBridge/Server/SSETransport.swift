@@ -142,6 +142,12 @@ public actor SSEServer {
         self.onClientDisconnected = onClientDisconnected
     }
 
+    /// PKT-366 F13: Bridge NIO thread to MainActor disconnect UI callback without redundant `await` on stored closure.
+    private func notifyClientDisconnected(_ name: String) async {
+        let callback = onClientDisconnected
+        await MainActor.run { callback(name) }
+    }
+
     // MARK: - Lifecycle
 
     /// Start accepting SSE connections. Blocks until the channel is closed.
@@ -156,9 +162,7 @@ public actor SSEServer {
 
         // PKT-366 F13: Capture disconnect callback for NIO handler
         let onDisconnect: @Sendable (String) async -> Void = { [weak self] name in
-            guard let self else { return }
-            let callback = await self.onClientDisconnected
-            await MainActor.run { callback(name) }
+            await self?.notifyClientDisconnected(name)
         }
 
         let rpcHandler: @Sendable (Data) async -> Data? = { [weak self] data in
@@ -303,13 +307,7 @@ public actor SSEServer {
             clientVersion = clientInfo["version"] as? String
         }
 
-        let validationPipeline = StandardValidationPipeline(validators: [
-            OriginValidator.localhost(),
-            AcceptHeaderValidator(mode: .sseRequired),
-            ContentTypeValidator(),
-            ProtocolVersionValidator(),
-            SessionValidator(),
-        ])
+        let validationPipeline = MCPHTTPValidation.streamableHTTPPipeline(ssePort: port)
 
         let transport = StatefulHTTPServerTransport(
             sessionIDGenerator: FixedIDGenerator(id: sessionID),

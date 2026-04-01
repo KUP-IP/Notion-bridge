@@ -5,22 +5,26 @@
 // PKT-354: Added Screen Recording permission indicator (green/red).
 // PKT-366 F12: Full TCC permissions display (Accessibility, Screen Recording,
 //   Notifications, Contacts, Full Disk Access).
-// Previous history: PKT-317, PKT-329, PKT-320, PKT-341, PKT-342, PKT-346
+// Dashboard TCC rows use the same PermissionManager probes as Settings (single source of truth).
 
 import SwiftUI
 import AppKit
-import UserNotifications
-import Contacts
 
 /// Status popover for the menu bar app.
 /// Shows server status (primary), connected clients (secondary), permissions, and stats.
 /// Styled with BridgeTheme. Liquid Glass chrome provided automatically by macOS 26 SDK.
 public struct DashboardView: View {
     let statusBar: StatusBarController
+    let permissionManager: PermissionManager
     let onOpenSettings: () -> Void
 
-    public init(statusBar: StatusBarController, onOpenSettings: @escaping () -> Void) {
+    public init(
+        statusBar: StatusBarController,
+        permissionManager: PermissionManager,
+        onOpenSettings: @escaping () -> Void
+    ) {
         self.statusBar = statusBar
+        self.permissionManager = permissionManager
         self.onOpenSettings = onOpenSettings
     }
 
@@ -28,15 +32,6 @@ public struct DashboardView: View {
     private var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? AppVersion.marketing
     }
-
-    // MARK: - TCC Permission States (F12)
-
-    @State private var accessibilityGranted: Bool = false
-    @State private var screenRecordingGranted: Bool = false
-    @State private var notificationsGranted: Bool = false
-    @State private var contactsGranted: Bool = false
-    @State private var fullDiskAccessGranted: Bool = false
-    @State private var automationGranted: Bool = false
 
     public var body: some View {
         VStack(alignment: .leading, spacing: BridgeSpacing.xs) {
@@ -49,51 +44,9 @@ public struct DashboardView: View {
         }
         .frame(minWidth: 260, maxWidth: 320)
         .padding(.vertical, BridgeSpacing.xs)
-        .onAppear {
-            refreshPermissions()
+        .task {
+            await permissionManager.checkAllAsync()
         }
-    }
-
-    /// Query all TCC permission states (F12).
-    private func refreshPermissions() {
-        accessibilityGranted = AXIsProcessTrusted()
-        screenRecordingGranted = CGPreflightScreenCaptureAccess()
-        fullDiskAccessGranted = checkFullDiskAccess()
-        contactsGranted = CNContactStore.authorizationStatus(for: .contacts) == .authorized
-        Task {
-            let settings = await UNUserNotificationCenter.current().notificationSettings()
-            let automationResult = await checkAutomationAccess()
-            await MainActor.run {
-                notificationsGranted = settings.authorizationStatus == .authorized
-                automationGranted = automationResult
-            }
-        }
-    }
-
-    /// Full Disk Access probe: attempt to read a TCC-protected path.
-    /// If readable, FDA is granted. If permission denied, it's not.
-    private func checkFullDiskAccess() -> Bool {
-        let protectedPath = "/Library/Application Support/com.apple.TCC/TCC.db"
-        return FileManager.default.isReadableFile(atPath: protectedPath)
-    }
-
-    /// Automation probe: test if System Events responds to Apple Events.
-    /// Uses Process-based osascript to avoid main-thread blocking.
-    private func checkAutomationAccess() async -> Bool {
-        await Task.detached {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", "tell application \"System Events\" to return name of first process whose frontmost is true"]
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            do {
-                try process.run()
-                process.waitUntilExit()
-                return process.terminationStatus == 0
-            } catch {
-                return false
-            }
-        }.value
     }
 
     // MARK: - Header
@@ -177,7 +130,7 @@ public struct DashboardView: View {
         .bridgeRow()
     }
 
-    // MARK: - Permissions (F12: Full TCC Display)
+    // MARK: - Permissions (F12 — aligned with PermissionManager / Settings)
 
     private var permissionsSection: some View {
         VStack(alignment: .leading, spacing: BridgeSpacing.xs) {
@@ -186,29 +139,44 @@ public struct DashboardView: View {
                 .fontWeight(.medium)
                 .foregroundStyle(BridgeColors.primary)
 
-            permissionRow("Accessibility", granted: accessibilityGranted)
-            permissionRow("Screen Recording", granted: screenRecordingGranted)
-            permissionRow("Notifications", granted: notificationsGranted)
-            permissionRow("Contacts", granted: contactsGranted)
-            permissionRow("Full Disk Access", granted: fullDiskAccessGranted)
-            permissionRow("Automation", granted: automationGranted)
+            ForEach(PermissionManager.Grant.v1Cases) { grant in
+                permissionRow(grant: grant)
+            }
         }
         .bridgeRow()
     }
 
-    /// Single permission status row with dot indicator and granted/denied label (F12).
-    private func permissionRow(_ name: String, granted: Bool) -> some View {
-        HStack(spacing: BridgeSpacing.xs) {
+    private func permissionRow(grant: PermissionManager.Grant) -> some View {
+        let status = permissionManager.status(for: grant)
+        let dotColor = dashboardPermissionDotColor(status)
+        let captionColor = dashboardPermissionCaptionColor(status)
+        return HStack(spacing: BridgeSpacing.xs) {
             Circle()
-                .fill(granted ? BridgeColors.success : .orange)
+                .fill(dotColor)
                 .frame(width: 8, height: 8)
-            Text(name)
+            Text(grant.displayName)
                 .font(.caption)
                 .foregroundStyle(BridgeColors.primary)
             Spacer()
-            Text(granted ? "Granted" : "Not Granted")
+            Text(permissionManager.statusLabel(for: grant))
                 .font(.caption)
-                .foregroundStyle(granted ? BridgeColors.success : .orange)
+                .foregroundStyle(captionColor)
+        }
+    }
+
+    private func dashboardPermissionDotColor(_ status: PermissionManager.GrantStatus) -> Color {
+        switch status {
+        case .granted: BridgeColors.success
+        case .denied: BridgeColors.error
+        case .unknown, .partiallyGranted, .restartRecommended: Color.orange
+        }
+    }
+
+    private func dashboardPermissionCaptionColor(_ status: PermissionManager.GrantStatus) -> Color {
+        switch status {
+        case .granted: BridgeColors.success
+        case .denied: BridgeColors.error
+        case .unknown, .partiallyGranted, .restartRecommended: Color.orange
         }
     }
 

@@ -2,6 +2,9 @@
 
 ## [1.6.0] — 2026-03-31
 
+### Fixed
+- **`NotionClient.updatePageMarkdown`** — PATCH body now sends `replace_content.new_str` (full markdown string) per [Update page markdown](https://developers.notion.com/reference/update-page-markdown). The previous nested `markdown.content` shape caused HTTP 400 validation errors from the Notion API.
+
 ### Changed
 - **Stripe MCP Proxy architecture** — Replaced hardcoded `StripeModule` (4 tools) with `StripeMcpProxy` + `StripeMcpModule`. Tools are now discovered dynamically from Stripe's remote MCP server (`mcp.stripe.com`) at registration time via HTTP `initialize` + `tools/list`. All discovered tools are registered with SecurityGate tiering (read → 🟢, write → 🟡, delete → 🔴).
 - **StripeClient cleaned** — Removed `StripeProduct`, `StripePrice` structs and 6 catalog methods (`retrieveProduct`, `updateProduct`, `retrievePrice`, `listPrices`, `parseProduct`, `parsePrice`). Retained payment intent and account info methods only.

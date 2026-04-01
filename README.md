@@ -4,7 +4,7 @@
 
 NotionBridge exposes local Mac capabilities and connected services as MCP tools over **Streamable HTTP**, **legacy SSE**, and **stdio**. It is built in Swift 6.2 for macOS 26+ on Apple Silicon and is designed to be always-on, auto-launched, and safe enough for daily operator use.
 
-**73 tools across 15 modules** · **3 transports** · **3-tier security model** · **Customer-owned Cloudflare Tunnel support**
+**73+N tools** (72 module tools + `echo` + **N** Stripe MCP tools when discovery succeeds) · **3 transports** · **3-tier security model** · **Customer-owned Cloudflare Tunnel support**
 
 **Product page:** https://kup.solutions/notion-bridge
 
@@ -44,7 +44,7 @@ NotionBridge currently ships the following module surface:
 | SkillsModule | 3 | `fetch_skill`, `list_routing_skills`, `manage_skill` |
 | ConnectionsModule | 5 | connection inventory, health, validation |
 | BuiltinModule | 1 | `echo` (registered in `ServerManager`, not a Swift `*Module` type) |
-| **Total** | **73** | 72 from feature modules + 1 builtin `echo` |
+| **Total** | **73+N** | 72 from feature modules + 1 builtin `echo` + **N** dynamic Stripe MCP tools (0 if not configured) |
 
 Core product traits:
 - Native macOS menu-bar app with onboarding, settings, and a status popover
@@ -74,6 +74,8 @@ make app
 ```
 
 The app bundle is written to `.build/NotionBridge.app`.
+
+> **Install naming:** The Swift target is `NotionBridge` (no space), so build output and DMG contents use `NotionBridge.app`. The Finder display name is **Notion Bridge** (with space), set by `CFBundleName` / `CFBundleDisplayName` in `Info.plist`. `make install` places the app at `/Applications/Notion Bridge.app` to match the display name. Both names refer to the same product.
 
 ---
 
@@ -115,7 +117,11 @@ If you are using Notion tools, add a valid Notion integration token through the 
 POST http://127.0.0.1:9700/mcp
 ```
 
-This is the primary HTTP MCP endpoint.
+This is the primary HTTP MCP endpoint. The listener is bound to **loopback** only. For remote agents (e.g. cloud IDEs) that reach your Mac through an **HTTPS tunnel** to that port, set **Settings → Connections → Remote access → Tunnel URL** to your tunnel’s base URL (for example `https://xyz.trycloudflare.com`). That extends Streamable HTTP **Origin** / **Host** validation to include the tunnel hostname while keeping the default localhost-only behavior when the field is empty.
+
+### Remote MCP security
+
+When a tunnel URL is set, **`POST /mcp` requires** a configured **MCP remote token** in the same settings section (generate/copy there) and matching **`Authorization: Bearer …`** in your MCP client. Without a token, new MCP sessions are rejected (fail closed). With an **empty** tunnel URL, local use is unchanged and a bearer is optional (you can still set a token to harden localhost-only clients). Tokens are stored in the **Keychain** in the app; **`com.notionbridge.mcpBearerToken`** remains a legacy read path. For defense in depth at the edge, operators can put **Cloudflare Access** in front of the tunnel hostname — see [docs/operator/cloudflare-access-notion-bridge.md](docs/operator/cloudflare-access-notion-bridge.md).
 
 ### Legacy SSE
 

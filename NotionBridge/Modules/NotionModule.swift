@@ -160,6 +160,11 @@ public enum NotionModule {
                     "properties": .string(NotionJSON.prettyPrint(pageJSON["properties"] ?? [:]))
                 ]
 
+                // PKT-526: Expose parent for data source resolution
+                if let parent = pageJSON["parent"] as? [String: Any] {
+                    result["parent"] = .string(NotionJSON.prettyPrint(parent))
+                }
+
                 if includeBlocks {
                     do {
                         let collected = try await client.collectBlocksDepthFirst(

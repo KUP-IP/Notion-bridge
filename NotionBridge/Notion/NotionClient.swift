@@ -596,12 +596,9 @@ public actor NotionClient {
     public func updatePageMarkdown(pageId: String, markdown: String) async throws -> Data {
         let cleanId = pageId.replacingOccurrences(of: "-", with: "")
         let body: [String: Any] = [
-            "type": "page_content",
-            "page_content": [
-                "type": "markdown",
-                "markdown": [
-                    "content": markdown
-                ]
+            "type": "replace_content",
+            "replace_content": [
+                "new_str": markdown
             ]
         ]
         let bodyData = try JSONSerialization.data(withJSONObject: body)

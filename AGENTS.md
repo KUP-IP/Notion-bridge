@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **73** MCP tools in total — **72** from registered feature modules plus **1** builtin tool (`echo`) — over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Feature code is organized in **14** Swift modules (`*Module`); `echo` is registered separately as `builtin`.
+NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **73+N** MCP tools in a typical configuration — **72** from registered feature modules, **1** builtin (`echo`), plus **N** tools from the optional remote Stripe MCP proxy when API discovery succeeds (**N=0** if Stripe is not configured or discovery fails) — over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Feature code is organized in **14** Swift modules (`*Module`); `echo` is registered separately as `builtin`, and Stripe tools are registered dynamically from `StripeMcpModule`.
 
 Bundle ID: `kup.solutions.notion-bridge` (legacy: `solutions.kup.keepr`)
 
@@ -63,6 +63,8 @@ Set the Notion API token (resolution priority order):
 2. `NOTION_API_KEY` environment variable (legacy)
 3. `~/.config/notion-bridge/config.json` — key: `notion_api_token`
 
+**Cursor MCP (avoid duplicates):** use a **single** global MCP entry in `~/.cursor/mcp.json` pointing at your Streamable HTTP URL. Do **not** add a workspace-scoped duplicate for Notion Bridge — remove it under Cursor **Settings → MCP** if present, then restart Cursor.
+
 ## Architecture
 
 ### Package Structure
@@ -103,7 +105,7 @@ For `shell_exec`/`cli_exec` tools, commands matching `safeCommandPatterns` (read
 **`AuditLog`** (`NotionBridge/Security/AuditLog.swift`) — actor. Append-only in-memory log with disk persistence via `LogManager`. Writes to `~/Library/Logs/NotionBridge/notion-bridge.log` (JSON lines, 10MB rotation with one backup). Every tool call gets an `AuditEntry` regardless of outcome (approved / rejected / escalated / error).
 
 **`SSEServer`** (`NotionBridge/Server/SSETransport.swift`) — actor. NIO-based HTTP server with two transport modes:
-- **Streamable HTTP**: `POST /mcp` with `Mcp-Session-Id` header — each session gets its own `StatefulHTTPServerTransport` and `Server` instance, all sharing one `ToolRouter`
+- **Streamable HTTP**: `POST /mcp` with `Mcp-Session-Id` header — each session gets its own `StatefulHTTPServerTransport` and `Server` instance, all sharing one `ToolRouter`. Request validation is built by **`MCPHTTPValidation.streamableHTTPPipeline`**: localhost-only origins/hosts by default; if **`tunnelURL`** (Remote access in UI) is set **and** parses to a host allowlist, the tunnel host is merged into the allowlist and **`POST /mcp` requires** a configured MCP bearer (**Keychain** `mcp_bearer_token`, else **`com.notionbridge.mcpBearerToken`** for migration) plus `Authorization: Bearer` — fail closed if the tunnel is active but no token is set. If **`tunnelURL`** is empty, bearer remains optional (same token keys when set). The HTTP server still listens on **127.0.0.1** only (`ServerManager`); there is no LAN-wide bind. Operators often add **Cloudflare Access** on the tunnel hostname; see `docs/operator/cloudflare-access-notion-bridge.md`.
 - **Legacy SSE**: `GET /sse` + `POST /messages` — for clients like Notion that use the standard split SSE spec
 - **Health endpoint**: `GET /health` returns JSON `{status, tools, uptime, version, clients}`
 

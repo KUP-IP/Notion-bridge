@@ -1,6 +1,6 @@
 // PermissionView.swift — TCC Grant Status Display
 // V1-02: Shows green/red status per grant with "Open System Settings" deep links
-// for all 5 required TCC grants.
+// for all six v1 TCC grants.
 // PKT-341: Added rebuild note explaining TCC grant invalidation
 // PKT-349 B3: Added permission pre-triggers for Automation and Contacts grants
 //   (mirrors D2 pattern from OnboardingWindow.swift)
@@ -251,7 +251,7 @@ public struct PermissionView: View {
                 recentlyGranted.insert(grant)
                 Task {
                     try? await Task.sleep(nanoseconds: 2_500_000_000)
-                    await MainActor.run {
+                    _ = await MainActor.run {
                         recentlyGranted.remove(grant)
                     }
                 }
