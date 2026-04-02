@@ -956,13 +956,32 @@ public enum SkillsModule {
         }
     }
 
-    /// Look up a skill from UserDefaults by name (case-insensitive).
+    /// Look up a skill from UserDefaults by name with fuzzy matching (v1.7.0, F5).
+    /// Tries: exact (case-insensitive) > normalized (strip "sk ", space/hyphen swap) > substring.
     private static func lookupSkill(named name: String) -> SkillConfig? {
         guard let data = UserDefaults.standard.data(forKey: "com.notionbridge.skills"),
               let skills = try? JSONDecoder().decode([SkillConfig].self, from: data) else {
             return nil
         }
-        return skills.first { $0.name.lowercased() == name.lowercased() }
+        let input = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // 1. Exact case-insensitive
+        if let exact = skills.first(where: { $0.name.lowercased() == input }) {
+            return exact
+        }
+        // 2. Normalized: strip "sk " prefix, swap spaces and hyphens
+        let stripped = input.hasPrefix("sk ") ? String(input.dropFirst(3)) : input
+        let variants = [stripped, stripped.replacingOccurrences(of: " ", with: "-"), stripped.replacingOccurrences(of: "-", with: " ")]
+        for v in variants {
+            if let match = skills.first(where: { $0.name.lowercased() == v }) {
+                return match
+            }
+        }
+        // 3. Substring: input contained in skill name or vice versa (unique match only)
+        let subs = skills.filter {
+            $0.name.lowercased().contains(stripped) || stripped.contains($0.name.lowercased())
+        }
+        if subs.count == 1 { return subs[0] }
+        return nil
     }
 
     /// List all configured skill names.

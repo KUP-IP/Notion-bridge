@@ -202,6 +202,29 @@ public final class SkillsManager {
         skills.first { $0.name.lowercased() == name.lowercased() }
     }
 
+    /// Fuzzy skill lookup with suggestions (v1.7.0, F5).
+    /// Returns (match, suggestions) for Settings UI and external callers.
+    public func findSkillFuzzy(named name: String) -> (match: Skill?, suggestions: [String]) {
+        let input = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // 1. Exact
+        if let exact = skill(named: input) { return (exact, []) }
+        // 2. Normalized: strip "sk " prefix, swap spaces and hyphens
+        let stripped = input.hasPrefix("sk ") ? String(input.dropFirst(3)) : input
+        let variants = [stripped, stripped.replacingOccurrences(of: " ", with: "-"), stripped.replacingOccurrences(of: "-", with: " ")]
+        for v in variants {
+            if let match = skills.first(where: { $0.name.lowercased() == v }) {
+                return (match, [])
+            }
+        }
+        // 3. Substring (unique match only)
+        let subs = skills.filter {
+            $0.name.lowercased().contains(stripped) || stripped.contains($0.name.lowercased())
+        }
+        if subs.count == 1 { return (subs[0], []) }
+        // 4. No match - return all names as suggestions
+        return (nil, skills.map(\.name))
+    }
+
     /// All enabled skills.
     public var enabledSkills: [Skill] {
         skills.filter(\.enabled)

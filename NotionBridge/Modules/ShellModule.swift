@@ -49,9 +49,11 @@ public enum ShellModule {
                     throw ToolRouterError.invalidArguments(toolName: "shell_exec", reason: "missing required 'command' parameter")
                 }
 
+                // v1.7.0: Cap timeout for background commands (F2)
+                let isBackground = command.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("&")
                 let timeout: Int = {
-                    if case .int(let t) = args["timeout"] { return t }
-                    return 30
+                    if case .int(let t) = args["timeout"] { return isBackground ? min(t, 5) : t }
+                    return isBackground ? 5 : 30
                 }()
 
                 let workingDir: String? = {

@@ -208,6 +208,28 @@ public enum NotionJSON {
         if let caption = typeData["caption"] as? [[String: Any]], !caption.isEmpty {
             return extractPlainText(from: caption)
         }
+        // v1.7.0: meeting_notes block - surface title, status, child block IDs
+        if type == "meeting_notes" {
+            var parts: [String] = []
+            if let title = typeData["title"] as? String, !title.isEmpty {
+                parts.append("Meeting: " + title)
+            }
+            if let status = typeData["status"] as? String {
+                parts.append("Status: " + status)
+            }
+            if let children = typeData["children"] as? [String: Any] {
+                if let sid = children["summary_block_id"] as? String {
+                    parts.append("summary_block_id: " + sid)
+                }
+                if let nid = children["notes_block_id"] as? String {
+                    parts.append("notes_block_id: " + nid)
+                }
+                if let tid = children["transcript_block_id"] as? String {
+                    parts.append("transcript_block_id: " + tid)
+                }
+            }
+            if !parts.isEmpty { return parts.joined(separator: " | ") }
+        }
         return ""
     }
 

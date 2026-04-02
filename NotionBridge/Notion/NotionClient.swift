@@ -736,4 +736,45 @@ public actor NotionClient {
         }
         return data
     }
+
+    // MARK: - Block Operations (v1.7.0)
+
+    /// A14: Retrieve a single block by ID.
+    /// GET /v1/blocks/{block_id}
+    public func getBlock(blockId: String) async throws -> Data {
+        let cleanId = blockId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(method: "GET", path: "/blocks/" + cleanId)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// A15: Update a block by ID.
+    /// PATCH /v1/blocks/{block_id}
+    public func updateBlock(blockId: String, data body: [String: Any]) async throws -> Data {
+        let cleanId = blockId.replacingOccurrences(of: "-", with: "")
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "PATCH", path: "/blocks/" + cleanId, body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    // MARK: - Database Schema (v1.7.0)
+
+    /// A16: Retrieve a database schema by ID.
+    /// GET /v1/databases/{database_id}
+    public func getDatabase(databaseId: String) async throws -> Data {
+        let cleanId = databaseId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(method: "GET", path: "/databases/" + cleanId)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
 }

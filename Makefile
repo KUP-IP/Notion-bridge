@@ -137,6 +137,14 @@ install: notarize
 	@killall Dock 2>/dev/null || true
 	@echo "✅ Installed: /Applications/Notion Bridge.app"
 
+# v1.7.0: Copy-only install (no notarize dep, no killall) (F3)
+install-copy:
+	@echo "Installing app to /Applications (copy-only)..."
+	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
+	@ditto "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
+	@echo "Installed: /Applications/Notion Bridge.app"
+	@echo "Restart NotionBridge manually to pick up changes."
+
 # ── Clean TCC ──────────────────────────────────────────────────────────
 clean-tcc:
 	@echo "🧹 Resetting TCC for legacy bundle ID (solutions.kup.keepr)..."

@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.7.0] — 2026-04-02
+
+### Added
+- **NotionClient: getBlock()** — GET /v1/blocks/{id}. Retrieves a single block by ID with full type-specific data.
+- **NotionClient: updateBlock()** — PATCH /v1/blocks/{id}. Updates a block's content by ID.
+- **NotionClient: getDatabase()** — GET /v1/databases/{id}. Retrieves a database schema by ID.
+- **notion_block_read** MCP tool (open tier) — Deep-inspect a single Notion block. Returns id, type, has_children, text, and raw type-specific payload.
+- **notion_block_update** MCP tool (notify tier) — Update a Notion block's content by ID. Accepts JSON payload.
+- **meeting_notes** support in extractPlainTextFromBlock — Surfaces title, status, and child block IDs (summary, notes, transcript).
+- **SkillsManager.findSkillFuzzy()** — Public fuzzy lookup: exact > normalized (strip 'sk ' prefix, space/hyphen swap) > substring. Returns (match, suggestions).
+- **Makefile install-copy target** — Copy-only install without notarize dependency or killall. For iterative development.
+
+### Changed
+- **notion_query** — Auto-retry on transient HTTP 404 with 2s delay before re-throwing (KI-08, F4).
+- **shell_exec** — Background commands (trailing &) now cap timeout at 5s instead of 30s for fast early-return (F2).
+- **lookupSkill** in SkillsModule — Now uses fuzzy matching: exact > normalized > substring. Resolves "web dev" to "Web Design", "sk messages" to "Messages", etc. (F5).
+
+### Notes
+- Tool count: 74 NotionBridge tools (72 base + 2 new block tools) + N Stripe MCP tools.
+- Version: marketing **1.7.0**, build **14** (Version.swift, Info.plist).
+- Feedback items resolved: F2, F3, F4, F5 (F1, F7 already fixed in v1.5.5/v1.6.0).
+
 ## [1.6.0] — 2026-03-31
 
 ### Fixed

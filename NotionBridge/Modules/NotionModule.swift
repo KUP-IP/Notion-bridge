@@ -358,13 +358,26 @@ public enum NotionModule {
                 if case .string(let s) = args["sorts"] { sortsData = s.data(using: .utf8) }
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                let data = try await client.queryDataSource(
-                    dataSourceId: dsId,
-                    filter: filterData,
-                    sorts: sortsData,
-                    pageSize: pageSize,
-                    startCursor: startCursor
-                )
+                // v1.7.0: Auto-retry transient 404 (KI-08, F4)
+                var data = Data()
+                do {
+                    data = try await client.queryDataSource(
+                        dataSourceId: dsId, filter: filterData,
+                        sorts: sortsData, pageSize: pageSize,
+                        startCursor: startCursor
+                    )
+                } catch {
+                    if String(describing: error).contains("404") {
+                        try await Task.sleep(nanoseconds: 2_000_000_000)
+                        data = try await client.queryDataSource(
+                            dataSourceId: dsId, filter: filterData,
+                            sorts: sortsData, pageSize: pageSize,
+                            startCursor: startCursor
+                        )
+                    } else {
+                        throw error
+                    }
+                }
 
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let results = json["results"] as? [[String: Any]] else {
@@ -884,6 +897,111 @@ public enum NotionModule {
                 return .object([
                     "count": .int(items.count),
                     "connections": .array(items)
+                ])
+            }
+        ))
+
+        // MARK: 17. notion_block_read - open (A14, v1.7.0)
+        await router.register(ToolRegistration(
+            name: "notion_block_read",
+            module: moduleName,
+            tier: .open,
+            description: "Deep-inspect a single Notion block by its ID. Returns all block properties including type-specific data. Use after notion_page_read to get full details of specific blocks.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "blockId": .object([
+                        "type": .string("string"),
+                        "description": .string("Block ID to retrieve")
+                    ]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("blockId")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let blockId) = args["blockId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_block_read", reason: "missing 'blockId'")
+                }
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.getBlock(blockId: blockId)
+
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse block response")])
+                }
+
+                let id = json["id"] as? String ?? ""
+                let type = json["type"] as? String ?? ""
+                let hasChildren = json["has_children"] as? Bool ?? false
+                let text = NotionJSON.extractPlainTextFromBlock(json)
+
+                var result: [String: Value] = [
+                    "id": .string(id),
+                    "type": .string(type),
+                    "has_children": .bool(hasChildren),
+                    "text": .string(text)
+                ]
+
+                // Include full type-specific payload as JSON string
+                if let typeData = json[type] {
+                    if let jsonData = try? JSONSerialization.data(withJSONObject: typeData, options: [.sortedKeys]),
+                       let jsonStr = String(data: jsonData, encoding: .utf8) {
+                        result["raw"] = .string(jsonStr)
+                    }
+                }
+
+                return .object(result)
+            }
+        ))
+
+        // MARK: 18. notion_block_update - notify (A15, v1.7.0)
+        await router.register(ToolRegistration(
+            name: "notion_block_update",
+            module: moduleName,
+            tier: .notify,
+            description: "Update a Notion block by ID. Pass the block type and updated content as a JSON string.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "blockId": .object([
+                        "type": .string("string"),
+                        "description": .string("Block ID to update")
+                    ]),
+                    "data": .object([
+                        "type": .string("string"),
+                        "description": .string("JSON string of block update payload (e.g. type-specific content)")
+                    ]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("blockId"), .string("data")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let blockId) = args["blockId"],
+                      case .string(let dataStr) = args["data"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_block_update", reason: "missing 'blockId' or 'data'")
+                }
+
+                guard let bodyData = dataStr.data(using: .utf8),
+                      let body = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any] else {
+                    return .object(["error": .string("Invalid JSON in 'data' parameter")])
+                }
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let responseData = try await client.updateBlock(blockId: blockId, data: body)
+
+                guard let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse update response")])
+                }
+
+                let id = json["id"] as? String ?? ""
+                let type = json["type"] as? String ?? ""
+
+                return .object([
+                    "id": .string(id),
+                    "type": .string(type),
+                    "updated": .bool(true)
                 ])
             }
         ))
