@@ -855,7 +855,7 @@ public final class PermissionManager {
             return "Open System Settings > Notifications and enable Notion Bridge if notifications were denied."
         case .contacts:
             if contactsStatus == .unknown {
-                return "Click Allow to trigger the macOS Contacts prompt."
+                return "Click Allow to trigger the macOS Contacts prompt. If macOS does not resolve the state, Notion Bridge should open Contacts settings automatically."
             }
             return "Open System Settings > Privacy & Security > Contacts and enable Notion Bridge. Contacts privacy access is separate from Automation access for Contacts.app."
         }

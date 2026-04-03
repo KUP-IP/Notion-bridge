@@ -119,7 +119,7 @@ public enum SessionModule {
                 "required": .array([])
             ]),
             handler: { _ in
-                let uptime = Date().timeIntervalSince(sessionStartTime)
+                let uptime = max(0, Date().timeIntervalSince(sessionStartTime))
                 let auditSize = await auditLog.count()
                 let diagnostics = await diagnosticsProvider?() ?? RuntimeDiagnostics(connections: 1, activeClients: 1)
                 let hours = Int(uptime) / 3600
@@ -164,7 +164,7 @@ public enum SessionModule {
                     ])
                 }
 
-                let previousUptime = Date().timeIntervalSince(sessionStartTime)
+                let previousUptime = max(0, Date().timeIntervalSince(sessionStartTime))
                 let previousAuditSize = await auditLog.count()
                 await auditLog.clear()
 

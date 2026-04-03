@@ -65,6 +65,14 @@ Set the Notion API token (resolution priority order):
 
 **Cursor MCP (avoid duplicates):** use a **single** global MCP entry in `~/.cursor/mcp.json` pointing at your Streamable HTTP URL. Do **not** add a workspace-scoped duplicate for Notion Bridge — remove it under Cursor **Settings → MCP** if present, then restart Cursor.
 
+## Git & Release Hygiene
+
+- Before a production install or risky verification pass, if the working tree is mixed or uncommitted, create a backup branch, commit the current state, and push it before additional surgery.
+- Do not push mixed emergency or verification state directly to `main`.
+- Use backup branches as recovery snapshots, not merge targets.
+- Split stability fixes, settings/UI restructures, and unrelated documentation or test drift into separate reviewable branches whenever feasible.
+- When installing a production candidate, verify the running binary path is `/Applications/Notion Bridge.app/Contents/MacOS/NotionBridge`, not a `.build` artifact.
+
 ## Architecture
 
 ### Package Structure

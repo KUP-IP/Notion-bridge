@@ -341,6 +341,11 @@ public struct PermissionView: View {
             Task {
                 if status == .unknown {
                     _ = await permissionManager.requestContactsAccess()
+                    let resolvedStatus = permissionManager.status(for: .contacts)
+                    if resolvedStatus != .granted,
+                       let url = PermissionManager.Grant.contacts.systemSettingsURL {
+                        NSWorkspace.shared.open(url)
+                    }
                 } else if let url = PermissionManager.Grant.contacts.systemSettingsURL {
                     NSWorkspace.shared.open(url)
                 }
@@ -529,6 +534,10 @@ struct AutoPermissionsStepView: View {
             switch grant {
             case .contacts:
                 _ = await permissionManager.requestContactsAccess()
+                if permissionManager.status(for: .contacts) != .granted,
+                   let url = PermissionManager.Grant.contacts.systemSettingsURL {
+                    NSWorkspace.shared.open(url)
+                }
             case .notifications:
                 _ = await permissionManager.requestNotificationAccess()
             case .automation:
