@@ -74,6 +74,25 @@ public actor ConnectionRegistry {
         try await getConnection(id: id, validateLive: false).capabilities
     }
 
+    public func configureNotionConnection(
+        name: String,
+        token: String,
+        primary: Bool = false
+    ) async throws -> BridgeConnection {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw ConnectionRegistryError.unsupportedAction("Connection name cannot be empty")
+        }
+
+        try await NotionClientRegistry.shared.addConnection(
+            name: trimmedName,
+            token: token,
+            primary: primary
+        )
+        await ConnectionHealthChecker.shared.invalidateAll()
+        return try await getConnection(id: "notion:\(trimmedName)", validateLive: true)
+    }
+
     public func configureStripeAPIKey(_ apiKey: String) async throws -> BridgeConnection {
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {

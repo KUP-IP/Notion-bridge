@@ -1,7 +1,7 @@
 // NotionModule.swift – V1-05 → V1-12 → PKT-367 Notion Integration Tools
 // NotionBridge · Modules
 //
-// 16 tools via NotionClientRegistry for multi-workspace support.
+// 18 tools via NotionClientRegistry for multi-workspace support.
 // PKT-320: Updated references from NOTION_API_KEY to NOTION_API_TOKEN
 // PKT-367: 13 new tools, NotionClientRegistry integration, optional workspace param
 

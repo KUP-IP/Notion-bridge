@@ -1,7 +1,7 @@
 // NotionModuleTests.swift – V1-05 → V2-NOTION-CORE NotionModule Tests
 // NotionBridge · Tests
 //
-// PKT-367: Updated for 16 tools, API v2026-03-11, multi-workspace registry,
+// PKT-367: Updated for 18 tools, API v2026-03-11, multi-workspace registry,
 //          config migration, new model types, helper tests
 
 import Foundation
@@ -19,12 +19,12 @@ func runNotionModuleTests() async {
     await NotionModule.register(on: router)
 
     // ============================================================
-    // MARK: - Tool Registration (16 tools)
+    // MARK: - Tool Registration (18 tools)
     // ============================================================
 
-    await test("NotionModule registers 16 tools") {
+    await test("NotionModule registers 18 tools") {
         let tools = await router.registrations(forModule: "notion")
-        try expect(tools.count == 16, "Expected 16 notion tools, got \(tools.count)")
+        try expect(tools.count == 18, "Expected 18 notion tools, got \(tools.count)")
     }
 
     let expectedTools: [String] = [
@@ -33,7 +33,7 @@ func runNotionModuleTests() async {
         "notion_block_delete", "notion_page_markdown_read", "notion_page_markdown_write",
         "notion_comments_list", "notion_comment_create", "notion_users_list",
         "notion_page_move", "notion_file_upload", "notion_token_introspect",
-        "notion_connections_list"
+        "notion_connections_list", "notion_block_read", "notion_block_update"
     ]
 
     for toolName in expectedTools {
@@ -51,7 +51,8 @@ func runNotionModuleTests() async {
     let openTools = [
         "notion_search", "notion_page_read", "notion_query",
         "notion_page_markdown_read", "notion_comments_list",
-        "notion_users_list", "notion_token_introspect", "notion_connections_list"
+        "notion_users_list", "notion_token_introspect", "notion_connections_list",
+        "notion_block_read"
     ]
     for toolName in openTools {
         await test("\(toolName) tier is open") {
@@ -64,7 +65,8 @@ func runNotionModuleTests() async {
     let notifyTools = [
         "notion_page_update", "notion_page_create", "notion_blocks_append",
         "notion_block_delete", "notion_page_markdown_write",
-        "notion_comment_create", "notion_page_move", "notion_file_upload"
+        "notion_comment_create", "notion_page_move", "notion_file_upload",
+        "notion_block_update"
     ]
     for toolName in notifyTools {
         await test("\(toolName) tier is notify") {

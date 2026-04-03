@@ -4,6 +4,7 @@ import SwiftUI
 public struct APIConnectionsManagementView: View {
     @State private var apiConnections: [BridgeConnection] = []
     @State private var isLoading = true
+    @State private var isRefreshing = false
     @State private var isSaving = false
     @State private var apiKey = ""
     @State private var saveError: String?
@@ -81,8 +82,18 @@ public struct APIConnectionsManagementView: View {
 
                 Spacer()
 
+                if isRefreshing {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                        Text("Validating…")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Button {
-                    Task { await loadConnections() }
+                    Task { await reloadConnections() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.caption)
@@ -91,7 +102,7 @@ public struct APIConnectionsManagementView: View {
                 .help("Refresh API connection status")
             }
         }
-        .task { await loadConnections() }
+        .task { await reloadConnections() }
     }
 
     private func connectionRow(_ connection: BridgeConnection) -> some View {
@@ -139,6 +150,12 @@ public struct APIConnectionsManagementView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let validatedAt = connection.lastValidatedAt, !validatedAt.isEmpty {
+                Text("Last checked: \(validatedAt)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
             if !connection.capabilities.isEmpty {
                 Text(connection.capabilities.joined(separator: " • "))
                     .font(.caption2)
@@ -148,34 +165,79 @@ public struct APIConnectionsManagementView: View {
         .padding(.vertical, 4)
     }
 
-    private func loadConnections() async {
+    @MainActor
+    private func reloadConnections() async {
         isLoading = true
         saveError = nil
         do {
-            apiConnections = try await ConnectionRegistry.shared.listConnections(kind: .api, validateLive: true)
+            let snapshot = try await ConnectionRegistry.shared.listConnections(kind: .api, validateLive: false)
+            apiConnections = snapshot.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            isLoading = false
+            await refreshStatuses(for: snapshot.map(\.id))
         } catch {
             saveError = error.localizedDescription
             apiConnections = []
+            isLoading = false
         }
-        isLoading = false
+    }
+
+    private func refreshStatuses(for ids: [String]? = nil) async {
+        let targetIds = await MainActor.run {
+            ids ?? apiConnections.map(\.id)
+        }
+        guard !targetIds.isEmpty else { return }
+
+        await MainActor.run { isRefreshing = true }
+
+        let validated = await withTaskGroup(of: BridgeConnection?.self, returning: [BridgeConnection].self) { group in
+            for id in targetIds {
+                group.addTask {
+                    try? await ConnectionRegistry.shared.validateConnection(id: id)
+                }
+            }
+
+            var results: [BridgeConnection] = []
+            for await connection in group {
+                if let connection {
+                    results.append(connection)
+                }
+            }
+            return results
+        }
+
+        await MainActor.run {
+            for connection in validated {
+                if let index = apiConnections.firstIndex(where: { $0.id == connection.id }) {
+                    apiConnections[index] = connection
+                }
+            }
+            apiConnections.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            isRefreshing = false
+        }
     }
 
     private func saveStripeKey() async {
-        isSaving = true
-        saveError = nil
-        saveSuccessMessage = nil
+        await MainActor.run {
+            isSaving = true
+            saveError = nil
+            saveSuccessMessage = nil
+        }
 
         do {
             _ = try await ConnectionRegistry.shared.configureStripeAPIKey(apiKey)
-            apiKey = ""
-            saveSuccessMessage = "Stripe API key saved and validated."
-            showApiKeyEditor = false
-            await loadConnections()
+            await MainActor.run {
+                apiKey = ""
+                saveSuccessMessage = "Stripe API key saved. Live validation is running in the background."
+                showApiKeyEditor = false
+                isSaving = false
+            }
+            await reloadConnections()
         } catch {
-            saveError = error.localizedDescription
+            await MainActor.run {
+                saveError = error.localizedDescription
+                isSaving = false
+            }
         }
-
-        isSaving = false
     }
 
     private func statusColor(_ status: BridgeConnectionStatus) -> Color {

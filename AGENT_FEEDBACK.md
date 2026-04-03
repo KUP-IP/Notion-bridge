@@ -204,3 +204,31 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 **Description:** `notion_query` returns HTTP 404 with message "Could not find database... Make sure the relevant pages and databases are shared with your integration" even when the integration IS connected. The 404 was transient — retrying the exact same query minutes later succeeded. The error message is indistinguishable from a genuine "not shared" error, leading to a 20+ minute debug session investigating permissions that were never actually broken.
 **Context:** Querying SKILLS database (da15143d) and AI LOGS database (16fcbb58) during sk close agent Phase 5 write-backs. Both queries returned 404. Later retries with identical parameters succeeded.
 **Suggested Fix:** 1. If the error is transient/propagation-related, the Bridge could auto-retry once before surfacing the 404. 2. If possible, distinguish "database not found/not shared" (permanent) from "temporary unavailable" (transient) in the error response. 3. Add a `retryOnce` parameter to notion_query for resilience.
+
+
+### 2026-04-02 — MAC Keepr v1.7.0 Sprint Session
+
+| ID | Tool | Type | Detail | Evidence |
+|----|------|------|--------|----------|
+| F14 | `file_copy` | Friction | No overwrite flag — fails with "item already exists" when destination exists. Required fallback to `shell_exec` with `cp -f`. | Headshot copy to kup.solutions public dir |
+| F15 | `shell_exec` (sed) | Friction | macOS `sed -i ''` with `\a` append command mangles tabs in Makefile recipe lines — inserts spaces instead of tabs. Required Python workaround for any Makefile modifications. | install-copy target insertion |
+| F16 | `file_write` | Enhancement | `file_write` creates files but `file_append` requires existing files. A "create-or-append" mode would reduce two-step patterns. | Build script creation workflow |
+
+
+
+### 2026-04-02 | Agent: MAC Keepr | Session: kup-solutions-v2-restructure
+
+**Category:** Bug
+**Tool:** file_write
+**Severity:** High
+**Description:** `file_write` encodes HTML entities in JSX/TSX files — `<` becomes literal `&lt;`, `>` becomes `&gt;`. Vite dev server is lenient and serves the file without error (HTTP 200), but esbuild production build (`npm run build:client`) rejects it: `ERROR: Unexpected "&"`. This creates a false-positive dev verification — file looks fine in dev but fails at build time.
+**Context:** Writing `products.tsx` with JSX angle brackets via `file_write` tool. Dev server returned HTTP 200, but production build failed on the encoded entities.
+**Suggested Fix:** The `file_write` handler in FileModule.swift uses `content.write(to: url, atomically: true, encoding: .utf8)` which should write raw UTF-8. The encoding may be happening in the MCP parameter serialization layer (JSON string → Swift String conversion). Investigate whether the MCP SDK's `Value.string()` decoder is performing HTML entity decoding/encoding. Workaround: use `shell_exec` with `cat << 'DELIM' > path` heredoc for any file containing angle brackets.
+
+**Category:** Friction
+**Tool:** screen_capture
+**Severity:** Low
+**Description:** `screen_capture` with `target: "window"` and `windowId: 0` returns "Window ID 0 not found in capturable windows." No documentation on how to discover valid window IDs. Had to fall back to `target: "display"` (full screen capture).
+**Context:** Trying to capture the Preview.app window showing the trophy icon for visual review.
+**Suggested Fix:** Add a `list_windows` tool or include valid window IDs in the error message. Alternatively, document that window IDs come from `ax_tree` or `process_list` pid → CGWindowListCopyWindowInfo.
+
