@@ -13,7 +13,11 @@ func runSessionModuleTests() async {
     let gate = SecurityGate()
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
-    await SessionModule.register(on: router, auditLog: log)
+    await SessionModule.register(
+        on: router,
+        auditLog: log,
+        diagnosticsProvider: { SessionModule.RuntimeDiagnostics(connections: 2, activeClients: 3) }
+    )
 
     // Registration
     await test("SessionModule registers 3 tools") {
@@ -128,17 +132,19 @@ func runSessionModuleTests() async {
         }
     }
 
-    // session_info: connections value
-    await test("session_info connections is 1") {
+    // session_info: diagnostics provider values
+    await test("session_info reflects injected runtime diagnostics") {
         let result = try await router.dispatch(
             toolName: "session_info",
             arguments: .object([:])
         )
         if case .object(let dict) = result,
-           case .int(let connections) = dict["connections"] {
-            try expect(connections == 1, "Connections should be 1, got \(connections)")
+           case .int(let connections) = dict["connections"],
+           case .int(let activeClients) = dict["activeClients"] {
+            try expect(connections == 2, "Connections should match diagnostics provider, got \(connections)")
+            try expect(activeClients == 3, "Active clients should match diagnostics provider, got \(activeClients)")
         } else {
-            throw TestError.assertion("Expected connections field")
+            throw TestError.assertion("Expected connections and activeClients fields")
         }
     }
 

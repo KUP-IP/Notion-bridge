@@ -110,7 +110,13 @@ public actor SSEServer {
     private let onClientDisconnected: @MainActor @Sendable (String) -> Void  // PKT-366 F13
     private var channel: Channel?
     private var sessions: [String: SessionContext] = [:]
-    private let sessionTimeout: TimeInterval = 3600
+    private let sessionTimeout: TimeInterval
+    private let sessionCleanupInterval: TimeInterval
+    private let maxHTTPSessions: Int
+    private var totalSessionsCreated = 0
+    private var totalSessionsExpired = 0
+    private var totalSessionsEvicted = 0
+    private var totalSessionsClosed = 0
 
     public nonisolated let endpoint: String = "/mcp"
 
@@ -126,20 +132,41 @@ public actor SSEServer {
         var clientVersion: String?
     }
 
+    public struct SessionRuntimeDiagnostics: Sendable {
+        public let activeHTTPClients: Int
+        public let activeLegacyClients: Int
+        public let totalSessionsCreated: Int
+        public let totalSessionsExpired: Int
+        public let totalSessionsEvicted: Int
+        public let totalSessionsClosed: Int
+        public let maxHTTPSessions: Int
+        public let sessionTimeoutSeconds: Int
+        public let sessionCleanupIntervalSeconds: Int
+
+        public var activeClients: Int { activeHTTPClients + activeLegacyClients }
+    }
+
     public init(
         host: String = "127.0.0.1",
         port: Int = BridgeConstants.defaultSSEPort,
         router: ToolRouter,
         onToolCall: @escaping @MainActor @Sendable () -> Void,
         onClientConnected: @escaping @MainActor @Sendable (String, String) -> Void = { _, _ in },
-        onClientDisconnected: @escaping @MainActor @Sendable (String) -> Void = { _ in }
+        onClientDisconnected: @escaping @MainActor @Sendable (String) -> Void = { _ in },
+        sessionTimeout: TimeInterval = 300,
+        sessionCleanupInterval: TimeInterval = 30,
+        maxHTTPSessions: Int = 48
     ) {
+        let normalizedSessionTimeout = max(30, sessionTimeout)
         self.host = host
         self.port = port
         self.router = router
         self.onToolCall = onToolCall
         self.onClientConnected = onClientConnected
         self.onClientDisconnected = onClientDisconnected
+        self.sessionTimeout = normalizedSessionTimeout
+        self.sessionCleanupInterval = max(5, min(normalizedSessionTimeout, sessionCleanupInterval))
+        self.maxHTTPSessions = max(8, maxHTTPSessions)
     }
 
     /// PKT-366 F13: Bridge NIO thread to MainActor disconnect UI callback without redundant `await` on stored closure.
@@ -218,9 +245,8 @@ public actor SSEServer {
 
     /// Stop the SSE server gracefully.
     public func stop() async {
-        for (id, session) in sessions {
-            await session.transport.disconnect()
-            sessions.removeValue(forKey: id)
+        for id in Array(sessions.keys) {
+            await removeSession(id, reason: "server stop")
         }
         try? await channel?.close()
         channel = nil
@@ -229,6 +255,20 @@ public actor SSEServer {
 
     /// Number of active sessions (Streamable HTTP + legacy SSE).
     public var activeSessionCount: Int { sessions.count + legacy.activeCount }
+
+    public func sessionRuntimeDiagnostics() -> SessionRuntimeDiagnostics {
+        SessionRuntimeDiagnostics(
+            activeHTTPClients: sessions.count,
+            activeLegacyClients: legacy.activeCount,
+            totalSessionsCreated: totalSessionsCreated,
+            totalSessionsExpired: totalSessionsExpired,
+            totalSessionsEvicted: totalSessionsEvicted,
+            totalSessionsClosed: totalSessionsClosed,
+            maxHTTPSessions: maxHTTPSessions,
+            sessionTimeoutSeconds: Int(sessionTimeout),
+            sessionCleanupIntervalSeconds: Int(sessionCleanupInterval)
+        )
+    }
 
     // MARK: - Health Endpoint (V1-QUALITY-C2)
 
@@ -241,14 +281,23 @@ public actor SSEServer {
             guard let earliest = sessions.values.map(\.createdAt).min() else { return 0 }
             return Int(Date().timeIntervalSince(earliest))
         }()
-        let clientCount = activeSessionCount
+        let diagnostics = sessionRuntimeDiagnostics()
 
         let health: [String: Any] = [
             "status": "running",
             "tools": toolCount,
             "uptime": uptime,
             "version": appVersion,
-            "clients": clientCount
+            "clients": diagnostics.activeClients,
+            "httpClients": diagnostics.activeHTTPClients,
+            "legacyClients": diagnostics.activeLegacyClients,
+            "maxHTTPClients": diagnostics.maxHTTPSessions,
+            "sessionTimeoutSeconds": diagnostics.sessionTimeoutSeconds,
+            "sessionCleanupIntervalSeconds": diagnostics.sessionCleanupIntervalSeconds,
+            "sessionsCreated": diagnostics.totalSessionsCreated,
+            "sessionsExpired": diagnostics.totalSessionsExpired,
+            "sessionsEvicted": diagnostics.totalSessionsEvicted,
+            "sessionsClosed": diagnostics.totalSessionsClosed
         ]
 
         return (try? JSONSerialization.data(withJSONObject: health, options: [.sortedKeys])) ?? Data()
@@ -266,13 +315,7 @@ public actor SSEServer {
             let response = await session.transport.handleRequest(request)
 
             if request.method.uppercased() == "DELETE" && response.statusCode == 200 {
-                // PKT-366 F13: Notify UI of client disconnection
-                if let name = session.clientName {
-                    let callback = self.onClientDisconnected
-                    await MainActor.run { callback(name) }
-                }
-                sessions.removeValue(forKey: sessionID)
-                print("[SSE] Session closed: \(sessionID.prefix(8))…")
+                await removeSession(sessionID, reason: "closed via DELETE", incrementClosed: true)
             }
 
             return response
@@ -306,6 +349,10 @@ public actor SSEServer {
             clientName = clientInfo["name"] as? String
             clientVersion = clientInfo["version"] as? String
         }
+
+        await cleanupExpiredSessions()
+        await pruneDuplicateClientSessions(clientName: clientName, clientVersion: clientVersion)
+        await evictSessionsIfNeeded(reservingSlots: 1)
 
         let validationPipeline = MCPHTTPValidation.streamableHTTPPipeline(ssePort: port)
 
@@ -350,8 +397,9 @@ public actor SSEServer {
                 clientName: clientName,
                 clientVersion: clientVersion
             )
+            totalSessionsCreated += 1
 
-            print("[SSE] Session created: \(sessionID.prefix(8))… (total: \(sessions.count))")
+            print("[SSE] Session created: \(sessionID.prefix(8))… (active HTTP: \(sessions.count)/\(maxHTTPSessions))")
 
             // V1-QUALITY-C2: Notify UI of new client connection
             if let name = clientName {
@@ -364,8 +412,7 @@ public actor SSEServer {
             let response = await transport.handleRequest(request)
 
             if case .error = response {
-                sessions.removeValue(forKey: sessionID)
-                await transport.disconnect()
+                await removeSession(sessionID, reason: "initialize failed")
             }
 
             return response
@@ -473,23 +520,92 @@ public actor SSEServer {
 
     private func sessionCleanupLoop() async {
         while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(60))
-            let now = Date()
-            let expired = sessions.filter { _, ctx in
-                now.timeIntervalSince(ctx.lastAccessedAt) > sessionTimeout
-            }
-            for (id, _) in expired {
-                if let session = sessions.removeValue(forKey: id) {
-                    // PKT-366 F13: Notify UI of client disconnection
-                    if let name = session.clientName {
-                        let callback = self.onClientDisconnected
-                        await MainActor.run { callback(name) }
-                    }
-                    await session.transport.disconnect()
-                    print("[SSE] Session expired: \(id.prefix(8))…")
-                }
-            }
+            try? await Task.sleep(for: .seconds(sessionCleanupInterval))
+            await cleanupExpiredSessions()
         }
+    }
+
+    private func cleanupExpiredSessions(now: Date = Date()) async {
+        let expiredIDs = sessions
+            .filter { _, ctx in now.timeIntervalSince(ctx.lastAccessedAt) > sessionTimeout }
+            .sorted { lhs, rhs in
+                if lhs.value.lastAccessedAt == rhs.value.lastAccessedAt {
+                    return lhs.value.createdAt < rhs.value.createdAt
+                }
+                return lhs.value.lastAccessedAt < rhs.value.lastAccessedAt
+            }
+            .map(\.key)
+
+        for id in expiredIDs {
+            await removeSession(id, reason: "expired", incrementExpired: true)
+        }
+    }
+
+    private func evictSessionsIfNeeded(reservingSlots: Int = 0) async {
+        let overflow = max(0, sessions.count + reservingSlots - maxHTTPSessions)
+        guard overflow > 0 else { return }
+
+        let evictionOrder = sessions
+            .sorted { lhs, rhs in
+                if lhs.value.lastAccessedAt == rhs.value.lastAccessedAt {
+                    return lhs.value.createdAt < rhs.value.createdAt
+                }
+                return lhs.value.lastAccessedAt < rhs.value.lastAccessedAt
+            }
+            .prefix(overflow)
+            .map(\.key)
+
+        for id in evictionOrder {
+            await removeSession(id, reason: "evicted to enforce cap", incrementEvicted: true)
+        }
+    }
+
+    private func pruneDuplicateClientSessions(clientName: String?, clientVersion: String?) async {
+        guard let rawName = clientName?.trimmingCharacters(in: .whitespacesAndNewlines), !rawName.isEmpty else {
+            return
+        }
+
+        let duplicateIDs = sessions
+            .filter { _, ctx in
+                guard ctx.clientName == rawName else { return false }
+                if let clientVersion {
+                    return ctx.clientVersion == clientVersion
+                }
+                return true
+            }
+            .sorted { lhs, rhs in
+                if lhs.value.lastAccessedAt == rhs.value.lastAccessedAt {
+                    return lhs.value.createdAt < rhs.value.createdAt
+                }
+                return lhs.value.lastAccessedAt < rhs.value.lastAccessedAt
+            }
+            .map(\.key)
+
+        for id in duplicateIDs {
+            await removeSession(id, reason: "replaced duplicate client session for \(rawName)", incrementEvicted: true)
+        }
+    }
+
+    private func removeSession(
+        _ id: String,
+        reason: String,
+        incrementClosed: Bool = false,
+        incrementExpired: Bool = false,
+        incrementEvicted: Bool = false
+    ) async {
+        guard let session = sessions.removeValue(forKey: id) else { return }
+
+        if incrementClosed { totalSessionsClosed += 1 }
+        if incrementExpired { totalSessionsExpired += 1 }
+        if incrementEvicted { totalSessionsEvicted += 1 }
+
+        if let name = session.clientName {
+            let callback = self.onClientDisconnected
+            await MainActor.run { callback(name) }
+        }
+
+        await session.transport.disconnect()
+        print("[SSE] Session \(reason): \(id.prefix(8))… (active HTTP: \(sessions.count)/\(maxHTTPSessions))")
     }
 
     // MARK: - Helpers

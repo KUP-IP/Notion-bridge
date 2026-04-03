@@ -9,6 +9,16 @@ import MCP
 /// Provides session tools: tools_list (V1-03), session_info (V1-04), session_clear (V1-04).
 public enum SessionModule {
 
+    public struct RuntimeDiagnostics: Sendable {
+        public let connections: Int
+        public let activeClients: Int
+
+        public init(connections: Int, activeClients: Int) {
+            self.connections = connections
+            self.activeClients = activeClients
+        }
+    }
+
     public static let moduleName = "session"
 
     /// Session start timestamp for uptime tracking.
@@ -16,7 +26,11 @@ public enum SessionModule {
 
     /// Register all session module tools on the given router.
     /// V1-04: now accepts auditLog for session_info and session_clear.
-    public static func register(on router: ToolRouter, auditLog: AuditLog) async {
+    public static func register(
+        on router: ToolRouter,
+        auditLog: AuditLog,
+        diagnosticsProvider: (@Sendable () async -> RuntimeDiagnostics)? = nil
+    ) async {
 
         // tools_list – open (V1-03, preserved)
         await router.register(ToolRegistration(
@@ -105,8 +119,9 @@ public enum SessionModule {
                 "required": .array([])
             ]),
             handler: { _ in
-                let uptime = Date().timeIntervalSince(sessionStartTime)
+                let uptime = max(0, Date().timeIntervalSince(sessionStartTime))
                 let auditSize = await auditLog.count()
+                let diagnostics = await diagnosticsProvider?() ?? RuntimeDiagnostics(connections: 1, activeClients: 1)
                 let hours = Int(uptime) / 3600
                 let minutes = (Int(uptime) % 3600) / 60
                 let seconds = Int(uptime) % 60
@@ -115,9 +130,9 @@ public enum SessionModule {
                 return .object([
                     "uptime": .string(uptimeStr),
                     "uptimeSeconds": .double(uptime),
-                    "connections": .int(1),
+                    "connections": .int(diagnostics.connections),
                     "toolCalls": .int(auditSize),
-                    "activeClients": .int(1),
+                    "activeClients": .int(diagnostics.activeClients),
                     "auditLogSize": .int(auditSize)
                 ])
             }
@@ -149,7 +164,7 @@ public enum SessionModule {
                     ])
                 }
 
-                let previousUptime = Date().timeIntervalSince(sessionStartTime)
+                let previousUptime = max(0, Date().timeIntervalSince(sessionStartTime))
                 let previousAuditSize = await auditLog.count()
                 await auditLog.clear()
 
