@@ -67,10 +67,33 @@ public actor ServerManager {
         let router = ToolRouter(securityGate: securityGate, auditLog: auditLog)
         self.router = router
 
+        let onToolCall = self.onToolCall
+        let onClientConnected = self.onClientConnected
+        let onClientDisconnected = self.onClientDisconnected
+        let sseServer = SSEServer(
+            host: "127.0.0.1",
+            port: ssePort,
+            router: router,
+            onToolCall: onToolCall,
+            onClientConnected: onClientConnected,
+            onClientDisconnected: onClientDisconnected
+        )
+        self.sseServer = sseServer
+
         // 2. Register modules
         await ShellModule.register(on: router)
         await FileModule.register(on: router)
-        await SessionModule.register(on: router, auditLog: auditLog)
+        await SessionModule.register(
+            on: router,
+            auditLog: auditLog,
+            diagnosticsProvider: {
+                let diagnostics = await sseServer.sessionRuntimeDiagnostics()
+                return SessionModule.RuntimeDiagnostics(
+                    connections: diagnostics.activeClients,
+                    activeClients: diagnostics.activeClients
+                )
+            }
+        )
         await MessagesModule.register(on: router)
         await SystemModule.register(on: router)
         await NotionModule.register(on: router)
@@ -135,7 +158,6 @@ public actor ServerManager {
         }
 
         // 6. Wire CallTool handler with tool-call notification (uses dispatchFormatted)
-        let onToolCall = self.onToolCall
         await server.withMethodHandler(CallTool.self) { [router] params in
             let arguments: Value = params.arguments.map { .object($0) } ?? .object([:])
             let (text, isError) = await router.dispatchFormatted(toolName: params.name, arguments: arguments)
@@ -143,16 +165,7 @@ public actor ServerManager {
             return .init(content: [.text(.init(text))], isError: isError)
         }
 
-        // 7. Create SSE server (configurable port via config/env fallback chain)
-        // V1-QUALITY-C2: Pass onClientConnected callback for client identification
-        self.sseServer = SSEServer(
-            host: "127.0.0.1",
-            port: ssePort,
-            router: router,
-            onToolCall: onToolCall,
-            onClientConnected: onClientConnected,
-            onClientDisconnected: onClientDisconnected
-        )
+        // 7. SSE server was created before module registration so session diagnostics can be injected
 
         return await router.allRegistrations().count
     }

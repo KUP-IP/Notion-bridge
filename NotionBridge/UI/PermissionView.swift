@@ -125,8 +125,7 @@ public struct PermissionView: View {
 
                 // D1: Action button only for non-granted, non-checking states
                 if status != .granted && !isChecking {
-                    Button(grant == .automation || grant == .fullDiskAccess
-                           ? "Open Settings" : "Allow") {
+                    Button(actionButtonTitle(for: grant, status: status)) {
                         permLog.notice("Button tapped for grant: \(grant.displayName)")
                         openSystemSettings(for: grant)
                     }
@@ -241,6 +240,20 @@ public struct PermissionView: View {
         }
     }
 
+    private func actionButtonTitle(
+        for grant: PermissionManager.Grant,
+        status: PermissionManager.GrantStatus
+    ) -> String {
+        switch grant {
+        case .automation, .fullDiskAccess:
+            return "Open Settings"
+        case .contacts, .notifications:
+            return status == .unknown ? "Allow" : "Open Settings"
+        case .accessibility, .screenRecording:
+            return "Allow"
+        }
+    }
+
     @MainActor
     private func captureGrantTransitions() {
         for grant in PermissionManager.Grant.v1Cases {
@@ -309,18 +322,28 @@ public struct PermissionView: View {
                 await permissionManager.recheckAllForTruth()
             }
         case .notifications:
-            // PKT-369 N4: Open System Settings directly — no pre-flight
-            // requestNotificationAccess(). The pre-flight was unreliable because
-            // requestAuthorization returns false when auth was already determined
-            // externally. The 2s timer + checkAllAsync() detects grant state.
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
-                NSWorkspace.shared.open(url)
-            }
-            Task { await permissionManager.recheckAllForTruth() }
-        case .contacts:
-            // Trigger the native Contacts prompt only.
+            let status = permissionManager.status(for: .notifications)
             Task {
-                _ = await permissionManager.requestContactsAccess()
+                if status == .unknown {
+                    _ = await permissionManager.requestNotificationAccess()
+                    let resolvedStatus = permissionManager.status(for: .notifications)
+                    if resolvedStatus != .granted,
+                       let url = PermissionManager.Grant.notifications.systemSettingsURL {
+                        NSWorkspace.shared.open(url)
+                    }
+                } else if let url = PermissionManager.Grant.notifications.systemSettingsURL {
+                    NSWorkspace.shared.open(url)
+                }
+                await permissionManager.recheckAllForTruth()
+            }
+        case .contacts:
+            let status = permissionManager.status(for: .contacts)
+            Task {
+                if status == .unknown {
+                    _ = await permissionManager.requestContactsAccess()
+                } else if let url = PermissionManager.Grant.contacts.systemSettingsURL {
+                    NSWorkspace.shared.open(url)
+                }
                 await permissionManager.recheckAllForTruth()
             }
         case .screenRecording:
@@ -374,7 +397,7 @@ struct AutoPermissionsStepView: View {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            Text("Use Grant All to trigger Contacts, Notifications, and Automation prompts. Each permission resolves to Granted or Denied.")
+            Text("Use Grant All to trigger Contacts, Notifications, and Automation prompts up front. Notifications may still need System Settings tuning because macOS tracks authorization separately from alert delivery style.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

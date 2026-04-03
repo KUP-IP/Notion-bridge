@@ -75,7 +75,7 @@ public struct SettingsView: View {
     let statusBar: StatusBarController
     let permissionManager: PermissionManager
 
-    @State var selectedSection: SettingsSection = .general
+    @State var selectedSection: SettingsSection = .connections
 
     // Token editing state (PKT-350 F1)
     @State var isEditingToken = false
@@ -97,7 +97,6 @@ public struct SettingsView: View {
     @State var showPostResetSheet = false
 
     enum SettingsSection: String, CaseIterable, Identifiable {
-        case general = "General"
         case connections = "Connections"
         case permissions = "Permissions"
         case tools = "Tools"
@@ -109,9 +108,8 @@ public struct SettingsView: View {
 
         var icon: String {
             switch self {
-            case .general: return "gearshape"
-            case .permissions: return "lock.shield"
             case .connections: return "network"
+            case .permissions: return "lock.shield"
             case .tools: return "hammer"
             case .skills: return "book.closed"
             case .credentials: return "key.fill"
@@ -140,7 +138,6 @@ public struct SettingsView: View {
     @ViewBuilder
     private var detailContent: some View {
         switch selectedSection {
-        case .general: generalSection
         case .connections: connectionsSection
         case .permissions: permissionsSection
         case .tools: toolsSection

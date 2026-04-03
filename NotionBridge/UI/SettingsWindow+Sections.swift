@@ -172,6 +172,58 @@ extension SettingsView {
 
     var connectionsSection: some View {
         Form {
+            Section("Server") {
+                LabeledContent("Status") {
+                    HStack(spacing: BridgeSpacing.xs) {
+                        Circle()
+                            .fill(statusBar.isServerRunning ? BridgeColors.success : BridgeColors.error)
+                            .frame(width: 8, height: 8)
+                        Text(statusBar.isServerRunning ? "Running" : "Stopped")
+                            .foregroundStyle(statusBar.isServerRunning ? BridgeColors.success : BridgeColors.error)
+                    }
+                }
+                LabeledContent("Port", value: String(ssePort))
+                LabeledContent("Tools", value: "\(statusBar.registeredToolCount) registered")
+                LabeledContent("Uptime", value: statusBar.uptimeString)
+            }
+
+            Section("Startup") {
+                Toggle("Launch at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, enabled in
+                        guard !isApplyingLaunchAtLoginChange else { return }
+                        launchAtLoginError = nil
+                        let service = SMAppService.mainApp
+                        do {
+                            if enabled {
+                                try service.unregister()
+                                try service.register()
+                            } else {
+                                try service.unregister()
+                            }
+                        } catch {
+                            launchAtLoginError = "Could not update launch-at-login: \(error.localizedDescription)"
+                            isApplyingLaunchAtLoginChange = true
+                            launchAtLogin.toggle()
+                            isApplyingLaunchAtLoginChange = false
+                        }
+                    }
+
+                if let launchAtLoginError {
+                    Text(launchAtLoginError)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Section("App Control") {
+                Button("Check for Updates", systemImage: "arrow.down.circle") {
+                    (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                }
+                Button("Restart Notion Bridge", systemImage: "arrow.clockwise") {
+                    restartApp(reopenSettings: true)
+                }
+            }
+
             Section("Local Server") {
                 LabeledContent("Streamable HTTP") {
                     Text(verbatim: "http://localhost:\(ssePort)/mcp")
@@ -192,61 +244,10 @@ extension SettingsView {
 
             Section {
                 ConnectionsManagementView()
-
-                if isEditingToken {
-                    SecureField("Paste new token", text: $newTokenValue)
-                        .textFieldStyle(.roundedBorder)
-
-                    if let error = tokenError {
-                        Text(error)
-                            .font(.caption)
-                            .foregroundStyle(BridgeColors.error)
-                    }
-
-                    if tokenSaveSuccess {
-                        Text("Token saved successfully!")
-                            .font(.caption)
-                            .foregroundStyle(BridgeColors.success)
-                    }
-
-                    HStack {
-                        Button("Save") {
-                            saveToken()
-                        }
-                        .buttonStyle(.borderedProminent)
-
-                        Button("Cancel") {
-                            isEditingToken = false
-                            newTokenValue = ""
-                            tokenError = nil
-                            tokenSaveSuccess = false
-                        }
-                    }
-                } else {
-                    HStack {
-                        LabeledContent("Primary Token", value: maskedTokenLabel)
-                        Button {
-                            isEditingToken = true
-                            tokenSaveSuccess = false
-                            tokenError = nil
-                        } label: {
-                            Image(systemName: "pencil")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.borderless)
-                        .frame(minWidth: 28, minHeight: 28)
-                        .contentShape(Rectangle())
-                    }
-                    if !statusBar.notionTokenDetail.isEmpty {
-                        Text(statusBar.notionTokenDetail)
-                            .font(.caption)
-                            .foregroundStyle(BridgeColors.secondary)
-                    }
-                }
             } header: {
-                Text("Notion workspaces")
+                Text("Workspace connections")
             } footer: {
-                Text("Only Notion integrations (workspace tokens) belong here. API keys for Stripe and other services are in API Connections below; remote URLs (e.g. Cloudflare tunnel) are under Remote Access.")
+                Text("Connect Notion workspaces here. Health checks run in the background so the page stays responsive while validation completes.")
                     .font(.caption2)
                     .foregroundStyle(BridgeColors.muted)
             }
@@ -256,7 +257,7 @@ extension SettingsView {
             } header: {
                 Text("API connections")
             } footer: {
-                Text("Third-party API keys used by bridge tools (e.g. Stripe). This is separate from your Notion workspace tokens above.")
+                Text("Third-party API keys used by bridge tools (for example Stripe). These are separate from workspace tokens and remote-access URLs.")
                     .font(.caption2)
                     .foregroundStyle(BridgeColors.muted)
             }

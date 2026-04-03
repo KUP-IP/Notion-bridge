@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **73+N** MCP tools in a typical configuration — **72** from registered feature modules, **1** builtin (`echo`), plus **N** tools from the optional remote Stripe MCP proxy when API discovery succeeds (**N=0** if Stripe is not configured or discovery fails) — over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Feature code is organized in **14** Swift modules (`*Module`); `echo` is registered separately as `builtin`, and Stripe tools are registered dynamically from `StripeMcpModule`.
+NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **75+N** MCP tools in a typical configuration — **74** from registered feature modules, **1** builtin (`echo`), plus **N** tools from the optional remote Stripe MCP proxy when API discovery succeeds (**N=0** if Stripe is not configured or discovery fails) — over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Feature code is organized in **14** Swift modules (`*Module`); `echo` is registered separately as `builtin`, and Stripe tools are registered dynamically from `StripeMcpModule`.
 
 Bundle ID: `kup.solutions.notion-bridge` (legacy: `solutions.kup.keepr`)
 

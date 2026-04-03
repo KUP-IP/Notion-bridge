@@ -1,48 +1,19 @@
-// ConnectionsManagementView.swift — Workspace Connections Management UI
-// NotionBridge · UI
-// PKT-368 D1-D6: Health badges, add/remove/rename, detail view, multi-workspace
-//
-// Self-contained SwiftUI view for managing Notion + Google Drive connections.
-// Embedded in SettingsWindow's Connections section.
-
 import SwiftUI
 
-// MARK: - Connection Display Model
-
-/// Unified display model for a workspace connection (Notion or Google Drive).
-struct ConnectionItem: Identifiable {
-    let id: String
-    let name: String
-    let type: ConnectionType
-    let isPrimary: Bool
-    let maskedToken: String
-    var health: ConnectionHealth
-
-    enum ConnectionType: String, CaseIterable, Identifiable {
-        case notion = "Notion"
-
-        var id: String { rawValue }
-
-        var icon: String {
-            switch self {
-            case .notion:      return "doc.text"
-            }
-        }
-    }
-}
-
-// MARK: - Connections Management View
-
-/// D1-D6: Full connection management interface.
-/// Shows all configured connections with health badges, supports CRUD operations.
+/// Unified workspace-connections management UI.
+/// Uses ConnectionRegistry for normalized models and performs live validation asynchronously
+/// so the list renders immediately while health checks stream in.
 public struct ConnectionsManagementView: View {
-    @State private var connections: [ConnectionItem] = []
+    @State private var connections: [BridgeConnection] = []
     @State private var isLoading = true
+    @State private var isRefreshing = false
+    @State private var errorMessage: String?
+
     @State private var showAddSheet = false
     @State private var showDeleteAlert = false
-    @State private var connectionToDelete: ConnectionItem?
+    @State private var connectionToDelete: BridgeConnection?
     @State private var showRenameAlert = false
-    @State private var renameTarget: ConnectionItem?
+    @State private var renameTarget: BridgeConnection?
     @State private var renameText = ""
     @State private var expandedConnectionId: String?
     @State private var showLastConnectionWarning = false
@@ -57,7 +28,7 @@ public struct ConnectionsManagementView: View {
                 HStack {
                     ProgressView()
                         .scaleEffect(0.7)
-                    Text("Loading connections…")
+                    Text("Loading workspace connections…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -68,32 +39,30 @@ public struct ConnectionsManagementView: View {
                     Image(systemName: "network.slash")
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                    Text("No connections configured")
+                    Text("No workspace connections configured")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.vertical, 12)
             } else {
-                // D1 + D5: Connection list with health badges
-                ForEach(connections) { conn in
+                ForEach(connections) { connection in
                     VStack(spacing: 0) {
-                        connectionRow(conn)
+                        connectionRow(connection)
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 withAnimation(.easeInOut(duration: 0.2)) {
-                                    expandedConnectionId = expandedConnectionId == conn.id ? nil : conn.id
+                                    expandedConnectionId = expandedConnectionId == connection.id ? nil : connection.id
                                 }
                             }
-                            .contextMenu { contextMenu(for: conn) }
+                            .contextMenu { contextMenu(for: connection) }
 
-                        // D5: Expanded detail view
-                        if expandedConnectionId == conn.id {
-                            connectionDetail(conn)
+                        if expandedConnectionId == connection.id {
+                            connectionDetail(connection)
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                         }
 
-                        if conn.id != connections.last?.id {
+                        if connection.id != connections.last?.id {
                             Divider()
                                 .padding(.leading, 24)
                         }
@@ -101,117 +70,105 @@ public struct ConnectionsManagementView: View {
                 }
             }
 
-            // D2: Add Connection + Refresh
+            if let errorMessage, !errorMessage.isEmpty {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.top, 8)
+            }
+
             HStack {
                 Button {
                     showAddSheet = true
                 } label: {
-                    Label("Add Connection", systemImage: "plus.circle")
+                    Label("Add Workspace", systemImage: "plus.circle")
                         .font(.callout)
                 }
                 .buttonStyle(.borderless)
 
                 Spacer()
 
+                if isRefreshing {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                        Text("Validating…")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Button {
-                    Task { await loadConnections() }
+                    Task { await reloadConnections() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                         .font(.caption)
                 }
                 .buttonStyle(.borderless)
-                .help("Refresh connection status")
+                .help("Refresh workspace connection status")
             }
             .padding(.top, 8)
         }
-        .task { await loadConnections() }
+        .task { await reloadConnections() }
         .sheet(isPresented: $showAddSheet) {
-            AddConnectionSheet {
-                Task { await loadConnections() }
+            AddWorkspaceConnectionSheet {
+                Task { await reloadConnections() }
             }
         }
-        // D3: Delete confirmation with preflight guard
-        .alert("Remove Connection", isPresented: $showDeleteAlert) {
+        .alert("Remove Workspace", isPresented: $showDeleteAlert) {
             Button("Cancel", role: .cancel) {}
             Button("Remove", role: .destructive) {
-                if let conn = connectionToDelete {
-                    Task {
-                        let preflight = await NotionClientRegistry.shared.preflightRemove(name: conn.name)
-                        switch preflight {
-                        case .primaryBlocked(let msg):
-                            primaryBlockedMessage = msg
-                            showPrimaryBlockedAlert = true
-                        case .lastConnectionWarning:
-                            showLastConnectionWarning = true
-                        case .removed:
-                            await removeConnection(conn)
-                        }
-                    }
+                if let connectionToDelete {
+                    Task { await beginRemove(connectionToDelete) }
                 }
             }
         } message: {
-            if let conn = connectionToDelete {
-                Text("Remove \"\(conn.name)\"? The stored token will be deleted.")
+            if let connectionToDelete {
+                Text("Remove \"\(connectionToDelete.name)\"? The stored token will be deleted.")
             }
         }
-        // Primary blocked alert
         .alert("Cannot Delete Primary", isPresented: $showPrimaryBlockedAlert) {
             Button("OK") {}
         } message: {
             Text(primaryBlockedMessage)
         }
-        // Last connection warning
-        .alert("Delete Last Connection?", isPresented: $showLastConnectionWarning) {
+        .alert("Delete Last Workspace?", isPresented: $showLastConnectionWarning) {
             Button("Cancel", role: .cancel) {}
             Button("Delete Anyway", role: .destructive) {
-                if let conn = connectionToDelete {
-                    Task {
-                        do {
-                            try await NotionClientRegistry.shared.removeConnection(name: conn.name)
-                        } catch {
-                            print("[ConnectionsManagement] Last-connection remove failed: \(error)")
-                        }
-                        await ConnectionHealthChecker.shared.invalidateAll()
-                        await loadConnections()
-                    }
+                if let connectionToDelete {
+                    Task { await confirmLastWorkspaceDeletion(connectionToDelete) }
                 }
             }
         } message: {
-            Text("You\u{2019}re about to delete your only connection. Nothing will work until you add a new one. Are you sure?")
+            Text("You’re about to delete your only workspace connection. Bridge features that need a workspace will stop working until you add a new one.")
         }
-        // D4: Rename alert
-        .alert("Rename Connection", isPresented: $showRenameAlert) {
-            TextField("Connection name", text: $renameText)
+        .alert("Rename Workspace", isPresented: $showRenameAlert) {
+            TextField("Workspace name", text: $renameText)
             Button("Cancel", role: .cancel) {}
             Button("Rename") {
-                if let conn = renameTarget, !renameText.isEmpty {
-                    Task { await renameConnection(conn, to: renameText) }
+                if let renameTarget, !renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Task { await renameConnection(renameTarget, to: renameText) }
                 }
             }
         } message: {
-            Text("Enter a new name for this connection.")
+            Text("Enter a new display name for this workspace connection.")
         }
     }
 
-    // MARK: - Connection Row (D1)
-
-    private func connectionRow(_ conn: ConnectionItem) -> some View {
+    private func connectionRow(_ connection: BridgeConnection) -> some View {
         HStack(spacing: 10) {
-            // Health badge
-            Image(systemName: conn.health.systemImage)
+            Image(systemName: connection.status.systemImage)
                 .font(.system(size: 10))
-                .foregroundStyle(healthColor(conn.health))
-                .help(conn.health.label)
+                .foregroundStyle(statusColor(connection.status))
+                .help(connection.status.label)
 
-            // Info
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text(conn.name)
+                    Text(connection.name)
                         .font(.callout)
-                        .fontWeight(conn.isPrimary ? .semibold : .regular)
+                        .fontWeight(connection.isPrimary ? .semibold : .regular)
 
-                    // D6: Primary indicator (multi-workspace)
-                    if conn.isPrimary && conn.type == .notion {
+                    if connection.isPrimary {
                         Text("PRIMARY")
                             .font(.system(size: 8, weight: .bold, design: .rounded))
                             .padding(.horizontal, 4)
@@ -223,77 +180,53 @@ public struct ConnectionsManagementView: View {
                 }
 
                 HStack(spacing: 6) {
-                    Image(systemName: conn.type.icon)
+                    Image(systemName: "doc.text")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                    Text(conn.type.rawValue)
+                    Text(connection.provider.displayName)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("·")
-                        .foregroundStyle(.quaternary)
-                    Text(conn.maskedToken)
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.tertiary)
+                    if let maskedCredential = connection.maskedCredential, !maskedCredential.isEmpty {
+                        Text("·")
+                            .foregroundStyle(.quaternary)
+                        Text(maskedCredential)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
 
             Spacer()
 
-            // Status text
-            Text(conn.health.label)
+            Text(connection.status.label)
                 .font(.caption2)
-                .foregroundStyle(healthColor(conn.health))
+                .foregroundStyle(statusColor(connection.status))
 
-            // Expand chevron
-            Image(systemName: expandedConnectionId == conn.id ? "chevron.up" : "chevron.down")
+            Image(systemName: expandedConnectionId == connection.id ? "chevron.up" : "chevron.down")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, 6)
     }
 
-    // MARK: - Connection Detail (D5)
-
-    private func connectionDetail(_ conn: ConnectionItem) -> some View {
+    private func connectionDetail(_ connection: BridgeConnection) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("Type")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 60, alignment: .leading)
-                Text(conn.type.rawValue)
-                    .font(.caption)
+            detailRow(label: "Provider", value: connection.provider.displayName)
+            detailRow(label: "Status", value: connection.status.label, icon: connection.status.systemImage, iconColor: statusColor(connection.status))
+            if let maskedCredential = connection.maskedCredential, !maskedCredential.isEmpty {
+                detailRow(label: "Token", value: maskedCredential, monospaced: true)
             }
-            HStack {
-                Text("Status")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 60, alignment: .leading)
-                Image(systemName: conn.health.systemImage)
-                    .font(.caption2)
-                    .foregroundStyle(healthColor(conn.health))
-                Text(conn.health.label)
-                    .font(.caption)
+            if connection.isPrimary {
+                detailRow(label: "Role", value: "Primary workspace — used when no workspace is specified")
             }
-            HStack {
-                Text("Token")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 60, alignment: .leading)
-                Text(conn.maskedToken)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.tertiary)
+            if let summary = connection.summary, !summary.isEmpty {
+                detailRow(label: "Summary", value: summary)
             }
-            if conn.isPrimary {
-                HStack {
-                    Text("Role")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 60, alignment: .leading)
-                    Text("Primary workspace — used when no workspace is specified")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            if let validatedAt = connection.lastValidatedAt, !validatedAt.isEmpty {
+                detailRow(label: "Checked", value: validatedAt)
+            }
+            if !connection.capabilities.isEmpty {
+                detailRow(label: "Tools", value: connection.capabilities.joined(separator: " • "))
             }
         }
         .padding(.leading, 24)
@@ -301,23 +234,43 @@ public struct ConnectionsManagementView: View {
         .padding(.bottom, 4)
     }
 
-    // MARK: - Context Menu (D3 + D4)
+    @ViewBuilder
+    private func detailRow(
+        label: String,
+        value: String,
+        icon: String? = nil,
+        iconColor: Color = .secondary,
+        monospaced: Bool = false
+    ) -> some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 60, alignment: .leading)
+            if let icon {
+                Image(systemName: icon)
+                    .font(.caption2)
+                    .foregroundStyle(iconColor)
+            }
+            Text(value)
+                .font(monospaced ? .system(.caption, design: .monospaced) : .caption)
+                .foregroundStyle(.primary)
+        }
+    }
 
     @ViewBuilder
-    private func contextMenu(for conn: ConnectionItem) -> some View {
-        // D4: Rename
+    private func contextMenu(for connection: BridgeConnection) -> some View {
         Button {
-            renameTarget = conn
-            renameText = conn.name
+            renameTarget = connection
+            renameText = connection.name
             showRenameAlert = true
         } label: {
             Label("Rename", systemImage: "pencil")
         }
 
-        // D6: Set as primary
-        if conn.type == .notion && !conn.isPrimary {
+        if !connection.isPrimary {
             Button {
-                Task { await setPrimary(conn) }
+                Task { await setPrimary(connection) }
             } label: {
                 Label("Set as Primary", systemImage: "star")
             }
@@ -325,116 +278,161 @@ public struct ConnectionsManagementView: View {
 
         Divider()
 
-        // D3: Remove
         Button(role: .destructive) {
-            connectionToDelete = conn
+            connectionToDelete = connection
             showDeleteAlert = true
         } label: {
-            Label("Remove Connection", systemImage: "trash")
+            Label("Remove Workspace", systemImage: "trash")
         }
     }
 
-    // MARK: - Data Loading
-
-    private func loadConnections() async {
+    @MainActor
+    private func reloadConnections() async {
         isLoading = true
-        var items: [ConnectionItem] = []
+        errorMessage = nil
 
-        // Load Notion connections from registry
         do {
-            let notionConns = try await NotionClientRegistry.shared.listConnections()
-            for conn in notionConns {
-                let health: ConnectionHealth = conn.status == "connected" ? .healthy : .error
-                items.append(ConnectionItem(
-                    id: "notion:\(conn.name)",
-                    name: conn.name,
-                    type: .notion,
-                    isPrimary: conn.isPrimary,
-                    maskedToken: conn.maskedToken,
-                    health: health
-                ))
-            }
+            let snapshot = try await ConnectionRegistry.shared.listConnections(kind: .workspace, validateLive: false)
+            connections = sortConnections(snapshot)
+            isLoading = false
+            await refreshStatuses(for: snapshot.map(\.id))
         } catch {
-            print("[ConnectionsManagement] Failed to load Notion connections: \(error)")
+            connections = []
+            errorMessage = error.localizedDescription
+            isLoading = false
         }
-
-        connections = items
-        isLoading = false
     }
 
-    // MARK: - Actions
+    private func refreshStatuses(for ids: [String]? = nil) async {
+        let targetIds = await MainActor.run {
+            ids ?? connections.map(\.id)
+        }
+        guard !targetIds.isEmpty else { return }
 
-    /// D3: Remove a connection with guard logic
-    private func removeConnection(_ conn: ConnectionItem) async {
-        if conn.type == .notion {
-            // Preflight check
-            let result = await NotionClientRegistry.shared.preflightRemove(name: conn.name)
-            switch result {
-            case .primaryBlocked(let message):
+        await MainActor.run { isRefreshing = true }
+
+        let validated = await withTaskGroup(of: BridgeConnection?.self, returning: [BridgeConnection].self) { group in
+            for id in targetIds {
+                group.addTask {
+                    try? await ConnectionRegistry.shared.validateConnection(id: id)
+                }
+            }
+
+            var results: [BridgeConnection] = []
+            for await connection in group {
+                if let connection {
+                    results.append(connection)
+                }
+            }
+            return results
+        }
+
+        await MainActor.run {
+            for connection in validated {
+                upsert(connection)
+            }
+            isRefreshing = false
+        }
+    }
+
+    @MainActor
+    private func upsert(_ connection: BridgeConnection) {
+        if let index = connections.firstIndex(where: { $0.id == connection.id }) {
+            connections[index] = connection
+        } else {
+            connections.append(connection)
+        }
+        connections = sortConnections(connections)
+    }
+
+    private func beginRemove(_ connection: BridgeConnection) async {
+        let preflight = await NotionClientRegistry.shared.preflightRemove(name: connection.name)
+        switch preflight {
+        case .primaryBlocked(let message):
+            await MainActor.run {
                 primaryBlockedMessage = message
                 showPrimaryBlockedAlert = true
-                return
-            case .lastConnectionWarning:
-                // Show last-connection warning — caller handles via showLastConnectionWarning
-                // If we got here from the last-connection confirmation, proceed
-                break
-            case .removed:
-                break
             }
-
-            do {
-                try await NotionClientRegistry.shared.removeConnection(name: conn.name)
-            } catch {
-                print("[ConnectionsManagement] Remove failed: \(error)")
+        case .lastConnectionWarning:
+            await MainActor.run {
+                connectionToDelete = connection
+                showLastConnectionWarning = true
             }
+        case .removed:
+            await removeConnection(connection)
         }
-        await ConnectionHealthChecker.shared.invalidateAll()
-        await loadConnections()
     }
 
-    /// D4: Rename a connection (Notion only — config name update)
-    private func renameConnection(_ conn: ConnectionItem, to newName: String) async {
-        if conn.type == .notion {
-            do {
-                try await NotionClientRegistry.shared.renameConnection(from: conn.name, to: newName)
-                await ConnectionHealthChecker.shared.invalidateAll()
-            } catch {
-                print("[ConnectionsManagement] Rename failed: \(error)")
-            }
-        }
-        await loadConnections()
-    }
-
-    /// D6: Set a Notion connection as primary
-    private func setPrimary(_ conn: ConnectionItem) async {
+    private func confirmLastWorkspaceDeletion(_ connection: BridgeConnection) async {
         do {
-            let registryName = conn.type == .notion ? conn.name : conn.name
-            try await NotionClientRegistry.shared.setPrimary(name: registryName)
-            await ConnectionHealthChecker.shared.invalidateAll()
-            await loadConnections()
+            try await ConnectionRegistry.shared.removeConnection(id: connection.id)
+            await reloadConnections()
         } catch {
-            print("[ConnectionsManagement] Set primary failed: \(error)")
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
-    // MARK: - Helpers
-
-    private func healthColor(_ health: ConnectionHealth) -> Color {
-        switch health {
-        case .healthy:      return .green
-        case .warning:      return .yellow
-        case .error:        return .red
-        case .unconfigured: return .gray
-        case .checking:     return .orange
+    private func removeConnection(_ connection: BridgeConnection) async {
+        do {
+            try await ConnectionRegistry.shared.removeConnection(id: connection.id)
+            await reloadConnections()
+        } catch {
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
+    private func renameConnection(_ connection: BridgeConnection, to newName: String) async {
+        do {
+            try await ConnectionRegistry.shared.renameConnection(id: connection.id, to: newName)
+            await reloadConnections()
+        } catch {
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func setPrimary(_ connection: BridgeConnection) async {
+        do {
+            try await ConnectionRegistry.shared.setPrimary(id: connection.id)
+            await reloadConnections()
+        } catch {
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func sortConnections(_ items: [BridgeConnection]) -> [BridgeConnection] {
+        items.sorted { lhs, rhs in
+            if lhs.isPrimary != rhs.isPrimary {
+                return lhs.isPrimary && !rhs.isPrimary
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func statusColor(_ status: BridgeConnectionStatus) -> Color {
+        switch status {
+        case .connected:
+            return .green
+        case .warning:
+            return .yellow
+        case .disconnected:
+            return .red
+        case .notConfigured:
+            return .gray
+        case .checking:
+            return .orange
+        }
+    }
 }
 
-// MARK: - Add Connection Sheet (D2)
-
-/// Guided form for adding a new Notion workspace connection.
-struct AddConnectionSheet: View {
+struct AddWorkspaceConnectionSheet: View {
     @Environment(\.dismiss) private var dismiss
     let onComplete: () -> Void
 
@@ -446,22 +444,20 @@ struct AddConnectionSheet: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("Add Connection")
+            Text("Add Workspace")
                 .font(.headline)
 
-            // Name
-            TextField("Connection name (e.g. Work, Personal)", text: $connectionName)
+            TextField("Workspace name (e.g. Work, Personal)", text: $connectionName)
                 .textFieldStyle(.roundedBorder)
 
-            // Token
             SecureField("Notion API token (ntn_...)", text: $token)
                 .textFieldStyle(.roundedBorder)
 
             Toggle("Set as primary workspace", isOn: $makePrimary)
                 .font(.callout)
 
-            if let error = errorMessage {
-                Text(error)
+            if let errorMessage {
+                Text(errorMessage)
                     .font(.caption)
                     .foregroundStyle(.red)
             }
@@ -487,7 +483,7 @@ struct AddConnectionSheet: View {
                     Task { await saveConnection() }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(connectionName.trimmingCharacters(in: .whitespaces).isEmpty || token.isEmpty || isSaving)
+                .disabled(connectionName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || token.isEmpty || isSaving)
                 .keyboardShortcut(.defaultAction)
             }
         }
@@ -496,24 +492,27 @@ struct AddConnectionSheet: View {
     }
 
     private func saveConnection() async {
-        isSaving = true
-        errorMessage = nil
-        let trimmedName = connectionName.trimmingCharacters(in: .whitespaces)
+        await MainActor.run {
+            isSaving = true
+            errorMessage = nil
+        }
 
         do {
-            try await NotionClientRegistry.shared.addConnection(
-                name: trimmedName,
+            _ = try await ConnectionRegistry.shared.configureNotionConnection(
+                name: connectionName,
                 token: token,
                 primary: makePrimary
             )
-            await ConnectionHealthChecker.shared.invalidateAll()
-            onComplete()
-            dismiss()
+            await MainActor.run {
+                onComplete()
+                dismiss()
+                isSaving = false
+            }
         } catch {
-            errorMessage = error.localizedDescription
+            await MainActor.run {
+                errorMessage = error.localizedDescription
+                isSaving = false
+            }
         }
-
-        isSaving = false
     }
-
 }

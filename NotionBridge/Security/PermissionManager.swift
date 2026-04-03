@@ -741,11 +741,11 @@ public final class PermissionManager {
         }
         // PKT-369 N1: Diagnostic probe — log raw authorization status
         print("[PermissionManager] N1 diagnostic: authorizationStatus=\(settings.authorizationStatus.rawValue) (0=notDetermined, 1=denied, 2=authorized, 3=provisional, 4=ephemeral)")
-        applyNotificationAuthorizationStatus(settings.authorizationStatus)
+        applyNotificationSettings(settings)
         notificationEvidence = .init(
             source: "UNUserNotificationCenter.notificationSettings()",
-            observed: "authorizationStatus=\(settings.authorizationStatus.rawValue)",
-            detail: "Notification authorization status from UserNotifications framework.",
+            observed: notificationSettingsObservedString(settings),
+            detail: notificationSettingsDetail(settings),
             checkedAt: Date()
         )
     }
@@ -758,36 +758,57 @@ public final class PermissionManager {
     public func requestNotificationAccess() async -> Bool {
         let center = UNUserNotificationCenter.current()
         do {
-            _ = try await center.requestAuthorization(options: [.alert, .sound])
+            _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
         } catch {
             print("[PermissionManager] requestAuthorization error: \(error.localizedDescription)")
         }
         // N2: Source of truth — notificationSettings() reflects actual macOS grant state
         let settings = await center.notificationSettings()
         print("[PermissionManager] N2 source-of-truth: authorizationStatus=\(settings.authorizationStatus.rawValue)")
-        applyNotificationAuthorizationStatus(settings.authorizationStatus)
+        applyNotificationSettings(settings)
         let granted = notificationStatus == .granted
         notificationEvidence = .init(
             source: "requestAuthorization + notificationSettings() [N2 source-of-truth]",
-            observed: "authorizationStatus=\(settings.authorizationStatus.rawValue)",
-            detail: granted
-                ? "Notification authorization confirmed via notificationSettings()."
-                : "Not fully authorized. authorizationStatus=\(settings.authorizationStatus.rawValue).",
+            observed: notificationSettingsObservedString(settings),
+            detail: notificationSettingsDetail(settings),
             checkedAt: Date()
         )
         return granted
     }
 
-    private func applyNotificationAuthorizationStatus(_ auth: UNAuthorizationStatus) {
-        switch auth {
+    private func applyNotificationSettings(_ settings: UNNotificationSettings) {
+        switch settings.authorizationStatus {
         case .authorized, .provisional, .ephemeral:
-            notificationStatus = .granted
+            let hasDeliverySurface = settings.alertSetting == .enabled
+                || settings.badgeSetting == .enabled
+                || settings.soundSetting == .enabled
+                || settings.notificationCenterSetting == .enabled
+            notificationStatus = hasDeliverySurface ? .granted : .partiallyGranted
         case .denied:
             notificationStatus = .denied
         case .notDetermined:
             notificationStatus = .unknown
         @unknown default:
             notificationStatus = .unknown
+        }
+    }
+
+    private func notificationSettingsObservedString(_ settings: UNNotificationSettings) -> String {
+        "authorizationStatus=\(settings.authorizationStatus.rawValue), alert=\(settings.alertSetting.rawValue), sound=\(settings.soundSetting.rawValue), badge=\(settings.badgeSetting.rawValue), center=\(settings.notificationCenterSetting.rawValue)"
+    }
+
+    private func notificationSettingsDetail(_ settings: UNNotificationSettings) -> String {
+        switch notificationStatus {
+        case .granted:
+            return "Notifications are authorized and at least one delivery surface is enabled for Notion Bridge."
+        case .partiallyGranted:
+            return "Notifications are authorized, but all visible delivery surfaces are disabled. Open System Settings > Notifications and enable alerts, Notification Center, sound, or badges for Notion Bridge."
+        case .denied:
+            return "Notifications were denied for Notion Bridge in System Settings."
+        case .unknown:
+            return "macOS has not resolved the notification prompt for Notion Bridge yet."
+        case .restartRecommended:
+            return "Notification settings changed and may require a relaunch to reflect accurately."
         }
     }
 
@@ -821,16 +842,22 @@ public final class PermissionManager {
                 let denied = Self.automationTargets.filter {
                     !(automationTargetGrants[$0.bundleID] ?? false)
                 }.map(\.name)
-                return "Grant Automation access for: \(denied.joined(separator: ", ")). Open System Settings > Privacy & Security > Automation."
+                return "Grant Automation access for: \(denied.joined(separator: ", ")). Open System Settings > Privacy & Security > Automation. Automation for Contacts.app is separate from Contacts privacy access."
             }
-            return "Enable Automation targets used by tools (System Events, Messages, Chrome, Contacts)."
+            return "Enable Automation targets used by tools (System Events, Messages, Chrome, Contacts, Reminders). Automation for Contacts.app is separate from Contacts privacy access."
         case .notifications:
             if notificationStatus == .unknown {
-                return "If alerts are already on in System Settings, quit and reopen Notion Bridge. Otherwise click Allow once so macOS can register this app for notifications."
+                return "Click Allow to trigger the macOS Notifications prompt. If macOS still does not resolve the state, Notion Bridge should open Notifications settings automatically."
             }
-            return "Allow Notifications when prompted or enable in System Settings > Notifications."
+            if notificationStatus == .partiallyGranted {
+                return "Notifications are authorized, but delivery is muted. Open System Settings > Notifications and enable alerts, Notification Center, sound, or badges for Notion Bridge."
+            }
+            return "Open System Settings > Notifications and enable Notion Bridge if notifications were denied."
         case .contacts:
-            return "Allow Contacts access when prompted or in System Settings > Privacy & Security > Contacts."
+            if contactsStatus == .unknown {
+                return "Click Allow to trigger the macOS Contacts prompt."
+            }
+            return "Open System Settings > Privacy & Security > Contacts and enable Notion Bridge. Contacts privacy access is separate from Automation access for Contacts.app."
         }
     }
 

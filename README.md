@@ -159,13 +159,11 @@ The security gate also enforces command-aware escalation rules, sensitive-path h
 ## Permissions
 
 Depending on the tools you use, NotionBridge may require:
-- Accessibility
-- Screen Recording
-- Full Disk Access
-- Automation
-- Contacts
+- Auto-prompted on first launch: Contacts, Notifications, and Automation target registration
+- Manual in System Settings: Accessibility, Screen Recording, and Full Disk Access
+- Separate grants for Contacts privacy access and Automation access to Contacts.app
 
-The onboarding flow and Settings window surface grant status and guide re-authorization when needed.
+The onboarding flow and Settings window surface current grant state, trigger native prompts when macOS allows it, and deep-link to recovery panes when manual re-authorization is required.
 
 ---
 
