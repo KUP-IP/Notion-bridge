@@ -36,13 +36,18 @@ There is no way to run a single test file in isolation — all tests run from `N
 ### App Bundle & Distribution
 
 ```bash
-make app        # Package .app bundle (requires make build first)
-make install    # Build .app and install to /Applications (resets TCC for legacy + current bundle IDs)
-make dmg        # Create distributable DMG
-make sign       # Code-sign with Developer ID
-make notarize   # Submit to Apple notarization (requires keychain profile)
-make release    # Full pipeline: clean → test → app → sign → notarize → dmg → verify
+make app           # Release build + package .build/NotionBridge.app
+make install       # sign → notarize → staple → ditto → /Applications/Notion Bridge.app (needs Developer ID + notary keychain profile)
+make install-copy  # Same .app to /Applications without sign/notarize — local dev only
+make dmg           # Create distributable DMG
+make sign          # Code-sign with Developer ID
+make notarize      # Submit to Apple notarization (requires keychain profile)
+make release       # Full pipeline: clean → test → app → sign → notarize → dmg → verify
 ```
+
+**Production install ladder (canonical):** `make test` → `make app` → `make install` when signing credentials exist; otherwise `make install-copy` and accept ad-hoc / Gatekeeper differences. **`swift build` alone does not refresh `/Applications`** — always use the Makefile app target.
+
+If `make app` warns that `actool` failed, icons may fall back to PNGs; see Makefile `app` target (asset compile is best-effort). A common cause is a broken **ibtoold** plugin load (`xcodebuild -runFirstLaunch` or opening **Xcode** once to refresh system content), not Swift source errors.
 
 ### Maintenance
 
@@ -67,10 +72,11 @@ Set the Notion API token (resolution priority order):
 
 ## Git & Release Hygiene
 
+- **`main`** on `origin` is the integration branch for shipped behavior; integrate via normal merge or PR — **no force-push**, **no history rewrite**.
 - Before a production install or risky verification pass, if the working tree is mixed or uncommitted, create a backup branch, commit the current state, and push it before additional surgery.
-- Do not push mixed emergency or verification state directly to `main`.
-- Use backup branches as recovery snapshots, not merge targets.
-- Split stability fixes, settings/UI restructures, and unrelated documentation or test drift into separate reviewable branches whenever feasible.
+- Do not push mixed emergency or verification state directly to `main` without review.
+- Use `backup/*` branches as recovery snapshots; fold them into `main` when ready, then avoid long-lived duplicate integration lines.
+- Split stability fixes, settings/UI restructures, and unrelated documentation or test drift into separate reviewable commits when feasible.
 - When installing a production candidate, verify the running binary path is `/Applications/Notion Bridge.app/Contents/MacOS/NotionBridge`, not a `.build` artifact.
 
 ## Architecture
