@@ -232,3 +232,23 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 **Context:** Trying to capture the Preview.app window showing the trophy icon for visual review.
 **Suggested Fix:** Add a `list_windows` tool or include valid window IDs in the error message. Alternatively, document that window IDs come from `ax_tree` or `process_list` pid → CGWindowListCopyWindowInfo.
 
+
+
+### 2026-04-03 | Agent: Cursor Composer | Session: keepr-bridge-closeout-sk-close-agent
+
+**Category:** Friction  
+**Tool:** notion_page_read  
+**Severity:** Low  
+**Description:** Reading skill page `sk-close-agent` (6673dba8-26b1-4b1d-aa0a-6aad084a861c) with default pagination returned `blockCount: 200` and truncated; full protocol extends beyond first 200 blocks. Agent relied on partial content + headings to execute phases.  
+**Context:** Phase 1.5 MCP feedback scan during sk close agent run.  
+**Suggested Fix:** Support higher `maxBlocks` for long skill sheets, or document "read in chunks" for skills >200 blocks.
+
+---
+
+**Category:** Enhancement  
+**Tool:** (workflow)  
+**Severity:** Low  
+**Description:** Phases 5–7 (AI LOG database, PACKETS, packet finalize) require Notion database IDs not present in this Cursor session; executed hub write-back to FOCUS page only.  
+**Context:** sk close agent full UEP chain in external IDE without Keepr packet context.  
+**Suggested Fix:** None for bridge — operator should run full closeout from Keepr with active packet when DB writes are required.
+
