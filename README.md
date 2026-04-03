@@ -222,6 +222,16 @@ The app’s `SUFeedURL` (see `Info.plist`) points at the **Sparkle appcast** (`a
 
 Verify locally: `make verify-sparkle-feed` (reads `SUFeedURL` from `Info.plist`).
 
+### Purchase download (kup.solutions)
+
+Stripe fulfillment uses the Cloudflare Worker in the **`kup.solutions`** repo (`workers/nb-fulfillment`). After each release:
+
+1. Run **`make dmg`** in this repo — artifact is **`.build/notion-bridge-v$(VERSION).dmg`**, where **`VERSION`** is **`CFBundleShortVersionString`** in **`Info.plist`** (same as **`DMG_NAME`** in the Makefile).
+2. Upload that file to R2 bucket **`nb-downloads`** with object key **`DMG_OBJECT_KEY`** from **`kup.solutions/workers/nb-fulfillment/wrangler.toml`** (must match the filename exactly).
+3. Deploy the worker if **`DMG_OBJECT_KEY`** changed: **`cd workers/nb-fulfillment && npx wrangler deploy --env production`**.
+
+Until the new object exists in R2, paid downloads return **500** (“Download artifact not found”).
+
 ## License and distribution
 
 NotionBridge is **source-available commercial software**.
