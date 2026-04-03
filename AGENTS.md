@@ -43,6 +43,7 @@ make dmg           # Create distributable DMG
 make sign          # Code-sign with Developer ID
 make notarize      # Submit to Apple notarization (requires keychain profile)
 make release       # Full pipeline: clean → test → app → sign → notarize → dmg → verify
+make check-appcast # Fail if appcast.xml does not match Info.plist version/build numbers
 ```
 
 **Production install ladder (canonical):** `make test` → `make app` → `make install` when signing credentials exist; otherwise `make install-copy` and accept ad-hoc / Gatekeeper differences. **`swift build` alone does not refresh `/Applications`** — always use the Makefile app target.

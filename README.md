@@ -220,7 +220,7 @@ The app’s `SUFeedURL` (see `Info.plist`) points at the **Sparkle appcast** (`a
 - **Option A — Public GitHub repo:** Keep the default `https://raw.githubusercontent.com/KUP-IP/Notion-bridge/main/appcast.xml` and set the repository to **public** (anonymous `curl` / incognito browser must show XML).
 - **Option B — Private repo:** Host `appcast.xml` at any **public HTTPS** URL you control (e.g. CDN or static site), then set `SUFeedURL` to that URL and ship a new build. The file must match the repo’s generated appcast (`make dmg` / `make appcast`); **`length`** and **`sparkle:edSignature`** must match the exact DMG you publish.
 
-Verify locally: `make verify-sparkle-feed` (reads `SUFeedURL` from `Info.plist`).
+Verify locally: `make check-appcast` (committed `appcast.xml` vs `Info.plist`), then `make verify-sparkle-feed` (reads `SUFeedURL` from `Info.plist` and curls the live feed).
 
 ### Purchase download (kup.solutions)
 
