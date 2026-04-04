@@ -985,6 +985,137 @@ public enum NotionModule {
             }
         ))
     }
+
+        // MARK: 19. notion_database_get - open (B1, v1.8.0)
+        await router.register(ToolRegistration(
+            name: "notion_database_get",
+            module: moduleName,
+            tier: .open,
+            description: "Retrieve a Notion database container by ID. Returns the database object including title, icon, cover, parent, and high-level metadata. Does NOT return the schema — use notion_datasource_get for schema details.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "databaseId": .object(["type": .string("string"), "description": .string("Database ID (with or without hyphens)")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("databaseId")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let dbId) = args["databaseId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_database_get", reason: "missing 'databaseId'")
+                }
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.getDatabase(databaseId: dbId)
+
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse database response")])
+                }
+
+                let id = json["id"] as? String ?? ""
+                let url = json["url"] as? String ?? ""
+                var title = "Untitled"
+                if let titleArr = json["title"] as? [[String: Any]] {
+                    title = titleArr.compactMap { $0["plain_text"] as? String }.joined()
+                }
+                let icon = json["icon"] as? [String: Any]
+                let iconType = icon?["type"] as? String ?? ""
+                let iconValue: String = {
+                    if iconType == "emoji" { return icon?["emoji"] as? String ?? "" }
+                    if iconType == "external" {
+                        return (icon?["external"] as? [String: Any])?["url"] as? String ?? ""
+                    }
+                    return ""
+                }()
+
+                var parentInfo: [String: Value] = [:]
+                if let parent = json["parent"] as? [String: Any],
+                   let parentType = parent["type"] as? String {
+                    parentInfo["type"] = .string(parentType)
+                    if let pid = parent[parentType] as? String {
+                        parentInfo["id"] = .string(pid)
+                    }
+                }
+
+                return .object([
+                    "id": .string(id),
+                    "title": .string(title),
+                    "url": .string(url),
+                    "icon": .object(["type": .string(iconType), "value": .string(iconValue)]),
+                    "parent": .object(parentInfo)
+                ])
+            }
+        ))
+
+        // MARK: 20. notion_datasource_get - open (B2, v1.8.0)
+        await router.register(ToolRegistration(
+            name: "notion_datasource_get",
+            module: moduleName,
+            tier: .open,
+            description: "Retrieve a Notion data source schema by ID. Returns the full schema including property definitions, types, and options. Use this to inspect a database's structure before querying.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "dataSourceId": .object(["type": .string("string"), "description": .string("Data source ID (with or without hyphens)")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("dataSourceId")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let dsId) = args["dataSourceId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_datasource_get", reason: "missing 'dataSourceId'")
+                }
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.getDataSource(dataSourceId: dsId)
+
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse data source response")])
+                }
+
+                let id = json["id"] as? String ?? ""
+                let name = json["name"] as? String ?? "Untitled"
+
+                // Extract properties/schema
+                var schemaItems: [Value] = []
+                if let properties = json["properties"] as? [String: [String: Any]] {
+                    for (propName, propDef) in properties.sorted(by: { $0.key < $1.key }) {
+                        let propId = propDef["id"] as? String ?? ""
+                        let propType = propDef["type"] as? String ?? ""
+                        var item: [String: Value] = [
+                            "name": .string(propName),
+                            "id": .string(propId),
+                            "type": .string(propType)
+                        ]
+                        // Include select/multi_select/status options if present
+                        if let typeConfig = propDef[propType] as? [String: Any],
+                           let options = typeConfig["options"] as? [[String: Any]] {
+                            item["options"] = .array(options.compactMap { opt in
+                                guard let optName = opt["name"] as? String else { return nil }
+                                return .string(optName)
+                            })
+                        }
+                        if let typeConfig = propDef[propType] as? [String: Any],
+                           let groups = typeConfig["groups"] as? [[String: Any]] {
+                            item["groups"] = .array(groups.compactMap { grp in
+                                guard let grpName = grp["name"] as? String else { return nil }
+                                return .string(grpName)
+                            })
+                        }
+                        schemaItems.append(.object(item))
+                    }
+                }
+
+                return .object([
+                    "id": .string(id),
+                    "name": .string(name),
+                    "schema": .array(schemaItems)
+                ])
+            }
+        ))
+    }
 }
 
 // MARK: - Lazy Registry Holder

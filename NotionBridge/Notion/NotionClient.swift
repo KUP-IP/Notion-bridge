@@ -760,4 +760,16 @@ public actor NotionClient {
         }
         return data
     }
+
+    /// B2 (v1.8.0): Retrieve a data source schema by ID.
+    /// GET /v1/data_sources/{data_source_id}
+    public func getDataSource(dataSourceId: String) async throws -> Data {
+        let cleanId = dataSourceId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(method: "GET", path: "/data_sources/" + cleanId)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
 }

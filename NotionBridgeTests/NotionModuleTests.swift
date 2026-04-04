@@ -30,7 +30,7 @@ func runNotionModuleTests() async {
     let expectedTools: [String] = [
         "notion_search", "notion_page_read", "notion_page_update",
         "notion_query", "notion_page_create", "notion_blocks_append",
-        "notion_block_delete", "notion_page_markdown_read",
+        "notion_block_delete", "notion_page_markdown_read", "notion_database_get", "notion_datasource_get",
         "notion_comments_list", "notion_comment_create", "notion_users_list",
         "notion_page_move", "notion_file_upload", "notion_token_introspect",
         "notion_connections_list", "notion_block_read", "notion_block_update"
@@ -52,7 +52,7 @@ func runNotionModuleTests() async {
         "notion_search", "notion_page_read", "notion_query",
         "notion_page_markdown_read", "notion_comments_list",
         "notion_users_list", "notion_token_introspect", "notion_connections_list",
-        "notion_block_read"
+        "notion_block_read", "notion_database_get", "notion_datasource_get"
     ]
     for toolName in openTools {
         await test("\(toolName) tier is open") {
