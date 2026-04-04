@@ -780,7 +780,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             responseHead.headers.add(name: "Content-Type", value: "text/event-stream")
             responseHead.headers.add(name: "Cache-Control", value: "no-cache")
             responseHead.headers.add(name: "Connection", value: "keep-alive")
-            responseHead.headers.add(name: "Access-Control-Allow-Origin", value: "*")
+            // SEC-02: CORS wildcard removed — localhost-only server needs no cross-origin access (PKT-373 P1-4)
             ctx.write(self.wrapOutboundOut(.head(responseHead)), promise: nil)
 
             let endpointData = "event: endpoint\ndata: /messages?sessionId=\(sessionID)\n\n"

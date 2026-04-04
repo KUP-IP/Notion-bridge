@@ -173,7 +173,19 @@ private struct MCPBearerTokenValidator: HTTPRequestValidator {
         let token = auth.dropFirst("Bearer ".count)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard token == expectedToken else {
+        // SEC-01: Constant-time comparison to prevent timing attacks on bearer token
+        let tokenData = Array(token.utf8)
+        let expectedData = Array(expectedToken.utf8)
+        let lengthMatch = tokenData.count == expectedData.count
+        // Always compare full length to avoid early-exit timing leak
+        let maxLen = max(tokenData.count, expectedData.count)
+        var mismatch: UInt8 = 0
+        for i in 0..<maxLen {
+            let a = i < tokenData.count ? tokenData[i] : 0
+            let b = i < expectedData.count ? expectedData[i] : 0
+            mismatch |= a ^ b
+        }
+        guard lengthMatch && mismatch == 0 else {
             return .error(
                 statusCode: 403,
                 .invalidRequest("Forbidden: invalid MCP bearer token"),
