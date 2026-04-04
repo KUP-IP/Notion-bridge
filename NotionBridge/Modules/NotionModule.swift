@@ -1,7 +1,7 @@
 // NotionModule.swift – V1-05 → V1-12 → PKT-367 Notion Integration Tools
 // NotionBridge · Modules
 //
-// 18 tools via NotionClientRegistry for multi-workspace support.
+// 20 tools via NotionClientRegistry for multi-workspace support.
 // PKT-320: Updated references from NOTION_API_KEY to NOTION_API_TOKEN
 // PKT-367: 13 new tools, NotionClientRegistry integration, optional workspace param
 
@@ -550,6 +550,7 @@ public enum NotionModule {
                 return .object(["markdown": .string(markdown)])
             }
         ))
+        // (MARK 9 removed: notion_page_markdown_write — D3 v1.8.0)
         // MARK: 10. notion_comments_list – open (A9a)
         await router.register(ToolRegistration(
             name: "notion_comments_list",

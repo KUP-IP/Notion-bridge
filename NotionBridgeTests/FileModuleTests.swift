@@ -44,8 +44,8 @@ func runFileModuleTests() async {
         try expect(tierMap["file_metadata"] == .open, "file_metadata should be green")
         try expect(tierMap["file_read"] == .open, "file_read should be green")
         try expect(tierMap["clipboard_read"] == .open, "clipboard_read should be green")
-        // Open: clipboard_write
-        try expect(tierMap["clipboard_write"] == .open, "clipboard_write should be open")
+        // Notify: clipboard_write (SEC-03: upgraded from .open)
+        try expect(tierMap["clipboard_write"] == .notify, "clipboard_write should be notify (SEC-03)")
         // Notify: file_copy (elevated PKT-373 P1-1)
         try expect(tierMap["file_copy"] == .notify, "file_copy should be notify (elevated PKT-373 P1-1)")
         // Orange: file_write, file_append, file_move, file_rename, dir_create

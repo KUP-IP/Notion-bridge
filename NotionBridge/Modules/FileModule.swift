@@ -465,11 +465,11 @@ public enum FileModule {
             }
         ))
 
-        // 12. clipboard_write – open
+        // 12. clipboard_write – notify (SEC-03: upgraded from .open)
         await router.register(ToolRegistration(
             name: "clipboard_write",
             module: moduleName,
-            tier: .open,
+            tier: .notify,
             description: "Write text to the macOS system clipboard, replacing any existing content. Returns confirmation.",
             inputSchema: .object([
                 "type": .string("object"),
