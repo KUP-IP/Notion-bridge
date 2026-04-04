@@ -19,6 +19,7 @@ import LocalAuthentication
 public enum CredentialType: String, Sendable, Codable, CaseIterable {
     case password = "password"
     case card = "card"
+    case unknown = "unknown"
 }
 
 // MARK: - CredentialMetadata
@@ -401,9 +402,7 @@ public final class CredentialManager: Sendable {
 
         // Parse type from kSecAttrLabel
         let typeRaw = item[kSecAttrLabel as String] as? String ?? ""
-        guard let credType = CredentialType(rawValue: typeRaw) else {
-            throw CredentialError.invalidType(typeRaw)
-        }
+        let credType = CredentialType(rawValue: typeRaw) ?? .unknown
 
         // Parse metadata from kSecAttrComment
         let commentJSON = item[kSecAttrComment as String] as? String ?? "{}"

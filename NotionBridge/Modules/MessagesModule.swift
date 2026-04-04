@@ -683,6 +683,16 @@ public enum MessagesModule {
                     ])
                 }
 
+                // A3: Reject raw chat identifiers (e.g. "chat123456789")
+                // These create malformed ghost threads in Messages.app
+                let chatIdPattern = try! NSRegularExpression(pattern: "^chat[0-9]+$", options: .caseInsensitive)
+                if chatIdPattern.firstMatch(in: recipient, range: NSRange(recipient.startIndex..., in: recipient)) != nil {
+                    return .object([
+                        "error": .string("Raw chat identifiers (e.g. '\(recipient)') cannot be used as recipients. Use messages_participants to resolve the chat to individual phone numbers or emails first."),
+                        "sent": .bool(false)
+                    ])
+                }
+
                 // Determine service type: manual override or auto-detect from chat.db
                 let serviceOverride: String? = {
                     if case .string(let s) = args["service"] { return s }

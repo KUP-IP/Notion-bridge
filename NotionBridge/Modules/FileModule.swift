@@ -11,6 +11,26 @@ import MCP
 /// Forbidden path enforcement handled by SecurityGate at ToolRouter dispatch level.
 public enum FileModule {
 
+    // MARK: - HTML Entity Decoding (A1 fix)
+    private static func decodeHTMLEntities(_ string: String) -> String {
+        var result = string
+        let entities: [(String, String)] = [
+            ("&amp;", "&"),
+            ("&lt;", "<"),
+            ("&gt;", ">"),
+            ("&quot;", "\""),
+            ("&#39;", "'"),
+            ("&#x27;", "'"),
+            ("&#x2F;", "/"),
+        ]
+        for (entity, char) in entities {
+            result = result.replacingOccurrences(of: entity, with: char)
+        }
+        return result
+    }
+
+
+
     public static let moduleName = "file"
 
     /// Register all file module tools on the given router.
@@ -239,11 +259,12 @@ public enum FileModule {
                     )
                 }
 
-                try content.write(to: url, atomically: true, encoding: .utf8)
+                let decodedContent = Self.decodeHTMLEntities(content)
+                try decodedContent.write(to: url, atomically: true, encoding: .utf8)
 
                 return .object([
                     "path": .string(path),
-                    "bytesWritten": .int(content.utf8.count),
+                    "bytesWritten": .int(decodedContent.utf8.count),
                     "success": .bool(true)
                 ])
             }
