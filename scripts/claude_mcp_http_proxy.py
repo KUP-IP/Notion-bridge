@@ -7,6 +7,7 @@ import urllib.error
 
 URL = os.environ.get("NOTION_BRIDGE_URL", "http://127.0.0.1:9700/mcp")
 BEARER = os.environ.get("NOTION_BRIDGE_BEARER", "")
+CLIENT_NAME = os.environ.get("NOTION_BRIDGE_CLIENT_NAME", "")
 SESSION_ID = None
 
 
@@ -93,6 +94,11 @@ def post_message(message):
 
 def handle_message(message):
 	msg_id = message.get("id") if isinstance(message, dict) else None
+	# Inject custom clientInfo.name if configured via NOTION_BRIDGE_CLIENT_NAME
+	if CLIENT_NAME and isinstance(message, dict) and message.get("method") == "initialize":
+		params = message.setdefault("params", {})
+		ci = params.setdefault("clientInfo", {})
+		ci["name"] = CLIENT_NAME
 	try:
 		status, content_type, body = post_message(message)
 	except urllib.error.HTTPError as e:

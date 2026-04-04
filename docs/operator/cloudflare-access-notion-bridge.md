@@ -8,6 +8,16 @@ NotionBridge listens on **loopback** only; a tunnel publishes a public hostname.
 
 Use Access **together with** the app’s **mandatory MCP bearer** when a tunnel URL is configured (see [SECURITY.md](../../SECURITY.md) and the in-app **Remote access** settings).
 
+## Important: browser-based MCP clients
+
+Some MCP hosts run inside a browser context or use browser-like traffic fingerprints. Those clients can be blocked by **Cloudflare Browser Integrity Check**, WAF challenges, or other browser-signature heuristics before the request ever reaches NotionBridge. If you see **Cloudflare 1010** or similar edge denials on `POST /mcp`, the fix is at the edge, not in the local app.
+
+For browser-based clients such as Claude chat:
+
+- Do **not** put browser challenges in front of `POST /mcp`.
+- If Cloudflare Access service tokens are unavailable in that client, use a **narrow bypass rule scoped to the MCP path and method** instead of disabling protection for the entire hostname.
+- Keep protection on the rest of the host, and rely on the app’s **Authorization: Bearer** requirement for the MCP endpoint.
+
 ## Prerequisites
 
 - A Cloudflare account and a **hostname** routed through Cloudflare (tunnel or proxied DNS).
@@ -47,12 +57,13 @@ In Cursor, configure the **remote MCP** URL to your tunnel’s **`POST /mcp`** e
 1. **Cloudflare Access** — `CF-Access-Client-Id` and `CF-Access-Client-Secret` if you use a service token (see above).
 2. **NotionBridge** — `Authorization: Bearer <token>` using the **MCP remote token** from NotionBridge **Settings → Connections → Remote access**.
 
-If a client cannot send custom headers, you cannot combine that client with both Access service-token auth and NotionBridge bearer in the intended way; use a client that supports headers or adjust edge policy with your security team.
+If a client cannot send custom headers, you cannot combine that client with both Access service-token auth and NotionBridge bearer in the intended way; use a client that supports headers or adjust edge policy with your security team. For browser-based clients, the usual adjustment is a **path-scoped bypass for `POST /mcp`** while keeping the app bearer token enabled.
 
 ## 5. Verification
 
 - With tunnel URL set and **no** MCP token in the app, **`initialize`** over Streamable HTTP should **fail** (HTTP **401** from NotionBridge).
 - After setting the token in the app and matching **`Authorization`** in the client (plus Access headers if used), **`initialize`** should **succeed**.
+- If `GET /health` succeeds but `POST /mcp` fails with **Cloudflare 1010**, **browser_signature_banned**, or another edge denial, inspect Cloudflare Security Events and remove browser challenges from the MCP path.
 
 ## 6. Health endpoint
 

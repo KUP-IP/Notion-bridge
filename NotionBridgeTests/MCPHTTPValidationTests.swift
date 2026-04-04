@@ -72,6 +72,17 @@ func runMCPHTTPValidationTests() async {
         try expect(r.hosts.contains("h.example:8443"))
     }
 
+    await test("tunnelOriginAllowlist supports dedicated MCP hostname") {
+        guard let r = MCPHTTPValidation.tunnelOriginAllowlist(from: "https://mcp.kup.solutions")
+        else {
+            throw TestError.assertion("expected non-nil")
+        }
+        try expect(r.origins.contains("https://mcp.kup.solutions"))
+        try expect(r.hosts.contains("mcp.kup.solutions"))
+        try expect(r.hosts.contains("mcp.kup.solutions:*"))
+    }
+
+
     await test("isRemoteTunnelActive is false when tunnel URL empty") {
         try withMCPHTTPDefaults(tunnelURL: nil, mcpBearer: nil) {
             try expect(MCPHTTPValidation.isRemoteTunnelActive() == false)

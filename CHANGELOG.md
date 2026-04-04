@@ -18,6 +18,7 @@
 - **lookupSkill** in SkillsModule — Now uses fuzzy matching: exact > normalized > substring. Resolves "web dev" to "Web Design", "sk messages" to "Messages", etc. (F5).
 
 ### Notes
+- Remote MCP operator guidance now documents that browser-based clients (for example Claude chat) can be blocked by Cloudflare Browser Integrity Check or WAF challenges on `POST /mcp`; recommended mitigation is a path-scoped edge bypass plus the app bearer token.
 - Tool count: 74 NotionBridge tools (72 base + 2 new block tools) + N Stripe MCP tools.
 - Version: marketing **1.7.0**, build **14** (Version.swift, Info.plist).
 - Feedback items resolved: F2, F3, F4, F5 (F1, F7 already fixed in v1.5.5/v1.6.0).

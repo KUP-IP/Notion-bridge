@@ -252,3 +252,12 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 **Context:** sk close agent full UEP chain in external IDE without Keepr packet context.  
 **Suggested Fix:** None for bridge — operator should run full closeout from Keepr with active packet when DB writes are required.
 
+
+### 2026-04-04 | Agent: MAC Keepr | Session: notion-4-close-agent
+
+**Category:** Friction  
+**Tool:** notion_query / notion_page_read / notion_page_markdown_read  
+**Severity:** Medium  
+**Description:** Close-agent preflight encountered intermittent Bridge MCP failures while resolving AI LOGS and SKILLS targets. `notion_query` returned transient HTTP 404s for candidate database IDs, and multiple Bridge tool calls failed with `Failed to connect to MCP server` before succeeding on retry. Expected: closeout-critical Notion reads should be resilient enough to complete without repeated manual retries.  
+**Context:** Running the close-agent sequence after the remote MCP remediation and QA session. The agent was trying to resolve the AI LOGS data source, inspect an existing AI LOG entry, and confirm the SKILLS record before writing the final closeout artifacts.  
+**Suggested Fix:** Add automatic retry logic and connection-health recovery for Bridge Notion read tools used during closeout, and expose authoritative AI LOGS / SKILLS target IDs without requiring discovery through flaky reads.

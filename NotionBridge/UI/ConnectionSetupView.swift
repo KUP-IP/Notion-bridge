@@ -168,9 +168,12 @@ public struct ConnectionSetupView: View {
             Text("MCP REMOTE TOKEN")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-            Text("Required while a tunnel URL is set. In Cursor (or your MCP client), add a header: Authorization: Bearer <token>.")
+            Text("Required while a tunnel URL is set. In your MCP client, add a header: Authorization: Bearer <token>.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+            Text("Browser-based clients such as Claude chat often cannot send Cloudflare service-token headers or complete browser challenges on /mcp. Prefer a path-scoped Cloudflare bypass for POST /mcp and rely on this bearer token at the app layer.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 SecureField("Bearer token", text: $mcpBearerToken)
                     .textFieldStyle(.roundedBorder)
