@@ -275,3 +275,31 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 - **Not KI-01** (SecurityGate 30s timeout) — this is a connection-level failure before any tool handler executes.
 - **Workaround:** Retry failed calls (works 100% of the time on retry). The sprint completed successfully despite ~50% first-attempt failure rate.
 - **Recommended:** File with Notion platform team as MCP client SSE reliability issue.
+
+
+### 2026-04-04 | Agent: MAC Keepr | Session: code-review-v1.8 (Notion AI)
+
+**Category:** Friction
+**Tool:** MCP Transport (all tools)
+**Severity:** High
+**Description:** ~50% of Bridge MCP tool calls fail with "Failed to connect to MCP server" throughout multi-hour sprint. Failures are random, affect all tools equally, and succeed on retry. 4 agent freezes occurred during the session (Phases 2→3, mid-Phase 4, mid-Phase 6, and mid-Phase 7). NotionBridge process and Cloudflare tunnel remained healthy throughout — failure is on the Notion AI MCP client side.
+**Context:** Executing 8-phase code review sprint (v1.8.0) via Notion AI agent → Bridge MCP. Sprint completed successfully despite ~50% first-attempt failure rate and 4 freezes, but elapsed time was significantly extended by retries.
+**Suggested Fix:** 1. Investigate Notion AI MCP client SSE connection pooling/reconnect logic. 2. Add client-side automatic retry with exponential backoff for transient connection failures. 3. Investigate agent freeze root cause — may be correlated with parallel MCP call failures.
+
+---
+
+**Category:** Friction
+**Tool:** session_info
+**Severity:** Low
+**Description:** `session_info` failed 6 consecutive times during Phase 7 tool validation while all other session module tools (`tools_list`, `session_clear`) worked. Other tools in the same parallel batches succeeded, suggesting a tool-specific issue rather than pure connection noise.
+**Context:** Live tool validation across all 15 modules during Phase 7.
+**Suggested Fix:** Investigate whether `session_info`'s uptime/connections/toolCalls aggregation introduces a timing window that exacerbates the MCP connection instability. Consider simplifying the response payload or adding a timeout guard.
+
+---
+
+**Category:** Friction
+**Tool:** file_search
+**Severity:** Low
+**Description:** `file_search` parameter naming mismatch: tool expects `query` + `directory` but the input schema also lists `pattern` and `maxResults` as valid parameters. Passing `{directory: "...", pattern: "*.md", maxResults: 10}` returns error "missing 'directory' or 'query'". The `query` parameter name is not intuitive for file glob patterns.
+**Context:** Phase 7 tool validation — attempting to search for .md files in project root.
+**Suggested Fix:** Either accept `pattern` as an alias for `query`, or update the input schema description to clarify that `query` is the substring search parameter.
