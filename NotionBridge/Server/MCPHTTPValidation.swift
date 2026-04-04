@@ -135,9 +135,28 @@ public enum MCPHTTPValidation {
         return UserDefaults.standard.string(forKey: mcpBearerTokenUserDefaultsKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
+
+    // MARK: - Constant-time string comparison (SEC-01)
+
+    /// Constant-time string comparison to prevent timing attacks.
+    /// Returns true only if both strings are identical.
+    /// Compares every byte position regardless of mismatch to avoid timing leaks.
+    static func constantTimeEqual(_ a: String, _ b: String) -> Bool {
+        let aBytes = Array(a.utf8)
+        let bBytes = Array(b.utf8)
+        let lengthMatch = aBytes.count == bBytes.count
+        let maxLen = max(aBytes.count, bBytes.count)
+        var mismatch: UInt8 = 0
+        for i in 0..<maxLen {
+            let x = i < aBytes.count ? aBytes[i] : 0
+            let y = i < bBytes.count ? bBytes[i] : 0
+            mismatch |= x ^ y
+        }
+        return lengthMatch && mismatch == 0
+    }
 }
 
-// MARK: - Remote tunnel requires bearer (fail closed)
+    // MARK: - Remote tunnel requires bearer (fail closed)
 
 private struct MCPRemoteTunnelMissingBearerValidator: HTTPRequestValidator {
     func validate(_ request: HTTPRequest, context: HTTPValidationContext) -> HTTPResponse? {
@@ -174,18 +193,7 @@ private struct MCPBearerTokenValidator: HTTPRequestValidator {
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         // SEC-01: Constant-time comparison to prevent timing attacks on bearer token
-        let tokenData = Array(token.utf8)
-        let expectedData = Array(expectedToken.utf8)
-        let lengthMatch = tokenData.count == expectedData.count
-        // Always compare full length to avoid early-exit timing leak
-        let maxLen = max(tokenData.count, expectedData.count)
-        var mismatch: UInt8 = 0
-        for i in 0..<maxLen {
-            let a = i < tokenData.count ? tokenData[i] : 0
-            let b = i < expectedData.count ? expectedData[i] : 0
-            mismatch |= a ^ b
-        }
-        guard lengthMatch && mismatch == 0 else {
+        guard MCPHTTPValidation.constantTimeEqual(String(token), expectedToken) else {
             return .error(
                 statusCode: 403,
                 .invalidRequest("Forbidden: invalid MCP bearer token"),
