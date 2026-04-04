@@ -1121,33 +1121,14 @@ public enum NotionModule {
 // MARK: - Lazy Registry Holder
 
 
-/// Thread-safe holder for lazy NotionClientRegistry initialization.
-/// Methods are async to cross actor-isolation boundary of NotionClientRegistry
-/// (Swift 6.2 infers actor isolation on @unchecked Sendable classes).
+/// Routes MCP tool calls to `NotionClientRegistry.shared` so Settings and tools share one registry
+/// (factory reset can clear in-memory state in one place).
 private final class NotionRegistryHolder: @unchecked Sendable {
-    private var registry: NotionClientRegistry?
-    private let lock = NSLock()
-
-    private func ensureRegistry() -> NotionClientRegistry {
-        lock.lock()
-        defer { lock.unlock() }
-
-        if let existing = registry {
-            return existing
-        }
-
-        let newRegistry = NotionClientRegistry()
-        registry = newRegistry
-        return newRegistry
-    }
-
     func getClient(workspace: String?) async throws -> NotionClient {
-        let reg = ensureRegistry()
-        return try await reg.getClient(workspace: workspace)
+        try await NotionClientRegistry.shared.getClient(workspace: workspace)
     }
 
     func listConnections() async throws -> [NotionConnectionInfo] {
-        let reg = ensureRegistry()
-        return try await reg.listConnections()
+        try await NotionClientRegistry.shared.listConnections()
     }
 }

@@ -6,6 +6,19 @@ import SwiftUI
 import ServiceManagement
 
 extension SettingsView {
+    /// Factory Reset confirmation — skills defaults, env-based Notion token, restart guidance.
+    var factoryResetConfirmationMessage: String {
+        """
+        This will clear: SSE port, learned command allows, stored credentials (Notion workspace tokens and Stripe), onboarding state, and macOS permissions for Notion Bridge.
+
+        Skills are restored to the built-in default set (three placeholder entries), not wiped empty.
+
+        If the app is launched with NOTION_API_TOKEN or NOTION_API_KEY in the environment, Notion may still resolve a token after reset (developer convenience). Unset those variables for a fully clean test.
+
+        Restart the app after reset so permission and connection status stay accurate.
+        """
+    }
+
     // MARK: - Permissions
 
     var permissionsSection: some View {
@@ -384,7 +397,7 @@ extension SettingsView {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("This will clear: SSE port, learned command allows, skills (restored to defaults), stored credentials, onboarding state, and macOS permissions for Notion Bridge.")
+                    Text(factoryResetConfirmationMessage)
                 }
 
                 if let factoryResetMessage {
@@ -501,6 +514,10 @@ extension SettingsView {
         if !KeychainManager.shared.deleteAll() {
             failures.append("keychain")
         }
+
+        // 3b) Drop in-memory Notion workspace clients so Settings/MCP match cleared storage without restart.
+        await NotionClientRegistry.shared.resetAfterFactoryReset()
+        await ConnectionHealthChecker.shared.invalidateAll()
 
         // 4) Reset TCC grants for current + legacy bundle IDs.
         let tccReset = await resetTCCPermissions()

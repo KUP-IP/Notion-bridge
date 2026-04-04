@@ -107,6 +107,12 @@ NotionBridge supports:
 
 If you are using Notion tools, add a valid Notion integration token through the app's connection flow or config file.
 
+### Factory reset (Settings → Maintenance)
+
+**Factory Reset** clears local config, Keychain entries for Notion Bridge, resets macOS permissions for the app, and reloads in-memory workspace connection state. **Skills** are reset to the built-in default set (three placeholders), not an empty list.
+
+If you launch the app with **`NOTION_API_TOKEN`** or **`NOTION_API_KEY`** set in the environment, Notion can still resolve a token after reset (that path is intentional for developers). Unset those variables when testing a truly empty workspace. Restart the app after reset so permission and connection UIs stay consistent.
+
 ---
 
 ## Transport surface

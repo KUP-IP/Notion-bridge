@@ -267,4 +267,17 @@ public actor NotionClientRegistry {
     public var connectionCount: Int {
         return clients.count
     }
+
+    // MARK: - Factory reset
+
+    /// Clears in-memory workspace clients and connection list, then reloads from disk and
+    /// `NotionTokenResolver` on next access. Call after `config.json` and Keychain have been
+    /// cleared so Settings and MCP see an empty state without restarting the app.
+    public func resetAfterFactoryReset() {
+        clients.removeAll()
+        connectionConfigs.removeAll()
+        primaryName = nil
+        initialized = false
+        print("[NotionClientRegistry] resetAfterFactoryReset — in-memory state cleared; will reload on next access")
+    }
 }
