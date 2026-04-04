@@ -591,24 +591,7 @@ public actor NotionClient {
         return data
     }
 
-    /// A8: Update page content from markdown.
-    /// PATCH /v1/pages/{id}/markdown
-    public func updatePageMarkdown(pageId: String, markdown: String) async throws -> Data {
-        let cleanId = pageId.replacingOccurrences(of: "-", with: "")
-        let body: [String: Any] = [
-            "type": "replace_content",
-            "replace_content": [
-                "new_str": markdown
-            ]
-        ]
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await request(method: "PATCH", path: "/pages/\(cleanId)/markdown", body: bodyData)
-        guard (200...299).contains(response.statusCode) else {
-            let msg = String(data: data, encoding: .utf8) ?? ""
-            throw NotionClientError.httpError(response.statusCode, msg)
-        }
-        return data
-    }
+
 
     /// A9a: List comments on a block or page.
     /// GET /v1/comments?block_id={id}

@@ -40,7 +40,7 @@ public enum NotionModule {
             name: "notion_search",
             module: moduleName,
             tier: .open,
-            description: "Search the Notion workspace for pages and databases by text query. Returns an array of {id, title, url, object_type} matches. Requires a configured NOTION_API_TOKEN.",
+            description: "Search the Notion workspace for pages and data sources by text query. Returns an array of {id, title, url, object_type} matches. filter.value accepts "page" or "data_source" (not "database"). Requires a configured NOTION_API_TOKEN.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -272,7 +272,7 @@ public enum NotionModule {
             name: "notion_page_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a new Notion page under a parent page or database. Pass properties as a JSON string; optionally include children blocks. Returns {id, url} of the created page.",
+            description: "Create a new Notion page under a parent page or database. Pass properties as a JSON string; optionally include children blocks. Returns {id, url} of the created page. Note: parentType "data_source_id" is the preferred parent type for row inserts under Notion API 2026-03-11; "database_id" is legacy.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -541,36 +541,6 @@ public enum NotionModule {
                 return .object(["markdown": .string(markdown)])
             }
         ))
-
-        // MARK: 9. notion_page_markdown_write – notify (A8)
-        await router.register(ToolRegistration(
-            name: "notion_page_markdown_write",
-            module: moduleName,
-            tier: .notify,
-            description: "Overwrite a Notion page body with new markdown -- this is a full replacement, existing content is deleted first. Returns confirmation. Use notion_blocks_append for non-destructive additions.",
-            inputSchema: .object([
-                "type": .string("object"),
-                "properties": .object([
-                    "pageId": .object(["type": .string("string"), "description": .string("Notion page ID")]),
-                    "markdown": .object(["type": .string("string"), "description": .string("Markdown content to write")]),
-                    "workspace": workspaceParam
-                ]),
-                "required": .array([.string("pageId"), .string("markdown")])
-            ]),
-            handler: { arguments in
-                guard case .object(let args) = arguments,
-                      case .string(let pageId) = args["pageId"],
-                      case .string(let markdown) = args["markdown"] else {
-                    throw ToolRouterError.invalidArguments(toolName: "notion_page_markdown_write", reason: "missing 'pageId' or 'markdown'")
-                }
-
-                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                let _ = try await client.updatePageMarkdown(pageId: pageId, markdown: markdown)
-
-                return .object(["success": .bool(true), "pageId": .string(pageId)])
-            }
-        ))
-
         // MARK: 10. notion_comments_list – open (A9a)
         await router.register(ToolRegistration(
             name: "notion_comments_list",

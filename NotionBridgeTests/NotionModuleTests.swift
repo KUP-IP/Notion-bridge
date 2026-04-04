@@ -30,7 +30,7 @@ func runNotionModuleTests() async {
     let expectedTools: [String] = [
         "notion_search", "notion_page_read", "notion_page_update",
         "notion_query", "notion_page_create", "notion_blocks_append",
-        "notion_block_delete", "notion_page_markdown_read", "notion_page_markdown_write",
+        "notion_block_delete", "notion_page_markdown_read",
         "notion_comments_list", "notion_comment_create", "notion_users_list",
         "notion_page_move", "notion_file_upload", "notion_token_introspect",
         "notion_connections_list", "notion_block_read", "notion_block_update"
@@ -64,7 +64,7 @@ func runNotionModuleTests() async {
 
     let notifyTools = [
         "notion_page_update", "notion_page_create", "notion_blocks_append",
-        "notion_block_delete", "notion_page_markdown_write",
+        "notion_block_delete",
         "notion_comment_create", "notion_page_move", "notion_file_upload",
         "notion_block_update"
     ]
@@ -209,17 +209,6 @@ func runNotionModuleTests() async {
         }
     }
 
-    await test("notion_page_markdown_write rejects missing params") {
-        do {
-            _ = try await router.dispatch(
-                toolName: "notion_page_markdown_write",
-                arguments: .object([:])
-            )
-            throw TestError.assertion("Expected error for missing params")
-        } catch is ToolRouterError {
-            // Expected
-        }
-    }
 
     await test("notion_comments_create rejects missing text") {
         do {
