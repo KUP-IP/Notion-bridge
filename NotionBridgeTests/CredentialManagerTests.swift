@@ -22,7 +22,7 @@ func runCredentialManagerTests() async {
 
     await test("CredentialType has exactly 2 cases") {
         let allCases = CredentialType.allCases
-        try expect(allCases.count == 2, "Expected 2 credential types, got \(allCases.count)")
+        try expect(allCases.count == 3, "Expected 3 credential types, got \(allCases.count)")
         try expect(allCases.contains(.password))
         try expect(allCases.contains(.card))
     }

@@ -141,7 +141,7 @@ public enum MCPHTTPValidation {
     /// Constant-time string comparison to prevent timing attacks.
     /// Returns true only if both strings are identical.
     /// Compares every byte position regardless of mismatch to avoid timing leaks.
-    static func constantTimeEqual(_ a: String, _ b: String) -> Bool {
+    public static func constantTimeEqual(_ a: String, _ b: String) -> Bool {
         let aBytes = Array(a.utf8)
         let bBytes = Array(b.utf8)
         let lengthMatch = aBytes.count == bBytes.count

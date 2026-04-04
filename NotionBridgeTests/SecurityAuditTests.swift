@@ -116,8 +116,8 @@ func runSecurityAuditTests() async {
         let requestTools = all.filter { $0.tier == .request }
         let expectedRequest = [
             "shell_exec", "run_script",
-            "applescript_run",
-            "credential_save", "credential_get", "credential_delete",
+            "applescript_exec",
+            "credential_save", "credential_read", "credential_delete",
             "payment_execute",
             "messages_send"
         ]
