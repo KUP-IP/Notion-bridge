@@ -261,3 +261,17 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 **Description:** Close-agent preflight encountered intermittent Bridge MCP failures while resolving AI LOGS and SKILLS targets. `notion_query` returned transient HTTP 404s for candidate database IDs, and multiple Bridge tool calls failed with `Failed to connect to MCP server` before succeeding on retry. Expected: closeout-critical Notion reads should be resilient enough to complete without repeated manual retries.  
 **Context:** Running the close-agent sequence after the remote MCP remediation and QA session. The agent was trying to resolve the AI LOGS data source, inspect an existing AI LOG entry, and confirm the SKILLS record before writing the final closeout artifacts.  
 **Suggested Fix:** Add automatic retry logic and connection-health recovery for Bridge Notion read tools used during closeout, and expose authoritative AI LOGS / SKILLS target IDs without requiring discovery through flaky reads.
+
+### [2026-04-04] MAC Keepr — Sprint v1.8.0 Bridge MCP Intermittent Failures
+- **Symptom:** ~50% of Bridge MCP tool calls fail with "Failed to connect to MCP server" during sprint execution.
+- **Affects:** All tools (file_read, file_list, shell_exec, fetch_skill) — not tool-specific.
+- **Pattern:** Failures are random; calls in the same parallel batch can have mixed success/failure. Not correlated with tool type, payload size, or time.
+- **Server-side diagnosis:**
+  - NotionBridge process healthy (PID 99011, running since 12:32 PM)
+  - Cloudflare tunnel active (cloudflared PID 94410), health endpoint returns HTTP 200
+  - 8 active SSE connections on port 9700
+  - No error/disconnect/timeout entries in NotionBridge or cloudflared system logs
+- **Conclusion:** Server and tunnel are healthy. Failure is on the **Notion AI MCP client side** — likely SSE connection pooling, timeout, or reconnect logic in the Notion platform's MCP client implementation.
+- **Not KI-01** (SecurityGate 30s timeout) — this is a connection-level failure before any tool handler executes.
+- **Workaround:** Retry failed calls (works 100% of the time on retry). The sprint completed successfully despite ~50% first-attempt failure rate.
+- **Recommended:** File with Notion platform team as MCP client SSE reliability issue.
