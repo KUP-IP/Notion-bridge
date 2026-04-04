@@ -40,7 +40,7 @@ public enum NotionModule {
             name: "notion_search",
             module: moduleName,
             tier: .open,
-            description: "Search the Notion workspace for pages and data sources by text query. Returns an array of {id, title, url, object_type} matches. filter.value accepts "page" or "data_source" (not "database"). Requires a configured NOTION_API_TOKEN.",
+            description: "Search the Notion workspace for pages and data sources by text query. Returns an array of {id, title, url, object_type} matches. filter.value accepts 'page' or 'data_source' (not 'database'). Requires a configured NOTION_API_TOKEN.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -272,7 +272,7 @@ public enum NotionModule {
             name: "notion_page_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a new Notion page under a parent page or database. Pass properties as a JSON string; optionally include children blocks. Returns {id, url} of the created page. Note: parentType "data_source_id" is the preferred parent type for row inserts under Notion API 2026-03-11; "database_id" is legacy.",
+            description: "Create a new Notion page under a parent page or database. Pass properties as a JSON string; optionally include children blocks. Returns {id, url} of the created page. Note: parentType 'data_source_id' is the preferred parent type for row inserts under Notion API 2026-03-11; 'database_id' is legacy.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -984,7 +984,6 @@ public enum NotionModule {
                 ])
             }
         ))
-    }
 
         // MARK: 19. notion_database_get - open (B1, v1.8.0)
         await router.register(ToolRegistration(

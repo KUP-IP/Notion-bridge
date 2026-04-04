@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.8.0] — 2026-04-04
+
+### Added
+- **notion_database_get** MCP tool (open tier) — Retrieve a Notion database container by ID. Returns title, icon, cover, parent metadata. (B1)
+- **notion_datasource_get** MCP tool (open tier) — Retrieve a Notion data source schema by ID. Returns full property definitions, types, and options. (B2)
+- **NotionClient: getDataSource()** — GET /v1/data_sources/id. New client method for data source schema retrieval.
+- **CredentialType.unknown** — Fallback credential type for non-standard keychain labels. (A2)
+- **fetch_skill close matches** — On miss, error response now includes Levenshtein-based close match suggestions instead of just listing all skills. (C1)
+- **manage_skill bypassConfirmation** — New boolean parameter to skip SecurityGate confirmation prompt for automated/unattended sessions. (C3)
+
+### Fixed
+- **file_write HTML entity encoding** — Content with HTML entities (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&#39;`) is now decoded before writing to disk. Round-trip integrity preserved. (A1)
+- **credential_read/credential_list** — `parseKeychainItem()` no longer throws for non-standard keychain labels; items with unknown labels surface as `type: "unknown"` instead of being silently excluded. (A2)
+- **messages_send chat identifier guard** — Raw `chat[0-9]+` identifiers are now rejected before AppleScript dispatch, preventing malformed ghost threads in Messages.app. Error directs caller to resolve via `messages_participants`. (A3)
+- **notion_query retry logging** — Auto-retry on transient 404 now logs "retrying transient 404" vs "permanent 404 — check sharing". Retry count visible in debug output. (C2)
+
+### Changed
+- **notion_search** description — Updated to reference "data sources" instead of "databases". `filter.value` documentation now specifies `"page"` or `"data_source"` (not `"database"`). (D1)
+- **notion_page_create** description — Notes that `parentType: "data_source_id"` is preferred for row inserts under Notion API 2026-03-11; `"database_id"` is legacy. (D2)
+
+### Removed
+- **notion_page_markdown_write** tool — Removed from NotionModule, NotionClient, and tests. Superseded by notion_page_update + content blocks approach. (D3)
+
+### Notes
+- B3 (`notion_datasource_create`) and B4 (`notion_datasource_update`) are gated on Notion API endpoint confirmation. Deferred to v1.9.0.
+- Git hygiene: merged `fix/session-lifecycle-stability` and `feat/settings-connections-restructure` into main. Deleted ghost branches (`claude/fervent-lichterman`, `claude/sad-kapitsa`).
+- Tool count: 75 NotionBridge tools (74 base − 1 removed + 2 new) + N Stripe MCP tools.
+- Version: marketing **1.8.0**, build **15** (Version.swift, Info.plist).
+
 ## [1.7.0] — 2026-04-02
 
 ### Added
