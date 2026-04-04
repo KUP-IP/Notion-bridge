@@ -358,8 +358,9 @@ public enum NotionModule {
                 if case .string(let s) = args["sorts"] { sortsData = s.data(using: .utf8) }
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                // v1.7.0: Auto-retry transient 404 (KI-08, F4)
+                // v1.7.0+v1.8.0: Auto-retry transient 404 (KI-06, C2)
                 var data = Data()
+                var retryCount = 0
                 do {
                     data = try await client.queryDataSource(
                         dataSourceId: dsId, filter: filterData,
@@ -368,12 +369,20 @@ public enum NotionModule {
                     )
                 } catch {
                     if String(describing: error).contains("404") {
+                        retryCount = 1
+                        NSLog("[notion_query] Retrying transient 404 for dataSource=%@ (attempt %d/2, delay=2s)", dsId, retryCount + 1)
                         try await Task.sleep(nanoseconds: 2_000_000_000)
-                        data = try await client.queryDataSource(
-                            dataSourceId: dsId, filter: filterData,
-                            sorts: sortsData, pageSize: pageSize,
-                            startCursor: startCursor
-                        )
+                        do {
+                            data = try await client.queryDataSource(
+                                dataSourceId: dsId, filter: filterData,
+                                sorts: sortsData, pageSize: pageSize,
+                                startCursor: startCursor
+                            )
+                            NSLog("[notion_query] Retry succeeded for dataSource=%@ after %d retry", dsId, retryCount)
+                        } catch {
+                            NSLog("[notion_query] Permanent 404 for dataSource=%@ after %d retry — check sharing permissions", dsId, retryCount)
+                            throw error
+                        }
                     } else {
                         throw error
                     }

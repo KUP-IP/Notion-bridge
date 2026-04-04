@@ -109,12 +109,15 @@ public enum SkillsModule {
 
                 // Look up skill in UserDefaults config (cache key includes metadata fingerprint)
                 guard let skillConfig = lookupSkill(named: name) else {
+                    let closeMatches = closestSkillMatches(for: name)
+                    let allSkills = listAvailableSkillNames()
                     return .object([
                         "error": .string("Skill not found: '\(name)'"),
-                        "hint": .string("Configure skills in Settings \u{2192} Skills tab."),
-                        "availableSkills": .array(
-                            listAvailableSkillNames().map { .string($0) }
-                        )
+                        "hint": .string(closeMatches.isEmpty
+                            ? "No close matches found. Configure skills in Settings \u{2192} Skills tab."
+                            : "Did you mean: \(closeMatches.joined(separator: ", "))?"),
+                        "closeMatches": .array(closeMatches.map { .string($0) }),
+                        "availableSkills": .array(allSkills.map { .string($0) })
                     ])
                 }
 
@@ -318,6 +321,10 @@ public enum SkillsModule {
                                 "url": .object(["type": .string("string")])
                             ])
                         ])
+                    ]),
+                    "bypassConfirmation": .object([
+                        "type": .string("boolean"),
+                        "description": .string("When true, skip SecurityGate confirmation prompt. Use for automated/unattended sessions. Default: false.")
                     ])
                 ]),
                 "required": .array([.string("action")])
@@ -329,6 +336,15 @@ public enum SkillsModule {
                         toolName: "manage_skill",
                         reason: "missing required 'action' parameter"
                     )
+                }
+
+                // C3: bypassConfirmation skips SecurityGate notify for automated sessions
+                let bypassConfirmation: Bool = {
+                    if case .bool(let b) = args["bypassConfirmation"] { return b }
+                    return false
+                }()
+                if bypassConfirmation {
+                    NSLog("[manage_skill] bypassConfirmation=true for action=%@, skipping SecurityGate", action)
                 }
 
                 switch action {
@@ -991,5 +1007,46 @@ public enum SkillsModule {
             return []
         }
         return skills.filter(\.enabled).map(\.name) // Only enabled skills
+    }
+
+    /// C1: Find close matches for a skill name using edit distance.
+    private static func closestSkillMatches(for input: String, maxResults: Int = 3) -> [String] {
+        let available = listAvailableSkillNames()
+        let normalized = input.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let stripped = normalized.hasPrefix("sk ") ? String(normalized.dropFirst(3)) : normalized
+
+        // Score each skill by edit distance to input variants
+        let scored = available.map { skill -> (String, Int) in
+            let skillLow = skill.lowercased()
+            let dist = min(
+                editDistance(skillLow, stripped),
+                editDistance(skillLow, stripped.replacingOccurrences(of: " ", with: "-")),
+                editDistance(skillLow, stripped.replacingOccurrences(of: "-", with: " "))
+            )
+            return (skill, dist)
+        }
+        .filter { $0.1 <= max(3, $0.0.count / 2) }  // Only reasonably close matches
+        .sorted { $0.1 < $1.1 }
+
+        return Array(scored.prefix(maxResults).map { $0.0 })
+    }
+
+    /// Simple Levenshtein edit distance.
+    private static func editDistance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        let m = a.count, n = b.count
+        if m == 0 { return n }
+        if n == 0 { return m }
+        var dp = Array(0...n)
+        for i in 1...m {
+            var prev = dp[0]
+            dp[0] = i
+            for j in 1...n {
+                let temp = dp[j]
+                dp[j] = a[i-1] == b[j-1] ? prev : 1 + min(prev, dp[j], dp[j-1])
+                prev = temp
+            }
+        }
+        return dp[n]
     }
 }
