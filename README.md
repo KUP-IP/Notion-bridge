@@ -247,4 +247,6 @@ Until the new object exists in R2, paid downloads return **500** (“Download ar
 
 NotionBridge is **source-available commercial software**.
 
-See `LICENSE.rtf`, `PRIVACY.md`, and `TERMS.md` for the governing materials included in this repo.
+This repository is licensed under the **KUP Solutions Source-Available License** (Version 1.0, April 2026). You may view and reference the source code. Copying, modification, redistribution, derivative works, and commercial use are prohibited without written permission from KUP Solutions.
+
+See [`LICENSE`](LICENSE) for the full license text. See also [`PRIVACY.md`](PRIVACY.md) and [`TERMS.md`](TERMS.md).

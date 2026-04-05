@@ -1,0 +1,105 @@
+KUP Solutions Source-Available License
+Version 1.0, April 2026
+
+Copyright (c) 2026 KUP Solutions (Isaiah Peters). All rights reserved.
+
+https://kup.solutions
+
+1. DEFINITIONS
+
+"Software" means the NotionBridge source code, documentation, and
+associated files in this repository.
+
+"Licensor" means KUP Solutions (Isaiah Peters).
+
+"You" means the individual or entity accessing the Software.
+
+2. GRANT OF RIGHTS
+
+Subject to the terms of this License, the Licensor grants You a
+limited, non-exclusive, non-transferable, non-sublicensable,
+revocable license to:
+
+  a) VIEW the Software for personal reference, evaluation, and
+     educational purposes;
+
+  b) REFERENCE the Software in discussions, reviews, and technical
+     analysis, provided such reference does not include substantial
+     reproduction of the source code.
+
+3. RESTRICTIONS
+
+You may NOT, without prior written permission from the Licensor:
+
+  a) Copy, reproduce, or duplicate the Software or any substantial
+     portion thereof;
+
+  b) Modify, adapt, translate, or create derivative works based on
+     the Software;
+
+  c) Distribute, sublicense, sell, lease, lend, or otherwise transfer
+     the Software or any portion thereof to any third party;
+
+  d) Use the Software, in whole or in part, for any commercial
+     purpose, including but not limited to incorporating it into
+     products or services offered to third parties;
+
+  e) Remove, alter, or obscure any copyright notices, license terms,
+     or proprietary markings in the Software;
+
+  f) Use the Software to create a competing product or service;
+
+  g) Reverse engineer, decompile, or disassemble the Software beyond
+     what is permitted by applicable law.
+
+4. NO OPEN-SOURCE CONVERSION
+
+This License does not include any provision for automatic conversion
+to an open-source license at any future date. The Software remains
+under the terms of this License unless the Licensor explicitly grants
+a different license in writing.
+
+5. CONTRIBUTIONS
+
+If You submit any contribution (code, documentation, or other
+material) to this repository, You hereby assign all intellectual
+property rights in that contribution to the Licensor. The Licensor
+may use, modify, and distribute contributions under any terms at
+their sole discretion.
+
+6. INTELLECTUAL PROPERTY
+
+The Software and all copies thereof are proprietary to the Licensor
+and title thereto remains in the Licensor. All rights in the
+Software not specifically granted in this License are reserved to
+the Licensor.
+
+7. NO WARRANTY
+
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY
+CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+8. TERMINATION
+
+This License is effective until terminated. Your rights under this
+License will terminate automatically without notice if You fail to
+comply with any of its terms. Upon termination, You must destroy all
+copies of the Software in Your possession.
+
+9. GOVERNING LAW
+
+This License shall be governed by and construed in accordance with
+the laws of the United States and the State of Texas, without
+regard to its conflict of law provisions.
+
+10. CONTACT
+
+For licensing inquiries or permission requests:
+isaiah@kup.solutions
+https://kup.solutions
