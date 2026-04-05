@@ -54,7 +54,7 @@ public final class StatusBarController {
     public var activeConnections: Int = 0
 
     /// Number of registered MCP tools
-    public var registeredToolCount: Int = 0
+    public var activeToolCount: Int = 0
 
     /// Total number of tool calls dispatched since server start
     public var totalToolCalls: Int = 0
@@ -154,7 +154,7 @@ public final class StatusBarController {
     /// Mark the server as started with the given tool count.
     public func markServerStarted(toolCount: Int) {
         serverStartTime = Date()
-        registeredToolCount = toolCount
+        activeToolCount = toolCount
         totalToolCalls = 0
         connectedClients = []
     }

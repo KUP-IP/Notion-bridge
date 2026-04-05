@@ -184,7 +184,7 @@ public struct DashboardView: View {
 
     private var statsSection: some View {
         HStack(spacing: BridgeSpacing.md) {
-            statItem(label: "Tools", value: "\(statusBar.registeredToolCount)")
+            statItem(label: "Tools", value: "\(statusBar.activeToolCount)")
             statItem(label: "Calls", value: "\(statusBar.totalToolCalls)")
         }
         .bridgeRow()

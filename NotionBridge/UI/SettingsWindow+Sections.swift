@@ -100,7 +100,7 @@ extension SettingsView {
                             .foregroundStyle(statusBar.isServerRunning ? BridgeColors.success : BridgeColors.error)
                     }
                 }
-                LabeledContent("Tools", value: "\(statusBar.registeredToolCount) active")
+                LabeledContent("Tools", value: "\(statusBar.activeToolCount) active")
                 LabeledContent("Uptime", value: statusBar.uptimeString)
             }
 
@@ -237,7 +237,7 @@ extension SettingsView {
             tools: statusBar.toolInfoList,
             onToggle: { _, _ in
                 let disabled = Set(UserDefaults.standard.stringArray(forKey: BridgeDefaults.disabledTools) ?? [])
-                statusBar.registeredToolCount = statusBar.toolInfoList.count - disabled.count
+                statusBar.activeToolCount = statusBar.toolInfoList.count - disabled.count
             },
             notificationDenied: permissionManager.notificationStatus != .granted
         )
@@ -567,7 +567,7 @@ extension SettingsView {
             "Build Target: \(buildTargetString)",
             "Port: \(ssePort)",
             "Server Running: \(statusBar.isServerRunning)",
-            "Tools Registered: \(statusBar.registeredToolCount)",
+            "Tools Active: \(statusBar.activeToolCount)",
             "Uptime: \(statusBar.uptimeString)",
             "",
             "Permissions:",

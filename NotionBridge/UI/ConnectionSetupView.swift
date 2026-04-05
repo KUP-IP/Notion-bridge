@@ -98,71 +98,21 @@ public struct ConnectionSetupView: View {
 
     private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("A tunnel gives remote MCP clients (e.g. Notion Agents) an HTTPS URL that forwards to your Mac. This is separate from API Connections (Stripe keys) and Notion workspace tokens.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            // Local endpoint info (same port as Connections → Server → Local port / Advanced → Network)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Image(systemName: "server.rack")
-                        .font(.caption)
-                        .foregroundStyle(.blue)
-                    Text(verbatim: "Local: 127.0.0.1:\(ssePort)/mcp")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                Text("Matches your configured MCP port. Change it under Advanced → Network (or NOTION_BRIDGE_PORT); restart the app for the server to bind to a new port.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
-
-            Divider()
-
             // Provider selection
-            Text("TUNNEL PROVIDER")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-
             ForEach(TunnelProvider.allCases) { provider in
                 providerRow(provider)
             }
 
-            // Tunnel URL input
             Divider()
-            VStack(alignment: .leading, spacing: 4) {
-                Text("TUNNEL URL")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                TextField("Paste your tunnel URL", text: $tunnelURL)
-                    .textFieldStyle(.roundedBorder)
-                    .font(.caption)
-                Text(verbatim: "Example: https://xxxx.trycloudflare.com")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-            }
+
+            // Tunnel URL
+            TextField("Tunnel URL", text: $tunnelURL)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
 
             if !tunnelURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Divider()
                 mcpBearerSection
-            }
-
-            // Help text — operator runs tunnel CLI; port must match local MCP (see Local line above)
-            if activeProvider == .cloudflare {
-                Text(verbatim: "Cloudflare: install cloudflared, then in Terminal run (port must match \(ssePort) above): cloudflared tunnel --url http://localhost:\(ssePort)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .textSelection(.enabled)
-            } else if activeProvider == .tailscale {
-                Text(verbatim: "Tailscale: in Terminal run (port must match \(ssePort) above): tailscale funnel \(ssePort)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .textSelection(.enabled)
-            } else {
-                Text(verbatim: "Paste the HTTPS URL from your tunnel provider. It must forward to http://127.0.0.1:\(ssePort) (same port as Local above). Custom port: Advanced → Network or NOTION_BRIDGE_PORT.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
             }
         }
         .padding(.top, 4)
@@ -174,17 +124,11 @@ public struct ConnectionSetupView: View {
         }
     }
 
-    // MARK: - MCP remote bearer (Streamable HTTP POST /mcp)
+    // MARK: - MCP Remote Token
 
     private var mcpBearerSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("MCP REMOTE TOKEN")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
-            Text("Required while a tunnel URL is set. In your MCP client, add a header: Authorization: Bearer <token>.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text("Browser-based clients such as Claude chat often cannot send Cloudflare service-token headers or complete browser challenges on /mcp. Prefer a path-scoped Cloudflare bypass for POST /mcp and rely on this bearer token at the app layer.")
+            Text("BEARER TOKEN")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
