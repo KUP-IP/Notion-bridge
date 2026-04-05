@@ -675,11 +675,32 @@ private struct IntegratedToolsContent: View {
 
     private func loadConnections() async {
         do {
+            // Phase 1: Instant snapshot so the UI renders provider names immediately
             let workspace = try await ConnectionRegistry.shared.listConnections(kind: .workspace, validateLive: false)
             let api = try await ConnectionRegistry.shared.listConnections(kind: .api, validateLive: false)
+            let snapshotNotion = workspace.first { $0.provider == .notion }
+            let snapshotStripe = api.first { $0.provider == .stripe }
             await MainActor.run {
-                notionConnection = workspace.first { $0.provider == .notion }
-                stripeConnection = api.first { $0.provider == .stripe }
+                notionConnection = snapshotNotion
+                stripeConnection = snapshotStripe
+            }
+
+            // Phase 2: Live validation — stream real statuses in as they resolve
+            await withTaskGroup(of: Void.self) { group in
+                if let conn = snapshotNotion {
+                    group.addTask {
+                        if let validated = try? await ConnectionRegistry.shared.validateConnection(id: conn.id) {
+                            await MainActor.run { notionConnection = validated }
+                        }
+                    }
+                }
+                if let conn = snapshotStripe {
+                    group.addTask {
+                        if let validated = try? await ConnectionRegistry.shared.validateConnection(id: conn.id) {
+                            await MainActor.run { stripeConnection = validated }
+                        }
+                    }
+                }
             }
         } catch {
             // Silently handle — indicators stay as not configured

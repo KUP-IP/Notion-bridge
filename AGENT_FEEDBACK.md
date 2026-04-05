@@ -386,3 +386,30 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 **Description:** Card number entry into Stripe payment iframe produced inconsistent results. Typing full 16-digit card number via AppleScript keystroke resulted in digits splitting across Card Number, Expiration, and CVC fields — Stripe's auto-advance behavior moved focus to the next field mid-entry. Multiple retry approaches (click to refocus, clear and retype, JS-based entry) all failed to produce a clean 16-digit entry. Final state: card number shows partial digits, expiration shows wrong values, CVC empty.
 **Context:** Entering payment card details (4031631605063293, exp 02/31, CVV 796) into X Ads Stripe billing form.
 **Suggested Fix:** For Stripe card entry, recommend: 1) Type digits in small batches (4 at a time) with delays between batches to allow Stripe's formatting to settle. 2) Use Stripe.js API directly if possible. 3) Consider a dedicated `form_fill` tool that understands auto-advancing fields.
+
+### 2026-04-05 | Agent: MAC Keepr | Session: thread-68
+
+**Category:** Friction  
+**Tool:** shell_exec (MCP connection)  
+**Severity:** High  
+**Description:** MCP server connection failures occurred at approximately 40% rate throughout the session. Commands would fail with "Failed to connect to MCP server" requiring immediate retry. Pattern was non-deterministic — same command would succeed on retry. This caused significant execution overhead during the security scan and remediation sprint.  
+**Context:** Executing a multi-wave security remediation sprint with 10+ sequential shell_exec calls for file patching, git operations, and verification.  
+**Suggested Fix:** Investigate MCP server keepalive/timeout configuration. Consider automatic retry with backoff in the MCP transport layer. The Bridge app may be dropping idle connections too aggressively.
+
+---
+
+**Category:** Friction  
+**Tool:** fetch_skill  
+**Severity:** Medium  
+**Description:** fetch_skill timed out twice (MCP error -32001: Request timed out) when loading the close-agent skill (~440 blocks). Succeeded on 4th attempt. Large skill pages may exceed the default MCP request timeout.  
+**Context:** Loading sk close-agent (440 blocks) for session closeout.  
+**Suggested Fix:** Increase timeout for fetch_skill or implement chunked loading for large skill pages. Consider caching recently-fetched skills.
+
+---
+
+**Category:** Friction  
+**Tool:** shell_exec (git add)  
+**Severity:** Low  
+**Description:** `git add` silently refuses to stage files matching .gitignore patterns (even for modifications to already-tracked files). Required `git add -f` for .cursor/rules after .cursor/ was added to .gitignore. Error message was helpful but required an extra round-trip.  
+**Context:** Staging security remediation changes that included edits to .cursor/rules (now in .gitignore).  
+**Suggested Fix:** None — this is standard git behavior. Document as a known pattern for agents doing git operations on files that transition into .gitignore coverage.
