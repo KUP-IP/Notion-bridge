@@ -61,7 +61,7 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 **Tool:** shell_exec (npx)  
 **Severity:** Low  
 **Description:** `npx skills add vercel-labs/skills` triggered an interactive agent-selection prompt, blocking non-interactive execution. The agent had to re-run with `--yes` flag to bypass. Expected: non-interactive by default when only one agent directory exists.  
-**Context:** Installing Vercel agent skills into `/Users/keepup/kup.solutions/.agents/skills/` during design infrastructure sprint.  
+**Context:** Installing Vercel agent skills into `<PROJECT_ROOT>/.agents/skills/` during design infrastructure sprint.  
 **Suggested Fix:** Document `--yes` flag requirement for non-interactive `npx skills add` in agent skill install workflows. Consider adding to sk dev-init Bootstrap Protocol as a known pattern.
 
 ---

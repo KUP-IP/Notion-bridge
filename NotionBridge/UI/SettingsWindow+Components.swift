@@ -115,7 +115,7 @@ struct SensitivePathsEditor: View {
     // MARK: Path Normalization
 
     /// Normalize absolute paths to ~/ form when applicable.
-    /// e.g. /Users/keepup/.ssh → ~/.ssh
+    /// e.g. ~/.ssh → ~/.ssh
     private func normalizePath(_ input: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let home = FileManager.default.homeDirectoryForCurrentUser.path

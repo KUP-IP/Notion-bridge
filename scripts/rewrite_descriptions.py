@@ -2,7 +2,7 @@
 """Rewrite all 66 NotionBridge MCP tool descriptions in Swift source files."""
 import os
 
-BASE = "/Users/keepup/Developer/keepr-bridge/NotionBridge"
+BASE = "os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'NotionBridge')"
 
 # (relative_path, old_desc_substring, new_full_description_value)
 # We match on unique substrings to avoid escaping issues

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 LOCAL_HEALTH = "http://127.0.0.1:9700/health"
-REMOTE_HOST = "mcp.kup.solutions"
+REMOTE_HOST = os.environ.get("MCP_REMOTE_HOST", "mcp.example.com")
 REMOTE_HEALTH = f"https://{REMOTE_HOST}/health"
 REMOTE_MCP = f"https://{REMOTE_HOST}/mcp"
 PLIST_PATH = Path.home() / "Library/Preferences/kup.solutions.notion-bridge.plist"

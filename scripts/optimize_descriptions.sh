@@ -3,7 +3,7 @@
 # Targeted replacements for 16 tools that need return-format hints,
 # disambiguation, or better LLM routing signals.
 set -e
-cd /Users/keepup/Developer/keepr-bridge
+cd "$(dirname "$0")/.."
 
 # === ShellModule.swift ===
 sed -i '' 's/description: "Run a shell command and return its output\."/description: "Run a shell command. Returns \{stdout, stderr, exitCode, duration\}. Escalates for sudo\/rm -rf patterns."/g' NotionBridge/Modules/ShellModule.swift

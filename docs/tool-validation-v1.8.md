@@ -65,10 +65,10 @@
 
 | Connection | Provider | Status | Auth |
 |-----------|----------|--------|------|
-| KEEP OS | notion | ✅ Connected | ntn_•••O6QE |
-| Notion Temp | notion | ✅ Connected | ntn_•••f37Z |
-| KEEP UP, LLC | stripe | ✅ Connected | sk_l•••16le |
-| Cloudflare | tunnel | ✅ Connected | bridge.kup.solutions |
+| KEEP OS | notion | ✅ Connected | ntn_••••••• |
+| Notion Temp | notion | ✅ Connected | ntn_••••••• |
+| KEEP UP, LLC | stripe | ✅ Connected | sk_••••••• |
+| Cloudflare | tunnel | ✅ Connected | <TUNNEL_HOST> |
 
 ## Verdict
 

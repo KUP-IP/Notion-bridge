@@ -13,3 +13,4 @@ DerivedData/
 .DS_Store
 menubar_master_hires.png
 .claude/
+.wrangler/

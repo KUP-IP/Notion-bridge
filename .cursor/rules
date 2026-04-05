@@ -1,0 +1,40 @@
+# NotionBridge — Cursor Agent Rules
+# v1.4.0 build 5 | Swift 6.3 | macOS 26+ | Apple Silicon
+
+## Project Overview
+NotionBridge is a native macOS menu bar app that runs an MCP server.
+- 65 module tools across 13 modules
+- Transports: stdio + SSE (legacy + Streamable HTTP)
+- SecurityGate with append-only audit log
+- Bundle ID: kup.solutions.notion-bridge
+- Signing ID: Developer ID Application: <DEVELOPER_NAME> (<APPLE_TEAM_ID>)
+
+## Build System
+- Swift Package Manager (Package.swift at repo root)
+- `Makefile` orchestrates the full pipeline
+- Key targets: `make release` = clean → test → sign → notarize → dmg → verify
+- Individual: `make build`, `make test`, `make sign`, `make notarize`, `make dmg`
+
+## Source Layout
+- `NotionBridge/` — main source (Config/, Modules/, Core/, Security/, Transport/)
+- `NotionBridgeTests/` — unit + integration tests (308 total)
+- `Info.plist` — bundle metadata (version must match Version.swift)
+- `AGENTS.md` — comprehensive project documentation for AI agents
+
+## MCP Integration
+- `.cursor/mcp.json` connects to `http://localhost:9700/mcp`
+- NotionBridge must be running for MCP tools to work
+
+## Release Checklist (v1.4.0)
+1. ✅ All tests pass (308/308)
+2. ✅ Version bumped (1.4.0 build 5)
+3. ✅ Tagged v1.4.0 and pushed to origin/main
+4. ⬜ Store notarytool credentials: `xcrun notarytool store-credentials "notarytool-profile" --apple-id <APPLE_ID> --team-id <APPLE_TEAM_ID> --password <APP_SPECIFIC_PASSWORD>`
+5. ⬜ Install create-dmg: `brew install create-dmg` (ensure brew is on PATH)
+6. ⬜ Run `make release` (or step-by-step: `make sign && make notarize && make dmg && make verify`)
+
+## Important Notes
+- NotionBridge cannot build/sign/notarize itself while running
+- The Makefile rpath uses `@loader_path` (not `@executable_path`)
+- Sparkle framework tools are in `.build/artifacts/sparkle/Sparkle/bin/`
+- Entitlements: JIT, unsigned memory, disable lib validation, apple events

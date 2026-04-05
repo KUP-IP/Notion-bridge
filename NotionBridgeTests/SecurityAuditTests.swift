@@ -64,7 +64,7 @@ func runSecurityAuditTests() async {
 
     await test("SEC-02: No Access-Control-Allow-Origin wildcard in SSETransport") {
         // Verify at the source level that the CORS wildcard is gone
-        let sseFile = "/Users/keepup/Developer/keepr-bridge/NotionBridge/Server/SSETransport.swift"
+        let sseFile = "NotionBridge/Server/SSETransport.swift"
         let content = try String(contentsOfFile: sseFile, encoding: .utf8)
         let hasCORSWildcard = content.contains("Access-Control-Allow-Origin\", value: \"*\"")
         try expect(!hasCORSWildcard, "SSETransport still contains CORS wildcard — SEC-02 not applied")

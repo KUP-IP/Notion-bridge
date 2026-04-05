@@ -6,7 +6,7 @@ Adds displayIndex parameter and all_displays target to screen_capture + screen_o
 import re
 import sys
 
-FILE = "/Users/keepup/Developer/keepr-bridge/NotionBridge/Modules/ScreenModule.swift"
+FILE = "os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'NotionBridge', 'Modules', 'ScreenModule.swift')"
 
 with open(FILE, "r") as f:
     src = f.read()
