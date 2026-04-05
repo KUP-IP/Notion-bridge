@@ -138,7 +138,7 @@ install: notarize
 	@echo "✅ Installed: /Applications/Notion Bridge.app"
 
 # v1.7.0: Copy-only install (no notarize dep, no killall) (F3)
-install-copy:
+install-copy: sign
 	@echo "Installing app to /Applications (copy-only)..."
 	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
 	@ditto "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"

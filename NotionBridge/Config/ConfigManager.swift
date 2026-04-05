@@ -396,12 +396,20 @@ public final class ConfigManager: @unchecked Sendable {
     /// Migrate tokens from config.json to Keychain on first launch.
     /// Reads existing tokens from config, saves to Keychain if not already there.
     /// Safe to call multiple times — skips if Keychain already has the token.
+    private static let keychainMigrationKey = "keychain_migration_v1_done"
+
     public func migrateTokensToKeychain() {
+        // Skip if migration already completed (avoids unnecessary Keychain access on every launch)
+        guard !UserDefaults.standard.bool(forKey: Self.keychainMigrationKey) else { return }
+
+        var migrated = false
+
         // Migrate Notion API token
         if let token = notionAPIToken, !token.isEmpty,
            !KeychainManager.shared.exists(key: KeychainManager.Key.notionAPIToken) {
             KeychainManager.shared.save(key: KeychainManager.Key.notionAPIToken, value: token)
             print("[ConfigManager] Migrated notion_api_token to Keychain")
+            migrated = true
         }
 
         // Migrate Stripe API key
@@ -410,7 +418,13 @@ public final class ConfigManager: @unchecked Sendable {
             KeychainManager.shared.save(key: KeychainManager.Key.stripeAPIKey, value: stripeKey)
             stripeAPIKey = nil
             print("[ConfigManager] Migrated stripe_api_key to Keychain")
+            migrated = true
         }
 
+        // Mark migration complete - even if nothing needed migrating, skip future checks
+        UserDefaults.standard.set(true, forKey: Self.keychainMigrationKey)
+        if migrated {
+            print("[ConfigManager] Keychain migration complete - flagged as done")
+        }
     }
 }

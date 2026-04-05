@@ -124,11 +124,15 @@ extension SettingsView {
                 ConnectionSetupView()
             }
 
-            // 5. App Control — three-column layout with Launch at Login
+            // 5. App Control
             Section("App Control") {
                 HStack {
-                    Toggle("Launch at login", isOn: $launchAtLogin)
-                        .fixedSize()
+                    Text("Launch at login")
+                    Toggle("", isOn: $launchAtLogin)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                    Spacer()
+                }
                         .onChange(of: launchAtLogin) { _, enabled in
                             guard !isApplyingLaunchAtLoginChange else { return }
                             launchAtLoginError = nil
@@ -167,15 +171,20 @@ extension SettingsView {
                                 isApplyingLaunchAtLoginChange = false
                             }
                         }
-                    Spacer()
-                    HStack(spacing: 12) {
-                        Button("Check Updates", systemImage: "arrow.down.circle") {
-                            (NSApp.delegate as? AppDelegate)?.checkForUpdates()
-                        }
-                        Button("Restart Bridge", systemImage: "arrow.clockwise") {
-                            restartApp(reopenSettings: true)
-                        }
+                HStack(spacing: 20) {
+                    Button {
+                        (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                    } label: {
+                        Label("Check Updates", systemImage: "arrow.down.circle")
                     }
+                    .buttonStyle(.borderless)
+                    Button {
+                        restartApp(reopenSettings: true)
+                    } label: {
+                        Label("Restart Bridge", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    Spacer()
                 }
 
                 if let err = launchAtLoginError {

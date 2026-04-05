@@ -2,18 +2,26 @@
 // NotionBridge · Security
 // V3-QUALITY B1: Secure token storage via macOS Keychain (SecItem API).
 // Thread-safe — all operations are synchronous via Security framework.
+// UEP-003 K2: In-process token cache to reduce Keychain prompts on unsigned rebuilds.
 
 import Foundation
 import Security
 
 /// Provides CRUD operations for storing sensitive values in the macOS Keychain.
 /// Uses kSecClassGenericPassword with service "com.notionbridge".
-public final class KeychainManager: Sendable {
+public final class KeychainManager: @unchecked Sendable {
 
     public static let shared = KeychainManager()
 
     /// Keychain service identifier.
     private static let service = "com.notionbridge"
+
+    /// In-process cache to avoid repeated Keychain prompts on unsigned rebuilds.
+    /// Lifetime: one app launch. Invalidated on save/update/delete.
+    private let cacheLock = NSLock()
+    private var cache: [String: String] = [:]
+    /// Keys that were read from Keychain and returned nil — cache the miss too.
+    private var negativeCacheKeys: Set<String> = []
 
     private init() {}
 
@@ -21,6 +29,42 @@ public final class KeychainManager: Sendable {
     /// return safe no-ops to avoid password prompt storms from mismatched code signatures.
     private var isAppBundle: Bool {
         Bundle.main.bundleURL.pathExtension == "app"
+    }
+
+    // MARK: - Cache Helpers
+
+    private func cachedValue(for key: String) -> String?? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let value = cache[key] { return .some(value) }
+        if negativeCacheKeys.contains(key) { return .some(nil) }
+        return nil // cache miss
+    }
+
+    private func setCacheValue(_ value: String?, for key: String) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        if let value = value {
+            cache[key] = value
+            negativeCacheKeys.remove(key)
+        } else {
+            cache.removeValue(forKey: key)
+            negativeCacheKeys.insert(key)
+        }
+    }
+
+    private func invalidateCache(for key: String) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        cache.removeValue(forKey: key)
+        negativeCacheKeys.remove(key)
+    }
+
+    private func invalidateAllCache() {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        cache.removeAll()
+        negativeCacheKeys.removeAll()
     }
 
     // MARK: - CRUD Operations
@@ -45,13 +89,22 @@ public final class KeychainManager: Sendable {
         let status = SecItemAdd(query as CFDictionary, nil)
         if status != errSecSuccess {
             print("[KeychainManager] ⚠️ Save failed for '\(key)': OSStatus \(status)")
+        } else {
+            setCacheValue(value, for: key)
         }
         return status == errSecSuccess
     }
 
     /// Read a value from the Keychain. Returns nil if not found.
+    /// UEP-003 K2: Checks in-process cache first to avoid repeated Keychain prompts.
     public func read(key: String) -> String? {
         guard isAppBundle else { return nil }
+
+        // Check in-process cache first
+        if let cached = cachedValue(for: key) {
+            return cached
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -66,8 +119,11 @@ public final class KeychainManager: Sendable {
         guard status == errSecSuccess,
               let data = result as? Data,
               let value = String(data: data, encoding: .utf8) else {
+            setCacheValue(nil, for: key)  // Cache the miss
             return nil
         }
+
+        setCacheValue(value, for: key)
         return value
     }
 
@@ -82,12 +138,22 @@ public final class KeychainManager: Sendable {
         ]
 
         let status = SecItemDelete(query as CFDictionary)
+        if status == errSecSuccess || status == errSecItemNotFound {
+            invalidateCache(for: key)
+        }
         return status == errSecSuccess || status == errSecItemNotFound
     }
 
     /// Check if a key exists in the Keychain.
+    /// UEP-003 K2: Uses cache to avoid Keychain prompt for already-read keys.
     public func exists(key: String) -> Bool {
         guard isAppBundle else { return false }
+
+        // Check cache first — if we have a positive cache hit, key exists
+        if let cached = cachedValue(for: key) {
+            return cached != nil
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -118,6 +184,9 @@ public final class KeychainManager: Sendable {
         let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
             return save(key: key, value: value)
+        }
+        if status == errSecSuccess {
+            setCacheValue(value, for: key)
         }
         return status == errSecSuccess
     }
@@ -163,6 +232,9 @@ public final class KeychainManager: Sendable {
         ]
 
         let status = SecItemDelete(query as CFDictionary)
+        if status == errSecSuccess {
+            invalidateAllCache()
+        }
         return status == errSecSuccess || status == errSecItemNotFound
     }
 }
