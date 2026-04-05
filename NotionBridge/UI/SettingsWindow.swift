@@ -94,10 +94,10 @@ public struct SettingsView: View {
 
     enum SettingsSection: String, CaseIterable, Identifiable {
         case connections = "Connections"
+        case credentials = "Credentials"
         case permissions = "Permissions"
         case tools = "Tools"
         case skills = "Skills"
-        case credentials = "Credentials"
         case advanced = "Advanced"
 
         var id: String { rawValue }

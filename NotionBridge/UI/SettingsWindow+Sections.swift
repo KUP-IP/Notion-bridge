@@ -128,6 +128,7 @@ extension SettingsView {
             Section("App Control") {
                 HStack {
                     Toggle("Launch at login", isOn: $launchAtLogin)
+                        .fixedSize()
                         .onChange(of: launchAtLogin) { _, enabled in
                             guard !isApplyingLaunchAtLoginChange else { return }
                             launchAtLoginError = nil
@@ -167,12 +168,13 @@ extension SettingsView {
                             }
                         }
                     Spacer()
-                    Button("Check Updates", systemImage: "arrow.down.circle") {
-                        (NSApp.delegate as? AppDelegate)?.checkForUpdates()
-                    }
-                    Spacer()
-                    Button("Restart Bridge", systemImage: "arrow.clockwise") {
-                        restartApp(reopenSettings: true)
+                    HStack(spacing: 12) {
+                        Button("Check Updates", systemImage: "arrow.down.circle") {
+                            (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                        }
+                        Button("Restart Bridge", systemImage: "arrow.clockwise") {
+                            restartApp(reopenSettings: true)
+                        }
                     }
                 }
 
@@ -627,15 +629,10 @@ private struct IntegratedToolsContent: View {
                     .font(.system(size: 8))
                     .foregroundStyle(statusColor(status))
                     .symbolEffect(.pulse, isActive: status == .checking)
-                VStack(alignment: .trailing, spacing: 2) {
+                if status != .disconnected {
                     Text(status.label)
                         .font(.caption)
                         .foregroundStyle(statusColor(status))
-                    if let detail = detailText(for: connection, status: status) {
-                        Text(detail)
-                            .font(.caption2)
-                            .foregroundStyle(BridgeColors.muted)
-                    }
                 }
             }
         } label: {
@@ -654,24 +651,6 @@ private struct IntegratedToolsContent: View {
         }
     }
 
-    private func detailText(for connection: BridgeConnection?, status: BridgeConnectionStatus) -> String? {
-        guard let connection else {
-            return status == .notConfigured ? "Add key in Credentials" : nil
-        }
-        switch status {
-        case .connected:
-            var parts: [String] = []
-            if let masked = connection.maskedCredential { parts.append(masked) }
-            if connection.isPrimary { parts.append("primary") }
-            return parts.isEmpty ? connection.name : parts.joined(separator: " · ")
-        case .notConfigured:
-            return "Add key in Credentials"
-        case .warning, .disconnected, .invalid:
-            return connection.maskedCredential ?? connection.name
-        case .checking:
-            return nil
-        }
-    }
 
     private func loadConnections() async {
         do {
@@ -727,7 +706,14 @@ private struct ConnectedClientsContent: View {
         .task { await loadConnectionNames() }
     }
 
+    private static let clientDisplayNames: [String: String] = [
+        "notion-mcp-client": "Notion API"
+    ]
+
     private func resolvedName(for client: ConnectedClient) -> String {
+        if let mapped = Self.clientDisplayNames[client.name] {
+            return mapped
+        }
         for (_, connName) in connectionNames {
             if client.name.localizedCaseInsensitiveContains(connName)
                 || connName.localizedCaseInsensitiveContains(client.name) {
