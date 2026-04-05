@@ -92,6 +92,8 @@ struct OnboardingView: View {
     @State private var hasAcceptedLegal: Bool = UserDefaults.standard.bool(forKey: BridgeDefaults.hasAcceptedLegalTerms)
 
     // Workspace Setup form state
+    // Connection Setup provider picker (UEP-004)
+    @State private var selectedProvider: AddConnectionProvider = .notion
     @State private var workspaceToken = ""
     @State private var workspaceName = ""
     @State private var isSavingWorkspace = false
@@ -313,30 +315,42 @@ struct OnboardingView: View {
                 .font(.system(size: 40))
                 .foregroundStyle(.purple)
 
-            Text("Connect Your Workspace")
+            Text("Connect a Service")
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            Text("Add your Notion API token to connect your workspace. You can add more workspaces later in Settings.")
+            Text("Add an API key for Notion, Stripe, or another service. You can add more connections later in Settings.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 8)
 
             VStack(alignment: .leading, spacing: 10) {
-                Link(destination: URL(string: "https://www.notion.so/profile/integrations")!) {
-                    HStack(spacing: 4) {
-                        Image(systemName: "arrow.up.right.square")
-                        Text("Create an internal integration at notion.so")
+                Picker("Provider", selection: $selectedProvider) {
+                    ForEach(AddConnectionProvider.allCases) { provider in
+                        Text(provider.rawValue).tag(provider)
                     }
-                    .font(.caption)
-                    .foregroundStyle(.purple)
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: selectedProvider) { _, _ in
+                    workspaceError = nil
                 }
 
-                TextField("Workspace name (e.g. Work, Personal)", text: $workspaceName)
+                if let helpURL = selectedProvider.helpURL {
+                    Link(destination: helpURL) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.up.right.square")
+                            Text(selectedProvider.helpLabel)
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.purple)
+                    }
+                }
+
+                TextField(selectedProvider.namePlaceholder, text: $workspaceName)
                     .textFieldStyle(.roundedBorder)
 
-                SecureField("Notion API token (ntn_...)", text: $workspaceToken)
+                SecureField(selectedProvider.tokenPlaceholder, text: $workspaceToken)
                     .textFieldStyle(.roundedBorder)
             }
             .padding(.horizontal, 8)
@@ -397,20 +411,45 @@ struct OnboardingView: View {
         }
 
         let trimmedToken = workspaceToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedToken.hasPrefix("ntn_") else {
-            await MainActor.run {
-                workspaceError = "Invalid token — must start with ntn_"
-                isSavingWorkspace = false
+
+        // UEP-004: Provider-specific validation
+        switch selectedProvider {
+        case .notion:
+            guard trimmedToken.hasPrefix("ntn_") else {
+                await MainActor.run {
+                    workspaceError = "Invalid token u{2014} must start with ntn_"
+                    isSavingWorkspace = false
+                }
+                return
             }
-            return
+        case .stripe:
+            guard trimmedToken.hasPrefix("sk_") || trimmedToken.hasPrefix("rk_") else {
+                await MainActor.run {
+                    workspaceError = "Invalid key u{2014} must start with sk_ or rk_"
+                    isSavingWorkspace = false
+                }
+                return
+            }
+        case .generic:
+            break
         }
 
         do {
-            _ = try await ConnectionRegistry.shared.configureNotionConnection(
-                name: workspaceName,
-                token: workspaceToken,
-                primary: true
-            )
+            switch selectedProvider {
+            case .notion:
+                _ = try await ConnectionRegistry.shared.configureNotionConnection(
+                    name: workspaceName,
+                    token: workspaceToken,
+                    primary: true
+                )
+            case .stripe:
+                _ = try await ConnectionRegistry.shared.configureStripeAPIKey(workspaceToken)
+            case .generic:
+                _ = try await ConnectionRegistry.shared.configureGenericConnection(
+                    name: workspaceName,
+                    apiKey: workspaceToken
+                )
+            }
             await MainActor.run {
                 workspaceSaved = true
                 isSavingWorkspace = false

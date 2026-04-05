@@ -110,6 +110,37 @@ public actor ConnectionRegistry {
         return try await buildStripeConnection(validateLive: true)
     }
 
+    /// UEP-004 W2: Store a generic API key in Keychain and return a BridgeConnection.
+    public func configureGenericConnection(name: String, apiKey: String) async throws -> BridgeConnection {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty else {
+            throw ConnectionRegistryError.unsupportedAction("Connection name cannot be empty")
+        }
+        guard !trimmedKey.isEmpty else {
+            throw ConnectionRegistryError.invalidAPIKey
+        }
+
+        let keychainKey = "generic:\(trimmedName)"
+        let saved = KeychainManager.shared.save(key: keychainKey, value: trimmedKey)
+        guard saved else {
+            throw ConnectionRegistryError.unsupportedAction("Failed to store API key in Keychain")
+        }
+
+        return BridgeConnection(
+            id: "\(BridgeConnectionProvider.generic.rawValue):\(trimmedName)",
+            provider: .generic,
+            kind: .api,
+            name: trimmedName,
+            status: .connected,
+            authType: "api_key",
+            maskedCredential: BridgeConnection.maskSecret(trimmedKey),
+            capabilities: [],
+            lastValidatedAt: formatter.string(from: Date()),
+            summary: "Generic API key stored securely"
+        )
+    }
+
     public func removeConnection(id: String) async throws {
         let provider = try parseProvider(from: id)
         switch provider {
@@ -123,7 +154,9 @@ public actor ConnectionRegistry {
         case .tunnel:
             throw ConnectionRegistryError.unsupportedAction("Remote access is managed through the Remote Access settings section")
         case .generic:
-            throw ConnectionRegistryError.unsupportedAction("Generic connections cannot be removed through this interface")
+            let name = try parseName(from: id)
+            let keychainKey = "generic:\(name)"
+            _ = KeychainManager.shared.delete(key: keychainKey)
         }
     }
 
