@@ -114,7 +114,7 @@ public actor ServerManager {
             name: "echo",
             module: "builtin",
             tier: .open,
-            description: "Echoes back the input message unchanged. Returns {message: string}. Use to verify MCP connectivity.",
+            description: "Echo your message back to verify the connection.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -145,7 +145,7 @@ public actor ServerManager {
 
         // 5. Wire ListTools handler — PKT-350: filter disabled tools
         await server.withMethodHandler(ListTools.self) { [router] _ in
-            let disabledNames = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
+            let disabledNames = CredentialsFeature.mergedDisabledToolNames()
             let registrations = await router.enabledRegistrations(disabledNames: disabledNames)
             let tools = registrations.map { reg in
                 Tool(

@@ -22,6 +22,8 @@ struct CredentialsView: View {
     @State private var errorMessage: String?
     @State private var entryToDelete: (service: String, account: String)?
     @State private var showDeleteConfirmation = false
+    @State private var credentialsEnabledUI = UserDefaults.standard.bool(forKey: CredentialsFeature.userDefaultsKey)
+    @State private var enablingCredentials = false
 
     // Add Password form state
     @State private var showAddPassword = false
@@ -51,69 +53,105 @@ struct CredentialsView: View {
 
     var body: some View {
         Form {
-            // MARK: Passwords
-            Section("Passwords") {
-                if passwords.isEmpty && !showAddPassword {
-                    Text("No saved passwords")
-                        .foregroundStyle(BridgeColors.secondary)
-                        .font(.caption)
-                } else {
-                    ForEach(0..<passwords.count, id: \.self) { idx in
-                        passwordRow(passwords[idx])
-                    }
-                }
-
-                DisclosureGroup("Add Password", isExpanded: $showAddPassword) {
-                    addPasswordForm
-                }
-                .font(.caption)
-            }
-
-            // MARK: Cards
-            Section("Cards") {
-                if cards.isEmpty && !showAddCard {
-                    Text("No saved cards")
-                        .foregroundStyle(BridgeColors.secondary)
-                        .font(.caption)
-                } else {
-                    ForEach(0..<cards.count, id: \.self) { idx in
-                        cardRow(cards[idx])
-                    }
-                }
-
-                DisclosureGroup("Add Card", isExpanded: $showAddCard) {
-                    addCardForm
-                }
-                .font(.caption)
-            }
-
-            // MARK: Footer
             Section {
-                if let errorMessage {
-                    Text(errorMessage)
+                Toggle(isOn: Binding(
+                    get: { credentialsEnabledUI },
+                    set: { newValue in
+                        if newValue {
+                            Task { await setCredentialsEnabled() }
+                        } else {
+                            UserDefaults.standard.set(false, forKey: CredentialsFeature.userDefaultsKey)
+                            credentialsEnabledUI = false
+                            showAddPassword = false
+                            showAddCard = false
+                            NotificationCenter.default.post(name: .notionBridgeCredentialsFeatureDidChange, object: nil)
+                        }
+                    }
+                )) {
+                    Text("Keychain credentials & MCP tools")
+                }
+                .disabled(enablingCredentials)
+                .accessibilityLabel("Enable Keychain credentials and credential MCP tools")
+
+                if !credentialsEnabledUI {
+                    Text(
+                        "When off, credential MCP tools are unavailable and this tab stays read-minimal. Turn on to store passwords and tokenized cards locally."
+                    )
+                    .font(.callout)
+                    .foregroundStyle(BridgeColors.secondary)
+                }
+            }
+
+            if credentialsEnabledUI {
+                // MARK: Passwords
+                Section("Passwords") {
+                    if passwords.isEmpty && !showAddPassword {
+                        Text("No saved passwords")
+                            .foregroundStyle(BridgeColors.secondary)
+                            .font(.caption)
+                    } else {
+                        ForEach(0..<passwords.count, id: \.self) { idx in
+                            passwordRow(passwords[idx])
+                        }
+                    }
+
+                    addCredentialRow(title: "Add Password", isExpanded: $showAddPassword) {
+                        addPasswordForm
+                    }
+                }
+
+                // MARK: Cards
+                Section("Cards") {
+                    if cards.isEmpty && !showAddCard {
+                        Text("No saved cards")
+                            .foregroundStyle(BridgeColors.secondary)
+                            .font(.caption)
+                    } else {
+                        ForEach(0..<cards.count, id: \.self) { idx in
+                            cardRow(cards[idx])
+                        }
+                    }
+
+                    addCredentialRow(title: "Add Card", isExpanded: $showAddCard) {
+                        addCardForm
+                    }
+                }
+
+                // MARK: Footer
+                Section {
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.caption)
+                            .foregroundStyle(BridgeColors.error)
+                    }
+
+                    HStack {
+                        Button("Refresh") {
+                            loadCredentials()
+                        }
                         .font(.caption)
-                        .foregroundStyle(BridgeColors.error)
-                }
 
-                HStack {
-                    Button("Refresh") {
-                        loadCredentials()
+                        if isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
                     }
-                    .font(.caption)
 
-                    if isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
+                    Text("Stored in macOS Keychain with biometric protection.")
+                        .font(.caption2)
+                        .foregroundStyle(BridgeColors.muted)
                 }
-
-                Text("Credentials are stored in macOS Keychain with biometric protection. Cards are tokenized via Stripe before storage.")
-                    .font(.caption2)
-                    .foregroundStyle(BridgeColors.muted)
             }
         }
         .formStyle(.grouped)
-        .task {
+        .onAppear {
+            credentialsEnabledUI = UserDefaults.standard.bool(forKey: CredentialsFeature.userDefaultsKey)
+        }
+        .task(id: credentialsEnabledUI) {
+            guard credentialsEnabledUI else {
+                isLoading = false
+                return
+            }
             loadCredentials()
         }
         .confirmationDialog(
@@ -132,6 +170,56 @@ struct CredentialsView: View {
         } message: {
             if let target = entryToDelete {
                 Text("Delete \"\(target.service) / \(target.account)\"? This cannot be undone.")
+            }
+        }
+    }
+
+    @MainActor
+    private func setCredentialsEnabled() async {
+        enablingCredentials = true
+        defer { enablingCredentials = false }
+        do {
+            try await CredentialManager.shared.requireBiometric(reason: "Enable Keychain-backed credentials for Notion Bridge")
+            UserDefaults.standard.set(true, forKey: CredentialsFeature.userDefaultsKey)
+            credentialsEnabledUI = true
+            loadCredentials()
+            NotificationCenter.default.post(name: .notionBridgeCredentialsFeatureDidChange, object: nil)
+        } catch {
+            credentialsEnabledUI = false
+        }
+    }
+
+    @ViewBuilder
+    private func addCredentialRow<Content: View>(
+        title: String,
+        isExpanded: Binding<Bool>,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                isExpanded.wrappedValue.toggle()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle.fill")
+                        .imageScale(.medium)
+                    Text(title)
+                        .font(.body)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(BridgeColors.secondary)
+                        .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
+                }
+                .padding(.vertical, 12)
+                .padding(.horizontal, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(title)
+
+            if isExpanded.wrappedValue {
+                content()
+                    .padding(.top, 6)
             }
         }
     }

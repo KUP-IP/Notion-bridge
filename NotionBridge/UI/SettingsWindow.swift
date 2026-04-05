@@ -15,16 +15,12 @@
 // PKT-363 D4: Restore Defaults merge + zero-path confirmation guard.
 // PKT-362 D3: Re-check All uses animatedRecheckAll() for per-row feedback.
 // PKT-362 D4: Reset TCC dialog rewritten with user-facing language.
-// PKT-362 D5: Post-reset guided instruction sheet with deep links + restart.
 
 import SwiftUI
 import ServiceManagement
 import AppKit
 
-// PKT-349 B2: Notification name for reset onboarding action
-extension Notification.Name {
-    static let resetOnboarding = Notification.Name("com.notionbridge.resetOnboarding")
-}
+// Notification names moved to NotionBridge/Core/BridgeNotifications.swift
 
 /// Manages the Settings NSWindow. Opens via gear icon in popover or Cmd+,.
 @MainActor
@@ -91,10 +87,10 @@ public struct SettingsView: View {
     @State var ssePortInput = String(ConfigManager.shared.ssePort)
     @State var ssePortError: String?
     @State var ssePortSaveSuccess = false
+    @State var showSSEPortRestartPrompt = false
+    @State var ssePortRevertOnCancel: Int?
     @State var factoryResetMessage: String?
     @State var showTCCResetDialog = false
-    // PKT-362 D5: Post-reset guided instruction sheet
-    @State var showPostResetSheet = false
 
     enum SettingsSection: String, CaseIterable, Identifiable {
         case connections = "Connections"
@@ -167,10 +163,9 @@ public struct SettingsView: View {
         return masked
     }
 
-    /// Runtime build target string — replaces hardcoded "macOS 14+".
+    /// Minimum OS matching SwiftPM deployment (not the machine's runtime version).
     var buildTargetString: String {
-        let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "macOS \(v.majorVersion)"
+        "macOS \(BridgeConstants.minimumMacOSMarketing)"
     }
 
     /// Compact relative timestamp — mirrors DashboardView.relativeTime pattern.
@@ -187,5 +182,4 @@ public struct SettingsView: View {
     @State var skillsManager = SkillsManager()
     // PKT-375: Screen output directory state
     @State var screenOutputDir: String = ConfigManager.shared.screenOutputDir
-    @State var learnedAllowPrefixes: [String] = ConfigManager.shared.learnedAllowPrefixes.sorted()
 }

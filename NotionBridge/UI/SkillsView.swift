@@ -26,6 +26,7 @@ struct SkillsView: View {
     @State private var newSkillPageId: String = ""
     @State private var newSkillVisibility: SkillVisibility = .standard
     @State private var addError: String?
+    @State private var urlValidationError: String?
 
     // PKT-487: Inline URL editing state
     @State private var editingSkillName: String?
@@ -33,6 +34,18 @@ struct SkillsView: View {
 
     var body: some View {
         Form {
+            let invalidPageSkills = skillsManager.skills.filter { !NotionPageRef.isValidStoredPageId($0.notionPageId) }
+            if !invalidPageSkills.isEmpty {
+                Section {
+                    Label(
+                        "Some skills have an invalid Notion page ID (not 32 hex digits). Fix the URL or ID in Settings — fetch_skill and sync will fail until corrected.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                }
+            }
+
             // F11: Cross-tab dependency guard
             if fetchSkillDisabled && !skillsManager.skills.isEmpty {
                 Section {
@@ -173,15 +186,23 @@ struct SkillsView: View {
 
                 // PKT-487 F2: Inline URL edit — tap to edit, save on Enter/focus loss
                 if editingSkillName == skill.name {
-                    TextField("Notion Page URL", text: $editingURL)
-                        .font(.caption)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit {
-                            commitURLEdit(for: skill.name)
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextField("Notion Page URL", text: $editingURL)
+                            .font(.caption)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                commitURLEdit(for: skill.name)
+                            }
+                            .onExitCommand {
+                                editingSkillName = nil
+                                urlValidationError = nil
+                            }
+                        if let urlValidationError {
+                            Text(urlValidationError)
+                                .font(.caption2)
+                                .foregroundStyle(.red)
                         }
-                        .onExitCommand {
-                            editingSkillName = nil
-                        }
+                    }
                 } else {
                     Text(skill.notionPageId.isEmpty ? "No URL set" : skill.notionPageId)
                         .font(.caption)
@@ -189,6 +210,7 @@ struct SkillsView: View {
                         .lineLimit(1)
                         .onTapGesture {
                             commitPendingEdit()
+                            urlValidationError = nil
                             editingSkillName = skill.name
                             editingURL = skill.notionPageId
                         }
@@ -280,8 +302,14 @@ struct SkillsView: View {
     /// Save the inline URL edit for a specific skill.
     private func commitURLEdit(for skillName: String) {
         let trimmed = editingURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        skillsManager.updateSkillURL(named: skillName, newPageId: trimmed)
-        editingSkillName = nil
+        switch NotionPageRef.normalizedPageId(from: trimmed) {
+        case .success(let normalized):
+            skillsManager.updateSkillURL(named: skillName, newPageId: normalized)
+            editingSkillName = nil
+            urlValidationError = nil
+        case .failure(let err):
+            urlValidationError = err.message
+        }
     }
 
     // MARK: - Add Skill
@@ -291,29 +319,18 @@ struct SkillsView: View {
         let name = newSkillName.trimmingCharacters(in: .whitespacesAndNewlines)
         let pageId = newSkillPageId.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let cleanPageId = extractPageId(from: pageId)
-
-        let success = skillsManager.addSkill(name: name, notionPageId: cleanPageId, visibility: newSkillVisibility)
-        if success {
-            newSkillName = ""
-            newSkillPageId = ""
-            newSkillVisibility = .standard
-        } else {
-            addError = "A skill with this name already exists."
-        }
-    }
-
-    /// Extract a Notion page ID from a URL, or return the input unchanged.
-    private func extractPageId(from input: String) -> String {
-        // Handle common Notion URL patterns
-        if input.contains("notion.so") || input.contains("notion.site"),
-           let lastComponent = input.split(separator: "/").last {
-            let str = String(lastComponent)
-            // Page ID is the last 32 hex chars
-            if let range = str.range(of: "[a-f0-9]{32}", options: .regularExpression) {
-                return String(str[range])
+        switch NotionPageRef.normalizedPageId(from: pageId) {
+        case .failure(let err):
+            addError = err.message
+        case .success(let normalized):
+            let success = skillsManager.addSkill(name: name, notionPageId: normalized, visibility: newSkillVisibility)
+            if success {
+                newSkillName = ""
+                newSkillPageId = ""
+                newSkillVisibility = .standard
+            } else {
+                addError = "A skill with this name already exists."
             }
         }
-        return input
     }
 }

@@ -37,7 +37,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test app appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-appcast release clean install clean-tcc patch-deps
+.PHONY: debug build test app appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -144,6 +144,9 @@ install-copy:
 	@ditto "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
 	@echo "Installed: /Applications/Notion Bridge.app"
 	@echo "Restart NotionBridge manually to pick up changes."
+
+# Alias for agents / remote MCP sessions: same as install-copy (no notarize; does not kill NotionBridge).
+install-agent-safe: install-copy
 
 # ── Clean TCC ──────────────────────────────────────────────────────────
 clean-tcc:

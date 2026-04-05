@@ -76,17 +76,22 @@ public struct ConnectionSetupView: View {
             Text(tunnelURL.isEmpty ? "Not configured" : activeProvider.rawValue)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Button {
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    isExpanded.toggle()
-                }
-            } label: {
-                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
+            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
         }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                isExpanded.toggle()
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(
+            "Remote Access, \(tunnelURL.isEmpty ? "not configured" : activeProvider.rawValue), \(isExpanded ? "expanded" : "collapsed")"
+        )
     }
 
     // MARK: - Expanded Content
@@ -97,15 +102,20 @@ public struct ConnectionSetupView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            // Local endpoint info
-            HStack(spacing: 6) {
-                Image(systemName: "server.rack")
-                    .font(.caption)
-                    .foregroundStyle(.blue)
-                Text(verbatim: "Local: 127.0.0.1:\(ssePort)/mcp")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
+            // Local endpoint info (same port as Connections → Server → Local port / Advanced → Network)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: "server.rack")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                    Text(verbatim: "Local: 127.0.0.1:\(ssePort)/mcp")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                Text("Matches your configured MCP port. Change it under Advanced → Network (or NOTION_BRIDGE_PORT); restart the app for the server to bind to a new port.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
 
             Divider()
@@ -125,9 +135,12 @@ public struct ConnectionSetupView: View {
                 Text("TUNNEL URL")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
-                TextField("https://your-tunnel.example.com", text: $tunnelURL)
+                TextField("Paste your tunnel URL", text: $tunnelURL)
                     .textFieldStyle(.roundedBorder)
                     .font(.caption)
+                Text(verbatim: "Example: https://xxxx.trycloudflare.com")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
             }
 
             if !tunnelURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -135,19 +148,19 @@ public struct ConnectionSetupView: View {
                 mcpBearerSection
             }
 
-            // Help text
+            // Help text — operator runs tunnel CLI; port must match local MCP (see Local line above)
             if activeProvider == .cloudflare {
-                Text(verbatim: "Run in Terminal: cloudflared tunnel --url http://localhost:\(ssePort)")
+                Text(verbatim: "Cloudflare: install cloudflared, then in Terminal run (port must match \(ssePort) above): cloudflared tunnel --url http://localhost:\(ssePort)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)
             } else if activeProvider == .tailscale {
-                Text("Run in Terminal: tailscale funnel \(ssePort)")
+                Text(verbatim: "Tailscale: in Terminal run (port must match \(ssePort) above): tailscale funnel \(ssePort)")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)
             } else {
-                Text("Paste your tunnel URL here. It should forward to localhost:\(ssePort).")
+                Text(verbatim: "Paste the HTTPS URL from your tunnel provider. It must forward to http://127.0.0.1:\(ssePort) (same port as Local above). Custom port: Advanced → Network or NOTION_BRIDGE_PORT.")
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

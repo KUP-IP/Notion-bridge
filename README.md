@@ -109,7 +109,9 @@ If you are using Notion tools, add a valid Notion integration token through the 
 
 ### Factory reset (Settings → Maintenance)
 
-**Factory Reset** clears local config, Keychain entries for Notion Bridge, resets macOS permissions for the app, and reloads in-memory workspace connection state. **Skills** are reset to the built-in default set (three placeholders), not an empty list.
+**Factory Reset** clears local config, Keychain entries for Notion Bridge, resets macOS permissions for the app, and reloads in-memory workspace connection state. **Skills** are cleared to an **empty** list.
+
+**Credentials** (Settings → Credentials) are **opt-in**: enable “Keychain credentials & MCP tools” to use `credential_*` and `payment_execute` with stored payment methods. When disabled, those MCP tools are omitted from listings and fail closed if called.
 
 If you launch the app with **`NOTION_API_TOKEN`** or **`NOTION_API_KEY`** set in the environment, Notion can still resolve a token after reset (that path is intentional for developers). Unset those variables when testing a truly empty workspace. Restart the app after reset so permission and connection UIs stay consistent.
 
@@ -187,8 +189,11 @@ Other useful targets:
 ```bash
 make clean
 make install
+make install-copy    # or: make install-agent-safe — copy .app to /Applications without full notarize (agent-safe)
 make release
 ```
+
+Pre-release manual QA: [docs/pre-ship-qa-checklist.md](docs/pre-ship-qa-checklist.md). Local MCP smoke (app running): `python3 scripts/qa_local_mcp_smoke.py`.
 
 ---
 

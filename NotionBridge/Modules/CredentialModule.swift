@@ -29,7 +29,7 @@ public enum CredentialModule {
             name: "credential_save",
             module: moduleName,
             tier: .request,
-            description: "Store or update a credential in the macOS Keychain. Supports 'password' and 'card' types -- cards are Stripe-tokenized before storage, raw numbers never persist. Triggers Touch ID prompt. Returns confirmation.",
+            description: "Save a password or card in the Keychain (cards are tokenized).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -132,7 +132,7 @@ public enum CredentialModule {
             name: "credential_read",
             module: moduleName,
             tier: .request,
-            description: "Retrieve a stored credential by service + account key. Returns {password, type, metadata}. No biometric prompt -- SecurityGate approval is sufficient.",
+            description: "Read one saved password or card.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -189,7 +189,7 @@ public enum CredentialModule {
             name: "credential_list",
             module: moduleName,
             tier: .notify,
-            description: "List stored credentials (metadata only -- no secrets exposed). Returns an array of {service, account, type, metadata} entries. Filter by type or service substring.",
+            description: "List saved credentials (names only, not secrets).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -271,7 +271,7 @@ public enum CredentialModule {
             name: "credential_delete",
             module: moduleName,
             tier: .request,
-            description: "Remove a credential from the macOS Keychain by service + account key. Triggers Touch ID prompt before deletion. Returns confirmation.",
+            description: "Delete a saved credential from the Keychain.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

@@ -23,8 +23,8 @@ public enum ShellModule {
         await router.register(ToolRegistration(
             name: "shell_exec",
             module: moduleName,
-            tier: .request,
-            description: "Execute a shell command with optional timeout and working directory. Returns {stdout, stderr, exitCode, duration}. Commands matching auto-escalation patterns (e.g. sudo, rm -rf) require elevated confirmation.",
+            tier: .open,
+            description: "Run a shell command. Returns {stdout, stderr, exitCode, duration}. Escalates for sudo/rm -rf patterns.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -131,8 +131,8 @@ public enum ShellModule {
         await router.register(ToolRegistration(
             name: "run_script",
             module: moduleName,
-            tier: .request,
-            description: "Execute a pre-approved script from the scripts directory. Only scripts in the approved list are allowed. Returns {stdout, stderr, exitCode}.",
+            tier: .notify,
+            description: "Run an allow-listed script from the app’s scripts folder.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

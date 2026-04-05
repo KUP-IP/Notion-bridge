@@ -48,6 +48,8 @@ make check-appcast # Fail if appcast.xml does not match Info.plist version/build
 
 **Production install ladder (canonical):** `make test` → `make app` → `make install` when signing credentials exist; otherwise `make install-copy` and accept ad-hoc / Gatekeeper differences. **`swift build` alone does not refresh `/Applications`** — always use the Makefile app target.
 
+**Agents / Cursor / MCP-driven sessions:** After `make app`, use **`make install-copy`** or **`make install-agent-safe`** (same target) to copy `.build/NotionBridge.app` → `/Applications/Notion Bridge.app` without running the full notarize pipeline. Avoid long `make install` / `make release` from the same session that hosts your MCP connection if the workflow would time out or abort. The `install` target only sends `killall Dock` (icon refresh), not the Notion Bridge process—historical friction is documented in `AGENT_FEEDBACK.md` and resolved by preferring `install-copy` for copy-only installs.
+
 If `make app` warns that `actool` failed, icons may fall back to PNGs; see Makefile `app` target (asset compile is best-effort). A common cause is a broken **ibtoold** plugin load (`xcodebuild -runFirstLaunch` or opening **Xcode** once to refresh system content), not Swift source errors.
 
 ### Maintenance
@@ -141,6 +143,15 @@ MCP metadata (`summary`, `triggerPhrases`, `antiTriggerPhrases`) is **authoritat
 - **`manage_skill`** (`.request`) — Registry CRUD, `set_visibility`, **`set_metadata`** (partial updates), and Notion sync actions above. Not a secrecy boundary: approved calls still see all skills.
 
 `notion_page_read` uses the same block collection as skills: paginated siblings; optional nesting via `includeNested` (default false). Prefer `notion_page_markdown_read` for full prose when block structure is unnecessary.
+
+### Credentials (`CredentialModule` + `payment_execute`)
+
+Enable **Keychain credentials** in Settings to expose `credential_*` MCP tools and allow `payment_execute` (Stripe PaymentIntent using a stored `pm_` from `credential_save`). When disabled, credential tools are filtered from `ListTools` and dispatch fails closed; `payment_execute` also checks the flag.
+
+### Version surfaces
+
+- **MCP protocol** — `BridgeConstants.mcpProtocolVersion` (Model Context Protocol spec date), used in MCP `initialize` / legacy JSON-RPC.
+- **Notion REST API** — `BridgeConstants.notionAPIVersion` → `Notion-Version` header on `https://api.notion.com` (Notion workspace tools). Distinct from MCP and from Notion’s hosted MCP (`mcp.notion.com`).
 
 ### Notion Token Configuration
 

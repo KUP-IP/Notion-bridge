@@ -28,8 +28,13 @@ public enum AppVersion {
 
 /// Protocol and networking constants for NotionBridge.
 public enum BridgeConstants {
-    /// MCP protocol version supported by this build.
-    public static let mcpProtocolVersion = "2024-11-05"
+    /// MCP (Model Context Protocol) version announced in the `initialize` handshake.
+    /// Aligned with the current MCP spec revision (see modelcontextprotocol.io).
+    public static let mcpProtocolVersion = "2025-06-18"
+    /// Minimum macOS major version matching `Package.swift` deployment target.
+    public static let minimumMacOSMarketing = "26+"
+    /// `Notion-Version` header for all Notion REST API requests (`NotionClient`).
+    public static let notionAPIVersion = "2026-03-11"
     /// Default SSE server port.
     public static let defaultSSEPort = 9700
 }

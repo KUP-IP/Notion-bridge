@@ -105,7 +105,7 @@ public actor StripeMcpProxy {
     private func ensureInitialized() async throws {
         guard !isInitialized else { return }
         let params: [String: Any] = [
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": BridgeConstants.mcpProtocolVersion,
             "capabilities": [String: Any](),
             "clientInfo": [
                 "name": "NotionBridge",

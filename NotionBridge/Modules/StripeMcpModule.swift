@@ -26,7 +26,7 @@ public enum StripeMcpModule {
                     module: moduleName,
                     tier: tier,
                     neverAutoApprove: isDestructive,
-                    description: tool.description,
+                    description: Self.customerFacingDescription(tool.description),
                     inputSchema: tool.inputSchema,
                     handler: { [name = tool.name] arguments in
                         do {
@@ -46,6 +46,19 @@ public enum StripeMcpModule {
         } catch {
             print("[StripeMcpModule] Discovery failed: \(error.localizedDescription). No Stripe tools registered.")
         }
+    }
+
+    /// Short, customer-readable line for Settings and MCP listings (Stripe’s API may return long copy).
+    private static func customerFacingDescription(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "Stripe account or payment tool." }
+        if let range = trimmed.range(of: ". ") {
+            return String(trimmed[..<range.lowerBound]).trimmingCharacters(in: .whitespaces) + "."
+        }
+        if trimmed.count > 180 {
+            return String(trimmed.prefix(177)) + "..."
+        }
+        return trimmed
     }
 
     /// Returns the list of currently discovered tool names (for ConnectionRegistry capabilities).

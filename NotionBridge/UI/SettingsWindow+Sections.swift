@@ -2,16 +2,19 @@
 // V3-QUALITY D1-D5: Extracted from SettingsWindow.swift monolith.
 // Each section is an extension on SettingsView for clean separation.
 
-import SwiftUI
+import AppKit
+import Darwin
+import Foundation
 import ServiceManagement
+import SwiftUI
 
 extension SettingsView {
     /// Factory Reset confirmation — skills defaults, env-based Notion token, restart guidance.
     var factoryResetConfirmationMessage: String {
         """
-        This will clear: SSE port, learned command allows, stored credentials (Notion workspace tokens and Stripe), onboarding state, and macOS permissions for Notion Bridge.
+        This will clear: SSE port, stored credentials (Notion workspace tokens and Stripe), onboarding state, and macOS permissions for Notion Bridge.
 
-        Skills are restored to the built-in default set (three placeholder entries), not wiped empty.
+        Skills are cleared to an empty list (add skills from Settings or via MCP when ready).
 
         If the app is launched with NOTION_API_TOKEN or NOTION_API_KEY in the environment, Notion may still resolve a token after reset (developer convenience). Unset those variables for a fully clean test.
 
@@ -63,8 +66,6 @@ extension SettingsView {
                         Task {
                             let resetResult = await resetTCCPermissions()
                             permissionActionMessage = resetResult.message
-                            // PKT-362 D5: Show post-reset guided instruction sheet
-                            showPostResetSheet = true
                         }
                     }
                     Button("Cancel", role: .cancel) {}
@@ -82,16 +83,13 @@ extension SettingsView {
             }
         }
         .formStyle(.grouped)
-        // PKT-362 D5: Post-reset guided instruction sheet
-        .sheet(isPresented: $showPostResetSheet) {
-            PostResetSheet(permissionManager: permissionManager)
-        }
     }
 
     // MARK: - Connections
 
     var connectionsSection: some View {
         Form {
+            // 1. Server status
             Section("Server") {
                 LabeledContent("Status") {
                     HStack(spacing: BridgeSpacing.xs) {
@@ -102,86 +100,11 @@ extension SettingsView {
                             .foregroundStyle(statusBar.isServerRunning ? BridgeColors.success : BridgeColors.error)
                     }
                 }
-                LabeledContent("Port", value: String(ssePort))
-                LabeledContent("Tools", value: "\(statusBar.registeredToolCount) registered")
+                LabeledContent("Tools", value: "\(statusBar.registeredToolCount) active")
                 LabeledContent("Uptime", value: statusBar.uptimeString)
             }
 
-            Section("Startup") {
-                Toggle("Launch at login", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, enabled in
-                        guard !isApplyingLaunchAtLoginChange else { return }
-                        launchAtLoginError = nil
-                        let service = SMAppService.mainApp
-                        do {
-                            if enabled {
-                                try service.unregister()
-                                try service.register()
-                            } else {
-                                try service.unregister()
-                            }
-                        } catch {
-                            launchAtLoginError = "Could not update launch-at-login: \(error.localizedDescription)"
-                            isApplyingLaunchAtLoginChange = true
-                            launchAtLogin.toggle()
-                            isApplyingLaunchAtLoginChange = false
-                        }
-                    }
-
-                if let launchAtLoginError {
-                    Text(launchAtLoginError)
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-            }
-
-            Section("App Control") {
-                Button("Check for Updates", systemImage: "arrow.down.circle") {
-                    (NSApp.delegate as? AppDelegate)?.checkForUpdates()
-                }
-                Button("Restart Notion Bridge", systemImage: "arrow.clockwise") {
-                    restartApp(reopenSettings: true)
-                }
-            }
-
-            Section("Local Server") {
-                LabeledContent("Streamable HTTP") {
-                    Text(verbatim: "http://localhost:\(ssePort)/mcp")
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-                LabeledContent("Legacy SSE") {
-                    Text(verbatim: "http://localhost:\(ssePort)/sse")
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-                LabeledContent("Health Check") {
-                    Text(verbatim: "http://localhost:\(ssePort)/health")
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                }
-            }
-
-            Section {
-                ConnectionsManagementView()
-            } header: {
-                Text("Workspace connections")
-            } footer: {
-                Text("Connect Notion workspaces here. Health checks run in the background so the page stays responsive while validation completes.")
-                    .font(.caption2)
-                    .foregroundStyle(BridgeColors.muted)
-            }
-
-            Section {
-                APIConnectionsManagementView()
-            } header: {
-                Text("API connections")
-            } footer: {
-                Text("Third-party API keys used by bridge tools (for example Stripe). These are separate from workspace tokens and remote-access URLs.")
-                    .font(.caption2)
-                    .foregroundStyle(BridgeColors.muted)
-            }
-
+            // 2. Setup Instructions
             Section("Setup Instructions") {
                 Link(destination: URL(string: "https://www.notion.so/profile/integrations")!) {
                     HStack {
@@ -192,6 +115,21 @@ extension SettingsView {
                 }
             }
 
+            // 3. Workspace connections
+            Section {
+                ConnectionsManagementView()
+            } header: {
+                Text("Workspace connections")
+            }
+
+            // 4. API connections
+            Section {
+                APIConnectionsManagementView()
+            } header: {
+                Text("API connections")
+            }
+
+            // 5. Connected Clients
             Section("Connected Clients") {
                 if statusBar.connectedClients.isEmpty {
                     Text("No clients connected")
@@ -211,8 +149,80 @@ extension SettingsView {
                 }
             }
 
+            // 6. Remote Access
             Section("Remote Access") {
                 ConnectionSetupView()
+            }
+
+            // 7. Launch at Startup
+            Section("Startup") {
+                Toggle("Launch at login", isOn: $launchAtLogin)
+                    .onChange(of: launchAtLogin) { _, enabled in
+                        guard !isApplyingLaunchAtLoginChange else { return }
+                        launchAtLoginError = nil
+                        let service = SMAppService.mainApp
+                        do {
+                            if enabled {
+                                if service.status == .enabled {
+                                    return
+                                }
+                                try? service.unregister()
+                                try service.register()
+                            } else {
+                                if service.status == .notRegistered {
+                                    return
+                                }
+                                try service.unregister()
+                            }
+                        } catch {
+                            let ns = error as NSError
+                            NSLog(
+                                "[LaunchAtLogin] failed enabled=\(enabled) domain=\(ns.domain) code=\(ns.code) description=\(ns.localizedDescription) status=\(service.status.rawValue)"
+                            )
+                            let notPermitted = (ns.domain == NSPOSIXErrorDomain && ns.code == EPERM)
+                                || ns.localizedDescription.localizedCaseInsensitiveContains("operation not permitted")
+                            if notPermitted {
+                                launchAtLoginError = enabled
+                                    ? "Could not enable Launch at login. Operation not permitted."
+                                    : "Could not disable Launch at login. Operation not permitted."
+                            } else {
+                                launchAtLoginError = enabled
+                                    ? "Could not enable Launch at login."
+                                    : "Could not disable Launch at login."
+                            }
+                            isApplyingLaunchAtLoginChange = true
+                            launchAtLogin.toggle()
+                            isApplyingLaunchAtLoginChange = false
+                        }
+                    }
+
+                if let err = launchAtLoginError {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        Text("Allow Notion Bridge in System Settings → General → Login Items (and Login Items / Background Items if shown). Install from /Applications/Notion Bridge.app.")
+                            .font(.caption2)
+                            .foregroundStyle(BridgeColors.secondary)
+                        Button("Open Login Items…") {
+                            Self.openLoginItemsSystemSettings()
+                        }
+                        .font(.caption)
+                    }
+                }
+            }
+
+            // 8. App Control — two-button row
+            Section("App Control") {
+                HStack {
+                    Button("Restart Bridge", systemImage: "arrow.clockwise") {
+                        restartApp(reopenSettings: true)
+                    }
+                    Spacer()
+                    Button("Check Updates", systemImage: "arrow.down.circle") {
+                        (NSApp.delegate as? AppDelegate)?.checkForUpdates()
+                    }
+                }
             }
         }
         .formStyle(.grouped)
@@ -226,7 +236,7 @@ extension SettingsView {
         ToolRegistryView(
             tools: statusBar.toolInfoList,
             onToggle: { _, _ in
-                let disabled = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
+                let disabled = Set(UserDefaults.standard.stringArray(forKey: BridgeDefaults.disabledTools) ?? [])
                 statusBar.registeredToolCount = statusBar.toolInfoList.count - disabled.count
             },
             notificationDenied: permissionManager.notificationStatus != .granted
@@ -236,7 +246,7 @@ extension SettingsView {
     // MARK: - Skills (PKT-366 F9)
 
     var skillsSection: some View {
-        let disabledTools = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
+        let disabledTools = Set(UserDefaults.standard.stringArray(forKey: BridgeDefaults.disabledTools) ?? [])
         return SkillsView(
             skillsManager: skillsManager,
             fetchSkillDisabled: disabledTools.contains("fetch_skill")
@@ -256,82 +266,65 @@ extension SettingsView {
         Form {
             Section("Version") {
                 LabeledContent("App Version", value: "v\(appVersion)")
-                LabeledContent("MCP Protocol", value: "v\(BridgeConstants.mcpProtocolVersion)")
-                LabeledContent("Build Target", value: buildTargetString)
+                LabeledContent("MCP protocol", value: BridgeConstants.mcpProtocolVersion)
+                LabeledContent("Notion API", value: BridgeConstants.notionAPIVersion)
+                LabeledContent("macOS", value: BridgeConstants.minimumMacOSMarketing)
             }
 
             Section("Network") {
                 HStack(spacing: BridgeSpacing.xs) {
-                    Text("SSE Port")
+                    Text("Local MCP port")
                     Spacer()
-                    TextField("9700", text: $ssePortInput)
+                    TextField(String(BridgeConstants.defaultSSEPort), text: $ssePortInput)
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
                         .frame(width: 100)
                         .onChange(of: ssePortInput) { _, _ in
                             ssePortSaveSuccess = false
                         }
+                        .accessibilityLabel("Local MCP server port")
+                    Button("Default") {
+                        ssePortInput = String(BridgeConstants.defaultSSEPort)
+                        ssePortError = nil
+                        ssePortSaveSuccess = false
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Set the field to \(BridgeConstants.defaultSSEPort) (does not save)")
                     Button("Save") {
                         saveSSEPort()
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                 }
-                Text("Applied on next app restart. Port resolution order: config.json → NOTION_BRIDGE_PORT → \(String(BridgeConstants.defaultSSEPort)).")
-                    .font(.caption2)
-                    .foregroundStyle(BridgeColors.muted)
                 if let ssePortError {
                     Text(ssePortError)
                         .font(.caption2)
                         .foregroundStyle(.orange)
                 }
-                if ssePortSaveSuccess {
-                    Text("Port saved. Restart Notion Bridge to apply.")
-                        .font(.caption2)
-                        .foregroundStyle(BridgeColors.success)
-                }
-                Text("This value sets the TCP port for the local MCP HTTP/SSE server (127.0.0.1). Notion in the cloud does not connect to it directly. Remote agents use the URL under Connections → Remote Access; your tunnel forwards that HTTPS URL to this localhost port. If you change the port, update cloudflared or Tailscale to forward to the same port.")
-                    .font(.caption2)
-                    .foregroundStyle(BridgeColors.muted)
-                if let port = Int(ssePortInput.trimmingCharacters(in: .whitespacesAndNewlines)), port >= 1, port < 1024 {
-                    Label("Well-known port — may require elevated privileges on macOS.", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
             }
 
-            Section("Learned Command Allows") {
-                if learnedAllowPrefixes.isEmpty {
-                    Text("No learned command prefixes yet. Use \"Always Allow\" from a Request-tier approval to add one.")
-                        .font(.caption)
-                        .foregroundStyle(BridgeColors.secondary)
-                } else {
-                    ForEach(learnedAllowPrefixes, id: \.self) { prefix in
-                        HStack(spacing: BridgeSpacing.xs) {
-                            Text(prefix)
-                                .font(.system(.caption, design: .monospaced))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
-                            Button(role: .destructive) {
-                                removeLearnedAllowPrefix(prefix)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                    }
 
-                    Button(role: .destructive) {
-                        ConfigManager.shared.clearLearnedAllowPrefixes()
-                        refreshLearnedAllowPrefixes()
-                    } label: {
-                        Text("Clear All")
-                    }
-                    .disabled(learnedAllowPrefixes.isEmpty)
+            Section("Local Server") {
+                LabeledContent("Streamable HTTP") {
+                    Text(verbatim: "http://localhost:\(ssePort)/mcp")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                }
+                LabeledContent("Legacy SSE") {
+                    Text(verbatim: "http://localhost:\(ssePort)/sse")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                }
+                LabeledContent("Health Check") {
+                    Text(verbatim: "http://localhost:\(ssePort)/health")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
                 }
             }
-
             Section("Paths") {
                 LabeledContent("Config File") {
                     Text(ConfigManager.shared.configFileURL.path)
@@ -372,7 +365,8 @@ extension SettingsView {
                     titleVisibility: .visible
                 ) {
                     Button("Reset", role: .destructive) {
-                        UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
+                        UserDefaults.standard.removeObject(forKey: OnboardingResumeKey.stepRaw)
+                        UserDefaults.standard.set(false, forKey: BridgeDefaults.hasCompletedOnboarding)
                         NotificationCenter.default.post(name: .resetOnboarding, object: nil)
                     }
                     Button("Cancel", role: .cancel) {}
@@ -392,7 +386,6 @@ extension SettingsView {
                         Task {
                             let result = await performFactoryReset()
                             factoryResetMessage = result.message
-                            showPostResetSheet = true
                         }
                     }
                     Button("Cancel", role: .cancel) {}
@@ -447,8 +440,24 @@ extension SettingsView {
             ssePortInput = String(ssePort)
             ssePortError = nil
         }
-        .sheet(isPresented: $showPostResetSheet) {
-            PostResetSheet(permissionManager: permissionManager)
+        .confirmationDialog(
+            "Port saved",
+            isPresented: $showSSEPortRestartPrompt,
+            titleVisibility: .visible
+        ) {
+            Button("Restart Notion Bridge") {
+                ssePortRevertOnCancel = nil
+                restartApp(reopenSettings: true)
+            }
+            Button("Cancel", role: .cancel) {
+                if let revert = ssePortRevertOnCancel {
+                    ConfigManager.shared.ssePort = revert
+                    ssePortInput = String(revert)
+                }
+                ssePortRevertOnCancel = nil
+            }
+        } message: {
+            Text("Restart to listen on the new port. Cancel restores the previous port in config.")
         }
     }
 
@@ -480,10 +489,18 @@ extension SettingsView {
             ssePortError = "Port must be a number between 1 and 65535."
             return
         }
+        let previous = ConfigManager.shared.ssePort
+        guard port != previous else {
+            ssePortError = nil
+            ssePortSaveSuccess = false
+            return
+        }
         ConfigManager.shared.ssePort = port
         ssePortInput = String(ConfigManager.shared.ssePort)
         ssePortError = nil
-        ssePortSaveSuccess = true
+        ssePortSaveSuccess = false
+        ssePortRevertOnCancel = previous
+        showSSEPortRestartPrompt = true
     }
 
     /// Full local reset for pre-ship recovery/testing.
@@ -527,7 +544,7 @@ extension SettingsView {
 
         await permissionManager.recheckAllForTruth()
         NotificationCenter.default.post(name: .notionTokenDidChange, object: nil)
-        UserDefaults.standard.set(false, forKey: "hasCompletedOnboarding")
+        UserDefaults.standard.set(false, forKey: BridgeDefaults.hasCompletedOnboarding)
 
         // PKT-485: Trigger onboarding window after factory reset.
         NotificationCenter.default.post(name: .resetOnboarding, object: nil)
@@ -545,13 +562,13 @@ extension SettingsView {
             "Notion Bridge Diagnostics",
             "========================",
             "App Version: v\(appVersion)",
-            "MCP Protocol: v\(BridgeConstants.mcpProtocolVersion)",
+            "MCP protocol: \(BridgeConstants.mcpProtocolVersion)",
+            "Notion API: \(BridgeConstants.notionAPIVersion)",
             "Build Target: \(buildTargetString)",
             "Port: \(ssePort)",
             "Server Running: \(statusBar.isServerRunning)",
             "Tools Registered: \(statusBar.registeredToolCount)",
             "Uptime: \(statusBar.uptimeString)",
-            "Learned Allow Prefixes: \(learnedAllowPrefixes.count)",
             "",
             "Permissions:",
             "  Accessibility: \(permissionManager.accessibilityStatus)",
@@ -565,13 +582,18 @@ extension SettingsView {
         NSPasteboard.general.setString(lines, forType: .string)
     }
 
-    func refreshLearnedAllowPrefixes() {
-        learnedAllowPrefixes = ConfigManager.shared.learnedAllowPrefixes.sorted()
-    }
 
-    func removeLearnedAllowPrefix(_ prefix: String) {
-        ConfigManager.shared.removeLearnedAllowPrefix(prefix)
-        refreshLearnedAllowPrefixes()
+    /// Opens System Settings to Login Items (tries Ventura+ URL first, then legacy Privacy pane).
+    fileprivate static func openLoginItemsSystemSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_LoginItems"
+        ]
+        for s in candidates {
+            if let url = URL(string: s), NSWorkspace.shared.open(url) {
+                return
+            }
+        }
     }
 
     // MARK: - Permissions Helpers
@@ -597,7 +619,10 @@ extension SettingsView {
 
         await permissionManager.recheckAllForTruth()
         if failures.isEmpty {
-            return (message: "Permissions reset. Follow the steps below to re-grant access.", didFail: false)
+            return (
+                message: "Permissions reset. Re-grant each permission in System Settings → Privacy & Security, then quit and reopen Notion Bridge.",
+                didFail: false
+            )
         }
         return (message: "Reset partially failed. Some permissions may need to be reset manually in System Settings.", didFail: true)
     }

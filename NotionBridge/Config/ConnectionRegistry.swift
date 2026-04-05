@@ -206,8 +206,8 @@ public actor ConnectionRegistry {
                 status: .notConfigured,
                 authType: "api_key",
                 maskedCredential: nil,
-                capabilities: ["payment_execute", "card_tokenization", "stripe_mcp_proxy"],
-                summary: "Configure a Stripe API key to enable payment and tokenization flows"
+                capabilities: [],
+                summary: nil
             )
         }
 
@@ -220,8 +220,8 @@ public actor ConnectionRegistry {
                 status: .checking,
                 authType: "api_key",
                 maskedCredential: maskedCredential,
-                capabilities: ["payment_execute", "card_tokenization", "stripe_mcp_proxy"],
-                summary: "Stripe API connection"
+                capabilities: [],
+                summary: nil
             )
         }
 
@@ -236,9 +236,9 @@ public actor ConnectionRegistry {
                 status: status,
                 authType: "api_key",
                 maskedCredential: maskedCredential,
-                capabilities: ["payment_execute", "card_tokenization", "stripe_mcp_proxy"],
-                lastValidatedAt: formatter.string(from: Date()),
-                summary: account.email ?? account.id,
+                capabilities: [],
+                lastValidatedAt: nil,
+                summary: nil,
                 metadata: [
                     "account_id": account.id,
                     "country": account.country ?? "",
@@ -254,9 +254,10 @@ public actor ConnectionRegistry {
                 status: .disconnected,
                 authType: "api_key",
                 maskedCredential: maskedCredential,
-                capabilities: ["payment_execute", "card_tokenization", "stripe_mcp_proxy"],
+                capabilities: [],
                 lastValidatedAt: formatter.string(from: Date()),
-                summary: error.localizedDescription
+                summary: nil,
+                metadata: ["last_error": error.localizedDescription]
             )
         }
     }

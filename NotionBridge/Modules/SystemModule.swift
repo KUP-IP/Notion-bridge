@@ -25,7 +25,7 @@ public enum SystemModule {
             name: "system_info",
             module: moduleName,
             tier: .open,
-            description: "Get macOS system info. Returns {osVersion, model, cpu, memory, hostname, uptime}. Use for environment diagnostics.",
+            description: "Show Mac model, OS, memory, and uptime.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -91,7 +91,7 @@ public enum SystemModule {
             name: "process_list",
             module: moduleName,
             tier: .open,
-            description: "List running macOS processes. Returns an array of {pid, name, cpu, mem, user} sorted by sortBy (default: cpu). Use filter for name substring matching.",
+            description: "List running apps and background processes.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -183,7 +183,7 @@ public enum SystemModule {
             name: "notify",
             module: moduleName,
             tier: .open,
-            description: "Send a local macOS notification banner. Returns confirmation. Optionally specify a sound name (e.g. 'Glass', 'Ping').",
+            description: "Show a macOS notification.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -231,7 +231,7 @@ public enum SystemModule {
             name: "contacts_search",
             module: moduleName,
             tier: .open,
-            description: "Search macOS Contacts by name, phone, or email. Returns matching contacts with name, phones, emails, and addresses. Specify fields to control which fields are searched (default: name only).",
+            description: "Search your Contacts.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

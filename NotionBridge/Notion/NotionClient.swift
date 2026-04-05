@@ -200,7 +200,7 @@ public actor NotionClient {
     private let apiKey: String
     private let tokenSource: String
     private let baseURL = "https://api.notion.com/v1"
-    private let notionVersion = "2026-03-11"  // PKT-367: A1 — upgraded from 2022-06-28
+    private let notionVersion = BridgeConstants.notionAPIVersion
     private let maxRequestsPerSecond: Double = 3.0
     private let maxRetries = 3
     private var lastRequestTime: ContinuousClock.Instant?

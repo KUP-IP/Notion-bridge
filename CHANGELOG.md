@@ -3,6 +3,7 @@
 ## [1.8.0] — 2026-04-04
 
 ### Added
+- **Pre-ship release** — `docs/pre-ship-qa-checklist.md` (manual QA matrix), `scripts/qa_local_mcp_smoke.py` (local `GET /health` + `POST /mcp` initialize), **`make install-agent-safe`** alias for `install-copy` (see `AGENTS.md`).
 - **notion_database_get** MCP tool (open tier) — Retrieve a Notion database container by ID. Returns title, icon, cover, parent metadata. (B1)
 - **notion_datasource_get** MCP tool (open tier) — Retrieve a Notion data source schema by ID. Returns full property definitions, types, and options. (B2)
 - **NotionClient: getDataSource()** — GET /v1/data_sources/id. New client method for data source schema retrieval.
@@ -17,8 +18,20 @@
 - **notion_query retry logging** — Auto-retry on transient 404 now logs "retrying transient 404" vs "permanent 404 — check sharing". Retry count visible in debug output. (C2)
 
 ### Changed
+- **Security: Request-tier Always Allow** — Choosing **Always Allow** on a Request-tier tool (notification actions) now sets that tool to **Notify** in the Tool Registry (`tierOverrides`), matching the tier toggle. It no longer appends legacy “learned command prefixes.” Sensitive-path prompts: **Allow** keeps a session grant; **Always Allow** stores a **permanent path allow** (unchanged intent, without tier side effects). Alert-only fallback (no notification permission) remains Allow/Deny only — use the Tool Registry to lower tier. Tools marked never-auto-approve do not offer Always Allow.
+- **Skills: Notion-only page refs** — Settings and `manage_skill` (`add`, `update_url`, `bulk_add`) accept only Notion page IDs (32 hex, dashes optional) or `notion.so` / `notion.site` URLs. Invalid rows in `bulk_add` are skipped with per-row reasons (`invalidPageRows`). Legacy bad IDs surface clear errors from `fetch_skill` / sync and an optional Settings banner.
+- **MCP protocol version** — Handshake and diagnostics now use MCP spec **2025-06-18** (was 2024-11-05). Advanced → Version clarifies Model Context Protocol vs Notion’s hosted MCP.
+- **Notion API version** — Advanced → Version and diagnostics list **`Notion-Version`** (**2026-03-11**), centralized as `BridgeConstants.notionAPIVersion` (used by `NotionClient`).
+- **Advanced → Network** — Port save opens a **Restart / Cancel** dialog; Cancel reverts `config.json` to the previous port. **Default** button fills 9700 without saving. Copy tightened for tunnel ↔ localhost port coupling. Connections → Server labels **Local port**.
+- **Onboarding connection snippets** — Sample MCP URLs use the configured local port (not hardcoded 9700). Health check uses the same port.
+- **Minimum macOS** — Advanced shows minimum deployment **macOS 26+** (matches SwiftPM), not the machine’s runtime major version alone.
+- **Skills registry** — Fresh installs and factory reset yield an **empty** skills list (no bundled placeholder skills). (UX Wave 2)
+- **Credentials (Settings + MCP)** — Keychain credential storage is **opt-in** with a migration for existing users (`hasCompletedOnboarding` → default on until changed). When off, `credential_*` tools are hidden from MCP listings and calls fail closed; `payment_execute` requires credentials enabled. Biometric gate when turning on. (UX Wave 4)
+- **Permissions UI** — Removed **PostResetSheet** (no guided sheet after TCC reset or factory reset); success copy points to **System Settings** and restart. Permissions tab auto-refresh throttled to **20s**; onboarding auto-permissions defer probes until **Re-check** or **Grant All**. (UX Wave 3)
+- **payment_execute** — Description clarifies Stripe PaymentIntent + stored `pm_` (not web checkout), separate from the Stripe MCP proxy. (UX Wave 5)
 - **notion_search** description — Updated to reference "data sources" instead of "databases". `filter.value` documentation now specifies `"page"` or `"data_source"` (not `"database"`). (D1)
 - **notion_page_create** description — Notes that `parentType: "data_source_id"` is preferred for row inserts under Notion API 2026-03-11; `"database_id"` is legacy. (D2)
+- **Settings polish (Connections, Credentials, Remote Access, Advanced)** — Minimal Stripe **API connections** row (pre-installed / status); removed Workspace and API section footers; **Credentials** delete uses attribute-matched Keychain queries with clearer messaging when removal fails; **Remote Access** header row toggles expand; **Advanced** Version/Network helper copy trimmed (Minimum macOS **26+**, port row + validation errors only).
 
 ### Removed
 - **notion_page_markdown_write** tool — Removed from NotionModule, NotionClient, and tests. Superseded by notion_page_update + content blocks approach. (D3)

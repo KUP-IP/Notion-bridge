@@ -27,8 +27,8 @@ private let permLog = Logger(subsystem: "kup.solutions.notion-bridge", category:
 public struct PermissionView: View {
     let permissionManager: PermissionManager
 
-    // PKT-357 F14: Timer publisher for auto-refresh
-    private let refreshTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    // PKT-357 F14: Timer publisher for auto-refresh (throttled — manual Re-check + activation still immediate)
+    private let refreshTimer = Timer.publish(every: 20, on: .main, in: .common).autoconnect()
     @State private var previousGrantStatus: [PermissionManager.Grant: PermissionManager.GrantStatus] = [:]
     @State private var recentlyGranted: Set<PermissionManager.Grant> = []
 
@@ -57,11 +57,6 @@ public struct PermissionView: View {
                     .padding(.top, 4)
             }
 
-            // PKT-341: TCC rebuild note — grants are tied to code signature
-            Text("Note: Xcode rebuilds may invalidate TCC grants (tied to code signature). Re-grant in System Settings if indicators turn orange after a rebuild.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .padding(.top, 4)
         }
         // PKT-357 F14: Check permissions on appear
         // V1-PATCH-003: checkAll() is now async (automation probes off main thread)
@@ -87,8 +82,7 @@ public struct PermissionView: View {
 
     // MARK: - Row
 
-    /// PKT-362 D1: Clean row — grant name + status icon only. No DisclosureGroup.
-    /// Remediation text shown only for non-granted states.
+    /// PKT-362 D1: Grant name, status dot, label, and action — no extra description copy.
     /// PKT-362 D3: Yellow "Checking…" indicator when grantCheckingState is active.
     private func permissionRow(
         grant: PermissionManager.Grant,
@@ -133,13 +127,6 @@ public struct PermissionView: View {
                     .font(.caption)
                     .foregroundStyle(.blue)
                 }
-            }
-
-            // D1: Remediation text — conditional, only for non-granted states
-            if status != .granted && !isChecking {
-                Text(permissionManager.remediation(for: grant))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
 
             // D1: DisclosureGroup REMOVED — probe/evidence data available via
@@ -385,6 +372,8 @@ struct AutoPermissionsStepView: View {
 
     @State private var isGrantingAll = false
     @State private var progressState: [PermissionManager.Grant: AutoGrantProgressState] = [:]
+    /// Defers probes on appear — user taps Re-check or Grant All first (avoids stale/misleading granted state).
+    @State private var userInitiatedProbe = false
 
     init(permissionManager: PermissionManager, onResolved: (() -> Void)? = nil) {
         self.permissionManager = permissionManager
@@ -402,7 +391,7 @@ struct AutoPermissionsStepView: View {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            Text("Use Grant All to trigger Contacts, Notifications, and Automation prompts up front. Notifications may still need System Settings tuning because macOS tracks authorization separately from alert delivery style.")
+            Text("Tap “Re-check Status” or “Grant All” to verify permission state. Until then, indicators may not reflect what System Settings shows. Grant All triggers Contacts, Notifications, and Automation prompts up front.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -424,6 +413,7 @@ struct AutoPermissionsStepView: View {
 
                 Button("Re-check Status") {
                     Task {
+                        userInitiatedProbe = true
                         await permissionManager.recheckAllForTruth()
                         syncProgressFromManager()
                         notifyResolvedIfNeeded()
@@ -434,12 +424,8 @@ struct AutoPermissionsStepView: View {
             }
             .frame(maxWidth: .infinity, alignment: .center)
         }
-        .task {
-            await permissionManager.recheckAllForTruth()
-            syncProgressFromManager()
-            notifyResolvedIfNeeded()
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard userInitiatedProbe else { return }
             Task {
                 await permissionManager.recheckAllForTruth()
                 syncProgressFromManager()
@@ -491,6 +477,7 @@ struct AutoPermissionsStepView: View {
     }
 
     private func baselineState(for grant: PermissionManager.Grant) -> AutoGrantProgressState {
+        if !userInitiatedProbe { return .pending }
         switch permissionManager.status(for: grant) {
         case .granted:
             return .granted
@@ -516,6 +503,7 @@ struct AutoPermissionsStepView: View {
 
     private func runGrantAllSequentially() async {
         guard !isGrantingAll else { return }
+        userInitiatedProbe = true
         isGrantingAll = true
         defer { isGrantingAll = false }
 
@@ -568,7 +556,8 @@ struct AutoPermissionsStepView: View {
 
     private func label(for state: AutoGrantProgressState, status: PermissionManager.GrantStatus) -> String {
         switch state {
-        case .pending: return "Pending"
+        case .pending:
+            return userInitiatedProbe ? "Pending" : "Not verified"
         case .prompting: return "Prompting…"
         case .granted: return "Granted"
         case .denied:
@@ -610,7 +599,7 @@ struct ManualPermissionsStepView: View {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, alignment: .center)
 
-            Text("These permissions must be enabled manually in System Settings. Use each deep link, grant access, then return and re-check.")
+            Text("These permissions must be enabled manually in System Settings. Use each deep link, grant access, then return and re-check. The Permissions tab can stay stale until you restart after a TCC reset.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

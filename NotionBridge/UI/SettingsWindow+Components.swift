@@ -1,6 +1,6 @@
 // SettingsWindow+Components.swift — Reusable Settings Components
 // V3-QUALITY D1-D5: Extracted from SettingsWindow.swift monolith.
-// Contains SensitivePathsEditor and PostResetSheet.
+// Contains SensitivePathsEditor.
 
 import SwiftUI
 
@@ -85,17 +85,11 @@ struct SensitivePathsEditor: View {
             }
 
             // PKT-363 D4: Restore Defaults — merges originals back without wiping custom
-            HStack {
-                Button("Restore Defaults") {
-                    paths = ConfigManager.shared.restoreDefaults()
-                }
-                .controlSize(.small)
-                .font(.caption)
-
-                Text("Merges original paths back without removing custom additions.")
-                    .font(.caption2)
-                    .foregroundStyle(BridgeColors.muted)
+            Button("Restore Defaults") {
+                paths = ConfigManager.shared.restoreDefaults()
             }
+            .controlSize(.small)
+            .font(.caption)
         }
         // PKT-363 D4: Zero-path confirmation guard
         .confirmationDialog(
@@ -174,98 +168,5 @@ struct SensitivePathsEditor: View {
             paths.remove(at: index)
             ConfigManager.shared.sensitivePaths = paths
         }
-    }
-}
-
-// MARK: - PKT-362 D5: Post-Reset Guided Instruction Sheet
-
-/// Presented after TCC reset completes. Shows an ordered list of each V1 grant
-/// with a deep link button to the corresponding System Settings pane, plus a
-/// "Restart NotionBridge" button at the bottom. Dismisses on restart.
-struct PostResetSheet: View {
-    let permissionManager: PermissionManager
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(spacing: 16) {
-            // Header
-            Image(systemName: "lock.shield")
-                .font(.largeTitle)
-                .foregroundStyle(.orange)
-
-            Text("Re-grant Permissions")
-                .font(.headline)
-
-            Text("Notion Bridge permissions have been reset. Open each setting below to re-grant access, then restart the app.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-
-            Divider()
-
-            // Ordered grant list with deep links
-            VStack(alignment: .leading, spacing: 12) {
-                ForEach(Array(PermissionManager.Grant.v1Cases.enumerated()), id: \.element.id) { index, grant in
-                    HStack(spacing: 12) {
-                        // Step number
-                        Text("\(index + 1)")
-                            .font(.caption)
-                            .fontWeight(.bold)
-                            .foregroundStyle(.white)
-                            .frame(width: 22, height: 22)
-                            .background(Circle().fill(.blue))
-
-                        // Grant name + current status
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(grant.displayName)
-                                .font(.callout)
-                            Text(permissionManager.statusLabel(for: grant))
-                                .font(.caption2)
-                                .foregroundStyle(
-                                    permissionManager.status(for: grant) == .granted
-                                        ? .green : .orange
-                                )
-                        }
-
-                        Spacer()
-
-                        // Deep link button
-                        if let url = grant.systemSettingsURL {
-                            Button("Open Settings") {
-                                NSWorkspace.shared.open(url)
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                    }
-                }
-            }
-
-            Divider()
-
-            // Restart button
-            Button {
-                let bundlePath = Bundle.main.bundlePath
-                let task = Process()
-                task.executableURL = URL(fileURLWithPath: "/bin/sh")
-                task.arguments = ["-c", "sleep 1 && open '\(bundlePath)'"]
-                try? task.run()
-                NSApp.terminate(nil)
-            } label: {
-                Label("Restart Notion Bridge", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-
-            // Dismiss option
-            Button("Close") {
-                dismiss()
-            }
-            .buttonStyle(.plain)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        .padding(24)
-        .frame(width: 420)
     }
 }

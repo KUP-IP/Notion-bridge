@@ -41,7 +41,7 @@ public enum FileModule {
             name: "file_list",
             module: moduleName,
             tier: .open,
-            description: "List directory contents. Returns an array of {name, type, size} entries. Set recursive=true for deep listing, showHidden=true to include dotfiles.",
+            description: "List files and folders in a directory.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -104,7 +104,7 @@ public enum FileModule {
             name: "file_search",
             module: moduleName,
             tier: .open,
-            description: "Search for files by name substring within a directory tree. Returns an array of matching absolute file paths.",
+            description: "Find files by name under a folder.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -148,7 +148,7 @@ public enum FileModule {
             name: "file_metadata",
             module: moduleName,
             tier: .open,
-            description: "Get metadata for a file or directory. Returns {size, created, modified, type, permissions}. Use before file_read to check size or existence.",
+            description: "Get size, dates, and type for a file or folder.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -183,7 +183,7 @@ public enum FileModule {
             name: "file_read",
             module: moduleName,
             tier: .open,
-            description: "Read text content from a file. Returns {content, bytesRead}. Use maxBytes to cap large files; set encoding to 'ascii' or 'latin1' for non-UTF-8 files.",
+            description: "Read text from a file on your Mac.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -232,7 +232,7 @@ public enum FileModule {
             name: "file_write",
             module: moduleName,
             tier: .notify,
-            description: "Write text content to a file, creating or overwriting it. Set createDirs=true to auto-create parent directories. Returns {bytesWritten, path}.",
+            description: "Create or overwrite a file with text.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -275,7 +275,7 @@ public enum FileModule {
             name: "file_append",
             module: moduleName,
             tier: .notify,
-            description: "Append text to the end of an existing file without overwriting. Returns {bytesWritten}. File must already exist -- use file_write for new files.",
+            description: "Append text to an existing file.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -309,7 +309,7 @@ public enum FileModule {
             name: "file_move",
             module: moduleName,
             tier: .notify,
-            description: "Move a file or directory to a new absolute path. Returns the new path on success. Works across volumes.",
+            description: "Move a file or folder to a new path.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -343,7 +343,7 @@ public enum FileModule {
             name: "file_rename",
             module: moduleName,
             tier: .notify,
-            description: "Rename a file or directory in its current location. Pass the new name (not a full path). Returns the updated absolute path.",
+            description: "Rename a file or folder in place.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -376,7 +376,7 @@ public enum FileModule {
             name: "file_copy",
             module: moduleName,
             tier: .notify,
-            description: "Copy a file or directory to a new absolute path. Returns the destination path on success. Copies directories recursively.",
+            description: "Copy a file or folder to another location.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -410,7 +410,7 @@ public enum FileModule {
             name: "dir_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a directory, including any missing intermediate parents (like mkdir -p). Returns the created path.",
+            description: "Create a folder (and parent folders if needed).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -441,7 +441,7 @@ public enum FileModule {
             name: "clipboard_read",
             module: moduleName,
             tier: .open,
-            description: "Read the current text content from the macOS system clipboard. Returns {content: string} or null if the clipboard is empty or non-text.",
+            description: "Read plain text from the clipboard.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -470,7 +470,7 @@ public enum FileModule {
             name: "clipboard_write",
             module: moduleName,
             tier: .notify,
-            description: "Write text to the macOS system clipboard, replacing any existing content. Returns confirmation.",
+            description: "Put text on the clipboard.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

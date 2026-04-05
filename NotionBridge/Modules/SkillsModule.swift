@@ -60,7 +60,7 @@ public enum SkillsModule {
             name: "fetch_skill",
             module: moduleName,
             tier: .open,
-            description: "Fetch a named skill by name (case-insensitive). Returns page title, URL, MCP metadata (summary, triggers), flattened block text, blockCount, truncated. Cache key includes metadata. Configure skills in Settings",
+            description: "Load one skill page from Notion by name.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -134,10 +134,18 @@ public enum SkillsModule {
                     ])
                 }
 
+                let pageIdRaw = skillConfig.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard NotionPageRef.isValidStoredPageId(pageIdRaw) else {
+                    return .object([
+                        "error": .string("Invalid Notion page ID for skill '\(name)'."),
+                        "hint": .string("Update the page URL or ID in Settings \u{2192} Skills to a valid Notion page (32 hex digits or a notion.so / notion.site link).")
+                    ])
+                }
+
                 // Fetch from Notion API
                 do {
                     let client = try NotionClient()
-                    let pageId = skillConfig.notionPageId
+                    let pageId = pageIdRaw
 
                     // Fetch page properties
                     let pageData = try await client.getPage(pageId: pageId)
@@ -237,7 +245,7 @@ public enum SkillsModule {
             name: "list_routing_skills",
             module: moduleName,
             tier: .open,
-            description: "List skills enabled for routing discovery: visibility routing, non-empty Notion page id. Includes MCP metadata (summary, triggers). Does not fetch page bodies — use fetch_skill.",
+            description: "List skills used for automatic routing.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -246,7 +254,7 @@ public enum SkillsModule {
             handler: { _ in
                 let skills = readAllSkills().filter {
                     $0.enabled && $0.visibility == .routing
-                        && !$0.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        && NotionPageRef.isValidStoredPageId($0.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
                 let items: [Value] = skills.map { s in
                     .object(Self.skillRowFields(s))
@@ -267,8 +275,8 @@ public enum SkillsModule {
         await router.register(ToolRegistration(
             name: "manage_skill",
             module: moduleName,
-            tier: .request, // was .orange — no such SecurityTier member
-            description: "Manage the skills registry. Actions: list, add, delete, toggle, rename, update_url, set_visibility, bulk_add, set_metadata, sync_metadata_to_notion, sync_metadata_from_notion. MCP metadata is authoritative; sync copies to/from Notion properties Bridge Summary, Bridge Triggers, Bridge Anti-triggers",
+            tier: .notify, // was .orange — no such SecurityTier member
+            description: "Add, edit, or sync your skills list and Notion metadata.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -287,7 +295,7 @@ public enum SkillsModule {
                     ]),
                     "url": .object([
                         "type": .string("string"),
-                        "description": .string("Notion page ID or URL (required for add, update_url)")
+                        "description": .string("Notion page URL (notion.so or notion.site) or 32-character hex page ID (required for add, update_url)")
                     ]),
                     "newName": .object([
                         "type": .string("string"),
@@ -313,7 +321,7 @@ public enum SkillsModule {
                     ]),
                     "skills": .object([
                         "type": .string("array"),
-                        "description": .string("Array of {name, url} objects for bulk_add action"),
+                        "description": .string("Array of {name, url} objects for bulk_add. Rows with invalid URLs or duplicate names are skipped; see invalidPageRows in the response."),
                         "items": .object([
                             "type": .string("object"),
                             "properties": .object([
@@ -374,13 +382,23 @@ public enum SkillsModule {
                         )
                     }
                     let vis = parseVisibilityArg(args) ?? .standard
-                    let success = writeAddSkill(name: name, pageId: url, visibility: vis)
-                    return .object([
-                        "success": .bool(success),
-                        "action": .string("add"),
-                        "name": .string(name),
-                        "message": .string(success ? "Skill '\(name)' added." : "Failed — name may be empty or duplicate.")
-                    ])
+                    switch NotionPageRef.normalizedPageId(from: url) {
+                    case .failure(let err):
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("add"),
+                            "name": .string(name),
+                            "message": .string(err.message)
+                        ])
+                    case .success(let normalized):
+                        let success = writeAddSkill(name: name, pageId: normalized, visibility: vis)
+                        return .object([
+                            "success": .bool(success),
+                            "action": .string("add"),
+                            "name": .string(name),
+                            "message": .string(success ? "Skill '\(name)' added." : "Failed — name may be empty or duplicate.")
+                        ])
+                    }
 
                 case "delete":
                     guard case .string(let name) = args["name"] else {
@@ -438,13 +456,23 @@ public enum SkillsModule {
                             reason: "'update_url' requires 'name' and 'url' parameters"
                         )
                     }
-                    let success = writeUpdateSkillURL(named: name, newPageId: url)
-                    return .object([
-                        "success": .bool(success),
-                        "action": .string("update_url"),
-                        "name": .string(name),
-                        "message": .string(success ? "Skill '\(name)' URL updated." : "Skill '\(name)' not found.")
-                    ])
+                    switch NotionPageRef.normalizedPageId(from: url) {
+                    case .failure(let err):
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("update_url"),
+                            "name": .string(name),
+                            "message": .string(err.message)
+                        ])
+                    case .success(let normalized):
+                        let success = writeUpdateSkillURL(named: name, newPageId: normalized)
+                        return .object([
+                            "success": .bool(success),
+                            "action": .string("update_url"),
+                            "name": .string(name),
+                            "message": .string(success ? "Skill '\(name)' URL updated." : "Skill '\(name)' not found.")
+                        ])
+                    }
 
                 case "set_visibility":
                     guard case .string(let name) = args["name"] else {
@@ -484,13 +512,22 @@ public enum SkillsModule {
                         }
                     }
                     let result = writeBulkAdd(skills: pairs)
-                    return .object([
+                    var bulk: [String: Value] = [
                         "action": .string("bulk_add"),
                         "added": .int(result.added),
                         "skipped": .int(result.skipped),
                         "total": .int(pairs.count),
                         "message": .string("Bulk add complete: \(result.added) added, \(result.skipped) skipped.")
-                    ])
+                    ]
+                    if !result.invalidPageRows.isEmpty {
+                        bulk["invalidPageRows"] = .array(result.invalidPageRows.map { row in
+                            .object([
+                                "name": .string(row.name),
+                                "reason": .string(row.reason)
+                            ])
+                        })
+                    }
+                    return .object(bulk)
 
                 case "set_metadata":
                     guard case .string(let name) = args["name"] else {
@@ -566,11 +603,11 @@ public enum SkillsModule {
                         ])
                     }
                     let pageId = skill.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !pageId.isEmpty else {
+                    guard NotionPageRef.isValidStoredPageId(pageId) else {
                         return .object([
                             "success": .bool(false),
                             "action": .string("sync_metadata_to_notion"),
-                            "message": .string("Skill has no Notion page id.")
+                            "message": .string("Skill has an invalid Notion page id — fix in Settings → Skills.")
                         ])
                     }
                     do {
@@ -617,11 +654,11 @@ public enum SkillsModule {
                         ])
                     }
                     let pageId = skill.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !pageId.isEmpty else {
+                    guard NotionPageRef.isValidStoredPageId(pageId) else {
                         return .object([
                             "success": .bool(false),
                             "action": .string("sync_metadata_from_notion"),
-                            "message": .string("Skill has no Notion page id.")
+                            "message": .string("Skill has an invalid Notion page id — fix in Settings → Skills.")
                         ])
                     }
                     do {
@@ -708,7 +745,7 @@ public enum SkillsModule {
 
     /// Read all skills from UserDefaults (thread-safe).
     private static func readAllSkills() -> [SkillConfig] {
-        guard let data = UserDefaults.standard.data(forKey: "com.notionbridge.skills"),
+        guard let data = UserDefaults.standard.data(forKey: BridgeDefaults.skills),
               let skills = try? JSONDecoder().decode([SkillConfig].self, from: data) else {
             return []
         }
@@ -718,7 +755,7 @@ public enum SkillsModule {
     /// Write skills array back to UserDefaults.
     private static func writeSkills(_ skills: [SkillConfig]) {
         guard let data = try? JSONEncoder().encode(skills) else { return }
-        UserDefaults.standard.set(data, forKey: "com.notionbridge.skills")
+        UserDefaults.standard.set(data, forKey: BridgeDefaults.skills)
         NotificationCenter.default.post(name: .notionBridgeSkillsStorageDidChange, object: nil)
     }
 
@@ -845,19 +882,36 @@ public enum SkillsModule {
         return false
     }
 
-    /// Bulk add skills. Returns (added, skipped) counts.
-    private static func writeBulkAdd(skills newSkills: [(name: String, pageId: String)]) -> (added: Int, skipped: Int) {
+    private struct BulkAddWriteResult {
+        let added: Int
+        let skipped: Int
+        let invalidPageRows: [(name: String, reason: String)]
+    }
+
+    /// Bulk add skills. Skips invalid page URLs (per-row reasons) and duplicate names.
+    private static func writeBulkAdd(skills newSkills: [(name: String, pageId: String)]) -> BulkAddWriteResult {
         var existing = readAllSkills()
-        var added = 0, skipped = 0
+        var added = 0
+        var skipped = 0
+        var invalidPageRows: [(name: String, reason: String)] = []
         for s in newSkills {
             let trimmed = s.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { skipped += 1; continue }
+            guard !trimmed.isEmpty else {
+                skipped += 1
+                continue
+            }
             if existing.contains(where: { $0.name.lowercased() == trimmed.lowercased() }) {
                 skipped += 1
-            } else {
+                continue
+            }
+            switch NotionPageRef.normalizedPageId(from: s.pageId) {
+            case .failure(let err):
+                skipped += 1
+                invalidPageRows.append((trimmed, err.message))
+            case .success(let normalized):
                 existing.append(SkillConfig(
                     name: trimmed,
-                    notionPageId: s.pageId,
+                    notionPageId: normalized,
                     enabled: true,
                     visibility: .standard,
                     summary: "",
@@ -868,7 +922,7 @@ public enum SkillsModule {
             }
         }
         writeSkills(existing)
-        return (added, skipped)
+        return BulkAddWriteResult(added: added, skipped: skipped, invalidPageRows: invalidPageRows)
     }
 
     // MARK: - Config Helpers
@@ -975,7 +1029,7 @@ public enum SkillsModule {
     /// Look up a skill from UserDefaults by name with fuzzy matching (v1.7.0, F5).
     /// Tries: exact (case-insensitive) > normalized (strip "sk ", space/hyphen swap) > substring.
     private static func lookupSkill(named name: String) -> SkillConfig? {
-        guard let data = UserDefaults.standard.data(forKey: "com.notionbridge.skills"),
+        guard let data = UserDefaults.standard.data(forKey: BridgeDefaults.skills),
               let skills = try? JSONDecoder().decode([SkillConfig].self, from: data) else {
             return nil
         }
@@ -1002,7 +1056,7 @@ public enum SkillsModule {
 
     /// List all configured skill names.
     private static func listAvailableSkillNames() -> [String] {
-        guard let data = UserDefaults.standard.data(forKey: "com.notionbridge.skills"),
+        guard let data = UserDefaults.standard.data(forKey: BridgeDefaults.skills),
               let skills = try? JSONDecoder().decode([SkillConfig].self, from: data) else {
             return []
         }

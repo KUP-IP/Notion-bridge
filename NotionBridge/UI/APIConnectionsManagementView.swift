@@ -13,6 +13,21 @@ public struct APIConnectionsManagementView: View {
 
     public init() {}
 
+    private var stripeConnection: BridgeConnection? {
+        apiConnections.first { $0.provider == .stripe }
+    }
+
+    /// Show Stripe key field + “Set Stripe API key” only when user may need to add or replace a key.
+    private var showStripeKeyEditorChrome: Bool {
+        guard let s = stripeConnection else { return false }
+        switch s.status {
+        case .notConfigured, .disconnected, .warning:
+            return true
+        case .connected, .checking:
+            return false
+        }
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if isLoading {
@@ -33,7 +48,11 @@ public struct APIConnectionsManagementView: View {
                     .padding(.vertical, 4)
             } else {
                 ForEach(apiConnections) { connection in
-                    connectionRow(connection)
+                    if connection.provider == .stripe {
+                        stripeConnectionRow(connection)
+                    } else {
+                        genericConnectionRow(connection)
+                    }
                 }
             }
 
@@ -49,7 +68,7 @@ public struct APIConnectionsManagementView: View {
                     .foregroundStyle(.green)
             }
 
-            if showApiKeyEditor {
+            if showStripeKeyEditorChrome, showApiKeyEditor {
                 SecureField("Paste Stripe secret key", text: $apiKey)
                     .textFieldStyle(.roundedBorder)
 
@@ -70,15 +89,17 @@ public struct APIConnectionsManagementView: View {
             }
 
             HStack {
-                Button {
-                    showApiKeyEditor.toggle()
-                    saveError = nil
-                    saveSuccessMessage = nil
-                } label: {
-                    Label(showApiKeyEditor ? "Hide Stripe key editor" : "Set Stripe API key", systemImage: "key.horizontal")
-                        .font(.callout)
+                if showStripeKeyEditorChrome {
+                    Button {
+                        showApiKeyEditor.toggle()
+                        saveError = nil
+                        saveSuccessMessage = nil
+                    } label: {
+                        Label(showApiKeyEditor ? "Hide Stripe key editor" : "Set Stripe API key", systemImage: "key.horizontal")
+                            .font(.callout)
+                    }
+                    .buttonStyle(.borderless)
                 }
-                .buttonStyle(.borderless)
 
                 Spacer()
 
@@ -103,9 +124,58 @@ public struct APIConnectionsManagementView: View {
             }
         }
         .task { await reloadConnections() }
+        .onChange(of: showStripeKeyEditorChrome) { _, show in
+            if !show {
+                showApiKeyEditor = false
+                apiKey = ""
+            }
+        }
     }
 
-    private func connectionRow(_ connection: BridgeConnection) -> some View {
+    private func stripeConnectionRow(_ connection: BridgeConnection) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: connection.status.systemImage)
+                    .font(.system(size: 10))
+                    .foregroundStyle(statusColor(connection.status))
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Text(connection.provider.displayName)
+                            .font(.caption2)
+                            .fontWeight(.semibold)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.12))
+                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                        Text(connection.name)
+                            .font(.callout)
+                    }
+                }
+                Spacer()
+                Text(stripeStatusRightLabel(connection.status))
+                    .font(.caption2)
+                    .foregroundStyle(statusColor(connection.status))
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func stripeStatusRightLabel(_ status: BridgeConnectionStatus) -> String {
+        switch status {
+        case .notConfigured:
+            return "Not set"
+        case .checking:
+            return "Checking…"
+        case .connected:
+            return "Configured"
+        case .warning:
+            return "Attention"
+        case .disconnected:
+            return "Disconnected"
+        }
+    }
+
+    private func genericConnectionRow(_ connection: BridgeConnection) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Image(systemName: connection.status.systemImage)

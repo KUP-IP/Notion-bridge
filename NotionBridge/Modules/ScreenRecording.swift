@@ -27,7 +27,7 @@ extension ScreenModule {
             name: "screen_record_start",
             module: moduleName,
             tier: .notify,
-            description: "Start a screen recording (SCStream + AVAssetWriter). Returns the output file path immediately. Default safety cap is 60s (max 300s). Only one recording at a time -- call screen_record_stop to finish.",
+            description: "Start screen recording. Returns filePath immediately. Default 60s cap (max 300s). One at a time.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -77,7 +77,7 @@ extension ScreenModule {
             name: "screen_record_stop",
             module: moduleName,
             tier: .notify,
-            description: "Stop the active screen recording. Returns {filePath, duration, fileSize}. Fails if no recording is in progress.",
+            description: "Stop recording. Returns {filePath, duration, fileSize}.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),

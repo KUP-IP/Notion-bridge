@@ -26,14 +26,16 @@ struct ToolRegistryView: View {
     /// When true AND any tool has Notify tier, a warning banner is shown.
     var notificationDenied: Bool = false
 
+    @State private var credentialFeatureEpoch = 0
+
     @State private var disabledTools: Set<String> = Set(
-        UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? []
+        UserDefaults.standard.stringArray(forKey: BridgeDefaults.disabledTools) ?? []
     )
 
     /// User tier overrides. Keys are tool names, values are tier raw values.
     /// Tools not in this map inherit their registered default tier.
     @State private var tierOverrides: [String: String] = (
-        UserDefaults.standard.dictionary(forKey: "com.notionbridge.tierOverrides") as? [String: String]
+        UserDefaults.standard.dictionary(forKey: BridgeDefaults.tierOverrides) as? [String: String]
     ) ?? [:]
 
     private static let coreTools: Set<String> = ["echo", "session_info", "tools_list"]
@@ -119,10 +121,10 @@ struct ToolRegistryView: View {
                 }
 
                 Section {
-                    HStack(spacing: 12) {
-                        tierHintDot(.green, label: "Open", desc: "Runs without prompts")
-                        tierHintDot(.orange, label: "Notify", desc: "Shows a notification")
-                        tierHintDot(.red, label: "Request", desc: "Requires approval")
+                    HStack(spacing: 16) {
+                        tierHintDot(.green, label: "Open")
+                        tierHintDot(.orange, label: "Notify")
+                        tierHintDot(.red, label: "Request")
                     }
                     .font(.caption)
                 } header: {
@@ -164,23 +166,42 @@ struct ToolRegistryView: View {
                 }
             }
             .formStyle(.grouped)
+            .id(credentialFeatureEpoch)
+            .onReceive(NotificationCenter.default.publisher(for: .notionBridgeCredentialsFeatureDidChange)) { _ in
+                credentialFeatureEpoch += 1
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .notionBridgeTierOverridesDidChange)) { _ in
+                tierOverrides = (UserDefaults.standard.dictionary(forKey: BridgeDefaults.tierOverrides) as? [String: String]) ?? [:]
+            }
         }
     }
 
+    private func credentialModuleGateActive(for tool: ToolInfo) -> Bool {
+        tool.module == "credential" && !CredentialsFeature.isEnabled
+    }
+
+    private func effectiveToolEnabled(_ tool: ToolInfo) -> Bool {
+        guard !disabledTools.contains(tool.name) else { return false }
+        if credentialModuleGateActive(for: tool) { return false }
+        return true
+    }
+
     private func enabledCount(in tools: [ToolInfo]) -> Int {
-        tools.filter { !disabledTools.contains($0.name) }.count
+        tools.filter { effectiveToolEnabled($0) }.count
     }
 
     @ViewBuilder
     private func toolRow(_ tool: ToolInfo) -> some View {
         let isCoreProtected = Self.coreTools.contains(tool.name)
-        let isEnabled = !disabledTools.contains(tool.name)
+        let gatedCredentials = credentialModuleGateActive(for: tool)
+        let isEnabled = effectiveToolEnabled(tool)
         let currentTier = effectiveTier(for: tool)
 
         HStack(alignment: .top, spacing: 12) {
             Toggle("", isOn: Binding(
                 get: { isEnabled },
                 set: { newValue in
+                    if gatedCredentials { return }
                     if newValue {
                         disabledTools.remove(tool.name)
                     } else {
@@ -192,7 +213,7 @@ struct ToolRegistryView: View {
             ))
             .toggleStyle(.switch)
             .labelsHidden()
-            .disabled(isCoreProtected)
+            .disabled(isCoreProtected || gatedCredentials)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -230,32 +251,41 @@ struct ToolRegistryView: View {
                     }
                 }
 
-                Text(tool.description)
-                    .font(.caption)
-                    .foregroundStyle(BridgeColors.secondary)
-                    .lineLimit(2)
+                if !isEnabled {
+                    Text(tool.description)
+                        .font(.caption)
+                        .foregroundStyle(BridgeColors.secondary)
+                        .lineLimit(3)
+                }
+
+                if gatedCredentials {
+                    Text("Enable Keychain credentials under Settings → Credentials to use these tools.")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                }
             }
         }
         .padding(.vertical, 2)
     }
 
     @ViewBuilder
-    private func tierHintDot(_ color: Color, label: String, desc: String) -> some View {
+    private func tierHintDot(_ color: Color, label: String) -> some View {
         HStack(spacing: 4) {
             Circle()
                 .fill(color)
                 .frame(width: 8, height: 8)
-            Text("**\(label)** — \(desc)")
+            Text(label)
+                .fontWeight(.semibold)
                 .foregroundStyle(BridgeColors.secondary)
         }
     }
 
     private func persistDisabledTools() {
-        UserDefaults.standard.set(Array(disabledTools), forKey: "com.notionbridge.disabledTools")
+        UserDefaults.standard.set(Array(disabledTools), forKey: BridgeDefaults.disabledTools)
     }
 
     /// Persist tier overrides to UserDefaults.
     private func persistTierOverrides() {
-        UserDefaults.standard.set(tierOverrides, forKey: "com.notionbridge.tierOverrides")
+        UserDefaults.standard.set(tierOverrides, forKey: BridgeDefaults.tierOverrides)
     }
 }

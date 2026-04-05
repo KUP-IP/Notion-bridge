@@ -17,7 +17,7 @@ public enum PaymentModule {
             module: moduleName,
             tier: .request,
             neverAutoApprove: true,
-            description: "Execute a Stripe payment using a stored pm_ token from credential_save. Requires user approval + Touch ID. Pass amount in cents (e.g. 2500 = $25). Returns the PaymentIntent object. Always provide an idempotency_key.",
+            description: "Charge a saved Stripe payment method (server-side PaymentIntent, not a checkout page).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -62,6 +62,13 @@ public enum PaymentModule {
                     throw ToolRouterError.invalidArguments(
                         toolName: "payment_execute",
                         reason: "missing required 'credential_service', 'credential_account', 'amount', or 'idempotency_key' parameter"
+                    )
+                }
+
+                guard CredentialsFeature.isEnabled else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "payment_execute",
+                        reason: "Credentials are disabled. Enable Keychain credentials in Notion Bridge Settings → Credentials to charge stored payment methods."
                     )
                 }
 

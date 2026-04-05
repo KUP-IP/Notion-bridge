@@ -27,8 +27,8 @@ public enum AppleScriptModule {
         await router.register(ToolRegistration(
             name: "applescript_exec",
             module: moduleName,
-            tier: .request,
-            description: "Execute AppleScript in-process via NSAppleScript. Runs as NotionBridge.app to avoid TCC re-prompting (unlike /usr/bin/osascript). Returns the result string or error info. Use for controlling apps like Chrome, Finder, System Events.",
+            tier: .notify,
+            description: "Run AppleScript in-process using NotionBridge's TCC grants. For app control and System Events.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

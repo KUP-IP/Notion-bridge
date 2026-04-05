@@ -13,10 +13,16 @@
 import SwiftUI
 import AppKit
 
+/// UserDefaults key for in-progress onboarding step (`OnboardingStep.rawValue`) while `hasCompletedOnboarding` is false.
+/// Cleared on wizard completion and when the user resets onboarding from Settings.
+enum OnboardingResumeKey {
+    static let stepRaw = "onboardingResumeStepRaw"
+}
+
 /// Manages the first-launch onboarding NSWindow.
 /// Shows a multi-step wizard:
 /// Welcome → Legal Acceptance → Auto Permissions → Manual Permissions → Connection → Test Connection.
-/// Checks `UserDefaults.bool(forKey: "hasCompletedOnboarding")` — skips if true.
+/// Checks `UserDefaults.bool(forKey: BridgeDefaults.hasCompletedOnboarding)` — skips if true.
 @MainActor
 public final class OnboardingWindowController {
     private var window: NSWindow?
@@ -29,7 +35,7 @@ public final class OnboardingWindowController {
     /// Show the onboarding window if the user hasn't completed it yet.
     /// Returns immediately if `hasCompletedOnboarding` is true.
     public func showIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") else {
+        guard !UserDefaults.standard.bool(forKey: BridgeDefaults.hasCompletedOnboarding) else {
             print("[Onboarding] Already completed — skipping")
             return
         }
@@ -63,7 +69,8 @@ public final class OnboardingWindowController {
     }
 
     private func complete() {
-        UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
+        UserDefaults.standard.removeObject(forKey: OnboardingResumeKey.stepRaw)
+        UserDefaults.standard.set(true, forKey: BridgeDefaults.hasCompletedOnboarding)
         window?.close()
         window = nil
         print("[Onboarding] Completed — hasCompletedOnboarding = true")
@@ -78,11 +85,11 @@ struct OnboardingView: View {
     let permissionManager: PermissionManager
     let onComplete: () -> Void
 
-    @State private var currentStep: OnboardingStep = .welcome
+    @State private var currentStep: OnboardingStep = Self.loadResumeStep()
     @State private var healthCheckStatus: HealthCheckStatus = .idle
     @State private var showLegacySSE: Bool = false
-    @State private var didAutoAdvanceFromAutoStep: Bool = false
-    @State private var hasAcceptedLegal: Bool = false
+    @State private var didAutoAdvanceFromAutoStep: Bool = Self.loadDidAutoAdvanceForResumeStep()
+    @State private var hasAcceptedLegal: Bool = UserDefaults.standard.bool(forKey: BridgeDefaults.hasAcceptedLegalTerms)
 
     enum OnboardingStep: Int, CaseIterable {
         case welcome = 0
@@ -91,6 +98,11 @@ struct OnboardingView: View {
         case manualPermissions = 3
         case connection = 4
         case testConnection = 5
+    }
+
+    /// Local MCP port from config (same source as Settings → Advanced → Network).
+    private var configuredSSEPort: Int {
+        ConfigManager.shared.ssePort
     }
 
     enum HealthCheckStatus {
@@ -136,6 +148,26 @@ struct OnboardingView: View {
                 .padding(.bottom, 24)
         }
         .frame(width: 520, height: 480)
+        .onChange(of: currentStep) { _, newValue in
+            UserDefaults.standard.set(newValue.rawValue, forKey: OnboardingResumeKey.stepRaw)
+        }
+        .onAppear {
+            hasAcceptedLegal = UserDefaults.standard.bool(forKey: BridgeDefaults.hasAcceptedLegalTerms)
+        }
+    }
+
+    /// Restores wizard position after quit/relaunch; defaults to welcome when no saved step.
+    private static func loadResumeStep() -> OnboardingStep {
+        guard let raw = UserDefaults.standard.object(forKey: OnboardingResumeKey.stepRaw) as? Int,
+              let step = OnboardingStep(rawValue: raw) else {
+            return .welcome
+        }
+        return step
+    }
+
+    /// Matches auto-permissions → manual advance so Back/forward behavior stays consistent after resume.
+    private static func loadDidAutoAdvanceForResumeStep() -> Bool {
+        loadResumeStep().rawValue >= OnboardingStep.manualPermissions.rawValue
     }
 
     // MARK: - Progress Bar
@@ -209,11 +241,6 @@ struct OnboardingView: View {
                     icon: "hand.raised.fill",
                     color: .orange,
                     text: "You control all permissions — deny or revoke any macOS grant at any time"
-                )
-                legalBullet(
-                    icon: "doc.on.doc.fill",
-                    color: .purple,
-                    text: "One-time $14.99 purchase — 7-day refund policy"
                 )
             }
             .padding(12)
@@ -302,7 +329,7 @@ struct OnboardingView: View {
                     {
                       "mcpServers": {
                         "notion-bridge": {
-                          "url": "http://localhost:9700/mcp"
+                          "url": "http://localhost:\(configuredSSEPort)/mcp"
                         }
                       }
                     }
@@ -320,7 +347,7 @@ struct OnboardingView: View {
                         {
                           "mcpServers": {
                             "notion-bridge": {
-                              "url": "http://localhost:9700/sse"
+                              "url": "http://localhost:\(configuredSSEPort)/sse"
                             }
                           }
                         }
@@ -477,7 +504,7 @@ struct OnboardingView: View {
         healthCheckStatus = .checking
         Task {
             do {
-                let url = URL(string: "http://localhost:9700/health")!
+                let url = URL(string: "http://localhost:\(configuredSSEPort)/health")!
                 let (data, response) = try await URLSession.shared.data(from: url)
                 guard let httpResponse = response as? HTTPURLResponse,
                       httpResponse.statusCode == 200 else {
@@ -533,7 +560,7 @@ struct OnboardingView: View {
                 Button("Continue") {
                     // PKT-491: Record legal acceptance when advancing past legal step
                     if currentStep == .legalAcceptance {
-                        UserDefaults.standard.set(true, forKey: "hasAcceptedLegalTerms")
+                        UserDefaults.standard.set(true, forKey: BridgeDefaults.hasAcceptedLegalTerms)
                         UserDefaults.standard.set(Date().ISO8601Format(), forKey: "legalAcceptanceDate")
                         print("[Onboarding] Legal terms accepted at \(Date().ISO8601Format())")
                     }

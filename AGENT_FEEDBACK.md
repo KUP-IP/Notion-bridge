@@ -160,6 +160,8 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 **Context:** Running `make install` after build+sign+notarize to copy the app to /Applications. The Makefile's install target kills the running NotionBridge process before copying, which severs the MCP connection.  
 **Suggested Fix:** Split `make install` into `make install-copy` (just ditto copy, no killall) and `make install-restart` (killall + relaunch). Agents can use `install-copy` safely, then instruct the user to restart manually. Alternatively, add a `--no-kill` flag.
 
+**Resolution (2026-04):** Makefile `install` no longer runs `killall NotionBridge` (only `killall Dock` for icon refresh after ditto). Copy-only path remains `make install-copy`; **`make install-agent-safe`** is an alias for the same target (see `AGENTS.md`). Agents should still prefer `install-copy` / `install-agent-safe` over full `make install` when a notary/signing chain is unnecessary, to avoid long-running steps and session drops.
+
 ---
 
 **Category:** Friction  

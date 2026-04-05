@@ -32,19 +32,23 @@ public struct CredentialMetadata: Codable, Sendable, Equatable {
     public var expMonth: Int?
     public var expYear: Int?
     public var stripePm: String?
+    /// Set when saved by `CredentialManager` (JSON key `nb`). Used with keychain access group to hide third-party items.
+    public var notionBridgeManaged: Bool?
 
     public init(
         brand: String? = nil,
         last4: String? = nil,
         expMonth: Int? = nil,
         expYear: Int? = nil,
-        stripePm: String? = nil
+        stripePm: String? = nil,
+        notionBridgeManaged: Bool? = nil
     ) {
         self.brand = brand
         self.last4 = last4
         self.expMonth = expMonth
         self.expYear = expYear
         self.stripePm = stripePm
+        self.notionBridgeManaged = notionBridgeManaged
     }
 
     enum CodingKeys: String, CodingKey {
@@ -52,6 +56,7 @@ public struct CredentialMetadata: Codable, Sendable, Equatable {
         case expMonth = "exp_month"
         case expYear = "exp_year"
         case stripePm = "stripe_pm"
+        case notionBridgeManaged = "nb"
     }
 
     /// Empty metadata for password-type credentials.
@@ -87,7 +92,16 @@ public enum CredentialError: Error, LocalizedError {
         switch self {
         case .biometricFailed(let msg): return "Biometric authentication failed: \(msg)"
         case .biometricUnavailable: return "Biometric authentication unavailable on this device"
-        case .keychainError(let status): return "Keychain error: OSStatus \(status)"
+        case .keychainError(let status):
+            // errSecInvalidOwnerEdit (-25244): ACL / code signature mismatch with stored item.
+            if status == -25244 {
+                return "Could not remove this credential from the keychain. It may have been created by another install of the app. Remove it in Keychain Access, or try again after reinstalling."
+            }
+            // errSecMissingEntitlement (-34018): item owned by another app or not deletable from this process.
+            if status == -34018 {
+                return "This keychain item can’t be deleted from Notion Bridge. It was likely saved by another app. Remove it in Keychain Access (search the service name), or use that app’s settings."
+            }
+            return "Keychain error: OSStatus \(status)"
         case .encodingError(let msg): return "Encoding error: \(msg)"
         case .stripeTokenizationFailed(let msg): return "Stripe tokenization failed: \(msg)"
         case .stripeKeyMissing: return "STRIPE_API_KEY not found in KeychainManager"
@@ -119,6 +133,35 @@ public final class CredentialManager: Sendable {
     /// test executable (non-.app bundle) without touching Keychain writes.
     private var shouldTokenizeCardsInNonAppTests: Bool {
         UserDefaults.standard.bool(forKey: "com.notionbridge.tests.enableStripeTokenizationOutsideApp")
+    }
+
+    /// Default access group for items this app creates (`AppIdentifierPrefix` + bundle ID). Other apps use different groups.
+    private static func defaultKeychainAccessGroupForThisApp() -> String? {
+        guard let prefix = Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String,
+              let bundleID = Bundle.main.bundleIdentifier else {
+            return nil
+        }
+        return "\(prefix)\(bundleID)"
+    }
+
+    /// `true` when the keychain item belongs to this app’s default access group (or the attribute is absent).
+    private static func isKeychainItemManagedByThisApp(_ item: [String: Any]) -> Bool {
+        guard let expected = defaultKeychainAccessGroupForThisApp() else {
+            return true
+        }
+        guard let ag = item[kSecAttrAccessGroup as String] as? String else {
+            return true
+        }
+        return ag == expected
+    }
+
+    /// Hide generic-password rows created by other apps (e.g. licensing tools) unless explicitly saved by us (`nb` in metadata).
+    private static func shouldSurfaceCredentialFromKeychainItem(
+        _ item: [String: Any],
+        parsedEntry: CredentialEntry
+    ) -> Bool {
+        if isKeychainItemManagedByThisApp(item) { return true }
+        return parsedEntry.metadata.notionBridgeManaged == true
     }
 
     // MARK: - Biometric Gate
@@ -188,6 +231,8 @@ public final class CredentialManager: Sendable {
 
         var finalPassword = password
         var finalMetadata = metadata
+
+        finalMetadata.notionBridgeManaged = true
 
         // Stripe tokenization for card type
         if type == .card {
@@ -282,9 +327,14 @@ public final class CredentialManager: Sendable {
         }
 
         do {
-            return try parseKeychainItem(item, includePassword: true)
+            let entry = try parseKeychainItem(item, includePassword: true)
+            guard Self.shouldSurfaceCredentialFromKeychainItem(item, parsedEntry: entry) else {
+                throw CredentialError.notFound
+            }
+            return entry
         } catch CredentialError.invalidType {
             // Bridge: Allow reading KeychainManager infrastructure keys (com.notionbridge service)
+            guard Self.isKeychainItemManagedByThisApp(item) else { throw CredentialError.notFound }
             let itemService = item[kSecAttrService as String] as? String ?? ""
             guard itemService == "com.notionbridge" else { throw CredentialError.invalidType(itemService) }
             let account = item[kSecAttrAccount as String] as? String ?? ""
@@ -303,6 +353,8 @@ public final class CredentialManager: Sendable {
     }
 
     /// List credentials, optionally filtered by type.
+    /// Uses `SecItemCopyMatching` on `kSecClassGenericPassword` with optional label filter.
+    /// Items from other apps (different keychain access group) are omitted unless saved by us (`nb` in metadata).
     /// Returns metadata only — no passwords or tokens exposed.
     public func list(type: CredentialType? = nil) throws -> [CredentialEntry] {
         guard isAppBundle else { return [] }
@@ -332,10 +384,14 @@ public final class CredentialManager: Sendable {
         // as password-type entries with metadata-only visibility (no secrets exposed).
         return items.compactMap { item in
             if let entry = try? parseKeychainItem(item, includePassword: false) {
+                guard Self.shouldSurfaceCredentialFromKeychainItem(item, parsedEntry: entry) else {
+                    return nil
+                }
                 return entry
             }
             // Fallback: surface com.notionbridge infrastructure keys as password-type entries
-            guard let service = item[kSecAttrService as String] as? String,
+            guard Self.isKeychainItemManagedByThisApp(item),
+                  let service = item[kSecAttrService as String] as? String,
                   service == "com.notionbridge",
                   let account = item[kSecAttrAccount as String] as? String else {
                 return nil
@@ -351,6 +407,7 @@ public final class CredentialManager: Sendable {
     }
 
     /// Delete a credential. Invokes biometric gate before deleting.
+    /// Uses attribute-matched delete (sync / access group) with fallbacks for Keychain mismatches.
     public func deleteCredential(
         service: String,
         account: String
@@ -360,20 +417,82 @@ public final class CredentialManager: Sendable {
         // Biometric gate (write path)
         try await requireBiometric(reason: "Delete credential for \(service)")
 
-        let query: [String: Any] = [
+        let lookup: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var result: AnyObject?
+        let copyStatus = SecItemCopyMatching(lookup as CFDictionary, &result)
+        if copyStatus == errSecItemNotFound {
+            throw CredentialError.notFound
+        }
+        guard copyStatus == errSecSuccess,
+              let item = result as? [String: Any] else {
+            throw CredentialError.keychainError(copyStatus)
+        }
+
+        let variants = Self.keychainDeleteQueryVariants(service: service, account: account, item: item)
+        var lastStatus: OSStatus = errSecInternalError
+        for deleteQuery in variants {
+            lastStatus = SecItemDelete(deleteQuery as CFDictionary)
+            if lastStatus == errSecSuccess {
+                return true
+            }
+            if lastStatus == errSecItemNotFound {
+                throw CredentialError.notFound
+            }
+        }
+        throw CredentialError.keychainError(lastStatus)
+    }
+
+    /// Builds delete query variants: mirrored attrs, minimal, minimal + sync flags.
+    private static func keychainDeleteQueryVariants(
+        service: String,
+        account: String,
+        item: [String: Any]
+    ) -> [[String: Any]] {
+        var list: [[String: Any]] = []
+        list.append(keychainDeleteQuery(fromStoredAttributes: item))
+
+        let minimal: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
+        list.append(minimal)
 
-        let status = SecItemDelete(query as CFDictionary)
-        if status == errSecItemNotFound {
-            throw CredentialError.notFound
+        var falseSync = minimal
+        falseSync[kSecAttrSynchronizable as String] = kCFBooleanFalse
+        list.append(falseSync)
+
+        var trueSync = minimal
+        trueSync[kSecAttrSynchronizable as String] = kCFBooleanTrue
+        list.append(trueSync)
+
+        return list
+    }
+
+    private static func keychainDeleteQuery(fromStoredAttributes item: [String: Any]) -> [String: Any] {
+        var q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword
+        ]
+        if let s = item[kSecAttrService as String] as? String {
+            q[kSecAttrService as String] = s
         }
-        guard status == errSecSuccess else {
-            throw CredentialError.keychainError(status)
+        if let a = item[kSecAttrAccount as String] as? String {
+            q[kSecAttrAccount as String] = a
         }
-        return true
+        if item[kSecAttrSynchronizable as String] != nil {
+            q[kSecAttrSynchronizable as String] = item[kSecAttrSynchronizable as String] as Any
+        }
+        if let ag = item[kSecAttrAccessGroup as String] as? String {
+            q[kSecAttrAccessGroup as String] = ag
+        }
+        return q
     }
 
     // MARK: - Private: Internal Delete (no biometric, for save overwrites)

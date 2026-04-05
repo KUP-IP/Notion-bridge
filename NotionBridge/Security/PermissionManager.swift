@@ -12,7 +12,7 @@
 // PKT-391 (V1-PATCH-003 v3): Replaced Process/osascript probe with NSAppleScript on
 //   DispatchQueue.global() to fix TCC identity mismatch. Probes now use the same
 //   binary identity (NotionBridge.app) as applescript_exec, eliminating -1743 errors.
-// PKT-362 D5: Added systemSettingsURL to Grant for deep links in post-reset sheet.
+// PKT-362 D5: Added systemSettingsURL to Grant for deep links in Settings.
 // PKT-362 D6: Added needsRestart flag and restart transition tracking.
 //
 // Detection methods per grant:
@@ -109,7 +109,6 @@ public final class PermissionManager {
         }
 
         /// PKT-362 D5: System Settings deep link URL per grant.
-        /// Used by PostResetSheet to offer one-tap navigation to the correct pane.
         public var systemSettingsURL: URL? {
             switch self {
             case .accessibility:

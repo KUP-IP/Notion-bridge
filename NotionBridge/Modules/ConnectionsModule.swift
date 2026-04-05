@@ -9,7 +9,7 @@ public enum ConnectionsModule {
             name: "connections_list",
             module: moduleName,
             tier: .open,
-            description: "List configured bridge connections across providers. Returns normalized entries for workspace, API, and remote-access connections.",
+            description: "List Notion, API, and remote-access connections.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -41,7 +41,7 @@ public enum ConnectionsModule {
             name: "connections_get",
             module: moduleName,
             tier: .open,
-            description: "Get a single bridge connection by id.",
+            description: "Get one connection’s details.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -66,7 +66,7 @@ public enum ConnectionsModule {
             name: "connections_health",
             module: moduleName,
             tier: .open,
-            description: "Return health information for all bridge connections or a single connection if connectionId is provided.",
+            description: "Check whether connections are healthy.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -108,7 +108,7 @@ public enum ConnectionsModule {
             name: "connections_validate",
             module: moduleName,
             tier: .open,
-            description: "Perform a live validation for a specific bridge connection and return the refreshed normalized record.",
+            description: "Re-check a connection against the live service.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -133,7 +133,7 @@ public enum ConnectionsModule {
             name: "connections_capabilities",
             module: moduleName,
             tier: .open,
-            description: "List capabilities exposed by a specific bridge connection.",
+            description: "List what a connection provides (e.g. Stripe tools).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

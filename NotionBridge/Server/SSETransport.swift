@@ -372,7 +372,7 @@ public actor SSEServer {
         let onToolCall = self.onToolCall
 
         await server.withMethodHandler(ListTools.self) { _ in
-            let disabledNames = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
+            let disabledNames = CredentialsFeature.mergedDisabledToolNames()
             let registrations = await router.enabledRegistrations(disabledNames: disabledNames)
             return .init(tools: registrations.map { reg in
                 Tool(name: reg.name, description: reg.description, inputSchema: reg.inputSchema)
@@ -458,7 +458,7 @@ public actor SSEServer {
             return nil
 
         case "tools/list":
-            let disabledNames = Set(UserDefaults.standard.stringArray(forKey: "com.notionbridge.disabledTools") ?? [])
+            let disabledNames = CredentialsFeature.mergedDisabledToolNames()
             let regs = await router.enabledRegistrations(disabledNames: disabledNames)
             let tools: [[String: Any]] = regs.map { reg in
                 var t: [String: Any] = [

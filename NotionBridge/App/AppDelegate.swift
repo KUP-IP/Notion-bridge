@@ -107,6 +107,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        CredentialsFeature.migrateIfNeeded()
+
         registerAutoLaunch()
 
         // PKT-357 F15: Prevent App Nap — keep MCP server alive during idle.

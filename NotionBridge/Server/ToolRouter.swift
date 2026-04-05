@@ -87,10 +87,17 @@ public actor ToolRouter {
             throw ToolRouterError.unknownTool(toolName)
         }
 
+        if tool.module == CredentialModule.moduleName && !CredentialsFeature.isEnabled {
+            throw ToolRouterError.invalidArguments(
+                toolName: toolName,
+                reason: "Credentials are disabled. Turn on “Keychain credentials” in Notion Bridge Settings → Credentials."
+            )
+        }
+
         // F1: Resolve effective tier — user override takes precedence over registered default.
         // Overrides are stored as [String: String] in UserDefaults by ToolRegistryView.
         let overrides = UserDefaults.standard.dictionary(
-            forKey: "com.notionbridge.tierOverrides"
+            forKey: BridgeDefaults.tierOverrides
         ) as? [String: String] ?? [:]
         let overriddenTier = overrides[toolName].flatMap { SecurityTier(rawValue: $0) } ?? tool.tier
         let effectiveTier: SecurityTier = tool.neverAutoApprove ? .request : overriddenTier

@@ -10,6 +10,9 @@ import Foundation
 import MCP
 import NotionBridgeLib
 
+// Credential / payment MCP tests assume the Keychain credentials feature is enabled.
+UserDefaults.standard.set(true, forKey: CredentialsFeature.userDefaultsKey)
+
 // MARK: - Test Harness
 
 nonisolated(unsafe) var passed = 0
@@ -116,6 +119,33 @@ await test("Session permissions start empty and can be cleared") {
     await gate.clearSessionPermissions()
     // After clearing, no paths should be session-allowed
     // (We can't easily test the notification flow in unit tests)
+}
+
+await test("NotionPageRef normalizes dashed UUID and notion.so URL") {
+    let id = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    switch NotionPageRef.normalizedPageId(from: id) {
+    case .success(let n):
+        try expect(n.contains("-"), "Expected dashed UUID form")
+        try expect(n.replacingOccurrences(of: "-", with: "").count == 32, "Expected 32 hex")
+    case .failure(let err):
+        throw TestError.assertion("Expected valid page id: \(err.message)")
+    }
+    let url = "https://www.notion.so/w/Test-a1b2c3d4e5f67890abcdef1234567890"
+    switch NotionPageRef.normalizedPageId(from: url) {
+    case .success(let n):
+        try expect(n.lowercased().contains("a1b2c3d4"), "Expected id from URL")
+    case .failure(let err):
+        throw TestError.assertion("Expected URL parse: \(err.message)")
+    }
+}
+
+await test("NotionPageRef rejects non-Notion URL") {
+    switch NotionPageRef.normalizedPageId(from: "https://example.com/page") {
+    case .success:
+        throw TestError.assertion("Expected failure for non-Notion URL")
+    case .failure(let err):
+        try expect(!err.message.isEmpty, "Expected error message")
+    }
 }
 
 await test("Permanent access can be granted and revoked") {

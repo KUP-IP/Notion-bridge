@@ -5,9 +5,13 @@
 // - Notify: execute immediately + fire-and-forget notification
 // - Request: actionable pre-execution approval (Allow / Deny / Always Allow)
 //   - Safe commands (read-only): auto-allow for shell/cli tools
-// - Sensitive path prompting with session/permanent allow (UserDefaults)
+//   - Always Allow (notifications): persists tier override to Notify (not learned prefixes).
+//   - `neverAutoApprove` tools: no Always Allow action (use Tool Registry).
+//   - Alert fallback: Allow/Deny only — tier change via Tool Registry.
+// - Sensitive path: Allow = session; Always Allow = permanent path allow (no tier override).
 // - Nuclear handoff for fork bomb patterns only
 
+import Foundation
 import UserNotifications
 import MCP
 
@@ -199,10 +203,10 @@ public actor SecurityGate {
         case .notify:
             return .allow
         case .request:
-            if !neverAutoApprove && checkLearnedAllow(detail) {
-                return .allow
-            }
-            return await requestApproval(
+            // Learned command prefixes no longer bypass Request prompts — use Tool Registry
+            // (tier override) or per-call approval. `neverAutoApprove` tools use notification
+            // category NO_ALWAYS (no Always Allow action); alert fallback is Allow/Deny only.
+            return await requestToolTierApproval(
                 toolName: toolName,
                 detail: detail,
                 neverAutoApprove: neverAutoApprove
@@ -288,29 +292,33 @@ public actor SecurityGate {
                     return nil
                 }
 
-                let decision = await requestApproval(
-                    toolName: toolName,
-                    detail: "Access sensitive path: \(sensitive)",
-                    neverAutoApprove: false
+                // Sensitive path approvals must not set global tool tier overrides.
+                // Option B: Allow = session only; Always Allow = permanent path grant (UserDefaults).
+                let body = String("Access sensitive path: \(sensitive)".prefix(120))
+                let approval = await approvalManager.requestApproval(
+                    title: "Notion Bridge wants to \(toolName)",
+                    body: body,
+                    allowAlwaysAllowAction: true
                 )
-
-                switch decision {
+                switch approval {
                 case .allow:
                     sessionAllowedPaths.insert(sensitive)
                     return nil
-                case .reject(let reason):
-                    return .reject(reason: "Sensitive path access denied (\(sensitive)): \(reason)")
-                case .handoff:
-                    return decision
+                case .alwaysAllow:
+                    grantPermanentAccess(path: sensitive)
+                    return nil
+                case .deny:
+                    return .reject(reason: "Sensitive path access denied (\(sensitive)): user declined or timed out")
                 }
             }
         }
         return nil
     }
 
-    // MARK: Notification Approval
+    // MARK: Notification Approval (Request-tier tools)
 
-    private func requestApproval(
+    /// Request-tier tool prompt. **Always Allow** persists `tierOverrides[toolName] = notify` (same as Tool Registry), never learned prefixes.
+    private func requestToolTierApproval(
         toolName: String,
         detail: String,
         neverAutoApprove: Bool
@@ -326,50 +334,19 @@ public actor SecurityGate {
         case .allow:
             return .allow
         case .alwaysAllow:
-            let prefix = learnedPrefix(for: detail)
-            if !prefix.isEmpty {
-                ConfigManager.shared.addLearnedAllowPrefix(prefix)
-            }
+            persistNotifyTierOverride(toolName: toolName)
             return .allow
         case .deny:
             return .reject(reason: "User denied via notification (or 30s timeout)")
         }
     }
 
-    // MARK: Learned Allow Prefixes
-
-    private func checkLearnedAllow(_ command: String) -> Bool {
-        let normalizedCommand = normalizeForPrefixMatch(command)
-        guard !normalizedCommand.isEmpty else { return false }
-        for prefix in ConfigManager.shared.learnedAllowPrefixes {
-            let normalizedPrefix = normalizeForPrefixMatch(prefix)
-            guard !normalizedPrefix.isEmpty else { continue }
-            if normalizedCommand.hasPrefix(normalizedPrefix) {
-                return true
-            }
-        }
-        return false
-    }
-
-    private func learnedPrefix(for command: String) -> String {
-        let normalized = normalizeWhitespace(command)
-        guard !normalized.isEmpty else { return "" }
-
-        if normalized.contains("\n") {
-            let firstLine = normalized
-                .split(separator: "\n")
-                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-                .first(where: { !$0.isEmpty }) ?? ""
-            return String(firstLine.prefix(80))
-        }
-
-        let tokens = normalized.split(separator: " ")
-        if tokens.isEmpty { return "" }
-        return tokens.prefix(3).joined(separator: " ")
-    }
-
-    private func normalizeForPrefixMatch(_ value: String) -> String {
-        normalizeWhitespace(value).lowercased()
+    private func persistNotifyTierOverride(toolName: String) {
+        let key = BridgeDefaults.tierOverrides
+        var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
+        dict[toolName] = SecurityTier.notify.rawValue
+        UserDefaults.standard.set(dict, forKey: key)
+        NotificationCenter.default.post(name: .notionBridgeTierOverridesDidChange, object: nil)
     }
 
     private func normalizeWhitespace(_ value: String) -> String {

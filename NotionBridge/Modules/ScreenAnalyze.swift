@@ -24,7 +24,7 @@ extension ScreenModule {
             name: "screen_analyze",
             module: moduleName,
             tier: .open,
-            description: "Extract dominant colors and luminance from a screenshot file. Takes a file path (from screen_capture) and returns dominant colors as hex values with percentages, average luminance (0-1), and image dimensions. Use this to understand the visual color palette of any captured screen.",
+            description: "Analyze a screenshot file for dominant colors and luminance. Input: filePath from screen_capture.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

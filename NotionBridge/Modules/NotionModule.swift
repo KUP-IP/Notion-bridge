@@ -40,7 +40,7 @@ public enum NotionModule {
             name: "notion_search",
             module: moduleName,
             tier: .open,
-            description: "Search the Notion workspace for pages and data sources by text query. Returns an array of {id, title, url, object_type} matches. filter.value accepts 'page' or 'data_source' (not 'database'). Requires a configured NOTION_API_TOKEN.",
+            description: "Search your Notion workspace for pages and data sources by keyword.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -99,7 +99,7 @@ public enum NotionModule {
             name: "notion_page_read",
             module: moduleName,
             tier: .open,
-            description: "Read a Notion page's properties and optionally child blocks (paginated). includeNested=false (default): direct children only, all pages. includeNested=true: depth-first nested blocks; optional maxBlocks (default 5000), maxDepth (default 10). Returns truncated if capped.",
+            description: "Read a Notion page’s properties and blocks.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -212,7 +212,7 @@ public enum NotionModule {
             name: "notion_page_update",
             module: moduleName,
             tier: .notify,
-            description: "Update a Notion page's properties. Pass a JSON string of Notion API property objects. Returns the updated page object. Requires user confirmation before execution.",
+            description: "Update a page’s properties in Notion.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -272,7 +272,7 @@ public enum NotionModule {
             name: "notion_page_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a new Notion page under a parent page or database. Pass properties as a JSON string; optionally include children blocks. Returns {id, url} of the created page. Note: parentType 'data_source_id' is the preferred parent type for row inserts under Notion API 2026-03-11; 'database_id' is legacy.",
+            description: "Create a new page under a parent page or database.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -330,7 +330,7 @@ public enum NotionModule {
             name: "notion_query",
             module: moduleName,
             tier: .open,
-            description: "Query a Notion database with optional filter, sort, and pagination. Returns {results[], has_more, next_cursor}. Filter and sorts must be JSON strings in Notion API format.",
+            description: "Query a database with filters, sorts, and pagination.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -428,7 +428,7 @@ public enum NotionModule {
             name: "notion_blocks_append",
             module: moduleName,
             tier: .notify,
-            description: "Append child blocks to a Notion page or block. Pass children as a JSON string array of block objects. Use afterBlock to insert after a specific block ID (Notion API 2026-03-11 position). Returns success, blocksAppended, and results [{id, type}, ...].",
+            description: "Add blocks to a Notion page or existing block.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -488,7 +488,7 @@ public enum NotionModule {
             name: "notion_block_delete",
             module: moduleName,
             tier: .notify,
-            description: "Move a Notion block to trash by its ID. Returns confirmation. Deletion is reversible from the Notion UI.",
+            description: "Move a block to trash (you can restore it in Notion).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -523,7 +523,7 @@ public enum NotionModule {
             name: "notion_page_markdown_read",
             module: moduleName,
             tier: .open,
-            description: "Read a Notion page body as markdown. Returns {markdown: string}. Faster than notion_page_read when you only need content, not properties or block structure.",
+            description: "Read a page’s body as clean markdown without property metadata. Lighter than notion_page_read.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -556,7 +556,7 @@ public enum NotionModule {
             name: "notion_comments_list",
             module: moduleName,
             tier: .open,
-            description: "List comments on a Notion page or block. Returns an array of {id, text, author, created_time} comments, newest first. Accepts pageSize for pagination.",
+            description: "List comments on a page or block.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -613,7 +613,7 @@ public enum NotionModule {
             name: "notion_comment_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a page-level comment on a Notion page. Returns the created comment object with id and timestamp.",
+            description: "Add a comment on a page.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -649,7 +649,7 @@ public enum NotionModule {
             name: "notion_users_list",
             module: moduleName,
             tier: .open,
-            description: "List all users in the Notion workspace. Returns an array of {id, name, email, type, avatar_url} entries. Supports pageSize for pagination.",
+            description: "List people in the workspace.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -702,7 +702,7 @@ public enum NotionModule {
             name: "notion_page_move",
             module: moduleName,
             tier: .notify,
-            description: "Move a Notion page to a new parent (page or database). Specify parentType as 'page_id' or 'database_id'. Returns the updated page object.",
+            description: "Move a page under a different parent.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -745,7 +745,7 @@ public enum NotionModule {
             name: "notion_file_upload",
             module: moduleName,
             tier: .notify,
-            description: "Upload a local file to Notion file storage (single-part, max 20 MB). Returns the file upload object with a URL usable in page content or properties.",
+            description: "Upload a file from your Mac for use in Notion pages.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -816,7 +816,7 @@ public enum NotionModule {
             name: "notion_token_introspect",
             module: moduleName,
             tier: .open,
-            description: "Introspect the active Notion API token. Returns {bot, owner, workspace} metadata. Use to verify which integration and workspace are connected.",
+            description: "See which Notion workspace and bot your connection uses.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -855,7 +855,7 @@ public enum NotionModule {
             name: "notion_connections_list",
             module: moduleName,
             tier: .open,
-            description: "List all configured Notion workspace connections. Returns an array of {name, workspace, status} entries showing connection health.",
+            description: "List your saved Notion workspace connections.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -886,7 +886,7 @@ public enum NotionModule {
             name: "notion_block_read",
             module: moduleName,
             tier: .open,
-            description: "Deep-inspect a single Notion block by its ID. Returns all block properties including type-specific data. Use after notion_page_read to get full details of specific blocks.",
+            description: "Inspect one block’s full details by ID.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -940,7 +940,7 @@ public enum NotionModule {
             name: "notion_block_update",
             module: moduleName,
             tier: .notify,
-            description: "Update a Notion block by ID. Pass the block type and updated content as a JSON string.",
+            description: "Update a block’s content.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -991,7 +991,7 @@ public enum NotionModule {
             name: "notion_database_get",
             module: moduleName,
             tier: .open,
-            description: "Retrieve a Notion database container by ID. Returns the database object including title, icon, cover, parent, and high-level metadata. Does NOT return the schema — use notion_datasource_get for schema details.",
+            description: "Get basic info about a database (not the full column schema).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1053,7 +1053,7 @@ public enum NotionModule {
             name: "notion_datasource_get",
             module: moduleName,
             tier: .open,
-            description: "Retrieve a Notion data source schema by ID. Returns the full schema including property definitions, types, and options. Use this to inspect a database's structure before querying.",
+            description: "Get a data source’s columns and types before you query or edit rows.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

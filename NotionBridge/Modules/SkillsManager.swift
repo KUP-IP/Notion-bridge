@@ -1,7 +1,7 @@
 // SkillsManager.swift — Skills Configuration Manager
 // NotionBridge · Modules
 // PKT-366 F9: Manages named Notion page skills stored in UserDefaults.
-// PKT-485: Added defaultSkills array + resetToDefaults() for factory reset.
+// PKT-485: resetToDefaults() clears skills for factory reset (empty registry).
 // PKT-487: Added moveSkill(from:to:) and sortAlphabetically() for ordering.
 
 import Foundation
@@ -134,15 +134,10 @@ public final class SkillsManager {
         }
     }
 
-    private static let defaultsKey = "com.notionbridge.skills"
+    private static let defaultsKey = BridgeDefaults.skills
 
-    /// PKT-485: Default skills restored after factory reset.
-    /// Structural defaults with empty page IDs — configured during onboarding.
-    public static let defaultSkills: [Skill] = [
-        Skill(name: "MAC AG", notionPageId: "", enabled: true, visibility: .standard),
-        Skill(name: "sk mac dev", notionPageId: "", enabled: true, visibility: .standard),
-        Skill(name: "sk executor", notionPageId: "", enabled: true, visibility: .standard),
-    ]
+    /// Empty template for factory reset / "restore defaults" — no bundled placeholder skills.
+    public static let defaultSkills: [Skill] = []
 
     public private(set) var skills: [Skill] = []
 
@@ -230,9 +225,12 @@ public final class SkillsManager {
         skills.filter(\.enabled)
     }
 
-    /// Enabled skills marked `routing` with a non-empty page id (for `list_routing_skills`).
+    /// Enabled skills marked `routing` with a valid Notion page id (for `list_routing_skills`).
     public var routingSkillsForDiscovery: [Skill] {
-        skills.filter { $0.enabled && $0.visibility == .routing && !$0.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        skills.filter {
+            $0.enabled && $0.visibility == .routing
+                && NotionPageRef.isValidStoredPageId($0.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
     }
 
     // MARK: - Extended CRUD (PKT-477 Feature 3)
@@ -332,8 +330,7 @@ public final class SkillsManager {
 
     // MARK: - Factory Reset (PKT-485)
 
-    /// Replace all skills with the default set and persist to UserDefaults.
-    /// Called by factory reset to restore a known-good starting state.
+    /// Clear all skills and persist (factory reset / restore empty registry).
     public func resetToDefaults() {
         skills = Self.defaultSkills
         save()
