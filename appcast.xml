@@ -1,16 +1,16 @@
 <?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
-        <title>NotionBridge</title>
+        <title>Notion Bridge</title>
         <item>
             <title>1.8.0</title>
-            <pubDate>Sat, 04 Apr 2026 22:18:11 -0500</pubDate>
+            <pubDate>Sat, 04 Apr 2026 22:43:49 -0500</pubDate>
             <link>https://github.com/KUP-IP/Notion-bridge/releases</link>
             <sparkle:version>15</sparkle:version>
             <sparkle:shortVersionString>1.8.0</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/KUP-IP/Notion-bridge/releases/download/v1.8.0/notion-bridge-v1.8.0.dmg" length="10493379" type="application/octet-stream" sparkle:edSignature="nNSdenwwoNDHtg1Q78qIT6ZVO7SGGHMlASbEx+cw9YupX61A2dTYpNzBP5I3jrVx9BdJ1tgnHmjIno2zJH9YBQ=="/>
+            <enclosure url="https://github.com/KUP-IP/Notion-bridge/releases/download/v1.8.0/notion-bridge-v1.8.0.dmg" length="9811057" type="application/octet-stream" sparkle:edSignature="keVagqo08N3XlxjV8NFaFXeQLJx/p9TJZuWwd0OVMldKNfdTYhAvy+j+PV9+9H/WVwW5z2KGGS5LFdr5wbX4Dw=="/>
         </item>
     </channel>
 </rss>
