@@ -91,13 +91,21 @@ struct OnboardingView: View {
     @State private var didAutoAdvanceFromAutoStep: Bool = Self.loadDidAutoAdvanceForResumeStep()
     @State private var hasAcceptedLegal: Bool = UserDefaults.standard.bool(forKey: BridgeDefaults.hasAcceptedLegalTerms)
 
+    // Workspace Setup form state
+    @State private var workspaceToken = ""
+    @State private var workspaceName = ""
+    @State private var isSavingWorkspace = false
+    @State private var workspaceError: String?
+    @State private var workspaceSaved = false
+
     enum OnboardingStep: Int, CaseIterable {
         case welcome = 0
         case legalAcceptance = 1
-        case autoPermissions = 2
-        case manualPermissions = 3
-        case connection = 4
-        case testConnection = 5
+        case workspaceSetup = 2
+        case autoPermissions = 3
+        case manualPermissions = 4
+        case connection = 5
+        case testConnection = 6
     }
 
     /// Local MCP port from config (same source as Settings → Advanced → Network).
@@ -128,6 +136,8 @@ struct OnboardingView: View {
                     welcomeStep
                 case .legalAcceptance:
                     legalAcceptanceStep
+                case .workspaceSetup:
+                    workspaceSetupStep
                 case .autoPermissions:
                     autoPermissionsStep
                 case .manualPermissions:
@@ -158,11 +168,15 @@ struct OnboardingView: View {
 
     /// Restores wizard position after quit/relaunch; defaults to welcome when no saved step.
     private static func loadResumeStep() -> OnboardingStep {
-        guard let raw = UserDefaults.standard.object(forKey: OnboardingResumeKey.stepRaw) as? Int,
-              let step = OnboardingStep(rawValue: raw) else {
+        guard let raw = UserDefaults.standard.object(forKey: OnboardingResumeKey.stepRaw) as? Int else {
             return .welcome
         }
-        return step
+        // Migration: old onboarding max was rawValue 5; reset if beyond that
+        if raw > 5 {
+            UserDefaults.standard.removeObject(forKey: OnboardingResumeKey.stepRaw)
+            return .welcome
+        }
+        return OnboardingStep(rawValue: raw) ?? .welcome
     }
 
     /// Matches auto-permissions → manual advance so Back/forward behavior stays consistent after resume.
@@ -288,6 +302,124 @@ struct OnboardingView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - Workspace Setup Step
+
+    private var workspaceSetupStep: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "key.fill")
+                .font(.system(size: 40))
+                .foregroundStyle(.purple)
+
+            Text("Connect Your Workspace")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Text("Add your Notion API token to connect your workspace. You can add more workspaces later in Settings.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 8)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Link(destination: URL(string: "https://www.notion.so/profile/integrations")!) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.up.right.square")
+                        Text("Create an internal integration at notion.so")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.purple)
+                }
+
+                TextField("Workspace name (e.g. Work, Personal)", text: $workspaceName)
+                    .textFieldStyle(.roundedBorder)
+
+                SecureField("Notion API token (ntn_...)", text: $workspaceToken)
+                    .textFieldStyle(.roundedBorder)
+            }
+            .padding(.horizontal, 8)
+
+            if let workspaceError {
+                Text(workspaceError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+
+            if workspaceSaved {
+                HStack(spacing: 4) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Text("Workspace connected!")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                }
+            }
+
+            HStack(spacing: 16) {
+                if !workspaceSaved {
+                    Button("Save & Continue") {
+                        Task { await saveWorkspaceConnection() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .disabled(
+                        workspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || workspaceToken.isEmpty
+                        || isSavingWorkspace
+                    )
+                }
+
+                if workspaceSaved {
+                    Button("Continue") {
+                        currentStep = OnboardingStep(rawValue: currentStep.rawValue + 1) ?? .testConnection
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .font(.callout)
+                } else {
+                    Button("Skip for now") {
+                        currentStep = OnboardingStep(rawValue: currentStep.rawValue + 1) ?? .testConnection
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+                }
+            }
+        }
+    }
+
+    private func saveWorkspaceConnection() async {
+        await MainActor.run {
+            isSavingWorkspace = true
+            workspaceError = nil
+        }
+
+        let trimmedToken = workspaceToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedToken.hasPrefix("ntn_") else {
+            await MainActor.run {
+                workspaceError = "Invalid token — must start with ntn_"
+                isSavingWorkspace = false
+            }
+            return
+        }
+
+        do {
+            _ = try await ConnectionRegistry.shared.configureNotionConnection(
+                name: workspaceName,
+                token: workspaceToken,
+                primary: true
+            )
+            await MainActor.run {
+                workspaceSaved = true
+                isSavingWorkspace = false
+            }
+        } catch {
+            await MainActor.run {
+                workspaceError = error.localizedDescription
+                isSavingWorkspace = false
+            }
         }
     }
 
@@ -550,7 +682,10 @@ struct OnboardingView: View {
 
             Spacer()
 
-            if currentStep == .testConnection {
+            if currentStep == .workspaceSetup {
+                // Workspace step has its own Save & Skip buttons
+                EmptyView()
+            } else if currentStep == .testConnection {
                 Button("Done") {
                     onComplete()
                 }

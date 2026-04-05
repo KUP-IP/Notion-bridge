@@ -53,6 +53,23 @@ struct CredentialsView: View {
 
     var body: some View {
         Form {
+            // MARK: API Keys
+            Section("API Keys") {
+                ConnectionsManagementView()
+            }
+
+            // MARK: Setup Instructions
+            Section("Setup Instructions") {
+                Link(destination: URL(string: "https://www.notion.so/profile/integrations")!) {
+                    HStack {
+                        Image(systemName: "globe")
+                        Text("Create an internal integration at notion.so/profile/integrations")
+                            .font(.caption)
+                    }
+                }
+            }
+
+            // MARK: Apple Keychain Credentials
             Section {
                 Toggle(isOn: Binding(
                     get: { credentialsEnabledUI },
@@ -68,10 +85,10 @@ struct CredentialsView: View {
                         }
                     }
                 )) {
-                    Text("Keychain credentials & MCP tools")
+                    Text("Apple Keychain Credentials")
                 }
                 .disabled(enablingCredentials)
-                .accessibilityLabel("Enable Keychain credentials and credential MCP tools")
+                .accessibilityLabel("Enable Apple Keychain Credentials")
 
                 if !credentialsEnabledUI {
                     Text(

@@ -104,97 +104,77 @@ extension SettingsView {
                 LabeledContent("Uptime", value: statusBar.uptimeString)
             }
 
-            // 2. Setup Instructions
-            Section("Setup Instructions") {
-                Link(destination: URL(string: "https://www.notion.so/profile/integrations")!) {
-                    HStack {
-                        Image(systemName: "globe")
-                        Text("Create an internal integration at notion.so/profile/integrations")
-                            .font(.caption)
-                    }
-                }
+            // 2. Integrated Tools
+            Section("Integrated Tools") {
+                IntegratedToolsContent()
             }
 
-            // 3. Workspace connections
-            Section {
-                ConnectionsManagementView()
-            } header: {
-                Text("Workspace connections")
-            }
-
-            // 4. API connections
-            Section {
-                APIConnectionsManagementView()
-            } header: {
-                Text("API connections")
-            }
-
-            // 5. Connected Clients
+            // 3. Connected Clients
             Section("Connected Clients") {
                 if statusBar.connectedClients.isEmpty {
                     Text("No clients connected")
                         .foregroundStyle(BridgeColors.secondary)
                 } else {
-                    ForEach(statusBar.connectedClients, id: \.name) { client in
-                        LabeledContent(client.name) {
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text("v\(client.version)")
-                                    .font(.caption)
-                                Text("Since \(relativeTimestamp(from: client.connectedAt))")
-                                    .font(.caption2)
-                                    .foregroundStyle(BridgeColors.muted)
-                            }
-                        }
-                    }
+                    ConnectedClientsContent(clients: statusBar.connectedClients)
                 }
             }
 
-            // 6. Remote Access
+            // 4. Remote Access
             Section("Remote Access") {
                 ConnectionSetupView()
             }
 
-            // 7. Launch at Startup
-            Section("Startup") {
-                Toggle("Launch at login", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { _, enabled in
-                        guard !isApplyingLaunchAtLoginChange else { return }
-                        launchAtLoginError = nil
-                        let service = SMAppService.mainApp
-                        do {
-                            if enabled {
-                                if service.status == .enabled {
-                                    return
+            // 5. App Control — three-column layout with Launch at Login
+            Section("App Control") {
+                HStack {
+                    Toggle("Launch at login", isOn: $launchAtLogin)
+                        .onChange(of: launchAtLogin) { _, enabled in
+                            guard !isApplyingLaunchAtLoginChange else { return }
+                            launchAtLoginError = nil
+                            let service = SMAppService.mainApp
+                            do {
+                                if enabled {
+                                    if service.status == .enabled {
+                                        return
+                                    }
+                                    try? service.unregister()
+                                    try service.register()
+                                } else {
+                                    if service.status == .notRegistered {
+                                        return
+                                    }
+                                    try service.unregister()
                                 }
-                                try? service.unregister()
-                                try service.register()
-                            } else {
-                                if service.status == .notRegistered {
-                                    return
+                            } catch {
+                                let ns = error as NSError
+                                NSLog(
+                                    "[LaunchAtLogin] failed enabled=\(enabled) domain=\(ns.domain) code=\(ns.code) description=\(ns.localizedDescription) status=\(service.status.rawValue)"
+                                )
+                                let notPermitted = (ns.domain == NSPOSIXErrorDomain && ns.code == EPERM)
+                                    || ns.localizedDescription.localizedCaseInsensitiveContains("operation not permitted")
+                                if notPermitted {
+                                    launchAtLoginError = enabled
+                                        ? "Could not enable Launch at login. Operation not permitted."
+                                        : "Could not disable Launch at login. Operation not permitted."
+                                } else {
+                                    launchAtLoginError = enabled
+                                        ? "Could not enable Launch at login."
+                                        : "Could not disable Launch at login."
                                 }
-                                try service.unregister()
+                                isApplyingLaunchAtLoginChange = true
+                                launchAtLogin.toggle()
+                                isApplyingLaunchAtLoginChange = false
                             }
-                        } catch {
-                            let ns = error as NSError
-                            NSLog(
-                                "[LaunchAtLogin] failed enabled=\(enabled) domain=\(ns.domain) code=\(ns.code) description=\(ns.localizedDescription) status=\(service.status.rawValue)"
-                            )
-                            let notPermitted = (ns.domain == NSPOSIXErrorDomain && ns.code == EPERM)
-                                || ns.localizedDescription.localizedCaseInsensitiveContains("operation not permitted")
-                            if notPermitted {
-                                launchAtLoginError = enabled
-                                    ? "Could not enable Launch at login. Operation not permitted."
-                                    : "Could not disable Launch at login. Operation not permitted."
-                            } else {
-                                launchAtLoginError = enabled
-                                    ? "Could not enable Launch at login."
-                                    : "Could not disable Launch at login."
-                            }
-                            isApplyingLaunchAtLoginChange = true
-                            launchAtLogin.toggle()
-                            isApplyingLaunchAtLoginChange = false
                         }
+                    Spacer()
+                    Button("Check Updates", systemImage: "arrow.down.circle") {
+                        (NSApp.delegate as? AppDelegate)?.checkForUpdates()
                     }
+                    Spacer()
+                    Button("Restart Bridge", systemImage: "arrow.clockwise") {
+                        restartApp(reopenSettings: true)
+                    }
+                }
 
                 if let err = launchAtLoginError {
                     VStack(alignment: .leading, spacing: 8) {
@@ -208,19 +188,6 @@ extension SettingsView {
                             Self.openLoginItemsSystemSettings()
                         }
                         .font(.caption)
-                    }
-                }
-            }
-
-            // 8. App Control — two-button row
-            Section("App Control") {
-                HStack {
-                    Button("Restart Bridge", systemImage: "arrow.clockwise") {
-                        restartApp(reopenSettings: true)
-                    }
-                    Spacer()
-                    Button("Check Updates", systemImage: "arrow.down.circle") {
-                        (NSApp.delegate as? AppDelegate)?.checkForUpdates()
                     }
                 }
             }
@@ -625,5 +592,120 @@ extension SettingsView {
             )
         }
         return (message: "Reset partially failed. Some permissions may need to be reset manually in System Settings.", didFail: true)
+    }
+}
+
+// MARK: - Integrated Tools Content
+
+/// Displays Notion + Stripe integration status rows.
+/// Status derived from whether a valid key exists in Credentials/API Keys.
+private struct IntegratedToolsContent: View {
+    @State private var notionStatus: BridgeConnectionStatus = .notConfigured
+    @State private var stripeStatus: BridgeConnectionStatus = .notConfigured
+    @State private var isLoaded = false
+
+    var body: some View {
+        Group {
+            integrationRow(
+                icon: "network",
+                provider: "Notion",
+                status: notionStatus
+            )
+            integrationRow(
+                icon: "creditcard",
+                provider: "Stripe",
+                status: stripeStatus
+            )
+        }
+        .task { await loadStatus() }
+    }
+
+    private func integrationRow(icon: String, provider: String, status: BridgeConnectionStatus) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 16))
+                .foregroundStyle(status == .connected ? .green : .secondary)
+                .frame(width: 24)
+            Spacer()
+            if status == .connected {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 8))
+                    .foregroundStyle(.green)
+                    .symbolEffect(.pulse)
+                Text("Connected")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            } else {
+                Text("Add key in Credentials")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityLabel("\(provider): \(status == .connected ? "Connected" : "Not configured")")
+    }
+
+    private func loadStatus() async {
+        do {
+            let workspace = try await ConnectionRegistry.shared.listConnections(kind: .workspace, validateLive: false)
+            let api = try await ConnectionRegistry.shared.listConnections(kind: .api, validateLive: false)
+            await MainActor.run {
+                notionStatus = workspace.contains { $0.provider == .notion && $0.status == .connected } ? .connected : .notConfigured
+                stripeStatus = api.contains { $0.provider == .stripe && $0.status == .connected } ? .connected : .notConfigured
+                isLoaded = true
+            }
+        } catch {
+            // Silently handle — indicators stay as not configured
+        }
+    }
+}
+
+// MARK: - Connected Clients Content
+
+/// Displays connected MCP clients with resolved names and no version numbers.
+/// Resolves client identifiers against workspace connection names.
+private struct ConnectedClientsContent: View {
+    let clients: [ConnectedClient]
+    @State private var connectionNames: [String: String] = [:]
+
+    var body: some View {
+        ForEach(clients, id: \.name) { client in
+            LabeledContent(resolvedName(for: client)) {
+                Text("Since \(relativeTimestamp(from: client.connectedAt))")
+                    .font(.caption2)
+                    .foregroundStyle(BridgeColors.muted)
+            }
+        }
+        .task { await loadConnectionNames() }
+    }
+
+    private func resolvedName(for client: ConnectedClient) -> String {
+        for (_, connName) in connectionNames {
+            if client.name.localizedCaseInsensitiveContains(connName)
+                || connName.localizedCaseInsensitiveContains(client.name) {
+                return connName
+            }
+        }
+        return client.name
+    }
+
+    private func loadConnectionNames() async {
+        do {
+            let connections = try await ConnectionRegistry.shared.listConnections(kind: .workspace, validateLive: false)
+            await MainActor.run {
+                var names: [String: String] = [:]
+                for conn in connections {
+                    names[conn.id] = conn.name
+                }
+                connectionNames = names
+            }
+        } catch {
+            // Fall back to raw client names
+        }
+    }
+
+    private func relativeTimestamp(from date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }

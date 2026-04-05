@@ -428,6 +428,8 @@ public struct ConnectionsManagementView: View {
             return .gray
         case .checking:
             return .orange
+        case .invalid:
+            return .red
         }
     }
 }
@@ -495,6 +497,16 @@ struct AddWorkspaceConnectionSheet: View {
         await MainActor.run {
             isSaving = true
             errorMessage = nil
+        }
+
+        // Validate ntn_ prefix before slow API validation
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedToken.hasPrefix("ntn_") else {
+            await MainActor.run {
+                errorMessage = "Invalid token \u{2014} Notion API tokens must start with \"ntn_\""
+                isSaving = false
+            }
+            return
         }
 
         do {

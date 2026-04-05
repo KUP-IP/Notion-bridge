@@ -62,6 +62,8 @@ public actor ConnectionRegistry {
             if tunnelConnection.id == id {
                 return tunnelConnection
             }
+        case .generic:
+            break
         }
         throw ConnectionRegistryError.connectionNotFound(id)
     }
@@ -120,6 +122,8 @@ public actor ConnectionRegistry {
             ConfigManager.shared.stripeAPIKey = nil
         case .tunnel:
             throw ConnectionRegistryError.unsupportedAction("Remote access is managed through the Remote Access settings section")
+        case .generic:
+            throw ConnectionRegistryError.unsupportedAction("Generic connections cannot be removed through this interface")
         }
     }
 
@@ -130,7 +134,7 @@ public actor ConnectionRegistry {
             let oldName = try parseName(from: id)
             try await NotionClientRegistry.shared.renameConnection(from: oldName, to: newName)
             await ConnectionHealthChecker.shared.invalidateAll()
-        case .stripe, .tunnel:
+        case .stripe, .tunnel, .generic:
             throw ConnectionRegistryError.unsupportedAction("Renaming is not supported for this connection type")
         }
     }
@@ -142,7 +146,7 @@ public actor ConnectionRegistry {
             let name = try parseName(from: id)
             try await NotionClientRegistry.shared.setPrimary(name: name)
             await ConnectionHealthChecker.shared.invalidateAll()
-        case .stripe, .tunnel:
+        case .stripe, .tunnel, .generic:
             throw ConnectionRegistryError.unsupportedAction("Only workspace connections can be set as primary")
         }
     }

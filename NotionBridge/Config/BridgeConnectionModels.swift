@@ -4,6 +4,7 @@ public enum BridgeConnectionProvider: String, Codable, Sendable, CaseIterable {
     case notion
     case stripe
     case tunnel
+    case generic
 
     public var displayName: String {
         switch self {
@@ -13,6 +14,8 @@ public enum BridgeConnectionProvider: String, Codable, Sendable, CaseIterable {
             return "Stripe"
         case .tunnel:
             return "Tunnel"
+        case .generic:
+            return "Service"
         }
     }
 }
@@ -29,6 +32,7 @@ public enum BridgeConnectionStatus: String, Codable, Sendable, CaseIterable {
     case disconnected
     case notConfigured = "not_configured"
     case checking
+    case invalid
 
     public var label: String {
         switch self {
@@ -41,7 +45,9 @@ public enum BridgeConnectionStatus: String, Codable, Sendable, CaseIterable {
         case .notConfigured:
             return "Not Configured"
         case .checking:
-            return "Checking…"
+            return "Checking\u{2026}"
+        case .invalid:
+            return "Invalid"
         }
     }
 
@@ -57,6 +63,8 @@ public enum BridgeConnectionStatus: String, Codable, Sendable, CaseIterable {
             return "circle.dashed"
         case .checking:
             return "circle.dotted"
+        case .invalid:
+            return "xmark.octagon.fill"
         }
     }
 }
@@ -105,7 +113,7 @@ public struct BridgeConnection: Sendable, Codable, Identifiable {
 
     public static func maskSecret(_ secret: String) -> String {
         let trimmed = secret.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 8 else { return "••••••••" }
-        return "\(trimmed.prefix(4))•••••••\(trimmed.suffix(4))"
+        guard trimmed.count >= 8 else { return "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}" }
+        return "\(trimmed.prefix(4))\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\(trimmed.suffix(4))"
     }
 }
