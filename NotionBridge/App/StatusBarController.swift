@@ -77,6 +77,12 @@ public final class StatusBarController {
     /// Populated from MCP initialize request's clientInfo field.
     public var connectedClients: [ConnectedClient] = []
 
+    /// Pending removal tasks keyed by client name. Cancelled if the client reconnects within the grace period.
+    private var pendingRemovals: [String: Task<Void, Never>] = [:]
+
+    /// Grace period before removing a disconnected client from the UI (seconds).
+    private let removalGracePeriod: UInt64 = 4_000_000_000  // 4s in nanoseconds
+
     /// Formatted uptime string
     public var uptimeString: String {
         guard let start = serverStartTime else { return "Not running" }
@@ -156,6 +162,7 @@ public final class StatusBarController {
         serverStartTime = Date()
         activeToolCount = toolCount
         totalToolCalls = 0
+        cancelAllPendingRemovals()
         connectedClients = []
     }
 
@@ -163,6 +170,7 @@ public final class StatusBarController {
     public func markServerStopped() {
         serverStartTime = nil
         activeConnections = 0
+        cancelAllPendingRemovals()
         connectedClients = []
     }
 
@@ -185,7 +193,12 @@ public final class StatusBarController {
     // MARK: - Client Identification (V1-QUALITY-C2)
 
     /// Add a connected client. Called when MCP initialize request contains clientInfo.
+    /// Cancels any pending debounced removal for this client (suppresses flicker on reconnect).
     public func addClient(name: String, version: String) {
+        // Cancel pending removal if client reconnected within grace period
+        pendingRemovals[name]?.cancel()
+        pendingRemovals.removeValue(forKey: name)
+
         let client = ConnectedClient(name: name, version: version)
         // Replace existing entry with same name (reconnection)
         connectedClients.removeAll { $0.name == name }
@@ -194,11 +207,24 @@ public final class StatusBarController {
         print("[StatusBar] Client connected: \(name) v\(version) (total: \(connectedClients.count))")
     }
 
-    /// Remove a disconnected client by name.
+    /// Schedule removal of a disconnected client after a grace period.
+    /// If the client reconnects before the grace period expires, removal is cancelled.
     public func removeClient(name: String) {
-        connectedClients.removeAll { $0.name == name }
-        activeConnections = connectedClients.count
-        print("[StatusBar] Client disconnected: \(name) (remaining: \(connectedClients.count))")
+        // Cancel any existing pending removal for this client
+        pendingRemovals[name]?.cancel()
+
+        pendingRemovals[name] = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: self?.removalGracePeriod ?? 4_000_000_000)
+            } catch {
+                return  // Cancelled — client reconnected
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.connectedClients.removeAll { $0.name == name }
+            self.activeConnections = self.connectedClients.count
+            self.pendingRemovals.removeValue(forKey: name)
+            print("[StatusBar] Client disconnected: \(name) (remaining: \(self.connectedClients.count))")
+        }
     }
 
     /// Remove a disconnected client by session ID (best-effort match by index).
@@ -209,5 +235,11 @@ public final class StatusBarController {
             activeConnections = connectedClients.count
             print("[StatusBar] Client disconnected: \(removed.name) (remaining: \(connectedClients.count))")
         }
+    }
+
+    /// Cancel all pending debounced removals.
+    private func cancelAllPendingRemovals() {
+        for (_, task) in pendingRemovals { task.cancel() }
+        pendingRemovals.removeAll()
     }
 }
