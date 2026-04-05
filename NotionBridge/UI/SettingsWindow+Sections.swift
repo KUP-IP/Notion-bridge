@@ -597,61 +597,89 @@ extension SettingsView {
 
 // MARK: - Integrated Tools Content
 
-/// Displays Notion + Stripe integration status rows.
-/// Status derived from whether a valid key exists in Credentials/API Keys.
+/// Displays Notion + Stripe integration status with provider labels,
+/// multi-state indicators, and detail text (masked credential / primary badge).
 private struct IntegratedToolsContent: View {
-    @State private var notionStatus: BridgeConnectionStatus = .notConfigured
-    @State private var stripeStatus: BridgeConnectionStatus = .notConfigured
-    @State private var isLoaded = false
+    @State private var notionConnection: BridgeConnection?
+    @State private var stripeConnection: BridgeConnection?
 
     var body: some View {
         Group {
             integrationRow(
                 icon: "network",
-                provider: "Notion",
-                status: notionStatus
+                provider: "Notion Workspace",
+                connection: notionConnection
             )
             integrationRow(
                 icon: "creditcard",
-                provider: "Stripe",
-                status: stripeStatus
+                provider: "Stripe API",
+                connection: stripeConnection
             )
         }
-        .task { await loadStatus() }
+        .task { await loadConnections() }
     }
 
-    private func integrationRow(icon: String, provider: String, status: BridgeConnectionStatus) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-                .font(.system(size: 16))
-                .foregroundStyle(status == .connected ? .green : .secondary)
-                .frame(width: 24)
-            Spacer()
-            if status == .connected {
-                Image(systemName: "circle.fill")
+    private func integrationRow(icon: String, provider: String, connection: BridgeConnection?) -> some View {
+        let status = connection?.status ?? .notConfigured
+        return LabeledContent {
+            HStack(spacing: 6) {
+                Image(systemName: status.systemImage)
                     .font(.system(size: 8))
-                    .foregroundStyle(.green)
-                    .symbolEffect(.pulse)
-                Text("Connected")
-                    .font(.caption2)
-                    .foregroundStyle(.green)
-            } else {
-                Text("Add key in Credentials")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(statusColor(status))
+                    .symbolEffect(.pulse, isActive: status == .checking)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(status.label)
+                        .font(.caption)
+                        .foregroundStyle(statusColor(status))
+                    if let detail = detailText(for: connection, status: status) {
+                        Text(detail)
+                            .font(.caption2)
+                            .foregroundStyle(BridgeColors.muted)
+                    }
+                }
             }
+        } label: {
+            Label(provider, systemImage: icon)
         }
-        .accessibilityLabel("\(provider): \(status == .connected ? "Connected" : "Not configured")")
+        .accessibilityLabel("\(provider): \(status.label)")
     }
 
-    private func loadStatus() async {
+    private func statusColor(_ status: BridgeConnectionStatus) -> Color {
+        switch status {
+        case .connected: return BridgeColors.success
+        case .warning: return .orange
+        case .disconnected, .invalid: return BridgeColors.error
+        case .notConfigured: return BridgeColors.secondary
+        case .checking: return BridgeColors.secondary
+        }
+    }
+
+    private func detailText(for connection: BridgeConnection?, status: BridgeConnectionStatus) -> String? {
+        guard let connection else {
+            return status == .notConfigured ? "Add key in Credentials" : nil
+        }
+        switch status {
+        case .connected:
+            var parts: [String] = []
+            if let masked = connection.maskedCredential { parts.append(masked) }
+            if connection.isPrimary { parts.append("primary") }
+            return parts.isEmpty ? connection.name : parts.joined(separator: " · ")
+        case .notConfigured:
+            return "Add key in Credentials"
+        case .warning, .disconnected, .invalid:
+            return connection.maskedCredential ?? connection.name
+        case .checking:
+            return nil
+        }
+    }
+
+    private func loadConnections() async {
         do {
             let workspace = try await ConnectionRegistry.shared.listConnections(kind: .workspace, validateLive: false)
             let api = try await ConnectionRegistry.shared.listConnections(kind: .api, validateLive: false)
             await MainActor.run {
-                notionStatus = workspace.contains { $0.provider == .notion && $0.status == .connected } ? .connected : .notConfigured
-                stripeStatus = api.contains { $0.provider == .stripe && $0.status == .connected } ? .connected : .notConfigured
-                isLoaded = true
+                notionConnection = workspace.first { $0.provider == .notion }
+                stripeConnection = api.first { $0.provider == .stripe }
             }
         } catch {
             // Silently handle — indicators stay as not configured
