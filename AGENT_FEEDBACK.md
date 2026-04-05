@@ -305,3 +305,84 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 **Description:** `file_search` parameter naming mismatch: tool expects `query` + `directory` but the input schema also lists `pattern` and `maxResults` as valid parameters. Passing `{directory: "...", pattern: "*.md", maxResults: 10}` returns error "missing 'directory' or 'query'". The `query` parameter name is not intuitive for file glob patterns.
 **Context:** Phase 7 tool validation — attempting to search for .md files in project root.
 **Suggested Fix:** Either accept `pattern` as an alias for `query`, or update the input schema description to clarify that `query` is the substring search parameter.
+
+### 2026-04-04 | Agent: MAC Keepr | Session: remediation-sprint-v1.8.0-b (Notion AI)
+
+**Category:** Friction
+**Tool:** MCP Transport (all tools)
+**Severity:** High
+**Description:** ~40% of Bridge MCP tool calls fail with "Failed to connect to MCP server" throughout multi-hour session (continued from prior session). Failures are random, affect all tools equally, and succeed on retry. `make install` and `make dmg` consistently timeout at MCP's transport limit (~30s) due to notarization taking 35-40s. Workaround: break `make install` into sequential stages (build → sign → notarize → install) and create DMG manually from pre-notarized app bundle.
+**Context:** Executing 4 sequential sprints: open-loop remediation, settings UI changes, debounce fix, and production deployment. Each sprint completed successfully despite intermittent failures.
+**Suggested Fix:** 1. Increase MCP transport timeout for long-running operations (current ~30s limit is too short for notarization). 2. Consider a `shell_exec_async` tool variant that returns a job ID for polling, enabling long-running commands without transport timeouts.
+
+---
+
+**Category:** Enhancement
+**Tool:** shell_exec
+**Severity:** Medium
+**Description:** `shell_exec` `timeout` parameter is accepted but the MCP transport itself has a hard ~30s limit that overrides any tool-level timeout. Passing `timeout: 180` does not prevent transport-level timeouts. The parameter creates a false expectation that long operations will be supported.
+**Context:** `make install` and `make dmg` both exceed the transport limit during Apple notarization (35-40s).
+**Suggested Fix:** Either honor the tool-level timeout at the transport layer, or document the hard transport limit clearly in the tool description so agents can plan around it.
+
+---
+
+**Category:** Friction
+**Tool:** notion_query
+**Severity:** Low
+**Description:** `notion_query` parameter naming is `dataSourceId` (camelCase) but first attempt with `data_source_id` (snake_case) returned "missing 'dataSourceId'" error. The tool description/schema should clarify the exact parameter name format.
+**Context:** Phase 0.5 DB preflight during sk close-agent execution.
+**Suggested Fix:** Accept both camelCase and snake_case parameter names, or prominently document the exact format in the tool's input schema.
+
+### 2026-04-05 | Agent: MAC Keepr | Session: paid-ad-sprint-infra (Notion AI)
+
+**Category:** Friction
+**Tool:** MCP Transport (all tools)
+**Severity:** High
+**Description:** ~50% of Bridge MCP tool calls fail with "Failed to connect to MCP server" throughout multi-hour session. Consistent with prior sessions (2026-04-04). Failures are random, affect all tools equally, and succeed on retry. No correlation with tool type or payload size. NotionBridge process healthy throughout.
+**Context:** Executing paid ad infrastructure sprint — Reddit/X account setup, billing, pixel installation, and ad platform configuration via Chrome automation.
+**Suggested Fix:** Same as prior entries — Notion AI MCP client SSE connection pooling/reconnect issue. Auto-retry with backoff needed on platform side.
+
+---
+
+**Category:** Friction
+**Tool:** applescript_exec
+**Severity:** Low
+**Description:** Tool name is `applescript_exec` but agent initially tried `applescript` (without `_exec` suffix), causing "tool not found" error. Tool naming convention is inconsistent — most tools use bare names (e.g., `shell_exec`, `file_read`) but the AppleScript tool requires the `_exec` suffix.
+**Context:** First AppleScript invocation of the session to make Chrome full screen.
+**Suggested Fix:** Register `applescript` as an alias for `applescript_exec`, or rename to just `applescript` for consistency.
+
+---
+
+**Category:** Friction
+**Tool:** chrome_execute_js
+**Severity:** Low
+**Description:** Parameter name is `javascript` but agent initially used `code`, causing silent failure (empty return). No error message indicating wrong parameter name.
+**Context:** Executing JavaScript in Chrome to interact with X Ads billing form.
+**Suggested Fix:** Accept `code` as an alias for `javascript`, or return a clear error when required parameter `javascript` is missing.
+
+---
+
+**Category:** Friction
+**Tool:** ax_find_element
+**Severity:** Medium
+**Description:** `ax_find_element` cannot discover elements inside Stripe payment iframes (cross-origin). Search for AXPopUpButton returned 16 matches — all Chrome toolbar elements, none from the Stripe iframe. Stripe iframe elements are invisible to the macOS accessibility tree, making programmatic interaction with dropdowns and inputs inside Stripe forms extremely difficult.
+**Context:** Trying to change the State dropdown from "South Carolina" to "South Dakota" inside a Stripe billing iframe on X Ads. All approaches failed: typing, click+arrow, Tab+arrow, double-click, ax_find_element, ax_perform_action.
+**Suggested Fix:** Document that cross-origin iframe contents are not accessible via AX tools. For Stripe-style iframes, recommend chrome_execute_js with frame targeting as the only viable approach (though cross-origin restrictions may block this too).
+
+---
+
+**Category:** Friction
+**Tool:** screen_ocr + applescript_exec (coordinate systems)
+**Severity:** Medium
+**Description:** screen_ocr returns coordinates with bottom-left origin (y=0 at bottom), while AppleScript click commands use top-left origin (y=0 at top). Agent had to manually convert: `screen_y = (1 - y_ocr) * screen_height`. No documentation warns about this mismatch. Multiple click attempts landed on wrong elements before the conversion formula was discovered.
+**Context:** Using OCR to locate form fields and buttons on Reddit/X billing pages, then clicking via AppleScript.
+**Suggested Fix:** Either normalize OCR output to top-left origin (matching AppleScript/screen conventions), or add a conversion helper tool, or prominently document the coordinate system difference in tool descriptions.
+
+---
+
+**Category:** Bug
+**Tool:** chrome_execute_js (Stripe iframe interaction)
+**Severity:** High
+**Description:** Card number entry into Stripe payment iframe produced inconsistent results. Typing full 16-digit card number via AppleScript keystroke resulted in digits splitting across Card Number, Expiration, and CVC fields — Stripe's auto-advance behavior moved focus to the next field mid-entry. Multiple retry approaches (click to refocus, clear and retype, JS-based entry) all failed to produce a clean 16-digit entry. Final state: card number shows partial digits, expiration shows wrong values, CVC empty.
+**Context:** Entering payment card details (4031631605063293, exp 02/31, CVV 796) into X Ads Stripe billing form.
+**Suggested Fix:** For Stripe card entry, recommend: 1) Type digits in small batches (4 at a time) with delays between batches to allow Stripe's formatting to settle. 2) Use Stripe.js API directly if possible. 3) Consider a dedicated `form_fill` tool that understands auto-advancing fields.
