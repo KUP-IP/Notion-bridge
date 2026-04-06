@@ -24,13 +24,20 @@ struct SkillsView: View {
 
     @State private var newSkillName: String = ""
     @State private var newSkillPageId: String = ""
+    @State private var newSkillURL: String = ""
     @State private var newSkillVisibility: SkillVisibility = .standard
+    @State private var detectedPlatform: SkillPlatform = .manual
     @State private var addError: String?
     @State private var urlValidationError: String?
 
     // PKT-487: Inline URL editing state
     @State private var editingSkillName: String?
     @State private var editingURL: String = ""
+
+    // BUG-2 fix: Inline skill name rename state
+    @State private var renamingSkillName: String?
+    @State private var renameText: String = ""
+    @State private var renameError: String?
 
     var body: some View {
         Form {
@@ -106,9 +113,31 @@ struct SkillsView: View {
             Section {
                 TextField("Skill Name", text: $newSkillName)
                     .textFieldStyle(.roundedBorder)
-                TextField("Notion Page ID or URL", text: $newSkillPageId)
+                // V2-SKILLS: URL field with auto-detect
+                TextField("URL (Notion, Google Docs, etc.)", text: $newSkillURL)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
+                    .onChange(of: newSkillURL) { _, newValue in
+                        autoDetectFromURL(newValue)
+                    }
+                // V2-SKILLS: UUID field (auto-populated from URL or manual entry)
+                HStack {
+                    TextField("UUID / Page ID", text: $newSkillPageId)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                    // Platform badge (read-only, auto-detected)
+                    HStack(spacing: 3) {
+                        Image(systemName: detectedPlatform.systemImage)
+                            .font(.caption2)
+                        Text(detectedPlatform.displayName)
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                }
                 Picker("Visibility", selection: $newSkillVisibility) {
                     Text("Standard (fetch only)").tag(SkillVisibility.standard)
                     Text("Routing (discovery list)").tag(SkillVisibility.routing)
@@ -136,7 +165,7 @@ struct SkillsView: View {
                     Text("Routing — The skill is listed by list_routing_skills so agents can discover it by name without downloading the full page first.")
                     Divider()
                         .padding(.vertical, 4)
-                    Text("Skills are Notion pages. Add the page URL or ID above; routing vs standard only affects how MCP clients discover the skill, not Notion sharing.")
+                    Text("Skills are documents from any connected platform (Notion, Google Docs, etc.). Add the URL above to auto-detect the platform, or enter a UUID manually. Routing vs standard only affects how MCP clients discover the skill.")
                         .foregroundStyle(.secondary)
                 }
                 .font(.caption2)
@@ -166,22 +195,48 @@ struct SkillsView: View {
             .labelsHidden()
 
             VStack(alignment: .leading, spacing: 2) {
-                // PKT-487 F1: Clickable skill name — opens Notion page URL in browser
-                Button {
-                    openSkillURL(skill.notionPageId)
-                } label: {
+                // BUG-2 fix + PKT-487 F1: Click to open URL, double-click to rename
+                if renamingSkillName == skill.name {
+                    VStack(alignment: .leading, spacing: 2) {
+                        TextField("Skill Name", text: $renameText)
+                            .font(.callout)
+                            .fontWeight(.medium)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                commitRename(for: skill.name)
+                            }
+                            .onExitCommand {
+                                renamingSkillName = nil
+                                renameError = nil
+                            }
+                        if let renameError {
+                            Text(renameError)
+                                .font(.caption2)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                    .frame(maxWidth: 200)
+                } else {
                     Text(skill.name)
                         .fontWeight(.medium)
                         .foregroundStyle(.primary)
-                        .underline(false)
-                }
-                .buttonStyle(.plain)
-                .onHover { hovering in
-                    if hovering {
-                        NSCursor.pointingHand.push()
-                    } else {
-                        NSCursor.pop()
-                    }
+                        .onTapGesture {
+                            openSkillURL(skill.url ?? skill.notionPageId)
+                        }
+                        .onTapGesture(count: 2) {
+                            commitPendingEdit()
+                            renameError = nil
+                            renamingSkillName = skill.name
+                            renameText = skill.name
+                        }
+                        .onHover { hovering in
+                            if hovering {
+                                NSCursor.pointingHand.push()
+                            } else {
+                                NSCursor.pop()
+                            }
+                        }
+                        .help("Click to open in browser. Double-click to rename.")
                 }
 
                 // PKT-487 F2: Inline URL edit — tap to edit, save on Enter/focus loss
@@ -222,6 +277,19 @@ struct SkillsView: View {
                         .lineLimit(2)
                 }
             }
+
+            // V2-SKILLS: Platform badge
+            HStack(spacing: 3) {
+                Image(systemName: skill.platform.systemImage)
+                    .font(.caption2)
+                Text(skill.platform.displayName)
+                    .font(.caption2)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.secondary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 4))
 
             Picker("", selection: Binding(
                 get: { skill.visibility },
@@ -283,8 +351,9 @@ struct SkillsView: View {
         if urlString.hasPrefix("http://") || urlString.hasPrefix("https://") {
             candidate = urlString
         } else if !urlString.isEmpty {
-            // Treat bare page IDs as Notion URLs
-            candidate = "https://www.notion.so/\(urlString)"
+            // BUG-3 fix: Strip dashes from stored UUID — Notion URLs require 32 hex digits without dashes
+            let hex = urlString.replacingOccurrences(of: "-", with: "")
+            candidate = "https://www.notion.so/\(hex)"
         } else {
             return
         }
@@ -292,10 +361,30 @@ struct SkillsView: View {
         NSWorkspace.shared.open(url)
     }
 
+    /// BUG-2 fix: Commit the current inline rename, if any.
+    private func commitRename(for skillName: String) {
+        let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            renameError = "Name cannot be empty."
+            return
+        }
+        let success = skillsManager.renameSkill(named: skillName, to: trimmed)
+        if success {
+            renamingSkillName = nil
+            renameError = nil
+        } else {
+            renameError = "A skill with this name already exists."
+        }
+    }
+
     /// Commit the current inline URL edit, if any.
     private func commitPendingEdit() {
         if let name = editingSkillName {
             commitURLEdit(for: name)
+        }
+        // Also commit pending rename
+        if let name = renamingSkillName {
+            commitRename(for: name)
         }
     }
 
@@ -314,23 +403,73 @@ struct SkillsView: View {
 
     // MARK: - Add Skill
 
+    // V2-SKILLS: Auto-detect platform and populate UUID from URL
+    private func autoDetectFromURL(_ urlString: String) {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            detectedPlatform = .manual
+            return
+        }
+        switch SkillURLParser.parse(url: trimmed) {
+        case .success(let parsed):
+            newSkillPageId = parsed.uuid
+            detectedPlatform = parsed.platform
+            addError = nil
+        case .failure:
+            // Don't clear pageId — user may enter UUID manually
+            detectedPlatform = SkillURLParser.detectPlatform(from: trimmed)
+        }
+    }
+
     private func addSkill() {
         addError = nil
         let name = newSkillName.trimmingCharacters(in: .whitespacesAndNewlines)
         let pageId = newSkillPageId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let urlValue = newSkillURL.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        switch NotionPageRef.normalizedPageId(from: pageId) {
-        case .failure(let err):
-            addError = err.message
-        case .success(let normalized):
-            let success = skillsManager.addSkill(name: name, notionPageId: normalized, visibility: newSkillVisibility)
+        // Determine platform: if URL was provided and parsed, use detected; else try Notion default
+        let platform = detectedPlatform != .manual ? detectedPlatform : .notion
+        let storedURL: String? = urlValue.isEmpty ? nil : urlValue
+
+        // For Notion platform, validate UUID via NotionPageRef
+        if platform == .notion {
+            switch NotionPageRef.normalizedPageId(from: pageId) {
+            case .failure(let err):
+                addError = err.message
+                return
+            case .success(let normalized):
+                let success = skillsManager.addSkill(name: name, notionPageId: normalized, visibility: newSkillVisibility)
+                if success {
+                    // Update url/platform on the just-added skill
+                    if storedURL != nil || platform != .notion {
+                        skillsManager.updateSkillExtras(named: name, url: storedURL, platform: platform)
+                    }
+                    resetAddForm()
+                } else {
+                    addError = "A skill with this name already exists."
+                }
+            }
+        } else {
+            // Non-Notion platforms: store UUID as-is
+            guard !pageId.isEmpty else {
+                addError = "UUID is required."
+                return
+            }
+            let success = skillsManager.addSkill(name: name, notionPageId: pageId, visibility: newSkillVisibility)
             if success {
-                newSkillName = ""
-                newSkillPageId = ""
-                newSkillVisibility = .standard
+                skillsManager.updateSkillExtras(named: name, url: storedURL, platform: platform)
+                resetAddForm()
             } else {
                 addError = "A skill with this name already exists."
             }
         }
+    }
+
+    private func resetAddForm() {
+        newSkillName = ""
+        newSkillPageId = ""
+        newSkillURL = ""
+        newSkillVisibility = .standard
+        detectedPlatform = .manual
     }
 }

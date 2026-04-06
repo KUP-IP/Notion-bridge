@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 public enum ConnectionRegistryError: Error, LocalizedError {
     case invalidConnectionId(String)
@@ -150,7 +151,16 @@ public actor ConnectionRegistry {
             await ConnectionHealthChecker.shared.invalidate(connectionName: name)
         case .stripe:
             _ = KeychainManager.shared.delete(key: KeychainManager.Key.stripeAPIKey)
+            // BUG-1 fix: Also delete legacy keychain entry (pre-KeychainManager migration)
+            // and clear ConfigManager fallback to prevent stale-key false-positive in health check.
+            let legacyDeleteQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: KeychainManager.Key.stripeAPIKey
+            ]
+            SecItemDelete(legacyDeleteQuery as CFDictionary)
             ConfigManager.shared.stripeAPIKey = nil
+            // Reset StripeMcpProxy cached session so tools/list reflects removal
+            await StripeMcpProxy.shared.reset()
         case .tunnel:
             throw ConnectionRegistryError.unsupportedAction("Remote access is managed through the Remote Access settings section")
         case .generic:

@@ -361,10 +361,14 @@ public enum SkillsModule {
                     let items: [Value] = skills.map { skill in
                         var row: [String: Value] = [
                             "name": .string(skill.name),
-                            "url": .string(skill.notionPageId),
+                            "uuid": .string(skill.notionPageId),
                             "enabled": .bool(skill.enabled),
-                            "visibility": .string(skill.visibility.rawValue)
+                            "visibility": .string(skill.visibility.rawValue),
+                            "platform": .string(skill.platform.rawValue)
                         ]
+                        if let skillUrl = skill.url {
+                            row["url"] = .string(skillUrl)
+                        }
                         row.merge(Self.mcpMetadataObject(skill)) { _, new in new }
                         return .object(row)
                     }
@@ -382,22 +386,41 @@ public enum SkillsModule {
                         )
                     }
                     let vis = parseVisibilityArg(args) ?? .standard
-                    switch NotionPageRef.normalizedPageId(from: url) {
-                    case .failure(let err):
-                        return .object([
-                            "success": .bool(false),
-                            "action": .string("add"),
-                            "name": .string(name),
-                            "message": .string(err.message)
-                        ])
-                    case .success(let normalized):
-                        let success = writeAddSkill(name: name, pageId: normalized, visibility: vis)
+                    // V2-SKILLS: Try SkillURLParser first for multi-platform support
+                    let parseResult = SkillURLParser.parse(url: url)
+                    switch parseResult {
+                    case .success(let parsed):
+                        let success = writeAddSkill(
+                            name: name, pageId: parsed.uuid, visibility: vis,
+                            url: parsed.originalURL, platform: parsed.platform
+                        )
                         return .object([
                             "success": .bool(success),
                             "action": .string("add"),
                             "name": .string(name),
-                            "message": .string(success ? "Skill '\(name)' added." : "Failed — name may be empty or duplicate.")
+                            "platform": .string(parsed.platform.rawValue),
+                            "message": .string(success ? "Skill '\(name)' added (\(parsed.platform.displayName))." : "Failed — name may be empty or duplicate.")
                         ])
+                    case .failure:
+                        // Fallback: treat as Notion page ID/URL via NotionPageRef
+                        switch NotionPageRef.normalizedPageId(from: url) {
+                        case .failure(let err):
+                            return .object([
+                                "success": .bool(false),
+                                "action": .string("add"),
+                                "name": .string(name),
+                                "message": .string(err.message)
+                            ])
+                        case .success(let normalized):
+                            let success = writeAddSkill(name: name, pageId: normalized, visibility: vis, platform: .notion)
+                            return .object([
+                                "success": .bool(success),
+                                "action": .string("add"),
+                                "name": .string(name),
+                                "platform": .string("notion"),
+                                "message": .string(success ? "Skill '\(name)' added." : "Failed — name may be empty or duplicate.")
+                            ])
+                        }
                     }
 
                 case "delete":
@@ -577,7 +600,9 @@ public enum SkillsModule {
                         visibility: cur.visibility,
                         summary: newSummary,
                         triggerPhrases: newTrig,
-                        antiTriggerPhrases: newAnti
+                        antiTriggerPhrases: newAnti,
+                        url: cur.url,
+                        platform: cur.platform
                     )
                     writeSkills(skills)
                     await skillCache.clear()
@@ -707,7 +732,9 @@ public enum SkillsModule {
                             visibility: cur.visibility,
                             summary: newSummary,
                             triggerPhrases: trig,
-                            antiTriggerPhrases: anti
+                            antiTriggerPhrases: anti,
+                            url: cur.url,
+                            platform: cur.platform
                         )
                         writeSkills(skills)
                         await skillCache.clear()
@@ -760,7 +787,7 @@ public enum SkillsModule {
     }
 
     /// Add a skill via UserDefaults. Returns true on success.
-    private static func writeAddSkill(name: String, pageId: String, visibility: SkillVisibility = .standard) -> Bool {
+    private static func writeAddSkill(name: String, pageId: String, visibility: SkillVisibility = .standard, url: String? = nil, platform: SkillPlatform = .notion) -> Bool {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         var skills = readAllSkills()
@@ -772,7 +799,9 @@ public enum SkillsModule {
             visibility: visibility,
             summary: "",
             triggerPhrases: [],
-            antiTriggerPhrases: []
+            antiTriggerPhrases: [],
+            url: url,
+            platform: platform
         ))
         writeSkills(skills)
         return true
@@ -800,7 +829,9 @@ public enum SkillsModule {
                 visibility: visibility,
                 summary: s.summary,
                 triggerPhrases: s.triggerPhrases,
-                antiTriggerPhrases: s.antiTriggerPhrases
+                antiTriggerPhrases: s.antiTriggerPhrases,
+                url: s.url,
+                platform: s.platform
             )
             writeSkills(skills)
             return true
@@ -830,7 +861,9 @@ public enum SkillsModule {
                 visibility: s.visibility,
                 summary: s.summary,
                 triggerPhrases: s.triggerPhrases,
-                antiTriggerPhrases: s.antiTriggerPhrases
+                antiTriggerPhrases: s.antiTriggerPhrases,
+                url: s.url,
+                platform: s.platform
             )
             let newState = skills[idx].enabled
             writeSkills(skills)
@@ -854,7 +887,9 @@ public enum SkillsModule {
                 visibility: s.visibility,
                 summary: s.summary,
                 triggerPhrases: s.triggerPhrases,
-                antiTriggerPhrases: s.antiTriggerPhrases
+                antiTriggerPhrases: s.antiTriggerPhrases,
+                url: s.url,
+                platform: s.platform
             )
             writeSkills(skills)
             return true
@@ -874,7 +909,9 @@ public enum SkillsModule {
                 visibility: s.visibility,
                 summary: s.summary,
                 triggerPhrases: s.triggerPhrases,
-                antiTriggerPhrases: s.antiTriggerPhrases
+                antiTriggerPhrases: s.antiTriggerPhrases,
+                url: s.url,
+                platform: s.platform
             )
             writeSkills(skills)
             return true
@@ -937,9 +974,13 @@ public enum SkillsModule {
         let summary: String
         let triggerPhrases: [String]
         let antiTriggerPhrases: [String]
+        /// V2-SKILLS: Original URL for click-to-open.
+        let url: String?
+        /// V2-SKILLS: Auto-detected platform. Defaults to .notion for backward compat.
+        let platform: SkillPlatform
 
         enum CodingKeys: String, CodingKey {
-            case name, notionPageId, enabled, visibility, summary, triggerPhrases, antiTriggerPhrases
+            case name, notionPageId, enabled, visibility, summary, triggerPhrases, antiTriggerPhrases, url, platform
         }
 
         init(
@@ -949,7 +990,9 @@ public enum SkillsModule {
             visibility: SkillVisibility = .standard,
             summary: String = "",
             triggerPhrases: [String] = [],
-            antiTriggerPhrases: [String] = []
+            antiTriggerPhrases: [String] = [],
+            url: String? = nil,
+            platform: SkillPlatform = .notion
         ) {
             self.name = name
             self.notionPageId = notionPageId
@@ -958,6 +1001,8 @@ public enum SkillsModule {
             self.summary = SkillMetadataLimits.clampedSummary(summary)
             self.triggerPhrases = SkillMetadataLimits.clampedPhraseList(triggerPhrases)
             self.antiTriggerPhrases = SkillMetadataLimits.clampedPhraseList(antiTriggerPhrases)
+            self.url = url
+            self.platform = platform
         }
 
         init(from decoder: Decoder) throws {
@@ -972,6 +1017,9 @@ public enum SkillsModule {
             summary = SkillMetadataLimits.clampedSummary(rawSummary)
             triggerPhrases = SkillMetadataLimits.clampedPhraseList(rawTriggers)
             antiTriggerPhrases = SkillMetadataLimits.clampedPhraseList(rawAnti)
+            // V2-SKILLS: Backward-compat — existing skills default to .notion, no URL
+            url = try c.decodeIfPresent(String.self, forKey: .url)
+            platform = try c.decodeIfPresent(SkillPlatform.self, forKey: .platform) ?? .notion
         }
 
         func encode(to encoder: Encoder) throws {
@@ -983,6 +1031,8 @@ public enum SkillsModule {
             try c.encode(summary, forKey: .summary)
             try c.encode(triggerPhrases, forKey: .triggerPhrases)
             try c.encode(antiTriggerPhrases, forKey: .antiTriggerPhrases)
+            try c.encodeIfPresent(url, forKey: .url)
+            try c.encode(platform, forKey: .platform)
         }
 
         /// Stable token for `fetch_skill` cache invalidation when metadata changes.
@@ -1009,6 +1059,10 @@ public enum SkillsModule {
         var row = mcpMetadataObject(s)
         row["name"] = .string(s.name)
         row["notionPageId"] = .string(s.notionPageId)
+        row["platform"] = .string(s.platform.rawValue)
+        if let url = s.url {
+            row["url"] = .string(url)
+        }
         return row
     }
 

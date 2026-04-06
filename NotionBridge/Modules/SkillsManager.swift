@@ -85,9 +85,13 @@ public final class SkillsManager {
         public var summary: String
         public var triggerPhrases: [String]
         public var antiTriggerPhrases: [String]
+        /// V2-SKILLS: Original URL for click-to-open in browser. Optional.
+        public var url: String?
+        /// V2-SKILLS: Auto-detected platform from URL. Defaults to .notion for backward compat.
+        public var platform: SkillPlatform
 
         enum CodingKeys: String, CodingKey {
-            case name, notionPageId, enabled, visibility, summary, triggerPhrases, antiTriggerPhrases
+            case name, notionPageId, enabled, visibility, summary, triggerPhrases, antiTriggerPhrases, url, platform
         }
 
         public init(
@@ -97,7 +101,9 @@ public final class SkillsManager {
             visibility: SkillVisibility = .standard,
             summary: String = "",
             triggerPhrases: [String] = [],
-            antiTriggerPhrases: [String] = []
+            antiTriggerPhrases: [String] = [],
+            url: String? = nil,
+            platform: SkillPlatform = .notion
         ) {
             self.name = name
             self.notionPageId = notionPageId
@@ -106,6 +112,8 @@ public final class SkillsManager {
             self.summary = SkillMetadataLimits.clampedSummary(summary)
             self.triggerPhrases = SkillMetadataLimits.clampedPhraseList(triggerPhrases)
             self.antiTriggerPhrases = SkillMetadataLimits.clampedPhraseList(antiTriggerPhrases)
+            self.url = url
+            self.platform = platform
         }
 
         public init(from decoder: Decoder) throws {
@@ -120,6 +128,9 @@ public final class SkillsManager {
             summary = SkillMetadataLimits.clampedSummary(rawSummary)
             triggerPhrases = SkillMetadataLimits.clampedPhraseList(rawTriggers)
             antiTriggerPhrases = SkillMetadataLimits.clampedPhraseList(rawAnti)
+            // V2-SKILLS: Backward-compat — existing skills default to .notion, no URL
+            url = try c.decodeIfPresent(String.self, forKey: .url)
+            platform = try c.decodeIfPresent(SkillPlatform.self, forKey: .platform) ?? .notion
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -131,6 +142,8 @@ public final class SkillsManager {
             try c.encode(summary, forKey: .summary)
             try c.encode(triggerPhrases, forKey: .triggerPhrases)
             try c.encode(antiTriggerPhrases, forKey: .antiTriggerPhrases)
+            try c.encodeIfPresent(url, forKey: .url)
+            try c.encode(platform, forKey: .platform)
         }
     }
 
@@ -249,7 +262,19 @@ public final class SkillsManager {
         return false
     }
 
-    /// Update a skill's Notion page ID. Returns false if not found.
+    /// V2-SKILLS: Update url and platform fields on an existing skill.
+    @discardableResult
+    public func updateSkillExtras(named name: String, url: String?, platform: SkillPlatform) -> Bool {
+        if let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
+            skills[idx].url = url
+            skills[idx].platform = platform
+            save()
+            return true
+        }
+        return false
+    }
+
+        /// Update a skill's Notion page ID. Returns false if not found.
     @discardableResult
     public func updateSkillURL(named name: String, newPageId: String) -> Bool {
         if let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
