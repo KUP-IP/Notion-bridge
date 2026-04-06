@@ -92,6 +92,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        // PKT-431: Force revalidation on every appcast fetch to prevent stale NSURLSession cache.
+        updaterController.updater.httpHeaders = ["Cache-Control": "no-cache"]
         super.init()
     }
 

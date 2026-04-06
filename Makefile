@@ -25,6 +25,7 @@ APPCAST_ARCHIVES_DIR = $(BUILD_DIR)/sparkle-updates
 RELEASE_TAG    ?= v$(VERSION)
 APPCAST_FEED_URL ?= https://raw.githubusercontent.com/KUP-IP/Notion-bridge/main/appcast.xml
 APPCAST_LINK   ?= https://github.com/KUP-IP/Notion-bridge/releases
+SUFeedURL              = https://raw.githubusercontent.com/KUP-IP/Notion-bridge/main/appcast.xml
 APPCAST_DOWNLOAD_URL_PREFIX ?= https://github.com/KUP-IP/Notion-bridge/releases/download/$(RELEASE_TAG)/
 SIGNING_ID     ?= Developer ID Application: Isaiah Peters (VP24Z9CS22)
 NOTARIZE_PROFILE ?= notarytool-profile
@@ -37,7 +38,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test app appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps
+.PHONY: debug build test app appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -249,6 +250,18 @@ verify:
 	@echo "✅ Verified"
 
 # ── Sparkle feed (public availability) ─────────────────────────
+check-update-flow:
+	@echo "🔄 Verifying update flow..."
+	@REMOTE_BUILD=$$(curl -s $(SUFeedURL) | grep -o '<sparkle:version>[0-9]*' | head -1 | grep -o '[0-9]*'); \
+	LOCAL_BUILD=$$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' $(INFO_PLIST)); \
+	echo "  Remote appcast build: $$REMOTE_BUILD"; \
+	echo "  Local bundle build:   $$LOCAL_BUILD"; \
+	if [ -n "$$REMOTE_BUILD" ] && [ "$$REMOTE_BUILD" != "$$LOCAL_BUILD" ]; then \
+		echo "  ⚠️  Appcast build ($$REMOTE_BUILD) != local build ($$LOCAL_BUILD)"; \
+	else \
+		echo "  ✅ Build numbers match"; \
+	fi
+
 check-appcast:
 	@chmod +x scripts/check_appcast_version.sh
 	@./scripts/check_appcast_version.sh "$(INFO_PLIST)" "$(APPCAST_PATH)"

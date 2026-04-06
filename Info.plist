@@ -38,5 +38,7 @@
 	<string>https://raw.githubusercontent.com/KUP-IP/Notion-bridge/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>AYjKcJUCz34FoCoeCEc17j7pd3enjqd2ttzDEV6F6fg=</string>
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
 </dict>
 </plist>

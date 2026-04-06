@@ -193,7 +193,7 @@ make install-copy    # or: make install-agent-safe — copy .app to /Application
 make release
 ```
 
-Pre-release manual QA: [docs/pre-ship-qa-checklist.md](docs/pre-ship-qa-checklist.md). Local MCP smoke (app running): `python3 scripts/qa_local_mcp_smoke.py`.
+Sparkle cache-busting is handled at the app level via httpHeaders (PKT-431). Pre-release manual QA: [docs/pre-ship-qa-checklist.md](docs/pre-ship-qa-checklist.md). Local MCP smoke (app running): `python3 scripts/qa_local_mcp_smoke.py`.
 
 ---
 
