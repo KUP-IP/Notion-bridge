@@ -4,7 +4,7 @@
 
 NotionBridge exposes local Mac capabilities and connected services as MCP tools over **Streamable HTTP**, **legacy SSE**, and **stdio**. It is built in Swift 6.2 for macOS 26+ on Apple Silicon and is designed to be always-on, auto-launched, and safe enough for daily operator use.
 
-**76+N tools** (75 module tools + `echo` + **N** Stripe MCP tools when discovery succeeds) · **3 transports** · **3-tier security model** · **Customer-owned Cloudflare Tunnel support**
+**76+N tools** (75 module tools + `echo` + **N** dynamic Stripe MCP tools) · **3 transports** · **3-tier security model** · **Customer-owned Cloudflare Tunnel support**
 
 **Product page:** https://kup.solutions/notion-bridge
 
@@ -44,7 +44,7 @@ NotionBridge currently ships the following module surface:
 | SkillsModule | 3 | `fetch_skill`, `list_routing_skills`, `manage_skill` |
 | ConnectionsModule | 5 | connection inventory, health, validation |
 | BuiltinModule | 1 | `echo` (registered in `ServerManager`, not a Swift `*Module` type) |
-| **Total** | **76+N** | 75 from feature modules + 1 builtin `echo` + **N** dynamic Stripe MCP tools (0 if not configured) |
+| **Total** | **76+N** | 76 static tools + **N** dynamic Stripe MCP tools (currently 26 when configured) |
 
 Core product traits:
 - Native macOS menu-bar app with onboarding, settings, and a status popover

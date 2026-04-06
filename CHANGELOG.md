@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.8.1] — 2026-04-06
+
+### Added
+- **Skills Manager V2** — Platform-agnostic skill engine. Skills keyed on UUID with auto-detected platform routing (Notion, Google Docs). New `SkillURLParser.swift` utility. `manage_skill add` routes through URL parser. `manage_skill list` returns uuid, url, platform per skill. UI: URL field with live auto-detect, platform badge, inline skill rename (double-click). (`e0e09d9`)
+- **Credentials tab restructure** — "API Keys" renamed to "Notion Integrations". New dedicated "Stripe" section with connection state management, validation, and removal. `StripeConnectionSection.swift` + `StripeConnectionSheet.swift`. Add Connection wizard simplified to Notion-only. (`1bbf091`)
+- **MCP auto-routing on connection** — Routing skill index embedded in MCP `initialize` response via `instructions` field. Agents receive skill routing context at handshake time without needing to call `list_routing_skills` first. (`0fe85c8`)
+
+### Fixed
+- **Stripe stale key cleanup** — `ConnectionRegistry.removeConnection(.stripe)` now deletes legacy keychain entry (`SecItemDelete`) and resets `StripeMcpProxy`. No more false-positive green checkmark after key removal.
+- **Skill rename in UI** — Double-click skill name in SkillsView for inline `TextField` rename. Validates non-empty, unique name. Escape cancels.
+- **Skill page open crash** — `openSkillURL` now strips dashes from UUID before constructing `notion.so` URL. No more "Oops" error page.
+- **UI text simplification** — Removed platform-specific language (Notion, Google Docs) from URL field placeholders. Just says "URL". (`339457e`)
+
+### Changed
+- **Skill data model** — `Skill` struct gains `url: String?` and `platform: SkillPlatform`. Backward-compatible decoder defaults existing skills to `.notion` / `nil`. All mutation methods preserve new fields.
+- **README** — Updated tool count (76 static + N dynamic Stripe). Module table refreshed.
+- **AGENT_FEEDBACK.md** — Pruned all resolved entries from v1.8.0 development cycle.
+
 ## [1.8.0] — 2026-04-04
 
 ### Added
