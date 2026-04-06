@@ -136,9 +136,11 @@ public actor ServerManager {
 
         // 4. Build MCP Server — version from Bundle (single source of truth)
         let appVersion = AppVersion.resolved
+        let routingInstructions = SkillsModule.buildRoutingInstructions()
         let server = Server(
             name: "NotionBridge",
             version: appVersion,
+            instructions: routingInstructions,
             capabilities: .init(tools: .init())
         )
         self.server = server

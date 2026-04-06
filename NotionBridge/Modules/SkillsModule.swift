@@ -50,6 +50,34 @@ public enum SkillsModule {
 
     public static let moduleName = "skills"
 
+    // MARK: - Auto-Routing Instructions (injected into MCP initialize response)
+
+    /// Build a compact instructions string containing the routing skill index.
+    /// Called at session creation to embed in the MCP initialize response.
+    public static func buildRoutingInstructions() -> String {
+        let skills = readAllSkills().filter {
+            $0.enabled && $0.visibility == .routing
+                && NotionPageRef.isValidStoredPageId($0.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        guard !skills.isEmpty else {
+            return "NotionBridge MCP server. Call list_routing_skills to discover available skill-based capabilities."
+        }
+        // Build compact JSON routing index
+        var lines: [String] = []
+        for s in skills {
+            var entry = "\(s.name)"
+            if !s.summary.isEmpty { entry += " — \(s.summary)" }
+            if !s.triggerPhrases.isEmpty { entry += " [triggers: \(s.triggerPhrases.joined(separator: ", "))]" }
+            if !s.antiTriggerPhrases.isEmpty { entry += " [avoid: \(s.antiTriggerPhrases.joined(separator: ", "))]" }
+            lines.append(entry)
+        }
+        return """
+        NotionBridge MCP server. \(skills.count) routing skill(s) available:
+        \(lines.joined(separator: "\n"))
+        Use fetch_skill to load full skill content by name. Call list_routing_skills to refresh this index.
+        """
+    }
+
     /// Register the `fetch_skill` tool on the given router.
     public static func register(on router: ToolRouter) async {
 
@@ -245,7 +273,7 @@ public enum SkillsModule {
             name: "list_routing_skills",
             module: moduleName,
             tier: .open,
-            description: "List skills used for automatic routing.",
+            description: "Refresh the skill routing index. The initial index is provided in server instructions at connection time.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),

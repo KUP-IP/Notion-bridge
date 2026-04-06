@@ -363,9 +363,11 @@ public actor SSEServer {
         )
 
         let appVersion = AppVersion.resolved
+        let routingInstructions = SkillsModule.buildRoutingInstructions()
         let server = Server(
             name: "NotionBridgeSSE",
             version: appVersion,
+            instructions: routingInstructions,
             capabilities: .init(tools: .init())
         )
 
@@ -449,10 +451,12 @@ public actor SSEServer {
             }
 
             let legacyVersion = AppVersion.resolved
+            let routingInstructions = SkillsModule.buildRoutingInstructions()
             return buildRPCResponse(id: requestId, result: [
                 "protocolVersion": BridgeConstants.mcpProtocolVersion,
                 "capabilities": ["tools": [:] as [String: Any]] as [String: Any],
-                "serverInfo": ["name": "NotionBridge", "version": legacyVersion] as [String: Any]
+                "serverInfo": ["name": "NotionBridge", "version": legacyVersion] as [String: Any],
+                "instructions": routingInstructions
             ] as [String: Any])
 
         case "notifications/initialized":
