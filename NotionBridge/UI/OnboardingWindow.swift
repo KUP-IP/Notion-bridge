@@ -319,22 +319,14 @@ struct OnboardingView: View {
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            Text("Add an API key for Notion, Stripe, or another service. You can add more connections later in Settings.")
+            Text("Add your Notion API token to get started. You can add more connections later in Settings.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 8)
 
             VStack(alignment: .leading, spacing: 10) {
-                Picker("Provider", selection: $selectedProvider) {
-                    ForEach(AddConnectionProvider.allCases) { provider in
-                        Text(provider.rawValue).tag(provider)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: selectedProvider) { _, _ in
-                    workspaceError = nil
-                }
+
 
                 if let helpURL = selectedProvider.helpURL {
                     Link(destination: helpURL) {
@@ -412,44 +404,20 @@ struct OnboardingView: View {
 
         let trimmedToken = workspaceToken.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // UEP-004: Provider-specific validation
-        switch selectedProvider {
-        case .notion:
-            guard trimmedToken.hasPrefix("ntn_") else {
-                await MainActor.run {
-                    workspaceError = "Invalid token u{2014} must start with ntn_"
-                    isSavingWorkspace = false
-                }
-                return
+        guard trimmedToken.hasPrefix("ntn_") else {
+            await MainActor.run {
+                workspaceError = "Invalid token u{2014} must start with ntn_"
+                isSavingWorkspace = false
             }
-        case .stripe:
-            guard trimmedToken.hasPrefix("sk_") || trimmedToken.hasPrefix("rk_") else {
-                await MainActor.run {
-                    workspaceError = "Invalid key u{2014} must start with sk_ or rk_"
-                    isSavingWorkspace = false
-                }
-                return
-            }
-        case .generic:
-            break
+            return
         }
 
         do {
-            switch selectedProvider {
-            case .notion:
-                _ = try await ConnectionRegistry.shared.configureNotionConnection(
-                    name: workspaceName,
-                    token: workspaceToken,
-                    primary: true
-                )
-            case .stripe:
-                _ = try await ConnectionRegistry.shared.configureStripeAPIKey(workspaceToken)
-            case .generic:
-                _ = try await ConnectionRegistry.shared.configureGenericConnection(
-                    name: workspaceName,
-                    apiKey: workspaceToken
-                )
-            }
+            _ = try await ConnectionRegistry.shared.configureNotionConnection(
+                name: workspaceName,
+                token: workspaceToken,
+                primary: true
+            )
             await MainActor.run {
                 workspaceSaved = true
                 isSavingWorkspace = false

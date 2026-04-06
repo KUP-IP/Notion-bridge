@@ -81,7 +81,7 @@ public struct ConnectionsManagementView: View {
                 Button {
                     showAddSheet = true
                 } label: {
-                    Label("Add Connection", systemImage: "plus.circle")
+                    Label("Add Notion Integration", systemImage: "plus.circle")
                         .font(.callout)
                 }
                 .buttonStyle(.borderless)
@@ -437,48 +437,27 @@ public struct ConnectionsManagementView: View {
 /// UEP-004: Provider-agnostic connection sheet supporting Notion, Stripe, and Generic API keys.
 enum AddConnectionProvider: String, CaseIterable, Identifiable {
     case notion = "Notion"
-    case stripe = "Stripe"
-    case generic = "Other"
 
     var id: String { rawValue }
 
     var namePlaceholder: String {
-        switch self {
-        case .notion: return "Workspace name (e.g. Work, Personal)"
-        case .stripe: return "Connection name (e.g. Payments)"
-        case .generic: return "Connection name"
-        }
+        "Workspace name (e.g. Work, Personal)"
     }
 
     var tokenPlaceholder: String {
-        switch self {
-        case .notion: return "Notion API token (ntn_...)"
-        case .stripe: return "Stripe API key (sk_... or rk_...)"
-        case .generic: return "API key or token"
-        }
+        "Notion API token (ntn_...)"
     }
 
     var helpURL: URL? {
-        switch self {
-        case .notion: return URL(string: "https://www.notion.so/profile/integrations")
-        case .stripe: return URL(string: "https://dashboard.stripe.com/apikeys")
-        case .generic: return nil
-        }
+        URL(string: "https://www.notion.so/profile/integrations")
     }
 
     var helpLabel: String {
-        switch self {
-        case .notion: return "Create an internal integration at notion.so"
-        case .stripe: return "Get your API key from Stripe Dashboard"
-        case .generic: return ""
-        }
+        "Create a Notion integration at notion.so"
     }
 
     var saveButtonLabel: String {
-        switch self {
-        case .notion, .stripe: return "Test & Save"
-        case .generic: return "Save"
-        }
+        "Test & Save"
     }
 }
 
@@ -495,18 +474,10 @@ struct AddWorkspaceConnectionSheet: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("Add Connection")
+            Text("Add Notion Integration")
                 .font(.headline)
 
-            Picker("Provider", selection: $selectedProvider) {
-                ForEach(AddConnectionProvider.allCases) { provider in
-                    Text(provider.rawValue).tag(provider)
-                }
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: selectedProvider) { _, _ in
-                errorMessage = nil
-            }
+            
 
             TextField(selectedProvider.namePlaceholder, text: $connectionName)
                 .textFieldStyle(.roundedBorder)
@@ -514,10 +485,8 @@ struct AddWorkspaceConnectionSheet: View {
             SecureField(selectedProvider.tokenPlaceholder, text: $token)
                 .textFieldStyle(.roundedBorder)
 
-            if selectedProvider == .notion {
-                Toggle("Set as primary workspace", isOn: $makePrimary)
+            Toggle("Set as primary workspace", isOn: $makePrimary)
                     .font(.callout)
-            }
 
             if let errorMessage {
                 Text(errorMessage)
@@ -564,44 +533,20 @@ struct AddWorkspaceConnectionSheet: View {
 
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Provider-specific validation
-        switch selectedProvider {
-        case .notion:
-            guard trimmedToken.hasPrefix("ntn_") else {
-                await MainActor.run {
-                    errorMessage = "Invalid token \u{2014} Notion API tokens must start with \"ntn_\""
-                    isSaving = false
-                }
-                return
+        guard trimmedToken.hasPrefix("ntn_") else {
+            await MainActor.run {
+                errorMessage = "Invalid token \u{2014} Notion API tokens must start with \"ntn_\""
+                isSaving = false
             }
-        case .stripe:
-            guard trimmedToken.hasPrefix("sk_") || trimmedToken.hasPrefix("rk_") else {
-                await MainActor.run {
-                    errorMessage = "Invalid key \u{2014} Stripe API keys must start with \"sk_\" or \"rk_\""
-                    isSaving = false
-                }
-                return
-            }
-        case .generic:
-            break // Non-empty check already handled by button disabled state
+            return
         }
 
         do {
-            switch selectedProvider {
-            case .notion:
-                _ = try await ConnectionRegistry.shared.configureNotionConnection(
-                    name: connectionName,
-                    token: token,
-                    primary: makePrimary
-                )
-            case .stripe:
-                _ = try await ConnectionRegistry.shared.configureStripeAPIKey(token)
-            case .generic:
-                _ = try await ConnectionRegistry.shared.configureGenericConnection(
-                    name: connectionName,
-                    apiKey: token
-                )
-            }
+            _ = try await ConnectionRegistry.shared.configureNotionConnection(
+                name: connectionName,
+                token: token,
+                primary: makePrimary
+            )
             await MainActor.run {
                 onComplete()
                 dismiss()

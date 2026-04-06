@@ -54,19 +54,26 @@ struct CredentialsView: View {
     var body: some View {
         Form {
             // MARK: API Keys
-            Section("API Keys") {
+            Section("Notion Integrations") {
                 ConnectionsManagementView()
             }
 
             // MARK: Setup Instructions
-            Section("Setup Instructions") {
+            Section {
                 Link(destination: URL(string: "https://www.notion.so/profile/integrations")!) {
                     HStack {
                         Image(systemName: "globe")
-                        Text("Create an internal integration at notion.so/profile/integrations")
+                        Text("Create a Notion integration at notion.so/profile/integrations")
                             .font(.caption)
                     }
                 }
+            }
+
+
+
+            // MARK: Stripe
+            Section("Stripe") {
+                StripeConnectionSection()
             }
 
             // MARK: Apple Keychain Credentials
