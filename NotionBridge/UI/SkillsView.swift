@@ -114,7 +114,7 @@ struct SkillsView: View {
                 TextField("Skill Name", text: $newSkillName)
                     .textFieldStyle(.roundedBorder)
                 // V2-SKILLS: URL field with auto-detect
-                TextField("URL (Notion, Google Docs, etc.)", text: $newSkillURL)
+                TextField("URL", text: $newSkillURL)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
                     .onChange(of: newSkillURL) { _, newValue in
@@ -165,7 +165,7 @@ struct SkillsView: View {
                     Text("Routing — The skill is listed by list_routing_skills so agents can discover it by name without downloading the full page first.")
                     Divider()
                         .padding(.vertical, 4)
-                    Text("Skills are documents from any connected platform (Notion, Google Docs, etc.). Add the URL above to auto-detect the platform, or enter a UUID manually. Routing vs standard only affects how MCP clients discover the skill.")
+                    Text("Skills are documents loaded at runtime via the fetch_skill MCP tool. Add the URL above to auto-detect the platform, or enter a UUID manually. Routing vs standard only affects how MCP clients discover the skill.")
                         .foregroundStyle(.secondary)
                 }
                 .font(.caption2)
@@ -242,7 +242,7 @@ struct SkillsView: View {
                 // PKT-487 F2: Inline URL edit — tap to edit, save on Enter/focus loss
                 if editingSkillName == skill.name {
                     VStack(alignment: .leading, spacing: 4) {
-                        TextField("Notion Page URL", text: $editingURL)
+                        TextField("URL", text: $editingURL)
                             .font(.caption)
                             .textFieldStyle(.roundedBorder)
                             .onSubmit {
