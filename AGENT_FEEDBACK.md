@@ -413,3 +413,55 @@ _No entries yet. First entry will be appended by sk close-agent Phase 1.5._
 **Description:** `git add` silently refuses to stage files matching .gitignore patterns (even for modifications to already-tracked files). Required `git add -f` for .cursor/rules after .cursor/ was added to .gitignore. Error message was helpful but required an extra round-trip.  
 **Context:** Staging security remediation changes that included edits to .cursor/rules (now in .gitignore).  
 **Suggested Fix:** None — this is standard git behavior. Document as a known pattern for agents doing git operations on files that transition into .gitignore coverage.
+
+### 2026-04-06 — MAC Keepr Session: kup.solutions v2.1 Website Redesign
+
+**Session ID:** notion-13 (Notion AI agent conversation)
+**Skills:** close-agent, web-dev, Keepr
+**Duration:** ~4 hours across 4 sprints
+
+#### Bugs / Friction
+
+1. **`fetch_skill` parameter name mismatch**
+   - Tool: `fetch_skill`
+   - Called with `{"skillId": "close-agent"}` → Error: `"fetch_skill: missing required 'name' parameter"`
+   - Fix: Parameter is `name`, not `skillId`. Documentation or tool description should clarify.
+
+2. **`notion_get_page` does not exist**
+   - Tool: `notion_get_page` (non-existent)
+   - Error: `"Tool 'notion_get_page' does not exist on this MCP server"`
+   - Available alternatives: `notion_page_read`, `notion_page_markdown_read`
+   - Suggestion: Add alias or improve tool naming discoverability.
+
+3. **`notion_query` parameter name mismatch**
+   - Tool: `notion_query`
+   - Called with `{"databaseId": "..."}` → Error: `"notion_query: missing 'dataSourceId'"`
+   - Fix: Parameter is `dataSourceId`, not `databaseId`. Confusing when skill specs reference database_id.
+
+4. **`file_write` parameter name mismatch**
+   - Tool: `file_write`
+   - Called with `{"file_path": "...", "content": "..."}` → Error: `"file_write: missing 'path' or 'content'"`
+   - Fix: Parameter is `path`, not `file_path`.
+
+5. **MCP connection failures on parallel calls**
+   - Multiple instances of `"Failed to connect to MCP server"` when 2+ MCP calls were made simultaneously.
+   - Workaround: Sequential retries succeed. Consider connection pooling or documenting concurrency limits.
+
+6. **`shell_exec` long-running commands killed (SIGTERM)**
+   - Tool: `shell_exec`
+   - `sleep 60` killed after ~31s with exit code 15 (SIGTERM).
+   - Implication: Commands with >30s runtime may be terminated. Document timeout limits.
+
+7. **`chrome_execute_js` returns void for multi-statement JS**
+   - Tool: `chrome_execute_js`
+   - Multi-statement scripts return undefined/void.
+   - Workaround: Wrap in IIFE `(function(){ ... return result; })()`.
+   - Suggestion: Document IIFE requirement or auto-wrap.
+
+#### Enhancement Ideas
+
+- `fetch_skill` should accept both `name` and `skillId` as aliases.
+- `notion_query` should accept both `dataSourceId` and `databaseId`.
+- Document MCP concurrency limits in tool descriptions.
+- Document `shell_exec` timeout (~30s) in tool description.
+- `chrome_execute_js` should auto-wrap in IIFE or document the pattern.

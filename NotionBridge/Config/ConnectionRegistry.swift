@@ -230,7 +230,11 @@ public actor ConnectionRegistry {
     }
 
     private func buildStripeConnection(validateLive: Bool) async throws -> BridgeConnection {
+        // UEP-005: Read from KeychainManager (com.notionbridge service) first,
+        // then fall back to legacy service-name entry (pre-KeychainManager migration),
+        // then ConfigManager (config.json bridgeConnections.stripe.apiKey).
         let secret = KeychainManager.shared.read(key: KeychainManager.Key.stripeAPIKey)
+            ?? KeychainManager.shared.readLegacy(service: KeychainManager.Key.stripeAPIKey)
             ?? ConfigManager.shared.stripeAPIKey
         let maskedCredential = secret.map { BridgeConnection.maskSecret($0) }
 

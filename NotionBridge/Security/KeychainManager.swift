@@ -67,6 +67,45 @@ public final class KeychainManager: @unchecked Sendable {
         negativeCacheKeys.removeAll()
     }
 
+
+    // MARK: - Legacy Fallback Read
+
+    /// Read a value from the Keychain using the key itself as the service name.
+    /// This supports pre-KeychainManager entries where the service was the key name
+    /// rather than the app's bundle service (com.notionbridge).
+    /// If found, migrates the entry to the current service and deletes the legacy entry.
+    public func readLegacy(service legacyService: String) -> String? {
+        guard isAppBundle else { return nil }
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: legacyService,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        guard status == errSecSuccess,
+              let data = result as? Data,
+              let value = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        // Migrate: save under current service, delete legacy entry
+        if save(key: legacyService, value: value) {
+            let deleteQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: legacyService
+            ]
+            SecItemDelete(deleteQuery as CFDictionary)
+            print("[KeychainManager] Migrated legacy entry '\(legacyService)' to com.notionbridge service")
+        }
+
+        return value
+    }
+
     // MARK: - CRUD Operations
 
     /// Save a value to the Keychain. Overwrites if key already exists.

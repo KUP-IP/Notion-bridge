@@ -224,6 +224,7 @@ public actor SSEServer {
                 }
             }
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
+            .childChannelOption(ChannelOptions.socketOption(.so_keepalive), value: 1)
             .childChannelOption(ChannelOptions.maxMessagesPerRead, value: 1)
 
         do {
@@ -560,12 +561,19 @@ public actor SSEServer {
         }
     }
 
+    /// UEP-005 W3: Soft-cap duplicate session pruning.
+    /// Keeps the newest `maxPerClient` sessions per client name.
+    /// Sessions accessed within `gracePeriod` seconds are never evicted.
     private func pruneDuplicateClientSessions(clientName: String?, clientVersion: String?) async {
         guard let rawName = clientName?.trimmingCharacters(in: .whitespacesAndNewlines), !rawName.isEmpty else {
             return
         }
 
-        let duplicateIDs = sessions
+        let maxPerClient = 2
+        let gracePeriod: TimeInterval = 5.0
+        let now = Date()
+
+        let matching = sessions
             .filter { _, ctx in
                 guard ctx.clientName == rawName else { return false }
                 if let clientVersion {
@@ -574,15 +582,22 @@ public actor SSEServer {
                 return true
             }
             .sorted { lhs, rhs in
+                // Newest first (by lastAccessedAt, then createdAt)
                 if lhs.value.lastAccessedAt == rhs.value.lastAccessedAt {
-                    return lhs.value.createdAt < rhs.value.createdAt
+                    return lhs.value.createdAt > rhs.value.createdAt
                 }
-                return lhs.value.lastAccessedAt < rhs.value.lastAccessedAt
+                return lhs.value.lastAccessedAt > rhs.value.lastAccessedAt
             }
-            .map(\.key)
 
-        for id in duplicateIDs {
-            await removeSession(id, reason: "replaced duplicate client session for \(rawName)", incrementEvicted: true)
+        // Keep the newest maxPerClient sessions; evict the rest (respecting grace period)
+        let candidates = matching.dropFirst(maxPerClient)
+        for (id, ctx) in candidates {
+            let age = now.timeIntervalSince(ctx.lastAccessedAt)
+            if age < gracePeriod {
+                print("[SSE] Skipping eviction of \(id.prefix(8))… — accessed \(String(format: "%.1f", age))s ago (grace period)")
+                continue
+            }
+            await removeSession(id, reason: "soft-cap eviction for \(rawName) (keeping newest \(maxPerClient))", incrementEvicted: true)
         }
     }
 
@@ -702,30 +717,34 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     private func processRequest(head: HTTPRequestHead, body: Data?, context: ChannelHandlerContext) async {
         let fullURI = head.uri
         let path = fullURI.split(separator: "?").first.map(String.init) ?? fullURI
+        let startTime = CFAbsoluteTimeGetCurrent()
 
         if head.method == .OPTIONS {
             await writeCORSPreflight(version: head.version, context: context)
-            return
+            return  // skip access log for CORS preflight
         }
 
         // V1-QUALITY-C2: Health endpoint (GET /health) — no authentication required
         if head.method == .GET && path == "/health" {
             let healthData = await healthHandler()
             await writeJSONResponse(data: healthData, version: head.version, context: context)
-            return
+            return  // skip access log for health (too noisy)
         }
 
         if head.method == .GET && path == "/sse" {
+            logAccess(method: "GET", path: path, sessionID: nil, status: 200, start: startTime)
             await handleLegacySSE(head: head, context: context)
             return
         }
 
         if head.method == .POST && path == "/messages" {
+            logAccess(method: "POST", path: path, sessionID: nil, status: 200, start: startTime)
             await handleLegacyMessage(head: head, body: body, uri: fullURI, context: context)
             return
         }
 
         guard path == endpoint else {
+            logAccess(method: head.method.rawValue, path: path, sessionID: nil, status: 404, start: startTime)
             await writeResponse(
                 .error(statusCode: 404, .invalidRequest("Not Found")),
                 version: head.version,
@@ -743,9 +762,18 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
             }
         }
 
+        let sessionID = headers["mcp-session-id"]
         let httpRequest = HTTPRequest(method: head.method.rawValue, headers: headers, body: body)
         let response = await httpRequestHandler(httpRequest)
+        logAccess(method: head.method.rawValue, path: path, sessionID: sessionID, status: response.statusCode, start: startTime)
         await writeResponse(response, version: head.version, context: context)
+    }
+
+    /// UEP-005 W4: Structured access log for MCP request diagnostics.
+    private func logAccess(method: String, path: String, sessionID: String?, status: Int, start: CFAbsoluteTime) {
+        let durationMs = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+        let sid = sessionID.map { String($0.prefix(8)) + "…" } ?? "-"
+        print("[MCP-ACCESS] \(method) \(path) sid=\(sid) status=\(status) \(durationMs)ms")
     }
 
     // MARK: - Health Response Writer (V1-QUALITY-C2)
@@ -881,6 +909,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                 for (name, value) in response.headers {
                     head.headers.add(name: name, value: value)
                 }
+                head.headers.replaceOrAdd(name: "Connection", value: "keep-alive")
                 ctx.write(self.wrapOutboundOut(.head(head)), promise: nil)
                 ctx.flush()
             }
@@ -912,6 +941,8 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
                     head.headers.add(name: name, value: value)
                 }
                 ctx.write(self.wrapOutboundOut(.head(head)), promise: nil)
+
+                head.headers.replaceOrAdd(name: "Connection", value: "keep-alive")
 
                 if let body = bodyData {
                     var buffer = ctx.channel.allocator.buffer(capacity: body.count)
