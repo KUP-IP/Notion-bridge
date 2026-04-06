@@ -17,6 +17,10 @@ public enum CredentialsFeature: Sendable {
         "payment_execute",
     ]
 
+    /// PKT-441: UserDefaults key controlling whether API keys are retained
+    /// when the Credentials feature is toggled off.
+    public static let retainKeysOnDisableKey = "com.notionbridge.retainKeysOnDisable"
+
     /// Whether the Credentials feature is on (Keychain + MCP tools).
     public static var isEnabled: Bool {
         UserDefaults.standard.bool(forKey: userDefaultsKey)

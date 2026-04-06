@@ -17,6 +17,7 @@ import LocalAuthentication
 /// Discriminator for polymorphic credential storage.
 /// Persisted as `kSecAttrLabel` on each Keychain item.
 public enum CredentialType: String, Sendable, Codable, CaseIterable {
+    case apiKey = "api_key"   // PKT-441: API keys (Stripe, generic)
     case password = "password"
     case card = "card"
     case unknown = "unknown"

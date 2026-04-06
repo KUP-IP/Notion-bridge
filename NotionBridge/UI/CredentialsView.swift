@@ -41,6 +41,13 @@ struct CredentialsView: View {
     @State private var cardSaving = false
     @State private var cardFeedback: FormFeedback?
 
+    // PKT-441: Add API Key form state
+    @State private var showAddApiKey = false
+    @State private var akName = ""
+    @State private var akValue = ""
+    @State private var akSaving = false
+    @State private var akFeedback: FormFeedback?
+
     private let manager = CredentialManager.shared
 
     private var passwords: [CredentialEntry] {
@@ -49,6 +56,11 @@ struct CredentialsView: View {
 
     private var cards: [CredentialEntry] {
         credentials.filter { $0.type == .card }
+    }
+
+    // PKT-441: API Keys section
+    private var apiKeys: [CredentialEntry] {
+        credentials.filter { $0.type == .apiKey }
     }
 
     var body: some View {
@@ -71,11 +83,6 @@ struct CredentialsView: View {
 
 
 
-            // MARK: Stripe
-            Section("Stripe") {
-                StripeConnectionSection()
-            }
-
             // MARK: Apple Keychain Credentials
             Section {
                 Toggle(isOn: Binding(
@@ -88,6 +95,7 @@ struct CredentialsView: View {
                             credentialsEnabledUI = false
                             showAddPassword = false
                             showAddCard = false
+                            showAddApiKey = false
                             NotificationCenter.default.post(name: .notionBridgeCredentialsFeatureDidChange, object: nil)
                         }
                     }
@@ -107,6 +115,23 @@ struct CredentialsView: View {
             }
 
             if credentialsEnabledUI {
+                // MARK: API Keys (PKT-441)
+                Section("API Keys") {
+                    if apiKeys.isEmpty && !showAddApiKey {
+                        Text("No saved API keys")
+                            .foregroundStyle(BridgeColors.secondary)
+                            .font(.caption)
+                    } else {
+                        ForEach(0..<apiKeys.count, id: \.self) { idx in
+                            apiKeyRow(apiKeys[idx])
+                        }
+                    }
+
+                    addCredentialRow(title: "Add API Key", isExpanded: $showAddApiKey) {
+                        addApiKeyForm
+                    }
+                }
+
                 // MARK: Passwords
                 Section("Passwords") {
                     if passwords.isEmpty && !showAddPassword {
@@ -345,6 +370,37 @@ struct CredentialsView: View {
 
     // MARK: - Row Views
 
+    // MARK: - API Key Row (PKT-441)
+
+    @ViewBuilder
+    private func apiKeyRow(_ entry: CredentialEntry) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.service.replacingOccurrences(of: "api_key:", with: "").capitalized)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1)
+                if let maskedValue = entry.metadata.last4 {
+                    Text("••••\(maskedValue)")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text(entry.account)
+                        .font(.caption)
+                        .foregroundStyle(BridgeColors.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer()
+            Button(role: .destructive) {
+                entryToDelete = (service: entry.service, account: entry.account)
+                showDeleteConfirmation = true
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
     @ViewBuilder
     private func passwordRow(_ entry: CredentialEntry) -> some View {
         HStack {
@@ -404,6 +460,70 @@ struct CredentialsView: View {
                 Image(systemName: "trash")
             }
             .buttonStyle(.borderless)
+        }
+    }
+
+    // MARK: - Save Actions
+
+    // MARK: - Add API Key Form (PKT-441)
+
+    @ViewBuilder
+    private var addApiKeyForm: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField("Name (e.g. Stripe)", text: $akName)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(.body, design: .monospaced))
+
+            SecureField("API Key", text: $akValue)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+
+            if let feedback = akFeedback {
+                feedbackLabel(feedback)
+            }
+
+            HStack {
+                Button("Save API Key") {
+                    Task { await saveApiKey() }
+                }
+                .disabled(akSaving || akName.trimmingCharacters(in: .whitespaces).isEmpty
+                          || akValue.isEmpty)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
+                if akSaving {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func saveApiKey() async {
+        akFeedback = nil
+        akSaving = true
+        defer { akSaving = false }
+
+        let name = akName.trimmingCharacters(in: .whitespaces).lowercased()
+        let value = akValue.trimmingCharacters(in: .whitespaces)
+
+        do {
+            let last4 = String(value.suffix(4))
+            let metadata = CredentialMetadata(last4: last4)
+            _ = try await manager.save(
+                service: "api_key:\(name)",
+                account: name,
+                password: value,
+                type: .apiKey,
+                metadata: metadata
+            )
+            akFeedback = FormFeedback(message: "API key saved.", isError: false)
+            akName = ""
+            akValue = ""
+            loadCredentials()
+        } catch {
+            akFeedback = FormFeedback(message: error.localizedDescription, isError: true)
         }
     }
 

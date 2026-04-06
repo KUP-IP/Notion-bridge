@@ -111,6 +111,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
         CredentialsFeature.migrateIfNeeded()
 
+        // PKT-441: One-time Stripe key migration to unified credential vault
+        Task { await ConnectionRegistry.shared.migrateStripeKeyIfNeeded() }
+
         registerAutoLaunch()
 
         // PKT-357 F15: Prevent App Nap — keep MCP server alive during idle.

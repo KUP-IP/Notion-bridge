@@ -662,8 +662,11 @@ private struct IntegratedToolsContent: View {
 
 
     private func loadConnections() async {
+        // PKT-440: Invalidate stale cache so re-validation fetches fresh results
+        await ConnectionHealthChecker.shared.invalidateAll()
+
         do {
-            // Phase 1: Instant snapshot so the UI renders provider names immediately
+            // Phase 1: Instant snapshot with last-known status (PKT-440)
             let workspace = try await ConnectionRegistry.shared.listConnections(kind: .workspace, validateLive: false)
             let api = try await ConnectionRegistry.shared.listConnections(kind: .api, validateLive: false)
             let snapshotNotion = workspace.first { $0.provider == .notion }

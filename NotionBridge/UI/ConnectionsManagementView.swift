@@ -291,6 +291,9 @@ public struct ConnectionsManagementView: View {
         isLoading = true
         errorMessage = nil
 
+        // PKT-440: Invalidate stale cache so re-validation fetches fresh results
+        await ConnectionHealthChecker.shared.invalidateAll()
+
         do {
             let snapshot = try await ConnectionRegistry.shared.listConnections(kind: .workspace, validateLive: false)
             connections = sortConnections(snapshot)

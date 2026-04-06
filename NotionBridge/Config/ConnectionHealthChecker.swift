@@ -1,6 +1,7 @@
 // ConnectionHealthChecker.swift — Connection Health Status & Validation
 // NotionBridge · Config
 // PKT-368 D1: Per-connection health badge logic
+// PKT-440: Optimistic last-known-good status + reduced cache TTL
 //
 // Provides health status enum and validation utilities for workspace connections.
 // Supports Notion (via NotionClientRegistry) and Google Drive (via token check).
@@ -49,14 +50,42 @@ public enum ConnectionHealth: String, Sendable {
 
 /// Actor-based health checker with time-based caching.
 /// Validates connections by attempting lightweight API calls.
+/// PKT-440: Maintains a `lastKnown` dict that persists results across cache expiry,
+/// so callers can display the last validated status instead of "Checking…".
 public actor ConnectionHealthChecker {
 
     public static let shared = ConnectionHealthChecker()
 
+    /// Timed cache — entries expire after `cacheDuration` seconds.
     private var cache: [String: (health: ConnectionHealth, timestamp: Date)] = [:]
-    private let cacheDuration: TimeInterval = 60  // Cache for 60 seconds
+    private let cacheDuration: TimeInterval = 30  // PKT-440: reduced from 60s
+
+    /// Last-known-good (or last-known-bad) status. Never expires — only replaced
+    /// by a newer validation result or cleared by `invalidate`/`invalidateAll`.
+    /// Used by `lastKnownHealth()` so the UI can show a real status instead of `.checking`.
+    private var lastKnown: [String: ConnectionHealth] = [:]
 
     private init() {}
+
+    // MARK: - Last Known Health (PKT-440)
+
+    /// Returns the last validated health for a connection without triggering a recheck.
+    /// Returns `nil` if no prior validation result exists for this connection.
+    public func lastKnownHealth(connectionName: String) -> ConnectionHealth? {
+        let key = "notion:\(connectionName)"
+        return lastKnown[key]
+    }
+
+    /// Returns the last validated health for an arbitrary key (e.g. "stripe:default").
+    public func lastKnownHealthForKey(_ key: String) -> ConnectionHealth? {
+        return lastKnown[key]
+    }
+
+    /// Store a last-known result for an arbitrary key (used by ConnectionRegistry
+    /// for non-Notion connections like Stripe).
+    public func setLastKnown(_ health: ConnectionHealth, forKey key: String) {
+        lastKnown[key] = health
+    }
 
     // MARK: - Notion Connection Health
 
@@ -76,10 +105,12 @@ public actor ConnectionHealthChecker {
             guard result.success else {
                 let health = ConnectionHealth.error
                 cache[key] = (health, Date())
+                lastKnown[key] = health
                 return health
             }
             let health = ConnectionHealth.healthy
             cache[key] = (health, Date())
+            lastKnown[key] = health
             return health
         } catch {
             let errorStr = error.localizedDescription.lowercased()
@@ -90,6 +121,7 @@ public actor ConnectionHealthChecker {
                 health = .error
             }
             cache[key] = (health, Date())
+            lastKnown[key] = health
             return health
         }
     }
@@ -98,12 +130,21 @@ public actor ConnectionHealthChecker {
     // MARK: - Cache Management
 
     /// Invalidate cached health for a specific connection.
+    /// Note: lastKnown is preserved so optimistic display still works.
     public func invalidate(connectionName: String) {
         cache.removeValue(forKey: "notion:\(connectionName)")
     }
 
     /// Invalidate all cached health statuses.
+    /// Clears timed cache but preserves lastKnown for optimistic display.
     public func invalidateAll() {
         cache.removeAll()
+    }
+
+    /// Full reset — clears both timed cache and last-known results.
+    /// Used on factory reset or when connections are reconfigured.
+    public func resetAll() {
+        cache.removeAll()
+        lastKnown.removeAll()
     }
 }

@@ -28,6 +28,29 @@ public actor ConnectionRegistry {
 
     public init() {}
 
+    /// PKT-441: One-time migration — if a Stripe API key exists in KeychainManager
+    /// but not yet in CredentialManager, copy it over as a typed .apiKey entry.
+    public func migrateStripeKeyIfNeeded() async {
+        let migrationKey = "com.notionbridge.stripeKeyMigrated"
+        guard !UserDefaults.standard.bool(forKey: migrationKey) else { return }
+        UserDefaults.standard.set(true, forKey: migrationKey)
+
+        let secret = KeychainManager.shared.read(key: KeychainManager.Key.stripeAPIKey)
+            ?? KeychainManager.shared.readLegacy(service: KeychainManager.Key.stripeAPIKey)
+            ?? ConfigManager.shared.stripeAPIKey
+        guard let secret, !secret.isEmpty else { return }
+
+        let last4 = String(secret.suffix(4))
+        let metadata = CredentialMetadata(last4: last4)
+        _ = try? await CredentialManager.shared.save(
+            service: "api_key:stripe",
+            account: "stripe",
+            password: secret,
+            type: .apiKey,
+            metadata: metadata
+        )
+    }
+
     public func listConnections(
         provider: BridgeConnectionProvider? = nil,
         kind: BridgeConnectionKind? = nil,
@@ -102,10 +125,22 @@ public actor ConnectionRegistry {
             throw ConnectionRegistryError.invalidAPIKey
         }
 
+        // PKT-441: Write to both KeychainManager (for backward compat) and CredentialManager (unified vault)
         let updated = KeychainManager.shared.update(key: KeychainManager.Key.stripeAPIKey, value: trimmed)
         guard updated else {
             throw ConnectionRegistryError.unsupportedAction("Failed to store Stripe API key in Keychain")
         }
+
+        // Also store as a typed API key credential for the unified vault UI
+        let last4 = String(trimmed.suffix(4))
+        let metadata = CredentialMetadata(last4: last4)
+        _ = try? await CredentialManager.shared.save(
+            service: "api_key:stripe",
+            account: "stripe",
+            password: trimmed,
+            type: .apiKey,
+            metadata: metadata
+        )
 
         ConfigManager.shared.stripeAPIKey = nil
         return try await buildStripeConnection(validateLive: true)
@@ -207,10 +242,16 @@ public actor ConnectionRegistry {
         connections.reserveCapacity(notionConnections.count)
 
         for info in notionConnections {
-            let health = validateLive
-                ? await ConnectionHealthChecker.shared.checkNotionHealth(connectionName: info.name)
-                : .checking
-            let validatedAt = validateLive ? formatter.string(from: Date()) : nil
+            let health: ConnectionHealth
+            let validatedAt: String?
+            if validateLive {
+                health = await ConnectionHealthChecker.shared.checkNotionHealth(connectionName: info.name)
+                validatedAt = formatter.string(from: Date())
+            } else {
+                // PKT-440: Show last-known-good status instead of .checking
+                health = await ConnectionHealthChecker.shared.lastKnownHealth(connectionName: info.name) ?? .checking
+                validatedAt = nil
+            }
             connections.append(
                 BridgeConnection(
                     id: "\(BridgeConnectionProvider.notion.rawValue):\(info.name)",
@@ -263,12 +304,23 @@ public actor ConnectionRegistry {
         }
 
         guard validateLive else {
+            // PKT-440: Show last-known status instead of .checking
+            let lastKnown = await ConnectionHealthChecker.shared.lastKnownHealthForKey("stripe:default")
+            let optimisticStatus: BridgeConnectionStatus = {
+                switch lastKnown {
+                case .healthy: return .connected
+                case .warning: return .warning
+                case .error: return .disconnected
+                case .unconfigured: return .notConfigured
+                case .checking, .none: return .checking
+                }
+            }()
             return BridgeConnection(
                 id: "\(BridgeConnectionProvider.stripe.rawValue):default",
                 provider: .stripe,
                 kind: .api,
                 name: "Stripe",
-                status: .checking,
+                status: optimisticStatus,
                 authType: "api_key",
                 maskedCredential: maskedCredential,
                 capabilities: [],
@@ -279,6 +331,9 @@ public actor ConnectionRegistry {
         do {
             let account = try await StripeClient.shared.retrieveAccountInfo()
             let status: BridgeConnectionStatus = account.chargesEnabled ? .connected : .warning
+            // PKT-440: Store last-known result for optimistic display
+            let stripeHealth: ConnectionHealth = account.chargesEnabled ? .healthy : .warning
+            await ConnectionHealthChecker.shared.setLastKnown(stripeHealth, forKey: "stripe:default")
             return BridgeConnection(
                 id: "\(BridgeConnectionProvider.stripe.rawValue):default",
                 provider: .stripe,
@@ -297,6 +352,8 @@ public actor ConnectionRegistry {
                 ]
             )
         } catch {
+            // PKT-440: Store last-known error for optimistic display
+            await ConnectionHealthChecker.shared.setLastKnown(.error, forKey: "stripe:default")
             return BridgeConnection(
                 id: "\(BridgeConnectionProvider.stripe.rawValue):default",
                 provider: .stripe,

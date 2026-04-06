@@ -173,14 +173,26 @@ struct StripeConnectionSection: View {
         isLoading = true
         errorMessage = nil
         do {
+            // Phase 1: Instant snapshot with last-known status (PKT-440)
             connection = try await ConnectionRegistry.shared.getConnection(
                 id: "\(BridgeConnectionProvider.stripe.rawValue):default",
                 validateLive: false
             )
+            isLoading = false
+
+            // Phase 2: Live validation in background (PKT-440)
+            // Fixes bug where Stripe stayed "Checking…" forever
+            if let conn = connection, conn.status != .notConfigured {
+                isValidating = true
+                if let validated = try? await ConnectionRegistry.shared.validateConnection(id: conn.id) {
+                    connection = validated
+                }
+                isValidating = false
+            }
         } catch {
             connection = nil
+            isLoading = false
         }
-        isLoading = false
     }
 
     private func validate() async {
