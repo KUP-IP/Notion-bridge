@@ -7,6 +7,8 @@
 // Zero data loss backward-compat: old flat key preserved as read fallback.
 //
 // Uses actor isolation for thread-safety (no NSLock needed).
+// PKT-FIX-DUAL-PRIMARY: addConnection upserts on duplicate name; preflightRemove
+//   handles same-name edge case; setPrimary unsets all others atomically.
 
 import Foundation
 
@@ -90,22 +92,62 @@ public actor NotionClientRegistry {
         }
     }
 
-    /// Add a new named connection. Persists to config.json.
+    /// Add or update a named connection. If a connection with the same name already
+    /// exists, its token is replaced in-place (upsert) instead of creating a duplicate.
+    /// When `primary` is true, all other connections are atomically set to non-primary.
+    /// Persists to config.json.
+    /// PKT-FIX-DUAL-PRIMARY: Upsert prevents duplicate entries with the same name.
     public func addConnection(name: String, token: String, primary: Bool = false) throws {
         let client = try NotionClient(apiKey: token)
         clients[name] = client
-        connectionConfigs.append(NotionConnection(name: name, token: token, primary: primary))
-        if primary || primaryName == nil {
-            primaryName = name
+
+        if let existingIdx = connectionConfigs.firstIndex(where: { $0.name == name }) {
+            // Upsert: replace token on the existing entry
+            connectionConfigs[existingIdx].token = token
+            if primary {
+                // Atomically unset all others before setting this one
+                for i in connectionConfigs.indices {
+                    connectionConfigs[i].primary = (i == existingIdx)
+                }
+                primaryName = name
+            }
+            print("[NotionClientRegistry] Updated existing connection '\(name)'\(primary ? " (set primary)" : "")")
+        } else {
+            // New entry
+            if primary {
+                // Atomically unset all others
+                for i in connectionConfigs.indices {
+                    connectionConfigs[i].primary = false
+                }
+            }
+            connectionConfigs.append(NotionConnection(name: name, token: token, primary: primary))
+            if primary || primaryName == nil {
+                primaryName = name
+            }
+            print("[NotionClientRegistry] Added new connection '\(name)'\(primary ? " (primary)" : "")")
         }
+
         try persistConfig()
     }
 
     /// Preflight check before removing a connection. Returns the guard result.
+    /// PKT-FIX-DUAL-PRIMARY: Checks for other connections with *different* names
+    /// so same-name duplicates don't create an unresolvable block.
     public func preflightRemove(name: String) -> RemoveResult {
         if connectionConfigs.count == 1 { return .lastConnectionWarning }
+        // Check if this is the primary and whether a different-named connection exists
         if primaryName == name && connectionConfigs.count > 1 {
-            return .primaryBlocked(message: "Set a new primary before deleting this one.")
+            let hasOtherName = connectionConfigs.contains { $0.name != name }
+            if hasOtherName {
+                return .primaryBlocked(message: "Set a new primary before deleting this one.")
+            }
+            // All entries share the same name (duplicate bug state) — allow removal
+            // of excess entries to self-heal. Keep at least one.
+            let sameNameCount = connectionConfigs.filter { $0.name == name }.count
+            if sameNameCount > 1 {
+                return .removed
+            }
+            return .lastConnectionWarning
         }
         return .removed
     }
@@ -163,6 +205,8 @@ public actor NotionClientRegistry {
     // MARK: - Config Loading & Migration
 
     /// Load connections from config.json, handling both old and new formats.
+    /// PKT-FIX-DUAL-PRIMARY: Deduplicates entries with the same name on load,
+    /// keeping the last (newest) entry and ensuring exactly one primary.
     private func loadConnections() throws {
         let path = NotionTokenResolver.configFilePath
 
@@ -184,24 +228,57 @@ public actor NotionClientRegistry {
 
         // New format: { "connections": [{ "name": "...", "token": "...", "primary": true }] }
         if let connections = json["connections"] as? [[String: Any]] {
-            print("[NotionClientRegistry] Loading \(connections.count) connection(s) from new format")
+            // PKT-FIX-DUAL-PRIMARY: Deduplicate on load — last entry per name wins.
+            var seen: [String: Int] = [:]
+            var deduped: [(name: String, token: String, isPrimary: Bool)] = []
             for conn in connections {
                 guard let name = conn["name"] as? String,
                       let token = conn["token"] as? String,
                       !token.isEmpty else { continue }
                 let isPrimary = conn["primary"] as? Bool ?? false
-                do {
-                    let client = try NotionClient(apiKey: token)
-                    clients[name] = client
-                    connectionConfigs.append(NotionConnection(name: name, token: token, primary: isPrimary))
-                    if isPrimary || primaryName == nil {
-                        primaryName = name
-                    }
-                    print("[NotionClientRegistry] Loaded connection '\(name)'\(isPrimary ? " (primary)" : "")")
-                } catch {
-                    print("[NotionClientRegistry] Failed to create client for '\(name)': \(error)")
-                    connectionConfigs.append(NotionConnection(name: name, token: token, primary: isPrimary))
+                if let existingIdx = seen[name] {
+                    // Replace with newer entry (last-write-wins)
+                    deduped[existingIdx] = (name, token, isPrimary)
+                    print("[NotionClientRegistry] Dedup: replaced earlier '\(name)' with newer entry")
+                } else {
+                    seen[name] = deduped.count
+                    deduped.append((name, token, isPrimary))
                 }
+            }
+
+            // Ensure exactly one primary
+            let primaryCount = deduped.filter { $0.isPrimary }.count
+            if primaryCount != 1 && !deduped.isEmpty {
+                // Reset: make the last primary (or first entry) the sole primary
+                let lastPrimaryIdx = deduped.lastIndex(where: { $0.isPrimary }) ?? 0
+                for i in deduped.indices {
+                    deduped[i].isPrimary = (i == lastPrimaryIdx)
+                }
+                print("[NotionClientRegistry] Fixed primary count (was \(primaryCount), now 1)")
+            }
+
+            let needsPersist = deduped.count != connections.count || primaryCount != 1
+
+            print("[NotionClientRegistry] Loading \(deduped.count) connection(s) from new format")
+            for entry in deduped {
+                do {
+                    let client = try NotionClient(apiKey: entry.token)
+                    clients[entry.name] = client
+                    connectionConfigs.append(NotionConnection(name: entry.name, token: entry.token, primary: entry.isPrimary))
+                    if entry.isPrimary || primaryName == nil {
+                        primaryName = entry.name
+                    }
+                    print("[NotionClientRegistry] Loaded connection '\(entry.name)'\(entry.isPrimary ? " (primary)" : "")")
+                } catch {
+                    print("[NotionClientRegistry] Failed to create client for '\(entry.name)': \(error)")
+                    connectionConfigs.append(NotionConnection(name: entry.name, token: entry.token, primary: entry.isPrimary))
+                }
+            }
+
+            // Auto-heal: persist deduplicated config if duplicates or primary issues were found
+            if needsPersist {
+                try? persistConfig()
+                print("[NotionClientRegistry] Auto-healed config.json (removed duplicates / fixed primary)")
             }
             return
         }

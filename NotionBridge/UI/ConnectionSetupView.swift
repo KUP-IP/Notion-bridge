@@ -133,6 +133,7 @@ public struct ConnectionSetupView: View {
                 .foregroundStyle(.tertiary)
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 SecureField("Bearer token", text: $mcpBearerToken)
+                    .textContentType(.none)
                     .textFieldStyle(.roundedBorder)
                     .font(.caption)
                     .onChange(of: mcpBearerToken) { _, newValue in

@@ -486,6 +486,7 @@ struct AddWorkspaceConnectionSheet: View {
                 .textFieldStyle(.roundedBorder)
 
             SecureField(selectedProvider.tokenPlaceholder, text: $token)
+                .textContentType(.none)
                 .textFieldStyle(.roundedBorder)
 
             Toggle("Set as primary workspace", isOn: $makePrimary)

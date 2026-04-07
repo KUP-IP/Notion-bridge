@@ -287,6 +287,7 @@ struct CredentialsView: View {
                 .font(.caption)
 
             SecureField("Password", text: $pwPassword)
+                    .textContentType(.none)
                 .textFieldStyle(.roundedBorder)
                 .font(.caption)
 
@@ -475,6 +476,7 @@ struct CredentialsView: View {
                 .font(.system(.body, design: .monospaced))
 
             SecureField("API Key", text: $akValue)
+                    .textContentType(.none)
                 .textFieldStyle(.roundedBorder)
                 .font(.caption)
 

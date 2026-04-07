@@ -215,7 +215,7 @@ public enum ScreenModule {
             name: "screen_capture",
             module: moduleName,
             tier: .open,
-            description: "Screenshot the screen, a window, or a region. Returns {filePath, width, height}. Target: display|window|region|all_displays.",
+            description: "Screenshot the screen, a window, or a region. Returns {filePath, width, height}. Target: display|window|region|all_displays. Preferred over shell_exec screencapture — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

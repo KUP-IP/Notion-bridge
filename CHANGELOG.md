@@ -1,4 +1,12 @@
 # Changelog
+## [1.8.2] — 2026-04-07
+
+### Fixed
+- **Connection identity collision** — addConnection() now upserts when a connection with the same name already exists, preventing duplicate entries with dual-primary state. setPrimary() atomically unsets all other connections. preflightRemove() handles same-name edge case to allow self-healing deletion. loadConnections() auto-deduplicates on startup (last-write-wins) and ensures exactly one primary. (NotionClientRegistry.swift, NotionModels.swift)
+- **Apple Passwords modal deadlock** — Added .textContentType(.none) to all SecureField inputs (token, password, API key, bearer token fields) to prevent macOS AuthenticationServices from hijacking the input with an undismissable Passwords picker. (ConnectionsManagementView.swift, OnboardingWindow.swift, CredentialsView.swift, ConnectionSetupView.swift)
+
+### Changed
+- **Shell-as-last-resort tool descriptions** — Updated 17 MCP tool descriptions to steer agents toward dedicated tools over shell_exec. shell_exec description now lists alternatives and includes fallback clause for when dedicated tools are disabled. 12 file/clipboard tools, process_list, applescript_exec, and screen_capture now include "Preferred over shell_exec X" guidance. (ShellModule.swift, FileModule.swift, SystemModule.swift, AppleScriptModule.swift, ScreenModule.swift)
 
 ## [1.8.1] — 2026-04-06
 

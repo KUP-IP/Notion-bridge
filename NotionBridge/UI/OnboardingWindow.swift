@@ -343,6 +343,7 @@ struct OnboardingView: View {
                     .textFieldStyle(.roundedBorder)
 
                 SecureField(selectedProvider.tokenPlaceholder, text: $workspaceToken)
+                .textContentType(.none)
                     .textFieldStyle(.roundedBorder)
             }
             .padding(.horizontal, 8)

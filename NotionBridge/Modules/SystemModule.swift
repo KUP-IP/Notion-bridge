@@ -91,7 +91,7 @@ public enum SystemModule {
             name: "process_list",
             module: moduleName,
             tier: .open,
-            description: "List running apps and background processes.",
+            description: "List running apps and background processes. Preferred over shell_exec ps — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

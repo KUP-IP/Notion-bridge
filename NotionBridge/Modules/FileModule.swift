@@ -41,7 +41,7 @@ public enum FileModule {
             name: "file_list",
             module: moduleName,
             tier: .open,
-            description: "List files and folders in a directory.",
+            description: "List files and folders in a directory. Preferred over shell_exec ls — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -104,7 +104,7 @@ public enum FileModule {
             name: "file_search",
             module: moduleName,
             tier: .open,
-            description: "Find files by name under a folder.",
+            description: "Find files by name under a folder. Preferred over shell_exec find — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -148,7 +148,7 @@ public enum FileModule {
             name: "file_metadata",
             module: moduleName,
             tier: .open,
-            description: "Get size, dates, and type for a file or folder.",
+            description: "Get size, dates, and type for a file or folder. Preferred over shell_exec stat — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -183,7 +183,7 @@ public enum FileModule {
             name: "file_read",
             module: moduleName,
             tier: .open,
-            description: "Read text from a file on your Mac.",
+            description: "Read text from a file on your Mac. Preferred over shell_exec cat — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -232,7 +232,7 @@ public enum FileModule {
             name: "file_write",
             module: moduleName,
             tier: .notify,
-            description: "Create or overwrite a file with text.",
+            description: "Create or overwrite a file with text. Preferred over shell_exec echo > file — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -275,7 +275,7 @@ public enum FileModule {
             name: "file_append",
             module: moduleName,
             tier: .notify,
-            description: "Append text to an existing file.",
+            description: "Append text to an existing file. Preferred over shell_exec echo >> file — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -309,7 +309,7 @@ public enum FileModule {
             name: "file_move",
             module: moduleName,
             tier: .notify,
-            description: "Move a file or folder to a new path.",
+            description: "Move a file or folder to a new path. Preferred over shell_exec mv — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -343,7 +343,7 @@ public enum FileModule {
             name: "file_rename",
             module: moduleName,
             tier: .notify,
-            description: "Rename a file or folder in place.",
+            description: "Rename a file or folder in place. Preferred over shell_exec mv for renames — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -376,7 +376,7 @@ public enum FileModule {
             name: "file_copy",
             module: moduleName,
             tier: .notify,
-            description: "Copy a file or folder to another location.",
+            description: "Copy a file or folder to another location. Preferred over shell_exec cp — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -410,7 +410,7 @@ public enum FileModule {
             name: "dir_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a folder (and parent folders if needed).",
+            description: "Create a folder (and parent folders if needed). Preferred over shell_exec mkdir — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -441,7 +441,7 @@ public enum FileModule {
             name: "clipboard_read",
             module: moduleName,
             tier: .open,
-            description: "Read plain text from the clipboard.",
+            description: "Read plain text from the clipboard. Preferred over shell_exec pbpaste — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -470,7 +470,7 @@ public enum FileModule {
             name: "clipboard_write",
             module: moduleName,
             tier: .notify,
-            description: "Put text on the clipboard.",
+            description: "Put text on the clipboard. Preferred over shell_exec pbcopy — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
