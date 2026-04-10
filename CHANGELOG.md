@@ -247,6 +247,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Initial tracked release._
 
+[1.8.2]: https://github.com/KUP-IP/Notion-bridge/compare/v1.8.1...v1.8.2
+[1.8.1]: https://github.com/KUP-IP/Notion-bridge/compare/v1.8.0...v1.8.1
+[1.8.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.5.3...v1.8.0
+[1.7.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.5.3...v1.7.0-pkt381
+[1.6.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.5.5...v1.6.0
+[1.5.5]: https://github.com/KUP-IP/Notion-bridge/compare/v1.5.4...v1.5.5
+[1.5.4]: https://github.com/KUP-IP/Notion-bridge/compare/v1.5.3...v1.5.4
+[1.5.3]: https://github.com/KUP-IP/Notion-bridge/compare/v1.5.2...v1.5.3
+[1.5.2]: https://github.com/KUP-IP/Notion-bridge/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/KUP-IP/Notion-bridge/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.2.0...v1.3.0
