@@ -47,7 +47,7 @@ public enum CredentialModule {
                     ]),
                     "type": .object([
                         "type": .string("string"),
-                        "description": .string("Credential type: 'password' (default) or 'card'")
+                        "description": .string("Credential type: 'password' (default), 'card', or 'api_key'")
                     ]),
                     "metadata": .object([
                         "type": .string("object"),
@@ -78,7 +78,7 @@ public enum CredentialModule {
                 guard let credType = CredentialType(rawValue: typeStr) else {
                     throw ToolRouterError.invalidArguments(
                         toolName: "credential_save",
-                        reason: "invalid type '\(typeStr)'. Must be 'password' or 'card'"
+                        reason: "invalid type '\(typeStr)'. Must be 'password', 'card', or 'api_key'"
                     )
                 }
 

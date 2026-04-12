@@ -1,4 +1,12 @@
 # Changelog
+## [1.8.3] — 2026-04-11
+
+### Fixed
+- `credential_save`: accept `type: "api_key"` for save-path validation (GitHub #15).
+
+### Changed
+- Release build: v1.8.3 (18).
+
 ## [1.8.2] — 2026-04-07
 
 ### Fixed
