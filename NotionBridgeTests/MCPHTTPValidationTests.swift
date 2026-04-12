@@ -123,4 +123,46 @@ func runMCPHTTPValidationTests() async {
             try expect(MCPHTTPValidation.streamableHTTPBearerPhase() == .none)
         }
     }
+
+    // MARK: - Three-state remote access status tests
+
+    await test("three-state: no URL → notConfigured (phase .none)") {
+        try withMCPHTTPDefaults(tunnelURL: nil, mcpBearer: nil) {
+            try expect(MCPHTTPValidation.isRemoteTunnelActive() == false)
+            try expect(MCPHTTPValidation.streamableHTTPBearerPhase() == .none)
+        }
+    }
+
+    await test("three-state: URL + no token → misconfigured (phase .remoteTunnelMissingToken)") {
+        try withMCPHTTPDefaults(tunnelURL: "https://mcp.example.com", mcpBearer: nil) {
+            try expect(MCPHTTPValidation.isRemoteTunnelActive() == true)
+            try expect(MCPHTTPValidation.streamableHTTPBearerPhase() == .remoteTunnelMissingToken)
+        }
+    }
+
+    await test("three-state: URL + token → active (phase .bearerRequired)") {
+        try withMCPHTTPDefaults(tunnelURL: "https://mcp.example.com", mcpBearer: "test-token-123") {
+            try expect(MCPHTTPValidation.isRemoteTunnelActive() == true)
+            try expect(MCPHTTPValidation.streamableHTTPBearerPhase() == .bearerRequired("test-token-123"))
+        }
+    }
+
+    await test("three-state: empty-string token treated as missing") {
+        try withMCPHTTPDefaults(tunnelURL: "https://mcp.example.com", mcpBearer: "   ") {
+            try expect(MCPHTTPValidation.resolveMCPBearerToken().isEmpty)
+            try expect(MCPHTTPValidation.streamableHTTPBearerPhase() == .remoteTunnelMissingToken)
+        }
+    }
+
+    await test("constant-time comparison: equal strings") {
+        try expect(MCPHTTPValidation.constantTimeEqual("abc123", "abc123") == true)
+    }
+
+    await test("constant-time comparison: unequal strings") {
+        try expect(MCPHTTPValidation.constantTimeEqual("abc123", "abc124") == false)
+    }
+
+    await test("constant-time comparison: different lengths") {
+        try expect(MCPHTTPValidation.constantTimeEqual("short", "longer-string") == false)
+    }
 }

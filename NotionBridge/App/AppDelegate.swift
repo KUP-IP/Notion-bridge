@@ -162,6 +162,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Remote access config changed — invalidate all active MCP sessions so clients
+        // reconnect with the updated tunnel URL / bearer token.
+        NotificationCenter.default.addObserver(forName: .remoteAccessConfigDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task {
+                await self?.serverManager?.invalidateAllSessions(reason: "remote access config changed")
+            }
+        }
+
         // PKT-349 B2: Observe reset onboarding notification from Settings.
         // Dispatch to MainActor to satisfy Swift 6 strict concurrency.
         NotificationCenter.default.addObserver(forName: .resetOnboarding, object: nil, queue: .main) { [weak self] _ in
