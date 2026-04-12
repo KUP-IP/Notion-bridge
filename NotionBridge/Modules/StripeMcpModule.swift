@@ -1,6 +1,6 @@
 // StripeMcpModule.swift — Dynamic Stripe MCP Tool Registration
 // NotionBridge · Modules
-// v1.6.0: Replaces native StripeModule with proxy to Stripe's hosted MCP server.
+// v1.7.0: Adds 3-attempt exponential backoff + stripe_reconnect sentinel tool.
 // Tools are discovered dynamically via mcp.stripe.com — no hardcoded tool definitions.
 
 import Foundation
@@ -11,44 +11,133 @@ import MCP
 public enum StripeMcpModule {
     public static let moduleName = "stripe"
 
-    /// Register all discovered Stripe MCP tools on the given router.
-    /// If discovery fails (no API key, network error), logs a warning and registers zero tools.
-    /// The app continues to function — tools become available once the API key is configured.
-    public static func register(on router: ToolRouter) async {
-        do {
-            let tools = try await StripeMcpProxy.shared.discoverTools()
-            for tool in tools {
-                let tier = securityTier(for: tool.name)
-                let isDestructive = isDestructiveOperation(tool.name)
+    /// Maximum retry attempts for tool discovery at startup.
+    private static let maxRetries = 3
+    /// Base delay in seconds for exponential backoff (2s → 4s → 8s).
+    private static let baseDelay: UInt64 = 2
 
-                await router.register(ToolRegistration(
-                    name: tool.name,
-                    module: moduleName,
-                    tier: tier,
-                    neverAutoApprove: isDestructive,
-                    description: Self.customerFacingDescription(tool.description),
-                    inputSchema: tool.inputSchema,
-                    handler: { [name = tool.name] arguments in
-                        do {
-                            return try await StripeMcpProxy.shared.callTool(
-                                name: name,
-                                arguments: arguments
-                            )
-                        } catch {
-                            return .object(["error": .string(error.localizedDescription)])
-                        }
+    /// Register all discovered Stripe MCP tools on the given router.
+    /// Retries up to 3 times with exponential backoff (2s → 4s → 8s) on transient failures.
+    /// If all retries fail, registers a `stripe_reconnect` sentinel tool for manual recovery.
+    /// Authentication failures (missing API key) fail immediately — no retries.
+    public static func register(on router: ToolRouter) async {
+        var lastError: Error?
+
+        for attempt in 1...maxRetries {
+            do {
+                // Clear stale session state before retries
+                if attempt > 1 {
+                    await StripeMcpProxy.shared.reset()
+                }
+
+                let tools = try await StripeMcpProxy.shared.discoverTools()
+                await registerDiscoveredTools(tools, on: router)
+                if !tools.isEmpty {
+                    print("[StripeMcpModule] Registered \(tools.count) tools from Stripe MCP server")
+                }
+                return // Success — exit retry loop
+            } catch StripeMcpError.authenticationFailed {
+                // API key missing or invalid — no point retrying
+                let keyStatus = apiKeyPresent() ? "present but invalid" : "absent"
+                print("[StripeMcpModule] ⚠️ Startup discovery failed (attempt \(attempt)/\(maxRetries)): authenticationFailed. API key: \(keyStatus). Stripe tools unavailable — call stripe_reconnect to retry.")
+                lastError = StripeMcpError.authenticationFailed
+                break
+            } catch {
+                lastError = error
+                let keyStatus = apiKeyPresent() ? "present" : "absent"
+                print("[StripeMcpModule] ⚠️ Startup discovery failed (attempt \(attempt)/\(maxRetries)): \(error.localizedDescription). API key: \(keyStatus).")
+
+                if attempt < maxRetries {
+                    let delay = baseDelay * UInt64(1 << (attempt - 1)) // 2s, 4s, 8s
+                    print("[StripeMcpModule] Retrying in \(delay)s...")
+                    try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                }
+            }
+        }
+
+        // All retries exhausted or auth failure — register sentinel tool
+        let keyStatus = apiKeyPresent() ? "present" : "absent"
+        let reason = lastError?.localizedDescription ?? "unknown"
+        print("[StripeMcpModule] ⚠️ All discovery attempts exhausted. Last error: \(reason). API key: \(keyStatus). Registering stripe_reconnect for manual recovery.")
+        await registerReconnectSentinel(on: router)
+    }
+
+    /// Register discovered Stripe tools on the router.
+    private static func registerDiscoveredTools(
+        _ tools: [StripeMcpProxy.DiscoveredTool],
+        on router: ToolRouter
+    ) async {
+        for tool in tools {
+            let tier = securityTier(for: tool.name)
+            let isDestructive = isDestructiveOperation(tool.name)
+
+            await router.register(ToolRegistration(
+                name: tool.name,
+                module: moduleName,
+                tier: tier,
+                neverAutoApprove: isDestructive,
+                description: Self.customerFacingDescription(tool.description),
+                inputSchema: tool.inputSchema,
+                handler: { [name = tool.name] arguments in
+                    do {
+                        return try await StripeMcpProxy.shared.callTool(
+                            name: name,
+                            arguments: arguments
+                        )
+                    } catch {
+                        return .object(["error": .string(error.localizedDescription)])
                     }
-                ))
-            }
-            if !tools.isEmpty {
-                print("[StripeMcpModule] Registered \(tools.count) tools from Stripe MCP server")
-            }
-        } catch {
-            print("[StripeMcpModule] Discovery failed: \(error.localizedDescription). No Stripe tools registered.")
+                }
+            ))
         }
     }
 
-    /// Short, customer-readable line for Settings and MCP listings (Stripe’s API may return long copy).
+    /// Register the stripe_reconnect sentinel tool for manual session recovery.
+    /// On successful reconnection, registers all discovered tools and deregisters itself.
+    private static func registerReconnectSentinel(on router: ToolRouter) async {
+        await router.register(ToolRegistration(
+            name: "stripe_reconnect",
+            module: moduleName,
+            tier: .open,
+            neverAutoApprove: false,
+            description: "Retry connecting to the Stripe MCP server. Call this if Stripe tools are unavailable after startup.",
+            inputSchema: .object(["type": .string("object"), "properties": .object([:])]),
+            handler: { _ in
+                do {
+                    await StripeMcpProxy.shared.reset()
+                    let tools = try await StripeMcpProxy.shared.discoverTools(force: true)
+
+                    // Register all discovered tools on the live router
+                    await Self.registerDiscoveredTools(tools, on: router)
+
+                    // Deregister the sentinel tool — no longer needed
+                    await router.deregister(name: "stripe_reconnect")
+
+                    print("[StripeMcpModule] Reconnected — registered \(tools.count) tools from Stripe MCP server")
+                    return .object([
+                        "status": .string("reconnected"),
+                        "tools_registered": .int(tools.count)
+                    ])
+                } catch {
+                    return .object([
+                        "status": .string("failed"),
+                        "error": .string(error.localizedDescription)
+                    ])
+                }
+            }
+        ))
+    }
+
+    /// Check whether a Stripe API key is present in the Keychain.
+    private static func apiKeyPresent() -> Bool {
+        if let key = KeychainManager.shared.read(key: KeychainManager.Key.stripeAPIKey),
+           !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return true
+        }
+        return false
+    }
+
+    /// Short, customer-readable line for Settings and MCP listings (Stripe's API may return long copy).
     private static func customerFacingDescription(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Stripe account or payment tool." }

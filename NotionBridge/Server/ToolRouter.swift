@@ -60,6 +60,11 @@ public actor ToolRouter {
         registry[tool.name] = tool
     }
 
+    /// Remove a tool registration by name.
+    public func deregister(name: String) {
+        registry.removeValue(forKey: name)
+    }
+
     /// All currently registered tools.
     public func allRegistrations() -> [ToolRegistration] {
         Array(registry.values)
