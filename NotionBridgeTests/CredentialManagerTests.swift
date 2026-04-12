@@ -20,16 +20,20 @@ func runCredentialManagerTests() async {
     // Type System Tests
     // ============================================================
 
-    await test("CredentialType has exactly 2 cases") {
+    await test("CredentialType has expected cases") {
         let allCases = CredentialType.allCases
-        try expect(allCases.count == 3, "Expected 3 credential types, got \(allCases.count)")
+        try expect(allCases.count == 4, "Expected 4 credential types, got \(allCases.count)")
+        try expect(allCases.contains(.apiKey))
         try expect(allCases.contains(.password))
         try expect(allCases.contains(.card))
+        try expect(allCases.contains(.unknown))
     }
 
     await test("CredentialType raw values are correct") {
+        try expect(CredentialType.apiKey.rawValue == "api_key")
         try expect(CredentialType.password.rawValue == "password")
         try expect(CredentialType.card.rawValue == "card")
+        try expect(CredentialType.unknown.rawValue == "unknown")
     }
 
     await test("CredentialType is Codable (JSON round-trip)") {
