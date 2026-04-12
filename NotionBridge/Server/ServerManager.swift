@@ -76,7 +76,8 @@ public actor ServerManager {
             router: router,
             onToolCall: onToolCall,
             onClientConnected: onClientConnected,
-            onClientDisconnected: onClientDisconnected
+            onClientDisconnected: onClientDisconnected,
+            sessionTimeout: ConfigManager.shared.sessionTimeout
         )
         self.sseServer = sseServer
 
@@ -209,6 +210,11 @@ public actor ServerManager {
     /// Stop the SSE server gracefully.
     public func stopSSE() async {
         await sseServer?.stop()
+    }
+
+    /// Invalidate all active MCP sessions (e.g. after remote access config change).
+    public func invalidateAllSessions(reason: String) async {
+        await sseServer?.invalidateAllSessions(reason: reason)
     }
 }
 

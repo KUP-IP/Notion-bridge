@@ -374,8 +374,20 @@ public actor ConnectionRegistry {
         let defaults = UserDefaults.standard
         let provider = defaults.string(forKey: "tunnelProvider") ?? "Cloudflare"
         let tunnelURL = defaults.string(forKey: "tunnelURL")?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let isValidURL = URL(string: tunnelURL) != nil
-        let status: BridgeConnectionStatus = tunnelURL.isEmpty ? .notConfigured : (isValidURL ? .connected : .warning)
+        let bearerToken = MCPHTTPValidation.resolveMCPBearerToken()
+
+        // Three-state status mirroring MCPHTTPValidation.streamableHTTPBearerPhase():
+        // - .notConfigured: no tunnel URL
+        // - .warning: tunnel URL set but no bearer token (server will 401 all requests)
+        // - .connected: tunnel URL + bearer token both configured
+        let status: BridgeConnectionStatus
+        if tunnelURL.isEmpty {
+            status = .notConfigured
+        } else if bearerToken.isEmpty {
+            status = .warning
+        } else {
+            status = .connected
+        }
 
         return BridgeConnection(
             id: "\(BridgeConnectionProvider.tunnel.rawValue):remote-access",

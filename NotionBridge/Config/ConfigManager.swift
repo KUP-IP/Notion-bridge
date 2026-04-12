@@ -199,6 +199,42 @@ public final class ConfigManager: @unchecked Sendable {
     }
 
 
+    // MARK: - Session Timeout
+
+    /// Read/write the SSE session timeout from config.json.
+    /// `0` in config means no timeout (sessions never expire). Maps to `TimeInterval.infinity` at runtime.
+    /// Any positive value is clamped to a minimum of 30 seconds.
+    /// Falls back to 300 seconds (5 minutes) if not configured.
+    public var sessionTimeout: TimeInterval {
+        get {
+            queue.sync {
+                let config = readConfig()
+                guard let raw = config["sessionTimeout"] else { return 300 }
+                let value: Double
+                if let d = raw as? Double { value = d }
+                else if let i = raw as? Int { value = Double(i) }
+                else { return 300 }
+                return value == 0 ? .infinity : max(30, value)
+            }
+        }
+        set {
+            queue.sync(flags: .barrier) {
+                var config = readConfig()
+                // Store 0 to represent "no timeout"; otherwise store the raw value.
+                if newValue.isInfinite || newValue == 0 {
+                    config["sessionTimeout"] = 0
+                } else {
+                    config["sessionTimeout"] = newValue
+                }
+                do {
+                    try writeConfig(config)
+                } catch {
+                    print("[ConfigManager] ⚠️ Failed to write sessionTimeout: \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
     // MARK: - Notion Connections (V3-QUALITY A4)
 
     /// Read/write the connections array from config.json.

@@ -157,7 +157,7 @@ public actor SSEServer {
         sessionCleanupInterval: TimeInterval = 30,
         maxHTTPSessions: Int = 48
     ) {
-        let normalizedSessionTimeout = max(30, sessionTimeout)
+        let normalizedSessionTimeout = sessionTimeout.isInfinite ? .infinity : max(30, sessionTimeout)
         self.host = host
         self.port = port
         self.router = router
@@ -165,7 +165,9 @@ public actor SSEServer {
         self.onClientConnected = onClientConnected
         self.onClientDisconnected = onClientDisconnected
         self.sessionTimeout = normalizedSessionTimeout
-        self.sessionCleanupInterval = max(5, min(normalizedSessionTimeout, sessionCleanupInterval))
+        self.sessionCleanupInterval = normalizedSessionTimeout.isInfinite
+            ? max(5, sessionCleanupInterval)
+            : max(5, min(normalizedSessionTimeout, sessionCleanupInterval))
         self.maxHTTPSessions = max(8, maxHTTPSessions)
     }
 
@@ -252,6 +254,17 @@ public actor SSEServer {
         try? await channel?.close()
         channel = nil
         print("[SSE] Server stopped")
+    }
+
+    /// Invalidate all active HTTP sessions (e.g. after remote access config change).
+    /// Existing clients must reconnect and re-authenticate with the current config.
+    public func invalidateAllSessions(reason: String) async {
+        guard !sessions.isEmpty else { return }
+        let count = sessions.count
+        for id in Array(sessions.keys) {
+            await removeSession(id, reason: reason)
+        }
+        print("[SSE] Invalidated \(count) session(s): \(reason)")
     }
 
     /// Number of active sessions (Streamable HTTP + legacy SSE).
@@ -531,6 +544,7 @@ public actor SSEServer {
     }
 
     private func cleanupExpiredSessions(now: Date = Date()) async {
+        guard !sessionTimeout.isInfinite else { return }
         let expiredIDs = sessions
             .filter { _, ctx in now.timeIntervalSince(ctx.lastAccessedAt) > sessionTimeout }
             .sorted { lhs, rhs in

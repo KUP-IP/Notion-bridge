@@ -33,17 +33,62 @@ public enum TunnelProvider: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Remote Access Status
+
+/// Three-state status for the remote access indicator, mirroring
+/// the server's `MCPHTTPValidation.streamableHTTPBearerPhase()` logic.
+private enum RemoteAccessStatus {
+    /// Tunnel URL + bearer token both configured — remote access is active.
+    case active
+    /// Tunnel URL is set but no bearer token — server will 401 all requests.
+    case misconfigured
+    /// No tunnel URL — remote access is off.
+    case notConfigured
+
+    var dotColor: Color {
+        switch self {
+        case .active: return .green
+        case .misconfigured: return .yellow
+        case .notConfigured: return .gray
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .active: return "" // caller uses provider name
+        case .misconfigured: return "Token required"
+        case .notConfigured: return "Not configured"
+        }
+    }
+
+    static func resolve(tunnelURL: String, bearerToken: String) -> RemoteAccessStatus {
+        let url = tunnelURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return .notConfigured }
+        let token = bearerToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? .misconfigured : .active
+    }
+}
+
 // MARK: - Connection Setup View
 
 /// Displays tunnel status and provider selection for connecting remote Notion agents.
-/// V1: Minimal — shows status indicator, selected provider, and manual URL input.
-/// Settings are persisted via @AppStorage (UserDefaults).
+/// Settings are persisted to UserDefaults via explicit Save action (tunnel URL)
+/// or immediate persistence (bearer token Generate/Clear).
 public struct ConnectionSetupView: View {
     @AppStorage("tunnelProvider") private var selectedProvider: String = TunnelProvider.cloudflare.rawValue
-    @AppStorage("tunnelURL") private var tunnelURL: String = ""
     @State private var isExpanded: Bool = false
+
+    // Draft URL — decoupled from UserDefaults to prevent text field focus bugs.
+    // Loaded from UserDefaults on appear; written on explicit Save.
+    @State private var draftURL: String = ""
+    @State private var savedURL: String = ""
+    @State private var urlValidationError: String?
+    @State private var showSaveConfirmation: Bool = false
+
+    // Bearer token state
     @State private var mcpBearerToken: String = ""
     @State private var saveBearerTask: Task<Void, Never>?
+    @State private var showBearerWarning: Bool = false
 
     /// SSE port resolution: config.json -> env var -> default.
     private var ssePort: Int {
@@ -56,10 +101,24 @@ public struct ConnectionSetupView: View {
         TunnelProvider(rawValue: selectedProvider) ?? .cloudflare
     }
 
+    /// Whether the draft URL differs from the persisted URL.
+    private var hasUnsavedURLChanges: Bool {
+        draftURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            != savedURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Current remote access status based on persisted (saved) state.
+    private var remoteStatus: RemoteAccessStatus {
+        RemoteAccessStatus.resolve(tunnelURL: savedURL, bearerToken: mcpBearerToken)
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             statusHeader
             if isExpanded { expandedContent }
+        }
+        .onAppear {
+            loadFromStorage()
         }
     }
 
@@ -68,12 +127,12 @@ public struct ConnectionSetupView: View {
     private var statusHeader: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(tunnelURL.isEmpty ? .orange : .green)
+                .fill(remoteStatus.dotColor)
                 .frame(width: 8, height: 8)
             Text("Remote Access")
                 .font(.callout)
             Spacer()
-            Text(tunnelURL.isEmpty ? "Not configured" : activeProvider.rawValue)
+            Text(remoteStatus == .active ? activeProvider.rawValue : remoteStatus.label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
@@ -90,7 +149,7 @@ public struct ConnectionSetupView: View {
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
         .accessibilityLabel(
-            "Remote Access, \(tunnelURL.isEmpty ? "not configured" : activeProvider.rawValue), \(isExpanded ? "expanded" : "collapsed")"
+            "Remote Access, \(remoteStatus == .active ? activeProvider.rawValue : remoteStatus.label), \(isExpanded ? "expanded" : "collapsed")"
         )
     }
 
@@ -105,22 +164,53 @@ public struct ConnectionSetupView: View {
 
             Divider()
 
-            // Tunnel URL
-            TextField("Tunnel URL", text: $tunnelURL)
-                .textFieldStyle(.roundedBorder)
-                .font(.caption)
+            // Tunnel URL + Save button
+            tunnelURLSection
 
-            if !tunnelURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Bearer token (shown when a URL is saved)
+            if !savedURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Divider()
                 mcpBearerSection
             }
         }
         .padding(.top, 4)
-        .onAppear {
-            refreshMCPBearerFromStorage()
-        }
-        .onChange(of: tunnelURL) { _, _ in
-            refreshMCPBearerFromStorage()
+    }
+
+    // MARK: - Tunnel URL Section
+
+    private var tunnelURLSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                TextField("Tunnel URL", text: $draftURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .onChange(of: draftURL) { _, _ in
+                        // Clear validation error as user types
+                        urlValidationError = nil
+                        showSaveConfirmation = false
+                    }
+
+                Button("Save") {
+                    saveTunnelURL()
+                }
+                .controlSize(.small)
+                .disabled(!hasUnsavedURLChanges)
+            }
+
+            // Validation error
+            if let error = urlValidationError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+
+            // Save confirmation
+            if showSaveConfirmation {
+                Text("Saved")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+                    .transition(.opacity)
+            }
         }
     }
 
@@ -143,6 +233,8 @@ public struct ConnectionSetupView: View {
                     let token = Self.makeRandomBearerToken()
                     mcpBearerToken = token
                     persistMCPBearerImmediate(token)
+                    postRemoteAccessConfigChange()
+                    showBearerWarningBriefly()
                 }
                 .controlSize(.small)
                 Button("Copy") {
@@ -154,9 +246,60 @@ public struct ConnectionSetupView: View {
                 Button("Clear") {
                     mcpBearerToken = ""
                     persistMCPBearerImmediate("")
+                    postRemoteAccessConfigChange()
+                    showBearerWarningBriefly()
                 }
                 .controlSize(.small)
             }
+
+            // Warning after Generate/Clear
+            if showBearerWarning {
+                Text("Active clients disconnected — reconnect with the new token.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    // MARK: - Storage
+
+    private func loadFromStorage() {
+        let persisted = UserDefaults.standard.string(forKey: "tunnelURL") ?? ""
+        draftURL = persisted
+        savedURL = persisted
+        refreshMCPBearerFromStorage()
+    }
+
+    private func saveTunnelURL() {
+        let trimmed = draftURL.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Validate: empty is allowed (clears remote access), otherwise must parse
+        if !trimmed.isEmpty {
+            let withScheme = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+            guard let url = URL(string: withScheme), url.host != nil else {
+                urlValidationError = "Invalid URL — must be a valid hostname or URL"
+                return
+            }
+        }
+
+        // Persist
+        if trimmed.isEmpty {
+            UserDefaults.standard.removeObject(forKey: "tunnelURL")
+        } else {
+            UserDefaults.standard.set(trimmed, forKey: "tunnelURL")
+        }
+        savedURL = trimmed
+        urlValidationError = nil
+
+        // Notify server to invalidate sessions and rebuild validation pipeline
+        postRemoteAccessConfigChange()
+
+        // Show confirmation
+        showSaveConfirmation = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            showSaveConfirmation = false
         }
     }
 
@@ -189,6 +332,20 @@ public struct ConnectionSetupView: View {
         let st = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
         precondition(st == errSecSuccess, "SecRandomCopyBytes failed: \(st)")
         return Data(bytes).base64EncodedString()
+    }
+
+    // MARK: - Notifications
+
+    private func postRemoteAccessConfigChange() {
+        NotificationCenter.default.post(name: .remoteAccessConfigDidChange, object: nil)
+    }
+
+    private func showBearerWarningBriefly() {
+        showBearerWarning = true
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            showBearerWarning = false
+        }
     }
 
     // MARK: - Provider Row
