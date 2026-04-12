@@ -1,4 +1,20 @@
 # Changelog
+## [1.8.4] — 2026-04-12
+
+### Added
+- **Contacts module** — four new MCP tools: `contacts_health`, `contacts_search`, `contacts_get`, `contacts_resolve_handle`. Backed by CNContactStore — works without Contacts.app running. Closes #16.
+
+### Fixed
+- **Stripe startup resilience** — transient startup failures retry automatically (3-attempt exponential backoff, 2s→4s→8s); `stripe_reconnect` sentinel tool registered as manual recovery when all retries fail. Auth failures (missing key) skip retries immediately.
+- Remote access URL field no longer clears on click.
+- Remote access status indicator no longer shows green when bearer token is absent.
+- Remote access status loads correctly on Settings open (not only after expanding section).
+
+### Changed
+- **Remote access UX** — save button with dirty-state tracking; three-state status indicator (no URL / URL without token / fully configured); session invalidation on token rotation.
+- **Session persistence** — Bridge MCP sessions no longer expire (configurable via `sessionTimeout: 0` in config).
+- Release build: v1.8.4 (19).
+
 ## [1.8.3] — 2026-04-11
 
 ### Fixed
@@ -255,6 +271,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _Initial tracked release._
 
+[1.8.4]: https://github.com/KUP-IP/Notion-bridge/compare/v1.8.3...v1.8.4
+[1.8.3]: https://github.com/KUP-IP/Notion-bridge/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/KUP-IP/Notion-bridge/compare/v1.8.1...v1.8.2
 [1.8.1]: https://github.com/KUP-IP/Notion-bridge/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.5.3...v1.8.0

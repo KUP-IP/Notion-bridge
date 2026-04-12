@@ -11,11 +11,11 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "1.8.3"
+    public static let marketing = "1.8.4"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
-    public static let build = "18"
+    public static let build = "19"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
