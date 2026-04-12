@@ -4,13 +4,13 @@
         <title>NotionBridge</title>
         <item>
             <title>1.8.3</title>
-            <pubDate>Sat, 11 Apr 2026 21:31:22 -0500</pubDate>
+            <pubDate>Sat, 11 Apr 2026 21:57:59 -0500</pubDate>
             <link>https://github.com/KUP-IP/Notion-bridge/releases</link>
             <sparkle:version>18</sparkle:version>
             <sparkle:shortVersionString>1.8.3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
             <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
-            <enclosure url="https://github.com/KUP-IP/Notion-bridge/releases/download/v1.8.3/notion-bridge-v1.8.3.dmg" length="10538235" type="application/octet-stream" sparkle:edSignature="eWfQcuVcusyLFAxVK0N2AA/quGVDtVNNhNok8UEiNn80entHVqJxwcy91tQyaLawIuD4e7ik3XQHxm9gcizoDA=="/>
+            <enclosure url="https://github.com/KUP-IP/Notion-bridge/releases/download/v1.8.3/notion-bridge-v1.8.3.dmg" length="10538224" type="application/octet-stream" sparkle:edSignature="1c1Z/Iyn1GnfFGLwPkmjk0gmVH1OuknJmJ4quCC+77QwuNe2vckEtx+wRGuFnfJYtEo3Qyxbs/mvcc0myiWlBg=="/>
         </item>
     </channel>
 </rss>
