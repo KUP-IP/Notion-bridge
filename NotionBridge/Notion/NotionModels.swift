@@ -230,6 +230,12 @@ public enum NotionJSON {
             }
             if !parts.isEmpty { return parts.joined(separator: " | ") }
         }
+        // v1.8.5: table_row — cells is [[rich_text_object]]
+        if type == "table_row", let cells = typeData["cells"] as? [[[String: Any]]] {
+            let cellTexts = cells.map { extractPlainText(from: $0) }
+            let joined = cellTexts.joined(separator: " | ")
+            if !joined.trimmingCharacters(in: .whitespaces).isEmpty { return joined }
+        }
         return ""
     }
 

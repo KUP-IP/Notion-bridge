@@ -435,6 +435,21 @@ func runNotionModuleTests() async {
         try expect(text == "", "Expected empty string, got '\(text)'")
     }
 
+
+    await test("NotionJSON.extractPlainTextFromBlock extracts table_row cells") {
+        let block: [String: Any] = [
+            "type": "table_row",
+            "table_row": [
+                "cells": [
+                    [["plain_text": "Cell A"]],
+                    [["plain_text": "Cell B"]],
+                    [["plain_text": "Cell C"]]
+                ] as [[[String: Any]]]
+            ]
+        ]
+        let text = NotionJSON.extractPlainTextFromBlock(block)
+        try expect(text == "Cell A | Cell B | Cell C", "Expected 'Cell A | Cell B | Cell C', got '\(text)'")
+    }
     await test("NotionJSON.maskToken masks token correctly") {
         let masked = NotionJSON.maskToken("ntn_abcdef1234567890")
         try expect(masked.hasPrefix("ntn_"), "Expected prefix 'ntn_', got '\(masked)'")
