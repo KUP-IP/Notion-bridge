@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-Three security findings from Phase 1 have been **fixed and verified** in this phase. A comprehensive tier audit of all 75 registered tools found **no additional misclassifications** beyond the already-identified SEC-03. The build compiles cleanly after all fixes.
+Three security findings from Phase 1 have been **fixed and verified** in this phase. A comprehensive tier audit of the **v1.8.0** tier matrix below (66 tools in `.open` / `.notify` / `.request` buckets) found **no additional misclassifications** beyond the already-identified SEC-03. *Current static inventory:* **80** feature module tools (`BridgeConstants.staticFeatureModuleToolCount`) + **`echo`** + dynamic Stripe **N** — see README. The build compiles cleanly after all fixes.
 
 **Verdict:** All critical and medium findings resolved. No blocking security issues remain.
 
@@ -49,7 +49,7 @@ Three security findings from Phase 1 have been **fixed and verified** in this ph
 
 ## Comprehensive Tier Audit
 
-### Tier Distribution (75 tools)
+### Tier Distribution (v1.8.0 — 66 tools in matrix)
 
 | Tier | Count | Purpose |
 |------|-------|---------|
@@ -57,7 +57,9 @@ Three security findings from Phase 1 have been **fixed and verified** in this ph
 | `.notify` | 20 | Write operations, user-notified |
 | `.request` | 7 | Dangerous operations, explicit user approval |
 
-*Note: clipboard_write moved from .open to .notify, changing counts from 40/19/7 to 39/20/7.*
+*Note: clipboard_write moved from .open to .notify, changing counts from 40/19/7 to 39/20/7. Totals above are the audited slice only; later releases add tools (e.g. Contacts module) — do not treat 66 as today’s full static count.*
+
+*Current static surface (post–Contacts split): **80** feature module tools + `echo` + Stripe **N** — see `BridgeConstants` and README.*
 
 ### .request Tier (7 tools) — All Correct ✅
 | Tool | Module | Justification |

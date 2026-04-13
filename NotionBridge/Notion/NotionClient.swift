@@ -772,4 +772,45 @@ public actor NotionClient {
         }
         return data
     }
+
+    // MARK: - Data Source Schema Write (v1.8.5)
+
+    /// B3 (v1.8.5): Update a data source schema by ID.
+    /// PATCH /v1/data_sources/{data_source_id}
+    public func updateDataSource(dataSourceId: String, properties: Data) async throws -> Data {
+        let cleanId = dataSourceId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(
+            method: "PATCH",
+            path: "/data_sources/" + cleanId,
+            body: properties
+        )
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// B4 (v1.8.5): Create a new data source under a database.
+    /// POST /v1/data_sources
+    public func createDataSource(databaseId: String, properties: Data, title: String? = nil) async throws -> Data {
+        let cleanId = databaseId.replacingOccurrences(of: "-", with: "")
+        var body: [String: Any] = ["parent": ["database_id": cleanId]]
+
+        if let propsObj = try? JSONSerialization.jsonObject(with: properties) {
+            body["properties"] = propsObj
+        }
+
+        if let title = title {
+            body["title"] = [["type": "text", "text": ["content": title]]]
+        }
+
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "POST", path: "/data_sources", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
 }

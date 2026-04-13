@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **76+N** MCP tools in a typical configuration — **75** from registered feature modules, **1** builtin (`echo`), plus **N** tools from the optional remote Stripe MCP proxy when API discovery succeeds (**N=0** if Stripe is not configured or discovery fails) — over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Feature code is organized in **15** Swift modules (`*Module`); `echo` is registered separately as `builtin`, and Stripe tools are registered dynamically from `StripeMcpModule`.
+NotionBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **81+N** MCP tools in a typical configuration — **80** from registered feature modules (`BridgeConstants.staticFeatureModuleToolCount`), **1** builtin (`echo`), plus **N** tools from the optional remote Stripe MCP proxy when API discovery succeeds (**N=0** if Stripe is not configured or discovery fails) — over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Feature code is organized in **15** Swift modules (`*Module`); `echo` is registered separately as `builtin`, and Stripe tools are registered dynamically from `StripeMcpModule`.
 
 Bundle ID: `kup.solutions.notion-bridge` (legacy: `solutions.kup.keepr`)
 
@@ -71,7 +71,7 @@ Set the Notion API token (resolution priority order):
 2. `NOTION_API_KEY` environment variable (legacy)
 3. `~/.config/notion-bridge/config.json` — key: `notion_api_token`
 
-**Cursor MCP (avoid duplicates):** use a **single** global MCP entry in `~/.cursor/mcp.json` pointing at your Streamable HTTP URL. Do **not** add a workspace-scoped duplicate for Notion Bridge — remove it under Cursor **Settings → MCP** if present, then restart Cursor.
+**Cursor MCP (avoid duplicates):** use a **single** global MCP entry in `~/.cursor/mcp.json` named **`Bridge MCP`** (JSON key), pointing at your Streamable HTTP URL (and `Authorization: Bearer` when required). Do **not** add a workspace-scoped duplicate — remove it under Cursor **Settings → MCP** if present, then restart Cursor.
 
 ## Git & Release Hygiene
 

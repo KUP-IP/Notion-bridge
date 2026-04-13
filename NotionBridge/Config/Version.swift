@@ -11,11 +11,11 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "1.8.4"
+    public static let marketing = "1.8.5"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
-    public static let build = "19"
+    public static let build = "20"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
@@ -37,4 +37,11 @@ public enum BridgeConstants {
     public static let notionAPIVersion = "2026-03-11"
     /// Default SSE server port.
     public static let defaultSSEPort = 9700
+
+    /// Tools registered by Swift `*Module` types only: excludes `builtin` (`echo`) and excludes Stripe MCP (dynamic).
+    /// Keep in sync with `ServerManager.setup()` module registrations before `StripeMcpModule` / `echo`.
+    public static let staticFeatureModuleToolCount = 80
+
+    /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
+    public static let staticFeatureModuleFamilyCount = 15
 }

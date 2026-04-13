@@ -168,4 +168,16 @@ func runSkillsModuleTests() async {
             throw TestError.assertion("Expected structured result for empty skill name")
         }
     }
+
+    await test("manage_skill rejects missing action") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "manage_skill",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing action")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
 }

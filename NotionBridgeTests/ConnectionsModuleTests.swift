@@ -39,4 +39,40 @@ func runConnectionsModuleTests() async {
             try expect(tool.tier == .open, "Expected open tier for \(toolName)")
         }
     }
+
+    await test("connections_get rejects missing connectionId") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "connections_get",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing connectionId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("connections_validate rejects missing connectionId") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "connections_validate",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing connectionId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("connections_capabilities rejects missing connectionId") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "connections_capabilities",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing connectionId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
 }

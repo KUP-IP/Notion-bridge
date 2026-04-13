@@ -279,8 +279,8 @@ public actor SSEServer {
             totalSessionsEvicted: totalSessionsEvicted,
             totalSessionsClosed: totalSessionsClosed,
             maxHTTPSessions: maxHTTPSessions,
-            sessionTimeoutSeconds: Int(sessionTimeout),
-            sessionCleanupIntervalSeconds: Int(sessionCleanupInterval)
+            sessionTimeoutSeconds: sessionTimeout.isFinite ? Int(sessionTimeout) : 0,
+            sessionCleanupIntervalSeconds: sessionCleanupInterval.isFinite ? Int(sessionCleanupInterval) : 0
         )
     }
 

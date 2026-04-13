@@ -1115,6 +1115,110 @@ public enum NotionModule {
                 ])
             }
         ))
+
+        // MARK: 21. notion_datasource_update - notify (B3, v1.8.5)
+        await router.register(ToolRegistration(
+            name: "notion_datasource_update",
+            module: moduleName,
+            tier: .notify,
+            description: "Update a data source's schema (add/modify properties). Changes to one data source don't affect others in the same database.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "dataSourceId": .object(["type": .string("string"), "description": .string("Data source ID (with or without hyphens)")]),
+                    "properties": .object(["type": .string("string"), "description": .string("JSON string of properties to add or update (Notion API format)")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("dataSourceId"), .string("properties")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let dsId) = args["dataSourceId"],
+                      case .string(let propsJSON) = args["properties"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_datasource_update", reason: "missing 'dataSourceId' or 'properties'")
+                }
+
+                guard let propsData = propsJSON.data(using: .utf8),
+                      let propsObj = try? JSONSerialization.jsonObject(with: propsData) as? [String: Any] else {
+                    return .object(["error": .string("Invalid JSON in 'properties' parameter")])
+                }
+
+                let envelope: [String: Any] = ["properties": propsObj]
+                let envelopeData = try JSONSerialization.data(withJSONObject: envelope)
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let resultData = try await client.updateDataSource(dataSourceId: dsId, properties: envelopeData)
+
+                guard let resultJSON = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse update response")])
+                }
+
+                let id = resultJSON["id"] as? String ?? dsId
+                var name = "Untitled"
+                if let titleArr = resultJSON["title"] as? [[String: Any]] {
+                    name = titleArr.compactMap { $0["plain_text"] as? String }.joined()
+                }
+
+                return .object([
+                    "success": .bool(true),
+                    "id": .string(id),
+                    "name": .string(name)
+                ])
+            }
+        ))
+
+        // MARK: 22. notion_datasource_create - notify (B4, v1.8.5)
+        await router.register(ToolRegistration(
+            name: "notion_datasource_create",
+            module: moduleName,
+            tier: .notify,
+            description: "Create a new data source under an existing database.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "databaseId": .object(["type": .string("string"), "description": .string("Parent database ID")]),
+                    "properties": .object(["type": .string("string"), "description": .string("JSON string of property schema definitions (Notion API format)")]),
+                    "title": .object(["type": .string("string"), "description": .string("Optional name for the new data source")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("databaseId"), .string("properties")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let dbId) = args["databaseId"],
+                      case .string(let propsJSON) = args["properties"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_datasource_create", reason: "missing 'databaseId' or 'properties'")
+                }
+
+                guard let propsData = propsJSON.data(using: .utf8) else {
+                    return .object(["error": .string("Invalid JSON in 'properties'")])
+                }
+
+                let title: String? = {
+                    if case .string(let t) = args["title"] { return t }
+                    return nil
+                }()
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let resultData = try await client.createDataSource(databaseId: dbId, properties: propsData, title: title)
+
+                guard let resultJSON = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse create response")])
+                }
+
+                let id = resultJSON["id"] as? String ?? ""
+                var name = "Untitled"
+                if let titleArr = resultJSON["title"] as? [[String: Any]] {
+                    name = titleArr.compactMap { $0["plain_text"] as? String }.joined()
+                }
+
+                return .object([
+                    "success": .bool(true),
+                    "id": .string(id),
+                    "name": .string(name)
+                ])
+            }
+        ))
     }
 }
 

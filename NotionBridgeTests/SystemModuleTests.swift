@@ -18,7 +18,7 @@ func runSystemModuleTests() async {
     // Registration tests
     await test("SystemModule registers 3 tools") {
         let tools = await router.registrations(forModule: "system")
-        try expect(tools.count == 4, "Expected 4 system tools, got \(tools.count)")
+        try expect(tools.count == 3, "Expected 3 system tools, got \(tools.count)")
         let names = Set(tools.map(\.name))
         try expect(names.contains("system_info"), "Missing system_info")
         try expect(names.contains("process_list"), "Missing process_list")
@@ -38,10 +38,10 @@ func runSystemModuleTests() async {
         try expect(tool.tier == .open, "Expected green, got \(tool.tier.rawValue)")
     }
 
-    await test("notify tier is yellow") {
+    await test("notify tier is open") {
         let tools = await router.registrations(forModule: "system")
         let tool = tools.first(where: { $0.name == "notify" })!
-        try expect(tool.tier == .open, "Expected yellow, got \(tool.tier.rawValue)")
+        try expect(tool.tier == .open, "Expected open, got \(tool.tier.rawValue)")
     }
 
     // Functional tests — system_info
@@ -163,6 +163,32 @@ func runSystemModuleTests() async {
             throw TestError.assertion("Expected error for missing body")
         } catch is ToolRouterError {
             // Expected
+        }
+    }
+
+    await test("process_list respects filter param") {
+        let result = try await router.dispatch(
+            toolName: "process_list",
+            arguments: .object(["filter": .string("NotionBridge")])
+        )
+        if case .object(let dict) = result,
+           case .array(let procs) = dict["processes"] {
+            for proc in procs {
+                if case .object(let p) = proc, case .string(let name) = p["name"] {
+                    try expect(name.lowercased().contains("notionbridge"), "Filter should match: \(name)")
+                }
+            }
+        }
+    }
+
+    await test("process_list respects limit param") {
+        let result = try await router.dispatch(
+            toolName: "process_list",
+            arguments: .object(["limit": .int(3)])
+        )
+        if case .object(let dict) = result,
+           case .array(let procs) = dict["processes"] {
+            try expect(procs.count <= 3, "Expected at most 3 processes, got \(procs.count)")
         }
     }
 }

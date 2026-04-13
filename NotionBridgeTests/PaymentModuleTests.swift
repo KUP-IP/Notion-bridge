@@ -5,6 +5,13 @@ import Foundation
 import MCP
 import NotionBridgeLib
 
+private func unwrapTool(named name: String, from tools: [ToolRegistration]) throws -> ToolRegistration {
+    guard let tool = tools.first(where: { $0.name == name }) else {
+        throw TestError.assertion("Missing tool \(name)")
+    }
+    return tool
+}
+
 func runPaymentModuleTests() async {
     print("\n💳 PaymentModule Tests")
 
@@ -58,11 +65,16 @@ func runPaymentModuleTests() async {
     await test("PaymentModule default amount ceiling is 50000") {
         try expect(PaymentModule.amountCeiling == 50_000, "Expected amount ceiling 50000")
     }
-}
 
-private func unwrapTool(named name: String, from tools: [ToolRegistration]) throws -> ToolRegistration {
-    guard let tool = tools.first(where: { $0.name == name }) else {
-        throw TestError.assertion("Missing tool \(name)")
+    await test("payment_execute rejects missing required params") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "payment_execute",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing params")
+        } catch is ToolRouterError {
+            // Expected
+        }
     }
-    return tool
 }

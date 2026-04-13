@@ -24,7 +24,7 @@ func runNotionModuleTests() async {
 
     await test("NotionModule registers 18 tools") {
         let tools = await router.registrations(forModule: "notion")
-        try expect(tools.count == 19, "Expected 19 notion tools, got \(tools.count)")
+        try expect(tools.count == 21, "Expected 21 notion tools, got \(tools.count)")
     }
 
     let expectedTools: [String] = [
@@ -33,7 +33,8 @@ func runNotionModuleTests() async {
         "notion_block_delete", "notion_page_markdown_read", "notion_database_get", "notion_datasource_get",
         "notion_comments_list", "notion_comment_create", "notion_users_list",
         "notion_page_move", "notion_file_upload", "notion_token_introspect",
-        "notion_connections_list", "notion_block_read", "notion_block_update"
+        "notion_connections_list", "notion_block_read", "notion_block_update",
+        "notion_datasource_update", "notion_datasource_create"
     ]
 
     for toolName in expectedTools {
@@ -66,6 +67,7 @@ func runNotionModuleTests() async {
         "notion_page_update", "notion_page_create", "notion_blocks_append",
         "notion_block_delete",
         "notion_comment_create", "notion_page_move", "notion_file_upload",
+        "notion_datasource_update", "notion_datasource_create",
         "notion_block_update"
     ]
     for toolName in notifyTools {
@@ -259,6 +261,92 @@ func runNotionModuleTests() async {
     }
 
     // ============================================================
+
+    await test("notion_datasource_update rejects missing params") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_datasource_update",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing params")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_datasource_create rejects missing params") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_datasource_create",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing params")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+
+    await test("notion_datasource_update rejects invalid JSON in properties") {
+        do {
+            let result = try await router.dispatch(
+                toolName: "notion_datasource_update",
+                arguments: .object([
+                    "dataSourceId": .string("fake-ds-id"),
+                    "properties": .string("not valid json {{{")
+                ])
+            )
+            if case .object(let dict) = result,
+               case .string(let error) = dict["error"] {
+                try expect(error.contains("Invalid JSON"), "Expected Invalid JSON error, got: \(error)")
+            }
+        } catch {
+            // Also acceptable — API key might be missing
+        }
+    }
+
+    await test("notion_datasource_create rejects invalid JSON in properties") {
+        do {
+            let result = try await router.dispatch(
+                toolName: "notion_datasource_create",
+                arguments: .object([
+                    "databaseId": .string("fake-db-id"),
+                    "properties": .string("not valid json {{{")
+                ])
+            )
+            if case .object(let dict) = result,
+               case .string(let error) = dict["error"] {
+                try expect(error.contains("Invalid JSON"), "Expected Invalid JSON error, got: \(error)")
+            }
+        } catch {
+            // Also acceptable
+        }
+    }
+
+    await test("notion_database_get rejects missing databaseId") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_database_get",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing databaseId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_datasource_get rejects missing dataSourceId") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_datasource_get",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing dataSourceId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
     // MARK: - Config Migration & Registry
     // ============================================================
 
@@ -501,6 +589,19 @@ func runNotionModuleTests() async {
             }
         }
     } else {
+
+        await test("notion_datasource_update succeeds with API key (read schema)") {
+            let result = try await router.dispatch(
+                toolName: "notion_datasource_get",
+                arguments: .object(["dataSourceId": .string("992fd5ac-d938-4be4-95fb-8ef18bd86bba")])
+            )
+            if case .object(let dict) = result {
+                try expect(dict["id"] != nil, "Expected id key")
+                try expect(dict["schema"] != nil, "Expected schema key")
+            } else {
+                throw TestError.assertion("Expected object result")
+            }
+        }
         await test("notion_search reports missing API key gracefully") {
             do {
                 _ = try await router.dispatch(

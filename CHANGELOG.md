@@ -1,10 +1,27 @@
 # Changelog
+## [1.8.5] — 2026-04-12
+
+### Added
+- **notion_datasource_update** MCP tool (notify tier) — Update a data source's schema (add/modify properties) via `PATCH /v1/data_sources/{id}`. Enables programmatic schema changes on multi-data-source databases.
+- **notion_datasource_create** MCP tool (notify tier) — Create a new data source under an existing database via `POST /v1/data_sources`.
+- **NotionClient: updateDataSource(), createDataSource()** — Two new API methods for data source write operations.
+- **12 new tests** — Test suite hardening: invalid JSON rejection for new tools, missing-param validation for `notion_database_get`, `notion_datasource_get`, `connections_get/validate/capabilities`, `manage_skill`, `payment_execute`, `process_list` filter/limit params. Total: 389 tests.
+
+### Fixed
+- **EndToEndTests** — NotionModule expected tool count updated from 19 to 21.
+
+### Changed
+- `BridgeConstants.staticFeatureModuleToolCount`: 78 → 80.
+- NotionModule: 19 → 21 registered tools.
+- Release build: v1.8.5 (20).
+
 ## [1.8.4] — 2026-04-12
 
 ### Added
 - **Contacts module** — four new MCP tools: `contacts_health`, `contacts_search`, `contacts_get`, `contacts_resolve_handle`. Backed by CNContactStore — works without Contacts.app running. Closes #16.
 
 ### Fixed
+- **Tests & docs vs tool inventory** — E2E harness registers `ContactsModule`; expectations and README/AGENTS use `BridgeConstants.staticFeatureModuleToolCount` (78) + `echo` + Stripe **N**. `SystemModuleTests` expect three system tools after Contacts split.
 - **Stripe startup resilience** — transient startup failures retry automatically (3-attempt exponential backoff, 2s→4s→8s); `stripe_reconnect` sentinel tool registered as manual recovery when all retries fail. Auth failures (missing key) skip retries immediately.
 - Remote access URL field no longer clears on click.
 - Remote access status indicator no longer shows green when bearer token is absent.

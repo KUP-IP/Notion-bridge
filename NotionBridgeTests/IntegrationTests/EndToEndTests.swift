@@ -19,12 +19,13 @@ func runEndToEndTests() async {
     let auditLog = AuditLog()
     let router = ToolRouter(securityGate: securityGate, auditLog: auditLog)
 
-    // Register all modules (matches ServerManager.setup() bootstrap)
+    // Register all modules (same static surface as `ServerManager.setup()` except `StripeMcpModule` — network-dependent).
     await ShellModule.register(on: router)
     await FileModule.register(on: router)
     await SessionModule.register(on: router, auditLog: auditLog)
     await MessagesModule.register(on: router)
     await SystemModule.register(on: router)
+    await ContactsModule.register(on: router)
     await NotionModule.register(on: router)
     await ScreenModule.register(on: router)
     await ScreenModule.registerRecording(on: router)
@@ -41,10 +42,13 @@ func runEndToEndTests() async {
     // E2E-1: Full pipeline — dispatch → security → handler → audit
     // ============================================================
 
-    // Module-only count: ServerManager also registers builtin `echo`, so full MCP surface is 75 + 1 = 75 tools.
-    await test("E2E: router has all registered module tools (75 total)") {
+    // Full app: `BridgeConstants.staticFeatureModuleToolCount` + Stripe (N or sentinel) + `builtin` echo.
+    await test("E2E: router has all registered module tools (static feature count)") {
         let all = await router.allRegistrations()
-        try expect(all.count == 75, "Expected 75 module tools, got \(all.count)")
+        try expect(
+            all.count == BridgeConstants.staticFeatureModuleToolCount,
+            "Expected \(BridgeConstants.staticFeatureModuleToolCount) module tools, got \(all.count)"
+        )
     }
 
     await test("E2E: router filters by module correctly") {
@@ -338,12 +342,13 @@ func runEndToEndTests() async {
     // E2E-8: Module registration completeness
     // ============================================================
 
-    await test("E2E: All 14 modules registered with correct tool counts") {
+    await test("E2E: All static feature modules registered with correct tool counts") {
         let shell = await router.registrations(forModule: "shell")
         let file = await router.registrations(forModule: "file")
         let session = await router.registrations(forModule: "session")
         let messages = await router.registrations(forModule: "messages")
         let system = await router.registrations(forModule: "system")
+        let contacts = await router.registrations(forModule: "contacts")
         let notion = await router.registrations(forModule: "notion")
         let screen = await router.registrations(forModule: "screen")
         let accessibility = await router.registrations(forModule: "accessibility")
@@ -353,8 +358,9 @@ func runEndToEndTests() async {
         try expect(file.count == 12, "FileModule: expected 12")
         try expect(session.count == 3, "SessionModule: expected 3")
         try expect(messages.count == 6, "MessagesModule: expected 6")
-        try expect(system.count == 4, "SystemModule: expected 4")
-        try expect(notion.count == 19, "NotionModule: expected 19")
+        try expect(system.count == 3, "SystemModule: expected 3")
+        try expect(contacts.count == 4, "ContactsModule: expected 4")
+        try expect(notion.count == 21, "NotionModule: expected 21")
         try expect(screen.count == 5, "ScreenModule: expected 5")
         try expect(accessibility.count == 5, "AccessibilityModule: expected 5")
         try expect(applescript.count == 1, "AppleScriptModule: expected 1")
@@ -374,14 +380,19 @@ func runEndToEndTests() async {
         try expect(connections.count == 5, "ConnectionsModule: expected 5")
 
         let modulesWithTools = Set((await router.allRegistrations()).map(\.module))
-        try expect(modulesWithTools.count == 14, "Expected 14 modules, got \(modulesWithTools.count)")
+        try expect(
+            modulesWithTools.count == BridgeConstants.staticFeatureModuleFamilyCount,
+            "Expected \(BridgeConstants.staticFeatureModuleFamilyCount) modules, got \(modulesWithTools.count)"
+        )
     }
 
-    await test("E2E: Total module tool count is 75") {
+    await test("E2E: Total module tool count matches static feature surface") {
         let all = await router.allRegistrations()
-        // 75 module tools (this suite does not register builtin echo).
         let moduleTools = all.filter { $0.module != "builtin" }
-        try expect(moduleTools.count == 75, "Expected 75 module tools, got \(moduleTools.count)")
+        try expect(
+            moduleTools.count == BridgeConstants.staticFeatureModuleToolCount,
+            "Expected \(BridgeConstants.staticFeatureModuleToolCount) module tools, got \(moduleTools.count)"
+        )
     }
 
     await test("E2E: All security tiers represented in tool registry") {
