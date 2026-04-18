@@ -11,11 +11,11 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "1.8.5"
+    public static let marketing = "1.9.1"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
-    public static let build = "20"
+    public static let build = "22"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
@@ -29,7 +29,6 @@ public enum AppVersion {
 /// Protocol and networking constants for NotionBridge.
 public enum BridgeConstants {
     /// MCP (Model Context Protocol) version announced in the `initialize` handshake.
-    /// Aligned with the current MCP spec revision (see modelcontextprotocol.io).
     public static let mcpProtocolVersion = "2025-06-18"
     /// Minimum macOS major version matching `Package.swift` deployment target.
     public static let minimumMacOSMarketing = "26+"
@@ -40,6 +39,7 @@ public enum BridgeConstants {
 
     /// Tools registered by Swift `*Module` types only: excludes `builtin` (`echo`) and excludes Stripe MCP (dynamic).
     /// Keep in sync with `ServerManager.setup()` module registrations before `StripeMcpModule` / `echo`.
+    /// v1.9.1: 80 base + 7 new scheduler tools = 87.
     public static let staticFeatureModuleToolCount = 80
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).

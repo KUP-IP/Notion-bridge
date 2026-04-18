@@ -169,3 +169,29 @@ The project enforces Swift 6 strict concurrency (`-strict-concurrency=complete`)
 ### TCC Permissions
 
 The app requires Full Disk Access, Automation, and optionally Screen Recording and Accessibility. During development, after frequent rebuilds that change the code signature, run `make clean-tcc` to clear stale TCC grants for both the current (`kup.solutions.notion-bridge`) and legacy (`solutions.kup.keepr`) bundle IDs.
+
+## Jobs (scheduler module) — v1.9.1
+
+The scheduler module exposes 15 MCP tools for background job management. Jobs are backed by SQLite (`~/Library/Application Support/NotionBridge/jobs.sqlite`) and launchd LaunchAgents in `~/Library/LaunchAgents/solutions.kup.notionbridge.job.<id>.plist`. Each job runs a chain of up to 10 tool invocations via the bridge's own ToolRouter, with `$prev_result` templating between steps.
+
+### Tool inventory (15)
+
+| Tool | Tier | Purpose |
+|---|---|---|
+| `job_create` | notify | Create a scheduled job (5-field cron + action chain). |
+| `job_get` | open | Get a job by id with last 10 executions. |
+| `job_list` | open | List all jobs. |
+| `job_delete` | notify | Delete a job (unregister LaunchAgent, remove plist + DB row, cascade executions). |
+| `job_pause` | open | Pause (unregister LaunchAgent, keep row + plist). |
+| `job_resume` | open | Resume a paused job. |
+| `job_history` | open | Last N executions for a job. |
+| `job_templates` | open | List common job presets. |
+| **`job_run`** | notify | **v1.9.1** — Trigger immediate run, bypassing schedule. |
+| **`job_update`** | notify | **v1.9.1** — Patch name/schedule/actions/skipOnBattery. Schedule changes trigger atomic LaunchAgent re-registration with rollback. |
+| **`job_duplicate`** | notify | **v1.9.1** — Clone a job with a fresh id and LaunchAgent. |
+| **`job_export`** | open | **v1.9.1** — Export all or selected jobs as a versioned JSON envelope. |
+| **`job_import`** | notify | **v1.9.1** — Import jobs from an envelope (IDs regenerated). |
+| **`jobs_pause_all`** | notify | **v1.9.1** — Kill-switch: pause all active jobs in parallel. |
+| **`jobs_resume_all`** | notify | **v1.9.1** — Resume all paused jobs in parallel. |
+
+UI: **Settings → Jobs** (`JobsView` + `JobDetailView`). All UI mutations call `JobsManager.shared` actor methods directly; no MCP round-trip from the app shell.

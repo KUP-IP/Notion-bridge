@@ -289,6 +289,38 @@ public actor JobStore {
         }
     }
 
+
+    /// Atomic partial update. Caller-provided mutation receives the current
+    /// record and returns the modified record. Preserves id and createdAt.
+    public func update(id: String, mutate: (JobRecord) -> JobRecord) throws -> JobRecord {
+        guard let current = try self.fetch(id: id) else {
+            throw JobsModuleError.jobNotFound(id)
+        }
+        var next = mutate(current)
+        next.id = current.id
+        next.createdAt = current.createdAt
+        next.updatedAt = Date()
+        let actionJSON = try encodeActions(next.actionChain)
+        let sql = "UPDATE jobs SET name=?, schedule=?, action_chain=?, status=?, skip_on_battery=?, updated_at=? WHERE id=?;"
+        try bindAndStep(sql) { stmt in
+            sqlite3_bind_text(stmt, 1, next.name, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 2, next.schedule, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 3, actionJSON, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 4, next.status.rawValue, -1, SQLITE_TRANSIENT)
+            sqlite3_bind_int(stmt, 5, next.skipOnBattery ? 1 : 0)
+            sqlite3_bind_text(stmt, 6, Self.iso(next.updatedAt), -1, SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 7, next.id, -1, SQLITE_TRANSIENT)
+        }
+        return next
+    }
+
+    public func deleteExecutions(jobId: String) throws {
+        let sql = "DELETE FROM job_executions WHERE job_id=?;"
+        try bindAndStep(sql) { stmt in
+            sqlite3_bind_text(stmt, 1, jobId, -1, SQLITE_TRANSIENT)
+        }
+    }
+
     public func delete(id: String) throws {
         let sql = "DELETE FROM jobs WHERE id=?;"
         try bindAndStep(sql) { stmt in
@@ -737,6 +769,14 @@ public actor JobsManager {
             print("[JobsManager] bootstrap failed: \(error)")
         }
     }
+
+
+    /// Public accessor for the router stored at bootstrap/runCallback time.
+    /// Used by v1.10.0 tools (job_run) and UI Run Now control.
+    public func router_() -> ToolRouter? { return router }
+
+    /// Expose ssePort for external consumers (plist rebuilds).
+    public static var sseServerPort: Int { ssePort }
 
     // MARK: Tool handlers (called from JobsModule)
 

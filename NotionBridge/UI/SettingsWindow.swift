@@ -98,6 +98,7 @@ public struct SettingsView: View {
         case permissions = "Permissions"
         case tools = "Tools"
         case skills = "Skills"
+        case jobs = "Jobs"
         case advanced = "Advanced"
 
         var id: String { rawValue }
@@ -109,6 +110,7 @@ public struct SettingsView: View {
             case .tools: return "hammer"
             case .skills: return "book.closed"
             case .credentials: return "key.fill"
+            case .jobs: return "clock.badge.checkmark"
             case .advanced: return "wrench.and.screwdriver"
             }
         }
@@ -139,6 +141,7 @@ public struct SettingsView: View {
         case .tools: toolsSection
         case .skills: skillsSection
         case .credentials: credentialsSection
+        case .jobs: jobsSection
         case .advanced: advancedSection
         }
     }

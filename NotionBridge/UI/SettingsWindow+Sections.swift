@@ -756,3 +756,13 @@ private struct ConnectedClientsContent: View {
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 }
+
+
+// MARK: - Jobs Section (Jobs Surface v1.10.0)
+
+extension SettingsView {
+    @ViewBuilder
+    var jobsSection: some View {
+        JobsView()
+    }
+}

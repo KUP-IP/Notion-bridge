@@ -146,4 +146,41 @@ func runJobsModuleTests() async {
         try expect(fetched?.status == .paused)
         try await JobStore.shared.delete(id: id)
     }
+
+
+    // --- JobsModule v1.10.0 additions ---
+
+    await test("JobStore.update: partial update preserves id / createdAt") {
+        try await JobStore.shared.open()
+        let id = "test-update-\(UUID().uuidString)"
+        let job = JobRecord(id: id, name: "before", schedule: "0 9 * * *",
+                            actionChain: [ActionStep(tool: "a")])
+        try await JobStore.shared.insert(job)
+        defer { Task { try? await JobStore.shared.delete(id: id) } }
+        let before = try await JobStore.shared.fetch(id: id)!
+        let updated = try await JobStore.shared.update(id: id) { r in
+            var next = r; next.name = "after"; next.skipOnBattery = true; return next
+        }
+        try expect(updated.id == id, "id must be preserved")
+        try expect(updated.name == "after")
+        try expect(updated.skipOnBattery == true)
+        try expect(updated.createdAt == before.createdAt, "createdAt must be preserved")
+        try await JobStore.shared.delete(id: id)
+    }
+
+    await test("JobExportEnvelope: round-trip encode / decode") {
+        let job = JobRecord(name: "rt", schedule: "*/5 * * * *",
+                            actionChain: [ActionStep(tool: "x", arguments: ["k": .string("v")])])
+        let env = JobExportEnvelope(jobs: [job])
+        let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601
+        let data = try enc.encode(env)
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+        let back = try dec.decode(JobExportEnvelope.self, from: data)
+        try expect(back.version == 1)
+        try expect(back.jobs.count == 1)
+        try expect(back.jobs[0].name == "rt")
+        try expect(back.jobs[0].actionChain[0].tool == "x")
+    }
+
+
 }

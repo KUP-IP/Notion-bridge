@@ -1,4 +1,22 @@
 # Changelog
+## [1.9.1] — 2026-04-18
+
+### Added
+- **Jobs Surface** (Settings → Jobs) — restored dedicated sidebar section for scheduled jobs after v1.8.5 audit removed it. Includes status dots, human-readable cron preview, inline schedule editor with live validation, action-chain JSON editor, skip-on-battery toggle, Run Now, Duplicate, Pause/Resume, Delete, Copy ID, Reveal Log, search + sort toolbar, and kill-switches for Pause All / Resume All.
+- **7 new scheduler tools** — `job_run`, `job_update`, `job_duplicate`, `job_export`, `job_import`, `jobs_pause_all`, `jobs_resume_all`. Scheduler module now exposes 15 tools total (up from 8).
+- **JobStore.update(id:mutate:)** — atomic partial-update primitive on the JobStore actor with mutation closure; preserves id / createdAt, persists in one SQL round-trip.
+- **JobsManager+V2.swift** — high-level handler module containing runNow/updateJob/duplicateJob/exportJobs/importJobs/pauseAll/resumeAll. Schedule changes trigger atomic LaunchAgent re-registration with automatic DB rollback + plist restore on failure.
+- **CronHumanizer** — pure-Swift cron expression describer in JobsView (every minute, every N minutes, hourly at :MM, daily, weekly on DAY, monthly on day N).
+- **JobExportEnvelope** — versioned Codable wire format for job export/import.
+
+### Fixed
+- **SettingsSection enum** — reintroduced `.jobs` case between Skills and Advanced with `clock.badge.checkmark` icon; v1.8.5 removal left no UI surface for scheduled jobs.
+- **Version drift** — `AppVersion.marketing` bumped 1.8.5 → 1.9.0 to match Info.plist.
+
+### Changed
+- `BridgeConstants.staticFeatureModuleToolCount`: 73 → 80 (7 new scheduler tools). Family count unchanged at 15.
+- `AppVersion`: 1.8.5 (20) → 1.9.1 (22).
+
 ## [1.8.5] — 2026-04-12
 
 ### Added
@@ -305,3 +323,5 @@ _Initial tracked release._
 [1.3.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/KUP-IP/Notion-bridge/compare/v1.1.5...v1.2.0
 [1.1.5]: https://github.com/KUP-IP/Notion-bridge/releases/tag/v1.1.5
+
+[1.9.1]: https://github.com/KUP-IP/Notion-bridge/compare/v1.9.0...v1.9.1
