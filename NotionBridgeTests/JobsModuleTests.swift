@@ -94,15 +94,38 @@ func runJobsModuleTests() async {
         }
     }
 
-    await test("LaunchAgentPlist: ProgramArguments invokes curl against local SSE") {
+    // v1.9.2: ProgramArguments now uses the bundled NBJobRunner helper when
+    // available (inside the .app bundle), falling back to curl only when the
+    // helper cannot be located (test harness). Accept either shape.
+    await test("LaunchAgentPlist: ProgramArguments uses helper or curl fallback") {
         let intervals = try CronParser.parse("0 9 * * *")
         let plist = LaunchAgentPlist.build(jobId: "abc123", intervals: intervals, ssePort: 9700)
         guard let prog = plist["ProgramArguments"] as? [String] else {
             throw TestError.assertion("ProgramArguments missing or wrong type")
         }
-        try expect(prog.first == "/usr/bin/curl")
-        try expect(prog.contains("http://127.0.0.1:9700/jobs/abc123/run"))
-        try expect(prog.contains("POST"))
+        guard let first = prog.first else {
+            throw TestError.assertion("ProgramArguments empty")
+        }
+        if first.hasSuffix("NBJobRunner") {
+            // Helper mode: [helperPath, jobId]
+            try expect(prog.count == 2, "helper mode expects 2 args, got \(prog.count)")
+            try expect(prog[1] == "abc123")
+            let env = plist["EnvironmentVariables"] as? [String: String]
+            try expect(env?["NB_SSE_PORT"] == "9700", "missing NB_SSE_PORT env")
+        } else {
+            // Legacy fallback: curl POST
+            try expect(first == "/usr/bin/curl")
+            try expect(prog.contains("http://127.0.0.1:9700/jobs/abc123/run"))
+            try expect(prog.contains("POST"))
+        }
+    }
+
+    await test("LaunchAgentPlist: jobRunnerPath() returns empty or existing file") {
+        let path = LaunchAgentPlist.jobRunnerPath()
+        if !path.isEmpty {
+            try expect(FileManager.default.fileExists(atPath: path),
+                       "jobRunnerPath returned non-existent path: \(path)")
+        }
     }
 
     // --- JobStore (uses a temp SQLite file so the real DB is untouched) ---

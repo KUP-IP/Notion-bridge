@@ -629,18 +629,47 @@ public enum CronParser {
 // MARK: - LaunchAgentPlist
 
 public enum LaunchAgentPlist {
-    /// Build the plist dictionary. The launchd callback uses `curl` to POST to
-    /// the local SSE server so the agent executable doesn't need to be invoked.
+    /// Resolve the bundled NBJobRunner helper path inside the app bundle.
+    /// Falls back to /usr/bin/curl (pre-v1.9.2 behaviour) only if the helper
+    /// is absent — e.g. in test harness runs where Bundle.main is the test
+    /// executable and no helper has been embedded.
+    public static func jobRunnerPath() -> String {
+        let fm = FileManager.default
+        let bundlePath = Bundle.main.bundlePath
+        // Inside a real .app bundle: <bundle>/Contents/MacOS/NBJobRunner
+        let candidate = (bundlePath as NSString).appendingPathComponent("Contents/MacOS/NBJobRunner")
+        if fm.fileExists(atPath: candidate) { return candidate }
+        // Fallback for unit tests / swift run: look next to the running executable.
+        let exeDir = Bundle.main.bundleURL.deletingLastPathComponent().path
+        let sibling = (exeDir as NSString).appendingPathComponent("NBJobRunner")
+        if fm.fileExists(atPath: sibling) { return sibling }
+        return "" // empty → caller treats as legacy-mode (no helper available)
+    }
+
+    /// Build the plist dictionary. Launchd invokes the bundled NBJobRunner
+    /// helper (signed with the app's Developer ID) so macOS Background Task
+    /// Management attributes the job to Notion Bridge. Pre-v1.9.2 builds used
+    /// /usr/bin/curl which caused one BTM "curl" entry per scheduled job.
     public static func build(jobId: String, intervals: [CronParser.CalendarInterval], ssePort: Int) -> [String: Any] {
         let label = JobsPaths.launchLabel(jobId: jobId)
-        let url = "http://127.0.0.1:\(ssePort)/jobs/\(jobId)/run"
-        let program: [String] = [
-            "/usr/bin/curl", "-sS", "-X", "POST",
-            "-H", "Content-Type: application/json",
-            "--max-time", "30",
-            "--retry", "2", "--retry-delay", "5",
-            url
-        ]
+        let helperPath = jobRunnerPath()
+        let program: [String]
+        var envVars: [String: String] = ["NB_SSE_PORT": "\(ssePort)"]
+        if !helperPath.isEmpty {
+            program = [helperPath, jobId]
+        } else {
+            // Legacy fallback: curl invocation. Only exercised in swift-run/test
+            // contexts where the app bundle helper is unavailable.
+            let url = "http://127.0.0.1:\(ssePort)/jobs/\(jobId)/run"
+            program = [
+                "/usr/bin/curl", "-sS", "-X", "POST",
+                "-H", "Content-Type: application/json",
+                "--max-time", "30",
+                "--retry", "2", "--retry-delay", "5",
+                url
+            ]
+            envVars = [:]
+        }
         let stdoutPath = JobsPaths.logsDir.appendingPathComponent("\(jobId).out.log").path
         let stderrPath = JobsPaths.logsDir.appendingPathComponent("\(jobId).err.log").path
         var plist: [String: Any] = [
@@ -652,6 +681,9 @@ public enum LaunchAgentPlist {
             "StandardErrorPath": stderrPath,
             "ProcessType": "Background"
         ]
+        if !envVars.isEmpty {
+            plist["EnvironmentVariables"] = envVars
+        }
         let dicts = intervals.map { $0.plistDict() }
         if dicts.count == 1 {
             plist["StartCalendarInterval"] = dicts[0]
@@ -765,8 +797,64 @@ public actor JobsManager {
             // active jobs whose last execution is suspiciously stale. We log
             // rather than replay — launchd will fire the next scheduled slot.
             _ = try await JobStore.shared.listAll(statusFilter: .active)
+            // v1.9.2: Migrate legacy curl-based plists to the signed NBJobRunner
+            // helper. One-shot; re-running is a no-op because migrated plists
+            // no longer reference /usr/bin/curl.
+            await migrateLegacyCurlPlists()
         } catch {
             print("[JobsManager] bootstrap failed: \(error)")
+        }
+    }
+
+    /// v1.9.2: Rewrite any LaunchAgent plists under ~/Library/LaunchAgents/
+    /// that still invoke /usr/bin/curl so that macOS Background Task Management
+    /// attributes job agents to Notion Bridge instead of to curl. Idempotent.
+    /// Only considers plists with label prefix `solutions.kup.notionbridge.job.`.
+    private func migrateLegacyCurlPlists() async {
+        let fm = FileManager.default
+        let dir = JobsPaths.launchAgentsDir
+        guard let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
+        let prefix = "solutions.kup.notionbridge.job."
+        var migrated = 0
+        var skipped = 0
+        for url in entries where url.pathExtension == "plist" && url.lastPathComponent.hasPrefix(prefix) {
+            guard let data = try? Data(contentsOf: url),
+                  let any = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+                  let dict = any as? [String: Any],
+                  let args = dict["ProgramArguments"] as? [String],
+                  let first = args.first else { continue }
+            guard first == "/usr/bin/curl" else { skipped += 1; continue }
+            // Derive jobId from filename: solutions.kup.notionbridge.job.<id>.plist
+            let name = url.deletingPathExtension().lastPathComponent
+            let jobId = String(name.dropFirst(prefix.count))
+            guard !jobId.isEmpty else { continue }
+            // Unregister old, rewrite, re-register.
+            do {
+                try LaunchAgentLifecycle.unregister(jobId: jobId)
+            } catch {
+                print("[JobsManager] migrate: unregister failed for \(jobId): \(error)")
+            }
+            // Rebuild intervals from the stored JobRecord if present; otherwise
+            // preserve the existing StartCalendarInterval dict(s) verbatim by
+            // re-parsing from the source job record.
+            if let job = try? await JobStore.shared.fetch(id: jobId),
+               let intervals = try? CronParser.parse(job.schedule) {
+                let newPlist = LaunchAgentPlist.build(jobId: jobId, intervals: intervals, ssePort: Self.ssePort)
+                do {
+                    try LaunchAgentPlist.write(jobId: jobId, plist: newPlist)
+                    try LaunchAgentLifecycle.register(jobId: jobId)
+                    migrated += 1
+                } catch {
+                    print("[JobsManager] migrate: rewrite/register failed for \(jobId): \(error)")
+                }
+            } else {
+                // Orphaned plist with no matching DB row — safer to drop it.
+                try? LaunchAgentPlist.remove(jobId: jobId)
+                print("[JobsManager] migrate: removed orphaned plist \(jobId)")
+            }
+        }
+        if migrated > 0 || skipped > 0 {
+            print("[JobsManager] v1.9.2 BTM migration: migrated=\(migrated) skipped=\(skipped)")
         }
     }
 

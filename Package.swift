@@ -16,6 +16,7 @@ let package = Package(
         .executable(name: "NotionBridge", targets: ["NotionBridge"]),
         .executable(name: "NotionBridgeTests", targets: ["NotionBridgeTests"]),
         .executable(name: "NotificationContentExtension", targets: ["NotificationContentExtension"]),
+        .executable(name: "NBJobRunner", targets: ["NBJobRunner"]),
     ],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
@@ -64,6 +65,13 @@ let package = Package(
             path: "NotificationContentExtension",
             exclude: ["Info.plist"],
             sources: ["NotificationViewController.swift"]
+        ),
+        // v1.9.2: Signed launchd callback helper. Replaces /usr/bin/curl in
+        // job plists so BTM groups background items under Notion Bridge.
+        .executableTarget(
+            name: "NBJobRunner",
+            path: "NBJobRunner",
+            sources: ["main.swift"]
         ),
     ]
 )

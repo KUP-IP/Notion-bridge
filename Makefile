@@ -20,6 +20,9 @@ PLUGINS_DIR     = $(APP_BUNDLE)/Contents/PlugIns
 EXT_NAME        = NotificationContentExtension
 EXT_SRC_DIR     = NotificationContentExtension
 EXT_APPEX       = $(PLUGINS_DIR)/$(EXT_NAME).appex
+# v1.9.2: Signed launchd callback helper embedded at Contents/MacOS/NBJobRunner.
+JOB_RUNNER_NAME = NBJobRunner
+JOB_RUNNER_PATH = $(APP_BUNDLE)/Contents/MacOS/$(JOB_RUNNER_NAME)
 VERSION        := $(shell /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
 DMG_NAME        = notion-bridge-v$(VERSION).dmg
 DMG_PATH        = $(BUILD_DIR)/$(DMG_NAME)
@@ -43,7 +46,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test app extension appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps
+.PHONY: debug build test app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -66,7 +69,7 @@ test:
 	@echo "✅ Tests complete"
 
 # ── App Bundle (.app) ──────────────────────────────────────────
-app: build extension
+app: build extension jobrunner
 	@echo "📦 Packaging .app bundle..."
 	@rm -rf $(APP_BUNDLE)
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
@@ -136,6 +139,11 @@ app: build extension
 	@cp $(RELEASE_DIR)/$(EXT_NAME) $(EXT_APPEX)/Contents/MacOS/$(EXT_NAME)
 	@cp $(EXT_SRC_DIR)/Info.plist $(EXT_APPEX)/Contents/Info.plist
 	@echo "  ↳ Embedded $(EXT_NAME).appex"
+	@# v1.9.2: Embed NBJobRunner helper into Contents/MacOS/
+	@echo "🔗 Embedding $(JOB_RUNNER_NAME) into Contents/MacOS/..."
+	@cp $(RELEASE_DIR)/$(JOB_RUNNER_NAME) "$(JOB_RUNNER_PATH)"
+	@chmod +x "$(JOB_RUNNER_PATH)"
+	@echo "  ↳ Embedded $(JOB_RUNNER_NAME)"
 	@echo "✅ App bundle: $(APP_BUNDLE)"
 
 # ── Notification Content Extension (.appex) ───────────────
@@ -145,6 +153,14 @@ extension:
 	@echo "🔨 Building $(EXT_NAME) binary..."
 	swift build -c release --product $(EXT_NAME)
 	@echo "✅ Extension binary: $(RELEASE_DIR)/$(EXT_NAME)"
+
+# ── NBJobRunner helper binary (v1.9.2) ──
+# Builds the signed launchd callback helper. Replaces /usr/bin/curl in job
+# plists so macOS BTM attributes background items to Notion Bridge.
+jobrunner:
+	@echo "🔨 Building $(JOB_RUNNER_NAME) binary..."
+	swift build -c release --product $(JOB_RUNNER_NAME)
+	@echo "✅ JobRunner binary: $(RELEASE_DIR)/$(JOB_RUNNER_NAME)"
 
 # ── Install ────────────────────────────────────────────────────────────
 install: notarize
