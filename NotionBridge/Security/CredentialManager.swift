@@ -33,6 +33,10 @@ public struct CredentialMetadata: Codable, Sendable, Equatable {
     public var expMonth: Int?
     public var expYear: Int?
     public var stripePm: String?
+    /// Cardholder name, captured at card-save time. PKT-573.
+    public var cardholderName: String?
+    /// Billing ZIP / postal code, captured at card-save time. PKT-573.
+    public var zipCode: String?
     /// Set when saved by `CredentialManager` (JSON key `nb`). Used with keychain access group to hide third-party items.
     public var notionBridgeManaged: Bool?
 
@@ -42,6 +46,8 @@ public struct CredentialMetadata: Codable, Sendable, Equatable {
         expMonth: Int? = nil,
         expYear: Int? = nil,
         stripePm: String? = nil,
+        cardholderName: String? = nil,
+        zipCode: String? = nil,
         notionBridgeManaged: Bool? = nil
     ) {
         self.brand = brand
@@ -49,6 +55,8 @@ public struct CredentialMetadata: Codable, Sendable, Equatable {
         self.expMonth = expMonth
         self.expYear = expYear
         self.stripePm = stripePm
+        self.cardholderName = cardholderName
+        self.zipCode = zipCode
         self.notionBridgeManaged = notionBridgeManaged
     }
 
@@ -57,6 +65,8 @@ public struct CredentialMetadata: Codable, Sendable, Equatable {
         case expMonth = "exp_month"
         case expYear = "exp_year"
         case stripePm = "stripe_pm"
+        case cardholderName = "cardholder_name"
+        case zipCode = "zip_code"
         case notionBridgeManaged = "nb"
     }
 
@@ -241,12 +251,15 @@ public final class CredentialManager: Sendable {
                 number: password,
                 expMonth: metadata.expMonth ?? 1,
                 expYear: metadata.expYear ?? 2030,
-                brand: metadata.brand
+                brand: metadata.brand,
+                cardholderName: metadata.cardholderName,
+                zipCode: metadata.zipCode
             )
             finalPassword = tokenResult.pmToken
             finalMetadata.stripePm = tokenResult.pmToken
             finalMetadata.last4 = tokenResult.last4
             finalMetadata.brand = tokenResult.brand
+            // cardholderName + zipCode are user-supplied and preserved on finalMetadata (no overwrite)
         }
 
         // In standalone tests, stop after tokenization to avoid keychain writes.
@@ -563,7 +576,9 @@ public final class CredentialManager: Sendable {
         number: String,
         expMonth: Int,
         expYear: Int,
-        brand: String?
+        brand: String?,
+        cardholderName: String? = nil,
+        zipCode: String? = nil
     ) async throws -> StripeTokenResult {
         let keychainKey = KeychainManager.shared.read(key: KeychainManager.Key.stripeAPIKey)
         let testFallbackKey: String? = {
@@ -584,12 +599,21 @@ public final class CredentialManager: Sendable {
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "-", with: "")
 
-        let body = [
+        var bodyParts = [
             "type=card",
             "card[number]=\(cleanNumber)",
             "card[exp_month]=\(expMonth)",
             "card[exp_year]=\(expYear)"
-        ].joined(separator: "&")
+        ]
+        if let name = cardholderName?.trimmingCharacters(in: .whitespaces), !name.isEmpty {
+            let encoded = name.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? name
+            bodyParts.append("card[name]=\(encoded)")
+        }
+        if let zip = zipCode?.trimmingCharacters(in: .whitespaces), !zip.isEmpty {
+            let encoded = zip.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? zip
+            bodyParts.append("card[address_zip]=\(encoded)")
+        }
+        let body = bodyParts.joined(separator: "&")
 
         request.httpBody = body.data(using: .utf8)
 

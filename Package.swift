@@ -4,6 +4,9 @@
 // PKT-353: Platform bumped to macOS 26 (Tahoe) for Liquid Glass adoption.
 //   swift-tools-version bumped 6.0 → 6.2 (required for .macOS(.v26)).
 // PKT-430: Added Sparkle for auto-update framework
+// PKT-551: Added NotificationContentExtension executable target. Built as a
+//   standalone binary and packaged into a .appex bundle by the Makefile
+//   (SPM does not natively support .appExtension targets).
 import PackageDescription
 
 let package = Package(
@@ -12,6 +15,7 @@ let package = Package(
     products: [
         .executable(name: "NotionBridge", targets: ["NotionBridge"]),
         .executable(name: "NotionBridgeTests", targets: ["NotionBridgeTests"]),
+        .executable(name: "NotificationContentExtension", targets: ["NotificationContentExtension"]),
     ],
     dependencies: [
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
@@ -48,6 +52,18 @@ let package = Package(
                 .product(name: "NIOEmbedded", package: "swift-nio")
             ],
             path: "NotionBridgeTests"
+        ),
+        // PKT-551: Notification Content Extension — built as a standalone
+        // executable, then repackaged by the Makefile into
+        // NotificationContentExtension.appex and embedded into
+        // Notion Bridge.app/Contents/PlugIns/.
+        // Info.plist for the .appex lives at NotificationContentExtension/Info.plist
+        // and is copied by `make extension`, not built by SPM.
+        .executableTarget(
+            name: "NotificationContentExtension",
+            path: "NotificationContentExtension",
+            exclude: ["Info.plist"],
+            sources: ["NotificationViewController.swift"]
         ),
     ]
 )

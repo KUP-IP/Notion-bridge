@@ -19,6 +19,33 @@ import MCP
 import AppKit
 #endif
 
+// MARK: - Execution Notification Context (PKT-552)
+
+/// Structured context for Notify-tier fire-and-forget notifications.
+/// Populated by ToolRouter from tool arguments; consumed by NotificationApprovalManager
+/// to populate notification `userInfo` (contract with PKT-553 Content Extension).
+public struct ExecutionNotificationContext: Sendable {
+    public let toolName: String
+    public let argumentsSummary: String
+    public let notionPageURL: String?
+    public let notionBlockURL: String?
+    public let riskLevel: String
+
+    public init(
+        toolName: String,
+        argumentsSummary: String = "",
+        notionPageURL: String? = nil,
+        notionBlockURL: String? = nil,
+        riskLevel: String = "low"
+    ) {
+        self.toolName = toolName
+        self.argumentsSummary = argumentsSummary
+        self.notionPageURL = notionPageURL
+        self.notionBlockURL = notionBlockURL
+        self.riskLevel = riskLevel
+    }
+}
+
 // MARK: - Security Tier (v3: 3-tier model)
 
 /// Three security tiers replacing the previous 2-tier system.
@@ -400,10 +427,16 @@ public actor SecurityGate {
     /// F2: Sends a fire-and-forget macOS notification when a Notify-tier tool executes.
     /// This is informational only — no approval actions. Additive to the existing approval flow.
     /// Called by ToolRouter after successful execution of a Notify-tier tool.
+    /// PKT-552: Notify-tier fire-and-forget with structured context.
+    /// Populates `userInfo` with tool + Notion deep-link metadata (contract with PKT-553).
+    public func sendExecutionNotification(context: ExecutionNotificationContext) async {
+        await approvalManager.sendFireAndForget(context: context)
+    }
+
+    /// Legacy overload retained for backward compatibility.
     public func sendExecutionNotification(toolName: String) async {
-        await approvalManager.sendFireAndForget(
-            title: "Notion Bridge",
-            body: "\"\(toolName)\" was called"
+        await sendExecutionNotification(
+            context: ExecutionNotificationContext(toolName: toolName)
         )
     }
 
@@ -459,8 +492,15 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
     static let categoryIdentifier = "SECURITY_APPROVAL"
     static let categoryIdentifierNoAlways = "SECURITY_APPROVAL_NO_ALWAYS"
     static let allowActionIdentifier = "ALLOW_ACTION"
-    static let denyActionIdentifier = "DENY_ACTION"
+    static let cancelActionIdentifier = "CANCEL_ACTION"
     static let alwaysAllowActionIdentifier = "ALWAYS_ALLOW"
+
+    // PKT-552: Notify-tier category + action identifiers.
+    static let notifyNotionCategoryIdentifier = "NOTIFY_NOTION"
+    static let notifyGenericCategoryIdentifier = "NOTIFY_GENERIC"
+    static let openPageActionIdentifier = "OPEN_PAGE_ACTION"
+    static let silenceActionIdentifier = "SILENCE_ACTION"
+    static let requireApprovalActionIdentifier = "REQUIRE_APPROVAL_ACTION"
 
     /// UserNotifications is only reliable when running as a bundled app process.
     /// CLI test executables (e.g. swift run NotionBridgeTests) can crash when calling
@@ -487,7 +527,44 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         if let center {
             center.delegate = self
             registerCategories()
+            // PKT-548: Seed hasPermission from actual macOS notification state at init.
+            // Fixes cold-start bug where hasPermission starts false every launch,
+            // causing Request-tier tool calls to fall through to NSAlert modal
+            // fallback (no Always Allow action) instead of the notification path,
+            // even when the user has granted notifications in System Settings.
+            Task { [weak self] in
+                await self?.syncHasPermissionFromSettings()
+            }
         }
+    }
+
+    /// PKT-548: Query notificationSettings() and seed hasPermission from the
+    /// actual macOS grant state. Mirrors PermissionManager.checkNotifications so
+    /// that both permission sources converge to the same truth at app launch.
+    ///
+    /// macOS may leave authorizationStatus at .notDetermined even when the user
+    /// has granted notifications via System Settings, until requestAuthorization()
+    /// is called once in-process. This handles that cold-start sync gap.
+    private func syncHasPermissionFromSettings() async {
+        guard let center else { return }
+        var settings = await center.notificationSettings()
+        if settings.authorizationStatus == .notDetermined {
+            do {
+                _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+            } catch {
+                print("[SecurityGate] Init requestAuthorization error: \(error.localizedDescription)")
+            }
+            settings = await center.notificationSettings()
+        }
+        let granted: Bool
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            granted = true
+        default:
+            granted = false
+        }
+        hasPermission = granted
+        print("[SecurityGate] Init seed: hasPermission=\(granted) (authorizationStatus=\(settings.authorizationStatus.rawValue))")
     }
 
     // MARK: Thread-Safe Helpers (nonisolated — safe from async contexts)
@@ -511,47 +588,98 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
     private func registerCategories() {
         guard let center else { return }
-        let allowAction = UNNotificationAction(
-            identifier: Self.allowActionIdentifier,
-            title: "Allow",
-            options: [.authenticationRequired]
-        )
-        let denyAction = UNNotificationAction(
-            identifier: Self.denyActionIdentifier,
-            title: "Decline",
-            options: [.destructive]
-        )
+        // PKT-549: Action ordering — Always Allow first (visible in compact banner),
+        // Allow second, Cancel third (destructive/red). macOS only shows first 2 actions
+        // without expanding the notification, so Always Allow + Allow must lead.
         let alwaysAllowAction = UNNotificationAction(
             identifier: Self.alwaysAllowActionIdentifier,
             title: "Always Allow",
             options: []
         )
+        let allowAction = UNNotificationAction(
+            identifier: Self.allowActionIdentifier,
+            title: "Allow",
+            options: []
+        )
+        let cancelAction = UNNotificationAction(
+            identifier: Self.cancelActionIdentifier,
+            title: "Cancel",
+            options: [.destructive]
+        )
         let category = UNNotificationCategory(
             identifier: Self.categoryIdentifier,
-            actions: [allowAction, denyAction, alwaysAllowAction],
+            actions: [alwaysAllowAction, allowAction, cancelAction],
             intentIdentifiers: [],
             options: []
         )
         let categoryNoAlways = UNNotificationCategory(
             identifier: Self.categoryIdentifierNoAlways,
-            actions: [allowAction, denyAction],
+            actions: [allowAction, cancelAction],
             intentIdentifiers: [],
             options: []
         )
-        center.setNotificationCategories([category, categoryNoAlways])
+        // PKT-552: Notify-tier categories.
+        let openPageAction = UNNotificationAction(
+            identifier: Self.openPageActionIdentifier,
+            title: "Open Page",
+            options: [.foreground]
+        )
+        let silenceAction = UNNotificationAction(
+            identifier: Self.silenceActionIdentifier,
+            title: "Silence",
+            options: []
+        )
+        let requireApprovalAction = UNNotificationAction(
+            identifier: Self.requireApprovalActionIdentifier,
+            title: "Require Approval",
+            options: []
+        )
+        let notifyNotionCategory = UNNotificationCategory(
+            identifier: Self.notifyNotionCategoryIdentifier,
+            actions: [openPageAction, silenceAction, requireApprovalAction],
+            intentIdentifiers: [],
+            options: []
+        )
+        let notifyGenericCategory = UNNotificationCategory(
+            identifier: Self.notifyGenericCategoryIdentifier,
+            actions: [silenceAction, requireApprovalAction],
+            intentIdentifiers: [],
+            options: []
+        )
+        center.setNotificationCategories([
+            category,
+            categoryNoAlways,
+            notifyNotionCategory,
+            notifyGenericCategory
+        ])
     }
 
     // MARK: Fire-and-Forget (F2)
 
-    /// F2: Fire-and-forget notification — informational only, no approval actions.
-    /// Sends a brief notification that a tool was called. Does not wait for user response.
-    public func sendFireAndForget(title: String, body: String) async {
+    /// PKT-552: Notify-tier fire-and-forget with structured context.
+    /// Selects `NOTIFY_NOTION` category (Open Page + Silence + Require Approval) when a
+    /// `notionPageURL` is present; otherwise `NOTIFY_GENERIC` (Silence + Require Approval).
+    /// `userInfo` carries the full context for PKT-553 Content Extension rendering.
+    public func sendFireAndForget(context: ExecutionNotificationContext) async {
         guard !isTestProcess, let center else { return }
         let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
+        content.title = "Notion Bridge"
+        content.body = "\"\(context.toolName)\" was called"
         content.sound = .default
-        // No categoryIdentifier — no Allow/Deny action buttons
+        content.categoryIdentifier = context.notionPageURL != nil
+            ? Self.notifyNotionCategoryIdentifier
+            : Self.notifyGenericCategoryIdentifier
+        // userInfo schema (contract with PKT-553 Content Extension):
+        //   toolName, argumentsSummary, notionPageURL, notionBlockURL, riskLevel, categoryType
+        var userInfo: [String: Any] = [
+            "toolName": context.toolName,
+            "argumentsSummary": context.argumentsSummary,
+            "riskLevel": context.riskLevel,
+            "categoryType": "notify"
+        ]
+        userInfo["notionPageURL"] = context.notionPageURL ?? NSNull()
+        userInfo["notionBlockURL"] = context.notionBlockURL ?? NSNull()
+        content.userInfo = userInfo
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
             content: content,
@@ -560,22 +688,59 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         try? await center.add(request)
     }
 
+    /// Legacy overload retained for non-Notify callers.
+    public func sendFireAndForget(title: String, body: String) async {
+        guard !isTestProcess, let center else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        try? await center.add(request)
+    }
+
+    // PKT-552: Persist a tier override from a notification action handler.
+    // Used by Silence (→ "open") and Require Approval (→ "request").
+    static func persistTierOverride(toolName: String, tier: String) {
+        let key = BridgeDefaults.tierOverrides
+        var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
+        dict[toolName] = tier
+        UserDefaults.standard.set(dict, forKey: key)
+        NotificationCenter.default.post(name: .notionBridgeTierOverridesDidChange, object: nil)
+    }
+
     public func requestPermission() async {
         guard let center else {
             hasPermission = false
             return
         }
         do {
-            let granted = try await center.requestAuthorization(options: [.alert, .sound])
-            hasPermission = granted
-            if granted {
-                print("[SecurityGate] Notification permission granted")
-            } else {
-                print("[SecurityGate] Notification permission denied — falling back to NSAlert")
-            }
+            _ = try await center.requestAuthorization(options: [.alert, .sound])
         } catch {
-            print("[SecurityGate] Notification permission error: \(error.localizedDescription)")
-            hasPermission = false
+            print("[SecurityGate] Notification permission request error: \(error.localizedDescription)")
+        }
+        // PKT-548: Use notificationSettings() as source-of-truth after the call,
+        // mirroring PermissionManager.requestNotificationAccess (N2). The Bool
+        // return from requestAuthorization is unreliable when authorization was
+        // already determined externally — it returns false (with UNErrorDomain
+        // error 1) even though the permission IS granted.
+        let settings = await center.notificationSettings()
+        let granted: Bool
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            granted = true
+        default:
+            granted = false
+        }
+        hasPermission = granted
+        if granted {
+            print("[SecurityGate] Notification permission active (authorizationStatus=\(settings.authorizationStatus.rawValue))")
+        } else {
+            print("[SecurityGate] Notification permission not granted — NSAlert fallback will be used (authorizationStatus=\(settings.authorizationStatus.rawValue))")
         }
     }
 
@@ -589,6 +754,11 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         if isTestProcess {
             return .allow
         }
+        // PKT-548: Diagnostic log to surface which approval path is chosen.
+        // Helps diagnose cases where Request-tier tool calls fall back to NSAlert
+        // despite notifications being granted at the OS level.
+        let path = hasPermission ? "notification" : "alert-fallback"
+        print("[SecurityGate] Approval path: \(path) for \(title)")
         if hasPermission {
             return await requestViaNotification(
                 title: title,
@@ -673,6 +843,41 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let identifier = response.notification.request.identifier
+        let userInfo = response.notification.request.content.userInfo
+
+        // PKT-552: Notify-tier action handlers — no pending continuation to resume.
+        switch response.actionIdentifier {
+        case Self.openPageActionIdentifier:
+            let urlString = (userInfo["notionBlockURL"] as? String)
+                ?? (userInfo["notionPageURL"] as? String)
+            #if canImport(AppKit)
+            if let urlString, let url = URL(string: urlString) {
+                NSWorkspace.shared.open(url)
+                print("[SecurityGate] Opened Notion deep link: \(urlString)")
+            } else {
+                print("[SecurityGate] Open Page: no URL in userInfo")
+            }
+            #endif
+            completionHandler()
+            return
+        case Self.silenceActionIdentifier:
+            if let toolName = userInfo["toolName"] as? String {
+                NotificationApprovalManager.persistTierOverride(toolName: toolName, tier: "open")
+                print("[SecurityGate] Silenced tool: \(toolName) → tier=open")
+            }
+            completionHandler()
+            return
+        case Self.requireApprovalActionIdentifier:
+            if let toolName = userInfo["toolName"] as? String {
+                NotificationApprovalManager.persistTierOverride(toolName: toolName, tier: "request")
+                print("[SecurityGate] Required approval for tool: \(toolName) → tier=request")
+            }
+            completionHandler()
+            return
+        default:
+            break
+        }
+
         let decision: ApprovalDecision
         switch response.actionIdentifier {
         case Self.allowActionIdentifier:

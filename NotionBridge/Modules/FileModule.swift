@@ -158,9 +158,11 @@ public enum FileModule {
             ]),
             handler: { arguments in
                 guard case .object(let args) = arguments,
-                      case .string(let path) = args["path"] else {
+                      case .string(let rawPath) = args["path"] else {
                     throw ToolRouterError.invalidArguments(toolName: "file_metadata", reason: "missing 'path'")
                 }
+                // v1.9.0 F3: expand ~ in paths so agents dont hardcode home dirs
+                let path = (rawPath as NSString).expandingTildeInPath
 
                 let attrs = try FileManager.default.attributesOfItem(atPath: path)
                 let size = (attrs[.size] as? Int) ?? 0
@@ -215,7 +217,13 @@ public enum FileModule {
                     data = data.prefix(max)
                 }
 
-                guard let content = String(data: data, encoding: encoding) else {
+                let content: String
+                if let decoded = String(data: data, encoding: encoding) {
+                    content = decoded
+                } else if encoding == .utf8 {
+                    // v1.9.0 B5: UTF-8 best-effort fallback replaces invalid bytes with U+FFFD
+                    content = String(decoding: data, as: UTF8.self)
+                } else {
                     return .object(["error": .string("Failed to decode file with specified encoding")])
                 }
 
@@ -371,17 +379,18 @@ public enum FileModule {
             }
         ))
 
-        // 9. file_copy – notify (PKT-373 P1-1: elevated from .open)
+        // 9. file_copy – notify (PKT-373 P1-1: elevated from .open; v1.9.0 F2: overwrite param)
         await router.register(ToolRegistration(
             name: "file_copy",
             module: moduleName,
             tier: .notify,
-            description: "Copy a file or folder to another location. Preferred over shell_exec cp — no approval required.",
+            description: "Copy a file or folder to another location. Set overwrite=true to replace an existing destination. Preferred over shell_exec cp — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "sourcePath": .object(["type": .string("string"), "description": .string("Source file or directory path")]),
-                    "destinationPath": .object(["type": .string("string"), "description": .string("Destination path")])
+                    "destinationPath": .object(["type": .string("string"), "description": .string("Destination path")]),
+                    "overwrite": .object(["type": .string("boolean"), "description": .string("If true, remove destination before copying (default: false)")])
                 ]),
                 "required": .array([.string("sourcePath"), .string("destinationPath")])
             ]),
@@ -391,10 +400,15 @@ public enum FileModule {
                       case .string(let dst) = args["destinationPath"] else {
                     throw ToolRouterError.invalidArguments(toolName: "file_copy", reason: "missing 'sourcePath' or 'destinationPath'")
                 }
+                let overwrite: Bool = { if case .bool(let b) = args["overwrite"] { return b }; return false }()
 
+                let dstURL = URL(fileURLWithPath: dst)
+                if overwrite && FileManager.default.fileExists(atPath: dst) {
+                    try FileManager.default.removeItem(at: dstURL)
+                }
                 try FileManager.default.copyItem(
                     at: URL(fileURLWithPath: src),
-                    to: URL(fileURLWithPath: dst)
+                    to: dstURL
                 )
 
                 return .object([

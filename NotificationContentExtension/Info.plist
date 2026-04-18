@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>NotionBridge Notification UI</string>
+	<key>CFBundleExecutable</key>
+	<string>NotificationContentExtension</string>
+	<key>CFBundleIdentifier</key>
+	<string>kup.solutions.notion-bridge.notification-content</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>NotificationContentExtension</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.usernotifications.content-extension</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>NotificationViewController</string>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>UNNotificationExtensionCategory</key>
+			<array>
+				<string>SECURITY_APPROVAL</string>
+				<string>SECURITY_APPROVAL_NO_ALWAYS</string>
+				<string>NOTIFY_NOTION</string>
+				<string>NOTIFY_GENERIC</string>
+			</array>
+			<key>UNNotificationExtensionInitialContentSizeRatio</key>
+			<real>0.5</real>
+			<key>UNNotificationExtensionDefaultContentHidden</key>
+			<true/>
+		</dict>
+	</dict>
+</dict>
+</plist>

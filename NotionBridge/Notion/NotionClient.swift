@@ -169,11 +169,14 @@ public enum NotionTokenResolver {
 
 // MARK: - Append block children (API 2026-03-11)
 
-/// Insert position for `PATCH /v1/blocks/{id}/children`.
-/// Use `.end` to omit `position` (Notion appends to the end). Use `.afterBlock` for `position.type == "after_block"`.
+/// Insert position for `PATCH /v1/blocks/{id}/children` (Notion API `2026-03-11`).
+/// - `.end`: omit `position` entirely — default server behavior appends at end of parent.
+/// - `.afterBlock(id:)`: send `position.type == "after_block"` with the target block id.
+/// - `.start`: send `position.type == "start"` — prepend at the beginning of the parent (new in API `2026-03-11`).
 public enum AppendBlocksPosition: Sendable {
     case end
     case afterBlock(id: String)
+    case start
 }
 
 // MARK: - Block collection result
@@ -447,9 +450,34 @@ public actor NotionClient {
         )
     }
 
+
+    /// v1.9.0 B3/E5: Normalize a pageId that may be a raw UUID, a dashed UUID,
+    /// a full Notion URL (".../Title-<32hex>"), or a compressed placeholder.
+    /// Returns the last 32-hex-char run if found; otherwise the dash-stripped input.
+    internal static func normalizePageId(_ raw: String) -> String {
+        let stripped = raw.replacingOccurrences(of: "-", with: "")
+        // Find the last run of >=32 hex chars
+        let chars = Array(stripped)
+        var endIdx = chars.count
+        while endIdx > 0 {
+            var startIdx = endIdx
+            while startIdx > 0, chars[startIdx - 1].isHexDigit {
+                startIdx -= 1
+            }
+            let runLen = endIdx - startIdx
+            if runLen >= 32 {
+                return String(chars[(endIdx - 32)..<endIdx])
+            }
+            // Skip the non-hex char (or stop if we hit the beginning)
+            if startIdx == 0 { break }
+            endIdx = startIdx - 1
+        }
+        return stripped
+    }
+
     /// Update page properties.
     public func updatePage(pageId: String, properties: Data) async throws -> Data {
-        let cleanId = pageId.replacingOccurrences(of: "-", with: "")
+        let cleanId = Self.normalizePageId(pageId)
         let (data, response) = try await request(
             method: "PATCH",
             path: "/pages/\(cleanId)",
@@ -525,14 +553,21 @@ public actor NotionClient {
 
         switch position {
         case .end:
+            // Omit `position` entirely; Notion appends at end of parent.
             break
         case .afterBlock(let rawId):
+            // API 2026-03-11: position.type == "after_block" with after_block.id.
             let id = Self.normalizeNotionIdForJSONBody(rawId)
             body["position"] = [
                 "type": "after_block",
                 "after_block": [
                     "id": id
                 ]
+            ]
+        case .start:
+            // API 2026-03-11: position.type == "start" prepends at beginning of parent.
+            body["position"] = [
+                "type": "start"
             ]
         }
         return body
@@ -611,7 +646,8 @@ public actor NotionClient {
     /// A9b: Create a comment on a page.
     /// POST /v1/comments
     public func createComment(pageId: String, text: String) async throws -> Data {
-        let cleanId = pageId.replacingOccurrences(of: "-", with: "")
+        // v1.9.0 B3: accept raw UUID, dashed UUID, Notion URL, or compressed placeholder
+        let cleanId = Self.normalizePageId(pageId)
         let body: [String: Any] = [
             "parent": ["page_id": cleanId],
             "rich_text": [["type": "text", "text": ["content": text]]]
@@ -793,9 +829,13 @@ public actor NotionClient {
 
     /// B4 (v1.8.5): Create a new data source under a database.
     /// POST /v1/data_sources
-    public func createDataSource(databaseId: String, properties: Data, title: String? = nil) async throws -> Data {
-        let cleanId = databaseId.replacingOccurrences(of: "-", with: "")
-        var body: [String: Any] = ["parent": ["database_id": cleanId]]
+    public func createDataSource(databaseId: String, properties: Data, title: String? = nil, parentType: String = "database_id") async throws -> Data {
+        // v1.9.1 B2+E1: accept page_id parent for "create new database with page parent" path.
+        // Notion API supports parent: { type: "page_id", page_id: "..." } natively; previous
+        // hard-wired database_id caused 404 object_not_found when a page ID was passed.
+        let cleanId = Self.normalizePageId(databaseId)
+        let parentKey = parentType == "page_id" ? "page_id" : "database_id"
+        var body: [String: Any] = ["parent": [parentKey: cleanId]]
 
         if let propsObj = try? JSONSerialization.jsonObject(with: properties) {
             body["properties"] = propsObj

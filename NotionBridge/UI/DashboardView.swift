@@ -190,15 +190,27 @@ public struct DashboardView: View {
         .bridgeRow()
     }
 
+    // PKT-547: Replaced single right-aligned "Quit Notion Bridge" with a
+    // left-aligned pair — Restart Bridge (faded blue) + Quit Bridge (faded red).
+    // Restart uses the shared NSApplication.restartBridge() utility in
+    // BridgeUtilities.swift so DashboardView and PermissionView stay in sync.
     private var quitSection: some View {
-        HStack {
-            Spacer()
-            Button("Quit Notion Bridge") {
+        HStack(spacing: BridgeSpacing.sm) {
+            Button("Restart Bridge") {
+                NSApp.restartBridge()
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+            .foregroundStyle(Color.blue.opacity(0.7))
+
+            Button("Quit Bridge") {
                 NSApp.terminate(nil)
             }
             .buttonStyle(.plain)
             .font(.caption)
-            .foregroundStyle(BridgeColors.muted)
+            .foregroundStyle(Color.red.opacity(0.6))
+
+            Spacer()
         }
         .bridgeRow()
     }

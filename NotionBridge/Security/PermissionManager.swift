@@ -286,8 +286,13 @@ public final class PermissionManager {
     /// V1-PATCH-003: Now async — automation probes run on background thread
     /// to prevent main-thread blocking that caused Dock connection severing.
     /// Call on popover open and periodically to detect re-grant needs.
-    /// Note: Notifications check is NOT included here.
-    /// Use recheckAllForTruth() or checkNotifications() for notification status.
+    ///
+    /// PKT-548: Notifications are intentionally excluded from checkAll() because
+    /// they require the async UNUserNotificationCenter API and a cold-start
+    /// requestAuthorization() dance (see checkNotifications). Including them here
+    /// would couple sync TCC probes to the notification permission lifecycle.
+    /// Use checkAllAsync() (includes notifications, runs in parallel) or
+    /// recheckAllForTruth() when notification status is needed.
     public func checkAll() async {
         checkAccessibility()
         checkScreenRecording()
@@ -300,9 +305,15 @@ public final class PermissionManager {
     /// PKT-369 N3: Async variant of checkAll() that includes notification status.
     /// Ensures notification authorization is checked alongside synchronous TCC grants.
     /// Use at all call sites where async context is available.
+    ///
+    /// PKT-548: Runs checkNotifications() in parallel with checkAll() so that the
+    /// Dashboard does not flash "Unknown" while waiting on the 10s-capped
+    /// Automation NSAppleScript probes. Notifications resolve in <100ms; there is
+    /// no reason to serialize them behind TCC probes.
     public func checkAllAsync() async {
+        async let notifications: Void = checkNotifications()
         await checkAll()
-        await checkNotifications()
+        await notifications
     }
 
     /// Active reconciliation pass intended for "truth sync" from UI.

@@ -494,6 +494,18 @@ func runNotionModuleTests() async {
         )
     }
 
+    await test("buildAppendBlocksRequestBody start sends position.type == start (API 2026-03-11)") {
+        let children = "[{\"object\":\"block\",\"type\":\"paragraph\",\"paragraph\":{\"rich_text\":[]}}]".data(using: .utf8)!
+        let body = try NotionClient.buildAppendBlocksRequestBody(children: children, position: .start)
+        try expect(body["children"] != nil, "Expected children")
+        try expect(body["after"] == nil, "Must not send deprecated after key")
+        guard let pos = body["position"] as? [String: Any] else {
+            throw TestError.assertion("Expected position dict")
+        }
+        try expect(pos["type"] as? String == "start", "Expected type start")
+        try expect(pos["after_block"] == nil, "start variant must not include after_block")
+    }
+
     // ============================================================
     // MARK: - NotionClientError Tests
     // ============================================================

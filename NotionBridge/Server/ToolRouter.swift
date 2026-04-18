@@ -161,10 +161,15 @@ public actor ToolRouter {
         do {
             let result = try await tool.handler(arguments)
 
-            // F2: Fire-and-forget notification for Notify-tier executions.
+            // F2 + PKT-552: Fire-and-forget Notify-tier notification with structured context.
             // Runs after successful execution — informational only.
             if effectiveTier == .notify {
-                await securityGate.sendExecutionNotification(toolName: toolName)
+                let context = ToolRouter.makeExecutionContext(
+                    toolName: toolName,
+                    arguments: arguments,
+                    summary: stringifySummary(arguments)
+                )
+                await securityGate.sendExecutionNotification(context: context)
             }
 
             let duration = ContinuousClock.now - start
@@ -199,7 +204,65 @@ public actor ToolRouter {
 
     // PKT-373 P1-5: batchGate removed (was dead code, never wired into dispatch pipeline)
 
-    // MARK: CallTool Dispatch Helper
+    // MARK: PKT-552: Notify-tier Deep Link Construction
+
+    /// Known Notion tool names (from NotionModule). Tools in this set with a
+    /// `pageId` or `blockId` argument receive a `notion.so` deep link in their
+    /// execution notification context.
+    private static let notionToolNames: Set<String> = [
+        "notion_page_read", "notion_page_create", "notion_page_update", "notion_page_move",
+        "notion_page_markdown_read", "notion_blocks_append", "notion_block_read",
+        "notion_block_update", "notion_block_delete", "notion_database_get",
+        "notion_datasource_get", "notion_datasource_create", "notion_datasource_update",
+        "notion_query", "notion_search", "notion_comments_list", "notion_comment_create",
+        "notion_users_list", "notion_file_upload", "notion_connections_list",
+        "notion_token_introspect"
+    ]
+
+    private static func dehyphenate(_ id: String) -> String {
+        id.replacingOccurrences(of: "-", with: "")
+    }
+
+    /// Build the execution notification context for a tool call. For Notion tools
+    /// with a pageId/blockId argument, constructs `https://notion.so/{id}` (with
+    /// `#{blockId}` fragment when applicable) for the Open Page deep-link action.
+    static func makeExecutionContext(
+        toolName: String,
+        arguments: Value,
+        summary: String
+    ) -> ExecutionNotificationContext {
+        var pageURL: String? = nil
+        var blockURL: String? = nil
+
+        if notionToolNames.contains(toolName), case .object(let dict) = arguments {
+            var pageId: String? = nil
+            if case .string(let s) = dict["pageId"], !s.isEmpty { pageId = s }
+            var blockId: String? = nil
+            if case .string(let s) = dict["blockId"], !s.isEmpty { blockId = s }
+
+            if let pid = pageId {
+                let dehy = dehyphenate(pid)
+                pageURL = "https://notion.so/\(dehy)"
+                if let bid = blockId {
+                    blockURL = "https://notion.so/\(dehy)#\(dehyphenate(bid))"
+                }
+            } else if let bid = blockId {
+                // No pageId in args — use blockId as the page identifier best-effort.
+                let dehy = dehyphenate(bid)
+                pageURL = "https://notion.so/\(dehy)"
+            }
+        }
+
+        return ExecutionNotificationContext(
+            toolName: toolName,
+            argumentsSummary: summary,
+            notionPageURL: pageURL,
+            notionBlockURL: blockURL,
+            riskLevel: "low"
+        )
+    }
+
+        // MARK: CallTool Dispatch Helper
 
     /// Dispatch a tool call and format the result as a CallTool-compatible tuple.
     /// Centralizes the dispatch → JSON encode → text conversion pipeline

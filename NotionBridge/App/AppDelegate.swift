@@ -130,6 +130,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             await LogManager.shared.bootstrap()
         }
 
+        // PKT-340 V2-SCHEDULER: Bootstrap JobsManager (opens SQLite, scans missed executions)
+        Task {
+            await JobsManager.shared.bootstrap()
+        }
+
         // PKT-341: Install signal handlers for crash breadcrumbs
         installSignalHandlers()
 

@@ -35,9 +35,11 @@ struct CredentialsView: View {
 
     // Add Card form state
     @State private var showAddCard = false
+    @State private var cardName = ""      // PKT-573: cardholder name
     @State private var cardNumber = ""
     @State private var cardExpiry = ""
     @State private var cardCVC = ""
+    @State private var cardZip = ""       // PKT-573: billing ZIP
     @State private var cardSaving = false
     @State private var cardFeedback: FormFeedback?
 
@@ -319,6 +321,11 @@ struct CredentialsView: View {
     @ViewBuilder
     private var addCardForm: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // PKT-573: Cardholder Name
+            TextField("Cardholder Name", text: $cardName)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+
             TextField("Card Number", text: $cardNumber)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(.body, design: .monospaced))
@@ -335,6 +342,12 @@ struct CredentialsView: View {
                     .frame(maxWidth: 60)
             }
 
+            // PKT-573: ZIP Code
+            TextField("ZIP Code", text: $cardZip)
+                .textFieldStyle(.roundedBorder)
+                .font(.caption)
+                .frame(maxWidth: 120)
+
             if let feedback = cardFeedback {
                 feedbackLabel(feedback)
             }
@@ -343,7 +356,9 @@ struct CredentialsView: View {
                 Button("Save Card") {
                     Task { await saveCard() }
                 }
-                .disabled(cardSaving || cardNumber.isEmpty
+                .disabled(cardSaving
+                          || cardName.trimmingCharacters(in: .whitespaces).isEmpty
+                          || cardNumber.isEmpty
                           || cardExpiry.isEmpty || cardCVC.isEmpty)
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
@@ -590,7 +605,15 @@ struct CredentialsView: View {
         cardSaving = true
         defer { cardSaving = false }
 
-        let metadata = CredentialMetadata(expMonth: expMonth, expYear: expYear)
+        // PKT-573: gather cardholder name + ZIP
+        let trimmedName = cardName.trimmingCharacters(in: .whitespaces)
+        let trimmedZip = cardZip.trimmingCharacters(in: .whitespaces)
+        let metadata = CredentialMetadata(
+            expMonth: expMonth,
+            expYear: expYear,
+            cardholderName: trimmedName.isEmpty ? nil : trimmedName,
+            zipCode: trimmedZip.isEmpty ? nil : trimmedZip
+        )
 
         do {
             // CredentialManager.save() handles Stripe tokenization internally
@@ -603,9 +626,11 @@ struct CredentialsView: View {
                 metadata: metadata
             )
             cardFeedback = FormFeedback(message: "Card saved and tokenized.", isError: false)
+            cardName = ""
             cardNumber = ""
             cardExpiry = ""
             cardCVC = ""
+            cardZip = ""
             loadCredentials()
         } catch {
             cardFeedback = FormFeedback(message: error.localizedDescription, isError: true)

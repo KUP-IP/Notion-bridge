@@ -122,7 +122,8 @@ public final class KeychainManager: @unchecked Sendable {
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: key,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+            kSecAttrLabel as String: "Notion Bridge"
         ]
 
         let status = SecItemAdd(query as CFDictionary, nil)
@@ -217,7 +218,8 @@ public final class KeychainManager: @unchecked Sendable {
         ]
 
         let attributes: [String: Any] = [
-            kSecValueData as String: data
+            kSecValueData as String: data,
+            kSecAttrLabel as String: "Notion Bridge"
         ]
 
         let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)

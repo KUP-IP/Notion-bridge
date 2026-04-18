@@ -413,6 +413,8 @@ await runSecurityAuditTests()
 // MARK: - V1-06 Integration / End-to-End Tests
 // ============================================================
 
+await runJobsModuleTests()
+
 await runEndToEndTests()
 
 // ============================================================

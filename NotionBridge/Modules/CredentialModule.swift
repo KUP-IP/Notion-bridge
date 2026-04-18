@@ -51,7 +51,15 @@ public enum CredentialModule {
                     ]),
                     "metadata": .object([
                         "type": .string("object"),
-                        "description": .string("Optional metadata JSON. For cards: {brand, last4, exp_month, exp_year}")
+                        "description": .string("Optional metadata JSON. For cards: {brand, last4, exp_month, exp_year, cardholder_name, zip_code}")
+                    ]),
+                    "name": .object([
+                        "type": .string("string"),
+                        "description": .string("Cardholder name (card type only, optional).")
+                    ]),
+                    "zip_code": .object([
+                        "type": .string("string"),
+                        "description": .string("Billing ZIP / postal code (card type only, optional).")
                     ]),
                     "syncToiCloud": .object([
                         "type": .string("boolean"),
@@ -88,7 +96,12 @@ public enum CredentialModule {
                     if case .string(let l) = metaDict["last4"] { metadata.last4 = l }
                     if case .int(let m) = metaDict["exp_month"] { metadata.expMonth = m }
                     if case .int(let y) = metaDict["exp_year"] { metadata.expYear = y }
+                    if case .string(let n) = metaDict["cardholder_name"] { metadata.cardholderName = n }
+                    if case .string(let z) = metaDict["zip_code"] { metadata.zipCode = z }
                 }
+                // PKT-573: top-level name / zip_code (card type). Override metadata if provided.
+                if case .string(let n) = args["name"] { metadata.cardholderName = n }
+                if case .string(let z) = args["zip_code"] { metadata.zipCode = z }
 
                 let sync: Bool = {
                     if case .bool(let s) = args["syncToiCloud"] { return s }

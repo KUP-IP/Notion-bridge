@@ -24,7 +24,7 @@ public enum ShellModule {
             name: "shell_exec",
             module: moduleName,
             tier: .request,
-            description: "Run a shell command. Returns {stdout, stderr, exitCode, duration}. Escalates for sudo/rm -rf patterns. Prefer dedicated tools when available: file_list (not ls), file_read (not cat), file_write (not echo >), file_copy (not cp), file_move (not mv), dir_create (not mkdir), file_metadata (not stat), process_list (not ps), clipboard_read/clipboard_write (not pbcopy/pbpaste), screen_capture (not screencapture), credential_read (not security), applescript_exec (not osascript). If a dedicated tool is not available on this connection, shell_exec is the correct fallback. Use shell_exec directly for git, make, build tools, package managers, and commands with no dedicated tool equivalent.",
+            description: "Run a shell command. Returns {stdout, stderr, exitCode, duration}. Pass timeout (seconds) to override the 600s default for long builds/migrations. Escalates for sudo/rm -rf patterns. Prefer dedicated tools when available: file_list (not ls), file_read (not cat), file_write (not echo >), file_copy (not cp), file_move (not mv), dir_create (not mkdir), file_metadata (not stat), process_list (not ps), clipboard_read/clipboard_write (not pbcopy/pbpaste), screen_capture (not screencapture), credential_read (not security), applescript_exec (not osascript). If a dedicated tool is not available on this connection, shell_exec is the correct fallback. Use shell_exec directly for git, make, build tools, package managers, and commands with no dedicated tool equivalent.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -34,7 +34,7 @@ public enum ShellModule {
                     ]),
                     "timeout": .object([
                         "type": .string("integer"),
-                        "description": .string("Timeout in seconds (default: 30)")
+                        "description": .string("Timeout in seconds (default: 600, i.e. 10 minutes). Background commands ending in & are capped at 5s.")
                     ]),
                     "workingDir": .object([
                         "type": .string("string"),
@@ -53,7 +53,8 @@ public enum ShellModule {
                 let isBackground = command.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("&")
                 let timeout: Int = {
                     if case .int(let t) = args["timeout"] { return isBackground ? min(t, 5) : t }
-                    return isBackground ? 5 : 30
+                    // v1.9.0 F1+E2: raised default 30 -> 600 to cover builds/migrations
+                    return isBackground ? 5 : 600
                 }()
 
                 let workingDir: String? = {

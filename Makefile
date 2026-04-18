@@ -15,6 +15,11 @@ RELEASE_DIR     = $(BUILD_DIR)/release
 DEBUG_DIR       = $(BUILD_DIR)/debug
 APP_BUNDLE      = $(BUILD_DIR)/NotionBridge.app
 FRAMEWORKS_DIR  = $(APP_BUNDLE)/Contents/Frameworks
+# PKT-551: Notification Content Extension (.appex) paths
+PLUGINS_DIR     = $(APP_BUNDLE)/Contents/PlugIns
+EXT_NAME        = NotificationContentExtension
+EXT_SRC_DIR     = NotificationContentExtension
+EXT_APPEX       = $(PLUGINS_DIR)/$(EXT_NAME).appex
 VERSION        := $(shell /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Info.plist)
 DMG_NAME        = notion-bridge-v$(VERSION).dmg
 DMG_PATH        = $(BUILD_DIR)/$(DMG_NAME)
@@ -38,7 +43,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test app appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps
+.PHONY: debug build test app extension appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -61,7 +66,7 @@ test:
 	@echo "✅ Tests complete"
 
 # ── App Bundle (.app) ──────────────────────────────────────────
-app: build
+app: build extension
 	@echo "📦 Packaging .app bundle..."
 	@rm -rf $(APP_BUNDLE)
 	@mkdir -p $(APP_BUNDLE)/Contents/MacOS
@@ -125,7 +130,21 @@ app: build
 	else \
 		echo "  ⚠️  Sparkle.framework not found at $(SPARKLE_FRAMEWORK)"; \
 	fi
+	@# PKT-551: Embed Notification Content Extension (.appex)
+	@echo "🔔 Embedding $(EXT_NAME).appex into $(PLUGINS_DIR)..."
+	@mkdir -p $(EXT_APPEX)/Contents/MacOS
+	@cp $(RELEASE_DIR)/$(EXT_NAME) $(EXT_APPEX)/Contents/MacOS/$(EXT_NAME)
+	@cp $(EXT_SRC_DIR)/Info.plist $(EXT_APPEX)/Contents/Info.plist
+	@echo "  ↳ Embedded $(EXT_NAME).appex"
 	@echo "✅ App bundle: $(APP_BUNDLE)"
+
+# ── Notification Content Extension (.appex) ───────────────
+# PKT-551: Builds the extension binary via SPM. The Makefile app target
+# repackages it into .appex structure and embeds it into PlugIns/.
+extension:
+	@echo "🔨 Building $(EXT_NAME) binary..."
+	swift build -c release --product $(EXT_NAME)
+	@echo "✅ Extension binary: $(RELEASE_DIR)/$(EXT_NAME)"
 
 # ── Install ────────────────────────────────────────────────────────────
 install: notarize
@@ -225,11 +244,18 @@ sign: app
 			echo "  ↳ Signed $$(basename "$$framework")"; \
 		done; \
 	fi
+	@# PKT-551: Sign nested .appex BEFORE parent app
+	@if [ -d "$(EXT_APPEX)" ]; then \
+		codesign --force --options runtime --timestamp --sign "$(SIGNING_ID)" "$(EXT_APPEX)"; \
+		echo "  ↳ Signed $(EXT_NAME).appex (nested)"; \
+	fi
 	codesign --force --deep --sign "$(SIGNING_ID)" \
 		--entitlements NotionBridge.entitlements \
 		--options runtime \
 		--timestamp \
 		$(APP_BUNDLE)
+	@echo "🔍 Verifying codesign (deep/strict)..."
+	@codesign --verify --deep --strict --verbose=2 $(APP_BUNDLE)
 	@echo "✅ Signed"
 
 # ── Notarize ───────────────────────────────────────────────────

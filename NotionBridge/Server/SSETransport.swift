@@ -194,6 +194,25 @@ public actor SSEServer {
             await self?.notifyClientDisconnected(name)
         }
 
+        // PKT-340 V2-SCHEDULER: Jobs callback handler -- looks up job in sqlite
+        // and runs its action chain through the ToolRouter.
+        let routerForJobs = self.router
+        let jobsCallback: @Sendable (String) async -> Data = { jobId in
+            do {
+                let result = try await JobsManager.shared.runCallback(jobId: jobId, router: routerForJobs)
+                // Encode as minimal JSON so launchd's curl sees 200 OK.
+                if case .object = result {
+                    let enc = JSONEncoder()
+                    enc.outputFormatting = [.sortedKeys]
+                    if let data = try? enc.encode(result) { return data }
+                }
+                return Data("{\"ok\":true}".utf8)
+            } catch {
+                let msg = error.localizedDescription.replacingOccurrences(of: "\\", with: "").replacingOccurrences(of: "\"", with: "'")
+                return Data("{\"ok\":false,\"error\":\"\(msg)\"}".utf8)
+            }
+        }
+
         let rpcHandler: @Sendable (Data) async -> Data? = { [weak self] data in
             await self?.processLegacyRPC(data)
         }
@@ -221,6 +240,7 @@ public actor SSEServer {
                         rpcHandler: rpcHandler,
                         httpRequestHandler: httpRequestHandler,
                         healthHandler: healthHandler,
+                        jobsCallbackHandler: jobsCallback,
                         onClientDisconnected: onDisconnect
                     ))
                 }
@@ -668,6 +688,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     private let rpcHandler: @Sendable (Data) async -> Data?
     private let httpRequestHandler: @Sendable (HTTPRequest) async -> HTTPResponse
     private let healthHandler: @Sendable () async -> Data
+    private let jobsCallbackHandler: @Sendable (String) async -> Data  // PKT-340: POST /jobs/{id}/run
     private let onClientDisconnected: @Sendable (String) async -> Void  // PKT-366 F13
 
     private struct PendingRequest {
@@ -684,6 +705,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         rpcHandler: @escaping @Sendable (Data) async -> Data?,
         httpRequestHandler: @escaping @Sendable (HTTPRequest) async -> HTTPResponse,
         healthHandler: @escaping @Sendable () async -> Data,
+        jobsCallbackHandler: @escaping @Sendable (String) async -> Data = { _ in Data() },
         onClientDisconnected: @escaping @Sendable (String) async -> Void = { _ in }
     ) {
         self.legacyBridge = legacyBridge
@@ -691,6 +713,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         self.rpcHandler = rpcHandler
         self.httpRequestHandler = httpRequestHandler
         self.healthHandler = healthHandler
+        self.jobsCallbackHandler = jobsCallbackHandler
         self.onClientDisconnected = onClientDisconnected
     }
 
@@ -758,6 +781,15 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         if head.method == .POST && path == "/messages" {
             logAccess(method: "POST", path: path, sessionID: nil, status: 200, start: startTime)
             await handleLegacyMessage(head: head, body: body, uri: fullURI, context: context)
+            return
+        }
+
+        // PKT-340 V2-SCHEDULER: POST /jobs/{id}/run -- invoked by launchd via curl
+        if head.method == .POST && path.hasPrefix("/jobs/") && path.hasSuffix("/run") {
+            let jobId = String(path.dropFirst("/jobs/".count).dropLast("/run".count))
+            let data = await jobsCallbackHandler(jobId)
+            logAccess(method: "POST", path: path, sessionID: nil, status: 200, start: startTime)
+            await writeJSONResponse(data: data, version: head.version, context: context)
             return
         }
 

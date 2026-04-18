@@ -162,7 +162,7 @@ public struct PermissionView: View {
             }
 
             Button("Restart Notion Bridge") {
-                restartApp()
+                NSApp.restartBridge()
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
@@ -260,15 +260,9 @@ public struct PermissionView: View {
         }
     }
 
-    /// PKT-362 D6: Restart the app by launching a new instance and terminating current.
-    private func restartApp() {
-        let bundlePath = Bundle.main.bundlePath
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/bin/sh")
-        task.arguments = ["-c", "sleep 1 && open '\(bundlePath)'"]
-        try? task.run()
-        NSApp.terminate(nil)
-    }
+    // PKT-547: restartApp() moved to BridgeUtilities.swift as
+    // NSApplication.restartBridge() so DashboardView and PermissionView
+    // share the same restart implementation.
 
     // MARK: - Deep Links
 

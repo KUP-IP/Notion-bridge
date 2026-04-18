@@ -434,7 +434,8 @@ public enum NotionModule {
                 "properties": .object([
                     "blockId": .object(["type": .string("string"), "description": .string("Parent page or block ID")]),
                     "children": .object(["type": .string("string"), "description": .string("JSON string of children blocks array")]),
-                    "afterBlock": .object(["type": .string("string"), "description": .string("Optional block ID to insert after")]),
+                    "afterBlock": .object(["type": .string("string"), "description": .string("Optional block ID to insert after (legacy param; prefer `position: after:{id}`).")]),
+                    "position": .object(["type": .string("string"), "description": .string("Optional insert position (API 2026-03-11): `start`, `end` (default), or `after:{blockId}`.")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("blockId"), .string("children")])
@@ -450,7 +451,21 @@ public enum NotionModule {
                     return .object(["error": .string("Invalid JSON in 'children'")])
                 }
 
+                // API 2026-03-11 position resolution:
+                //   1. Explicit `position` string wins: "start" | "end" | "after:{blockId}".
+                //   2. Legacy `afterBlock` param falls through to `.afterBlock(id:)`.
+                //   3. Default is `.end` (omits position).
                 let insertPosition: AppendBlocksPosition = {
+                    if case .string(let raw) = args["position"] {
+                        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let lower = trimmed.lowercased()
+                        if lower == "start" { return .start }
+                        if lower == "end" { return .end }
+                        if lower.hasPrefix("after:") {
+                            let id = String(trimmed.dropFirst("after:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !id.isEmpty { return .afterBlock(id: id) }
+                        }
+                    }
                     if case .string(let afterId) = args["afterBlock"], !afterId.isEmpty {
                         return .afterBlock(id: afterId)
                     }
@@ -1176,9 +1191,10 @@ public enum NotionModule {
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "databaseId": .object(["type": .string("string"), "description": .string("Parent database ID")]),
+                    "databaseId": .object(["type": .string("string"), "description": .string("Parent database or page ID (page ID supported as of v1.9.1 when parentType='page_id')")]),
                     "properties": .object(["type": .string("string"), "description": .string("JSON string of property schema definitions (Notion API format)")]),
                     "title": .object(["type": .string("string"), "description": .string("Optional name for the new data source")]),
+                    "parentType": .object(["type": .string("string"), "description": .string("Parent type: 'database_id' (default) or 'page_id'. v1.9.1 B2+E1.")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("databaseId"), .string("properties")])
@@ -1199,8 +1215,13 @@ public enum NotionModule {
                     return nil
                 }()
 
+                let parentType: String = {
+                    if case .string(let pt) = args["parentType"] { return pt }
+                    return "database_id"
+                }()
+
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                let resultData = try await client.createDataSource(databaseId: dbId, properties: propsData, title: title)
+                let resultData = try await client.createDataSource(databaseId: dbId, properties: propsData, title: title, parentType: parentType)
 
                 guard let resultJSON = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any] else {
                     return .object(["error": .string("Failed to parse create response")])
