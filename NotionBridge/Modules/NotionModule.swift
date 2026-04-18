@@ -1240,6 +1240,99 @@ public enum NotionModule {
                 ])
             }
         ))
+
+        // MARK: 23. notion_discussion_create – notify (E5, v1.9.1)
+        // Starts a NEW discussion thread on a page. Same endpoint as notion_comment_create
+        // (POST /v1/comments) but semantically distinct: no discussion_id hint, so Notion
+        // creates a fresh thread. Accepts compressed URLs via normalizePageId (v1.9.0 B3).
+        await router.register(ToolRegistration(
+            name: "notion_discussion_create",
+            module: moduleName,
+            tier: .notify,
+            description: "Start a new discussion thread on a page. Accepts compressed URLs, raw UUIDs, or Notion URLs for pageId.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "pageId": .object(["type": .string("string"), "description": .string("Page ID, URL, or compressed placeholder to start the discussion on")]),
+                    "text": .object(["type": .string("string"), "description": .string("Initial comment text for the discussion thread")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("pageId"), .string("text")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let pageId) = args["pageId"],
+                      case .string(let text) = args["text"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_discussion_create", reason: "missing 'pageId' or 'text'")
+                }
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.createDiscussion(pageId: pageId, text: text)
+
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse discussion response")])
+                }
+
+                let id = json["id"] as? String ?? ""
+                let discussionId = json["discussion_id"] as? String ?? ""
+
+                return .object([
+                    "success": .bool(true),
+                    "id": .string(id),
+                    "discussionId": .string(discussionId)
+                ])
+            }
+        ))
+
+        // MARK: 24. notion_code_block_append – notify (E3, v1.9.1)
+        // Auto-chunks long strings into ≤2000-char rich_text runs inside a single code
+        // block via PATCH /v1/blocks/{id}. Target block must already be a code block.
+        await router.register(ToolRegistration(
+            name: "notion_code_block_append",
+            module: moduleName,
+            tier: .notify,
+            description: "Replace a code block's content with a long string, auto-chunking into ≤2000-char rich_text runs (works around Notion's per-run cap). Block must already be a code block.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "blockId": .object(["type": .string("string"), "description": .string("Target code block ID, URL, or compressed placeholder")]),
+                    "content": .object(["type": .string("string"), "description": .string("Full content string; auto-chunked into 2000-char runs")]),
+                    "language": .object(["type": .string("string"), "description": .string("Optional code language (e.g. swift, typescript, plain text)")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("blockId"), .string("content")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let blockId) = args["blockId"],
+                      case .string(let content) = args["content"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_code_block_append", reason: "missing 'blockId' or 'content'")
+                }
+
+                let language: String? = {
+                    if case .string(let l) = args["language"] { return l }
+                    return nil
+                }()
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let responseData = try await client.updateCodeBlockChunked(blockId: blockId, content: content, language: language)
+
+                guard let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse code block update response")])
+                }
+
+                let id = json["id"] as? String ?? ""
+                let type = json["type"] as? String ?? ""
+                let chunkCount = (content.count + 1999) / 2000
+
+                return .object([
+                    "success": .bool(true),
+                    "id": .string(id),
+                    "type": .string(type),
+                    "chunkCount": .int(max(chunkCount, 1))
+                ])
+            }
+        ))
     }
 }
 

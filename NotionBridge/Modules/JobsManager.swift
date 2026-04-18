@@ -925,6 +925,7 @@ public actor JobsManager {
             throw JobsModuleError.launchAgentFailure("\(error)")
         }
 
+        notifyJobsChanged()
         return .object([
             "id": .string(job.id),
             "name": .string(job.name),
@@ -964,6 +965,7 @@ public actor JobsManager {
         try LaunchAgentLifecycle.unregister(jobId: id)
         try LaunchAgentPlist.remove(jobId: id)
         try await JobStore.shared.delete(id: id)
+        notifyJobsChanged()
         return .object(["deleted": .string(id)])
     }
 
@@ -972,6 +974,7 @@ public actor JobsManager {
         let id = try Self.requireStringArg(args, key: "id")
         try LaunchAgentLifecycle.unregister(jobId: id)
         try await JobStore.shared.updateStatus(id: id, status: .paused)
+        notifyJobsChanged()
         return .object(["paused": .string(id)])
     }
 
@@ -980,6 +983,7 @@ public actor JobsManager {
         let id = try Self.requireStringArg(args, key: "id")
         try LaunchAgentLifecycle.register(jobId: id)
         try await JobStore.shared.updateStatus(id: id, status: .active)
+        notifyJobsChanged()
         return .object(["resumed": .string(id)])
     }
 
@@ -1095,6 +1099,33 @@ public actor JobsManager {
             "status": .string(overall.rawValue),
             "steps": .int(stepResults.count)
         ])
+    }
+
+    // MARK: Background Items reset (D-e)
+
+    /// Re-registers all active job plists with launchd, resetting BTM attribution.
+    public func resetBackgroundItems() async -> (message: String, didFail: Bool) {
+        do {
+            let jobs = try await JobStore.shared.listAll(statusFilter: nil)
+            var reregistered = 0
+            for job in jobs {
+                try? LaunchAgentLifecycle.unregister(jobId: job.id)
+                if job.status == .active {
+                    try? LaunchAgentLifecycle.register(jobId: job.id)
+                    reregistered += 1
+                }
+            }
+            notifyJobsChanged()
+            return ("Re-registered \(reregistered) background item\(reregistered == 1 ? "" : "s").", false)
+        } catch {
+            return ("Reset failed: \(error)", true)
+        }
+    }
+
+    nonisolated func notifyJobsChanged() {
+        Task { @MainActor in
+            NotificationCenter.default.post(name: .jobsDidChange, object: nil)
+        }
     }
 
     // MARK: Helpers

@@ -125,6 +125,7 @@ extension JobsManager {
             }
         }
 
+        notifyJobsChanged()
         return .object([
             "updated": .string(updated.id),
             "name": .string(updated.name),
@@ -165,6 +166,7 @@ extension JobsManager {
             try? LaunchAgentPlist.remove(jobId: clone.id)
             throw JobsModuleError.launchAgentFailure("\(error)")
         }
+        notifyJobsChanged()
         return .object([
             "id": .string(clone.id),
             "name": .string(clone.name),
@@ -244,6 +246,7 @@ extension JobsManager {
             }
         }
 
+        if imported > 0 { notifyJobsChanged() }
         return .object([
             "imported": .int(imported),
             "skipped": .int(skipped.count),
@@ -274,6 +277,7 @@ extension JobsManager {
                 if ok { paused += 1 } else { failedIds.append(id) }
             }
         }
+        if paused > 0 { notifyJobsChanged() }
         return .object([
             "paused": .int(paused),
             "failed": .int(failedIds.count),
@@ -301,6 +305,7 @@ extension JobsManager {
                 if ok { resumed += 1 } else { failedIds.append(id) }
             }
         }
+        if resumed > 0 { notifyJobsChanged() }
         return .object([
             "resumed": .int(resumed),
             "failed": .int(failedIds.count),

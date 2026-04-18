@@ -90,6 +90,8 @@ public struct SettingsView: View {
     @State var showSSEPortRestartPrompt = false
     @State var ssePortRevertOnCancel: Int?
     @State var factoryResetMessage: String?
+    @State var showResetBackgroundItemsConfirmation = false
+    @State var resetBackgroundItemsMessage: String?
     @State var showTCCResetDialog = false
 
     enum SettingsSection: String, CaseIterable, Identifiable {

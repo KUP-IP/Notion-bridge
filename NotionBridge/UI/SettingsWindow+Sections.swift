@@ -352,6 +352,32 @@ extension SettingsView {
                     Text("This will restart the setup wizard. Your settings and data will not be affected.")
                 }
 
+                Button("Reset Background Items") {
+                    showResetBackgroundItemsConfirmation = true
+                }
+                .font(.caption)
+                .confirmationDialog(
+                    "Reset Background Items?",
+                    isPresented: $showResetBackgroundItemsConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Reset", role: .destructive) {
+                        Task {
+                            let result = await JobsManager.shared.resetBackgroundItems()
+                            await MainActor.run { resetBackgroundItemsMessage = result.message }
+                        }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This will re-register all scheduled background jobs with launchd, resetting BTM attribution to Notion Bridge.")
+                }
+
+                if let resetBackgroundItemsMessage {
+                    Text(resetBackgroundItemsMessage)
+                        .font(.caption)
+                        .foregroundStyle(BridgeColors.secondary)
+                }
+
                 Button("Factory Reset", role: .destructive) {
                     showFactoryResetConfirmation = true
                 }

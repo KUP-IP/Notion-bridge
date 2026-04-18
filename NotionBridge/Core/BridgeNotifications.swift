@@ -19,4 +19,7 @@ public extension Notification.Name {
     /// Remote access config changed (tunnel URL saved or bearer token generated/cleared).
     /// Observers should invalidate active MCP sessions and rebuild validation pipelines.
     static let remoteAccessConfigDidChange = Notification.Name("com.notionbridge.remoteAccessConfigDidChange")
+
+    /// Posted after any job mutation (create, delete, pause, resume, update, import) so the Jobs UI can reload.
+    static let jobsDidChange = Notification.Name("com.notionbridge.jobsDidChange")
 }

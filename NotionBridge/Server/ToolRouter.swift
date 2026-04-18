@@ -216,7 +216,9 @@ public actor ToolRouter {
         "notion_datasource_get", "notion_datasource_create", "notion_datasource_update",
         "notion_query", "notion_search", "notion_comments_list", "notion_comment_create",
         "notion_users_list", "notion_file_upload", "notion_connections_list",
-        "notion_token_introspect"
+        "notion_token_introspect",
+        // v1.9.1 E5 + E3:
+        "notion_discussion_create", "notion_code_block_append"
     ]
 
     private static func dehyphenate(_ id: String) -> String {

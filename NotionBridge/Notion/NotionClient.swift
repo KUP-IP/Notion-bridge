@@ -708,7 +708,8 @@ public actor NotionClient {
         // Phase 1: Create the file upload object (JSON metadata only)
         let createBody: [String: Any] = [
             "file_name": fileName,
-            "content_type": contentType
+            "content_type": contentType,
+            "mode": "single_part"
         ]
         let createData = try JSONSerialization.data(withJSONObject: createBody)
         let (createResponseData, createHttp) = try await request(method: "POST", path: "/file_uploads", body: createData)
@@ -852,5 +853,47 @@ public actor NotionClient {
             throw NotionClientError.httpError(response.statusCode, msg)
         }
         return data
+    }
+
+    /// E5 (v1.9.1): Create a new discussion thread on a page.
+    /// POST /v1/comments with parent.page_id (no discussion_id → starts a new thread).
+    /// Accepts raw UUID, dashed UUID, Notion URL, or compressed placeholder (via normalizePageId).
+    public func createDiscussion(pageId: String, text: String) async throws -> Data {
+        let cleanId = Self.normalizePageId(pageId)
+        let body: [String: Any] = [
+            "parent": ["page_id": cleanId],
+            "rich_text": [["type": "text", "text": ["content": text]]]
+        ]
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "POST", path: "/comments", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// E3 (v1.9.1): Update a code block by chunking a long string into
+    /// sequential rich_text runs (each ≤2000 chars to respect Notion's
+    /// per-run cap). Block must already be a code block.
+    public func updateCodeBlockChunked(blockId: String, content: String, language: String? = nil) async throws -> Data {
+        let cleanId = Self.normalizePageId(blockId)
+        // Chunk content into ≤2000-char pieces. Notion caps rich_text.text.content at 2000.
+        let maxChunk = 2000
+        var chunks: [String] = []
+        var idx = content.startIndex
+        while idx < content.endIndex {
+            let end = content.index(idx, offsetBy: maxChunk, limitedBy: content.endIndex) ?? content.endIndex
+            chunks.append(String(content[idx..<end]))
+            idx = end
+        }
+        if chunks.isEmpty { chunks = [""] }
+        let richText: [[String: Any]] = chunks.map { chunk in
+            ["type": "text", "text": ["content": chunk]]
+        }
+        var codePayload: [String: Any] = ["rich_text": richText]
+        if let language = language { codePayload["language"] = language }
+        let body: [String: Any] = ["code": codePayload]
+        return try await updateBlock(blockId: cleanId, data: body)
     }
 }

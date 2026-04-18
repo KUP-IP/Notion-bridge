@@ -51,6 +51,9 @@ public struct JobsView: View {
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task { await reload() }
+        .onReceive(NotificationCenter.default.publisher(for: .jobsDidChange)) { _ in
+            Task { await reload() }
+        }
         .sheet(isPresented: $showImportSheet) {
             ImportSheet(jsonText: $importJSONText, onCancel: {
                 showImportSheet = false
