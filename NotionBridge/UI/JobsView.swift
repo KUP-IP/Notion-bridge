@@ -395,7 +395,6 @@ private struct JobCardHeader: View {
         switch job.status {
         case .active: return .green
         case .paused: return .orange
-        default: return .gray
         }
     }
 }
@@ -817,7 +816,7 @@ private struct ImportSheet: View {
                     let panel = NSOpenPanel()
                     panel.allowedContentTypes = [.json]
                     panel.allowsMultipleSelection = false
-                    if panel.runModal() == .OK, let url = panel.url, let s = try? String(contentsOf: url) {
+                    if panel.runModal() == .OK, let url = panel.url, let s = try? String(contentsOf: url, encoding: .utf8) {
                         jsonText = s
                     }
                 }
