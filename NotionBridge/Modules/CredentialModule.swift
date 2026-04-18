@@ -29,7 +29,7 @@ public enum CredentialModule {
             name: "credential_save",
             module: moduleName,
             tier: .request,
-            description: "Save a password or card in the Keychain (cards are tokenized).",
+            description: "Save a password, API key, or payment card to the macOS Keychain. Cards are tokenized; optional iCloud Keychain sync. Requires user approval.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -145,7 +145,7 @@ public enum CredentialModule {
             name: "credential_read",
             module: moduleName,
             tier: .request,
-            description: "Read one saved password or card.",
+            description: "Read one credential from the Keychain by service + account. Requires user approval.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -202,7 +202,7 @@ public enum CredentialModule {
             name: "credential_list",
             module: moduleName,
             tier: .notify,
-            description: "List saved credentials (names only, not secrets).",
+            description: "List Keychain credentials — service + account names only, never secret values.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -284,7 +284,7 @@ public enum CredentialModule {
             name: "credential_delete",
             module: moduleName,
             tier: .request,
-            description: "Delete a saved credential from the Keychain.",
+            description: "Delete one Keychain credential by service + account. Irreversible. Requires user approval.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

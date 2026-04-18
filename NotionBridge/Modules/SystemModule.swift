@@ -24,7 +24,7 @@ public enum SystemModule {
             name: "system_info",
             module: moduleName,
             tier: .open,
-            description: "Show Mac model, OS, memory, and uptime.",
+            description: "Return the host Mac's model, OS version, RAM, and uptime.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -90,7 +90,7 @@ public enum SystemModule {
             name: "process_list",
             module: moduleName,
             tier: .open,
-            description: "List running apps and background processes. Preferred over shell_exec ps — no approval required.",
+            description: "List running apps and background processes, sortable by cpu/mem/pid/name. Preferred over shell_exec ps.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -182,7 +182,7 @@ public enum SystemModule {
             name: "notify",
             module: moduleName,
             tier: .open,
-            description: "Show a macOS notification.",
+            description: "Display a macOS user notification (title + body + optional sound). Non-blocking.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

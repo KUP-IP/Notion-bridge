@@ -24,7 +24,7 @@ extension ScreenModule {
             name: "screen_analyze",
             module: moduleName,
             tier: .open,
-            description: "Analyze a screenshot file for dominant colors and luminance. Input: filePath from screen_capture.",
+            description: "Analyze a saved screenshot file for dominant colors and luminance (input: filePath from screen_capture). Color/theme inspection only — no OCR.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

@@ -297,7 +297,7 @@ public enum AccessibilityModule {
             name: "ax_focused_app",
             module: moduleName,
             tier: .open,
-            description: "Get the frontmost app's name, bundleId, and pid. Use pid in other ax_* tools.",
+            description: "Return the frontmost app's name, bundleId, and pid. First step before any other ax_* call.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:])
@@ -327,7 +327,7 @@ public enum AccessibilityModule {
             name: "ax_tree",
             module: moduleName,
             tier: .open,
-            description: "Dump the UI element tree for an app. Omit pid for frontmost. Use maxDepth to limit.",
+            description: "Dump the full AX element tree for one app. Expensive — cap with maxDepth. Use ax_find_element for targeted lookups.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -368,7 +368,7 @@ public enum AccessibilityModule {
             name: "ax_find_element",
             module: moduleName,
             tier: .open,
-            description: "Search for UI elements by role, title, or label. Returns paths for ax_perform_action.",
+            description: "Locate AX elements by role/title/label and return their paths. Cheaper than ax_tree; feeds ax_perform_action.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -413,7 +413,7 @@ public enum AccessibilityModule {
             name: "ax_element_info",
             module: moduleName,
             tier: .open,
-            description: "Deep-inspect one AX element. Returns attributes, actions, position, size, and state.",
+            description: "Inspect one AX element's full attributes, available actions, geometry, and state. Use after ax_find_element to confirm before acting.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -439,7 +439,7 @@ public enum AccessibilityModule {
             name: "ax_perform_action",
             module: moduleName,
             tier: .notify,
-            description: "Act on a UI element: press, focus, setValue, confirm, increment, or decrement.",
+            description: "Execute an action (press/focus/setValue/confirm/cancel/increment/decrement) on a located AX element. Priority 1 on the app-control cascade.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

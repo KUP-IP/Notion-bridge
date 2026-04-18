@@ -40,7 +40,7 @@ public enum NotionModule {
             name: "notion_search",
             module: moduleName,
             tier: .open,
-            description: "Search your Notion workspace for pages and data sources by keyword.",
+            description: "Keyword-search a Notion workspace for pages and data sources. Returns IDs + titles; no semantic ranking.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -99,7 +99,7 @@ public enum NotionModule {
             name: "notion_page_read",
             module: moduleName,
             tier: .open,
-            description: "Read a Notion page’s properties and blocks.",
+            description: "Read a Notion page's properties + full block tree (paginates children, optional nested). Heavier than notion_page_markdown_read.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -212,7 +212,7 @@ public enum NotionModule {
             name: "notion_page_update",
             module: moduleName,
             tier: .notify,
-            description: "Update a page’s properties in Notion.",
+            description: "Update a Notion page's properties only (title, status, relations). For body content use notion_blocks_append / notion_block_update.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -272,7 +272,7 @@ public enum NotionModule {
             name: "notion_page_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a new page under a parent page or database.",
+            description: "Create a new Notion page under a page, database, or data source parent. Returns the new pageId.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -330,7 +330,7 @@ public enum NotionModule {
             name: "notion_query",
             module: moduleName,
             tier: .open,
-            description: "Query a database with filters, sorts, and pagination.",
+            description: "Query rows in a Notion data source with Notion-API filters/sorts/cursor pagination. Requires notion_datasource_get first for column names.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -428,7 +428,7 @@ public enum NotionModule {
             name: "notion_blocks_append",
             module: moduleName,
             tier: .notify,
-            description: "Add blocks to a Notion page or existing block.",
+            description: "Append child blocks to a Notion page or block. Supports position: start | end | after:{id} for insertion order.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -503,7 +503,7 @@ public enum NotionModule {
             name: "notion_block_delete",
             module: moduleName,
             tier: .notify,
-            description: "Move a block to trash (you can restore it in Notion).",
+            description: "Soft-delete a block (recoverable from Notion's trash). Reversible.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -538,7 +538,7 @@ public enum NotionModule {
             name: "notion_page_markdown_read",
             module: moduleName,
             tier: .open,
-            description: "Read a page’s body as clean markdown without property metadata. Lighter than notion_page_read.",
+            description: "Read a Notion page body as plain markdown only — no properties, no block IDs. Use when you just need the text.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -571,7 +571,7 @@ public enum NotionModule {
             name: "notion_comments_list",
             module: moduleName,
             tier: .open,
-            description: "List comments on a page or block.",
+            description: "List all comments on a Notion page or specific block (threaded discussions included).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -628,7 +628,7 @@ public enum NotionModule {
             name: "notion_comment_create",
             module: moduleName,
             tier: .notify,
-            description: "Add a comment on a page.",
+            description: "Post a top-level comment on a Notion page. For threaded replies use notion_discussion_create.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -664,7 +664,7 @@ public enum NotionModule {
             name: "notion_users_list",
             module: moduleName,
             tier: .open,
-            description: "List people in the workspace.",
+            description: "List all people (members + guests) in the Notion workspace with their IDs.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -717,7 +717,7 @@ public enum NotionModule {
             name: "notion_page_move",
             module: moduleName,
             tier: .notify,
-            description: "Move a page under a different parent.",
+            description: "Reparent a Notion page to a new page, database, or data source. Does not copy — moves the canonical page.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -760,7 +760,7 @@ public enum NotionModule {
             name: "notion_file_upload",
             module: moduleName,
             tier: .notify,
-            description: "Upload a file from your Mac for use in Notion pages.",
+            description: "Upload a local Mac file and return a Notion-hosted file reference for use in file / image / pdf blocks.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -831,7 +831,7 @@ public enum NotionModule {
             name: "notion_token_introspect",
             module: moduleName,
             tier: .open,
-            description: "See which Notion workspace and bot your connection uses.",
+            description: "Introspect the current Notion connection: returns workspace name, bot identity, and granted scopes.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -870,7 +870,7 @@ public enum NotionModule {
             name: "notion_connections_list",
             module: moduleName,
             tier: .open,
-            description: "List your saved Notion workspace connections.",
+            description: "List saved Notion workspace connections registered with the bridge. For all bridge connections use connections_list.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -901,7 +901,7 @@ public enum NotionModule {
             name: "notion_block_read",
             module: moduleName,
             tier: .open,
-            description: "Inspect one block’s full details by ID.",
+            description: "Fetch one block by ID with full raw block JSON (type, content, children flag). Use for surgical edits.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -955,7 +955,7 @@ public enum NotionModule {
             name: "notion_block_update",
             module: moduleName,
             tier: .notify,
-            description: "Update a block’s content.",
+            description: "Replace one block's inline content / type payload. For code blocks prefer notion_code_block_append (handles 2000-char chunking).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1006,7 +1006,7 @@ public enum NotionModule {
             name: "notion_database_get",
             module: moduleName,
             tier: .open,
-            description: "Get basic info about a database (not the full column schema).",
+            description: "Get database-level metadata (title, icon, data sources). For column schema call notion_datasource_get.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1068,7 +1068,7 @@ public enum NotionModule {
             name: "notion_datasource_get",
             module: moduleName,
             tier: .open,
-            description: "Get a data source’s columns and types before you query or edit rows.",
+            description: "Get a data source's column schema (property names, types, select options). Required before notion_query or property writes.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1136,7 +1136,7 @@ public enum NotionModule {
             name: "notion_datasource_update",
             module: moduleName,
             tier: .notify,
-            description: "Update a data source's schema (add/modify properties). Changes to one data source don't affect others in the same database.",
+            description: "Add or modify columns on one data source's schema. Scope is isolated to this data source — sibling data sources unaffected.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1187,7 +1187,7 @@ public enum NotionModule {
             name: "notion_datasource_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a new data source under an existing database.",
+            description: "Create a new data source (schema) under an existing database or page parent.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1249,7 +1249,7 @@ public enum NotionModule {
             name: "notion_discussion_create",
             module: moduleName,
             tier: .notify,
-            description: "Start a new discussion thread on a page. Accepts compressed URLs, raw UUIDs, or Notion URLs for pageId.",
+            description: "Start a new threaded discussion on a Notion page (accepts compressed URLs, UUIDs, or full Notion URLs).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1291,7 +1291,7 @@ public enum NotionModule {
             name: "notion_code_block_append",
             module: moduleName,
             tier: .notify,
-            description: "Replace a code block's content with a long string, auto-chunking into ≤2000-char rich_text runs (works around Notion's per-run cap). Block must already be a code block.",
+            description: "Replace a code block's content with a long string, auto-chunking into ≤2000-char runs. Target must already be type 'code'.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

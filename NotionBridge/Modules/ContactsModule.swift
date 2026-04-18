@@ -114,7 +114,7 @@ public enum ContactsModule {
             name: "contacts_health",
             module: moduleName,
             tier: .open,
-            description: "Check Contacts permission status and CNContactStore reachability.",
+            description: "Probe Contacts permission + CNContactStore reachability. Run this first if contacts_* tools fail.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -170,7 +170,7 @@ public enum ContactsModule {
             name: "contacts_search",
             module: moduleName,
             tier: .open,
-            description: "Search your Contacts.",
+            description: "Search the local Contacts app by name (default), phone, or email. For handle→contact resolution use contacts_resolve_handle.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -258,7 +258,7 @@ public enum ContactsModule {
             name: "contacts_get",
             module: moduleName,
             tier: .open,
-            description: "Fetch full contact card by stable contactId.",
+            description: "Fetch a full contact card by its CNContact.identifier UUID.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -294,7 +294,7 @@ public enum ContactsModule {
             name: "contacts_resolve_handle",
             module: moduleName,
             tier: .open,
-            description: "Map a phone number (E.164 or partial) or email to a contact. Critical tool for Messages triage.",
+            description: "Resolve a phone number (E.164 or partial) or email to the matching Contacts card. Critical step for Messages triage / attribution.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

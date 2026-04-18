@@ -47,7 +47,7 @@ public enum JobsModule {
             name: "job_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a scheduled job. 5-field cron + action chain (≤1–0 steps) with $prev_result templating.",
+            description: "Create a scheduled job: 5-field cron + action chain (≤10 steps) with $prev_result templating between steps. Registers a LaunchAgent.",
             inputSchema: .object([
                 "type": .string("object"),
                 "required": .array([.string("name"), .string("schedule"), .string("actions")]),
@@ -69,7 +69,7 @@ public enum JobsModule {
     private static func makeJobGet() -> ToolRegistration {
         ToolRegistration(
             name: "job_get", module: moduleName, tier: .open,
-            description: "Get a job by id with last 10 executions.",
+            description: "Fetch one job by ID, including its last 10 executions.",
             inputSchema: .object([
                 "type": .string("object"),
                 "required": .array([.string("id")]),
@@ -82,7 +82,7 @@ public enum JobsModule {
     private static func makeJobList() -> ToolRegistration {
         ToolRegistration(
             name: "job_list", module: moduleName, tier: .open,
-            description: "List all scheduled jobs.",
+            description: "List every scheduled job (active + paused) with summary metadata.",
             inputSchema: .object(["type": .string("object"), "properties": .object([:])]),
             handler: { args in try await JobsManager.shared.listJobs(args: args) }
         )
@@ -91,7 +91,7 @@ public enum JobsModule {
     private static func makeJobDelete() -> ToolRegistration {
         ToolRegistration(
             name: "job_delete", module: moduleName, tier: .notify,
-            description: "Delete a job: unregister LaunchAgent, remove plist, delete DB record (cascades executions).",
+            description: "Permanently delete a job: unregister LaunchAgent, remove plist, drop DB record (cascades execution history). Irreversible.",
             inputSchema: .object([
                 "type": .string("object"),
                 "required": .array([.string("id")]),
@@ -104,7 +104,7 @@ public enum JobsModule {
     private static func makeJobPause() -> ToolRegistration {
         ToolRegistration(
             name: "job_pause", module: moduleName, tier: .open,
-            description: "Pause a job (unregister LaunchAgent, keep DB record + plist).",
+            description: "Pause one job: unregister its LaunchAgent but keep DB record + plist. Reversible via job_resume.",
             inputSchema: .object([
                 "type": .string("object"),
                 "required": .array([.string("id")]),
@@ -117,7 +117,7 @@ public enum JobsModule {
     private static func makeJobResume() -> ToolRegistration {
         ToolRegistration(
             name: "job_resume", module: moduleName, tier: .open,
-            description: "Resume a paused job (re-register LaunchAgent).",
+            description: "Resume one paused job by re-registering its LaunchAgent.",
             inputSchema: .object([
                 "type": .string("object"),
                 "required": .array([.string("id")]),
@@ -130,7 +130,7 @@ public enum JobsModule {
     private static func makeJobHistory() -> ToolRegistration {
         ToolRegistration(
             name: "job_history", module: moduleName, tier: .open,
-            description: "Get last N executions for a job.",
+            description: "Return the last N execution records for one job (default 20, max 200).",
             inputSchema: .object([
                 "type": .string("object"),
                 "required": .array([.string("id")]),
@@ -146,7 +146,7 @@ public enum JobsModule {
     private static func makeJobTemplates() -> ToolRegistration {
         ToolRegistration(
             name: "job_templates", module: moduleName, tier: .open,
-            description: "List common job presets.",
+            description: "List built-in job presets (cron + action-chain starters) for common workflows.",
             inputSchema: .object(["type": .string("object"), "properties": .object([:])]),
             handler: { args in try await JobsManager.shared.listTemplates(args: args) }
         )
@@ -157,7 +157,7 @@ public enum JobsModule {
     private static func makeJobRun() -> ToolRegistration {
         ToolRegistration(
             name: "job_run", module: moduleName, tier: .notify,
-            description: "Trigger a job to run immediately, bypassing its schedule. Uses the stored router from bootstrap.",
+            description: "Fire a job now, bypassing its cron schedule. Does not modify the schedule itself.",
             inputSchema: .object([
                 "type": .string("object"),
                 "required": .array([.string("id")]),
@@ -170,7 +170,7 @@ public enum JobsModule {
     private static func makeJobUpdate() -> ToolRegistration {
         ToolRegistration(
             name: "job_update", module: moduleName, tier: .notify,
-            description: "Patch a job's name, schedule, action chain, or skipOnBattery. Schedule changes trigger atomic LaunchAgent re-registration with rollback on failure.",
+            description: "Patch a job's name, cron schedule, action chain, or skipOnBattery. Schedule changes re-register the LaunchAgent atomically (rollback on failure).",
             inputSchema: .object([
                 "type": .string("object"),
                 "required": .array([.string("id")]),
@@ -189,7 +189,7 @@ public enum JobsModule {
     private static func makeJobDuplicate() -> ToolRegistration {
         ToolRegistration(
             name: "job_duplicate", module: moduleName, tier: .notify,
-            description: "Clone a job with a fresh id and new LaunchAgent registration. Optional nameSuffix appended to the duplicated job's name (default ' (copy)').",
+            description: "Clone a job with a fresh ID and its own LaunchAgent. Optional nameSuffix (default ' (copy)').",
             inputSchema: .object([
                 "type": .string("object"),
                 "required": .array([.string("id")]),
@@ -205,7 +205,7 @@ public enum JobsModule {
     private static func makeJobExport() -> ToolRegistration {
         ToolRegistration(
             name: "job_export", module: moduleName, tier: .open,
-            description: "Export jobs as a JSON envelope (version, exportedAt, jobs[]). Provide 'ids' to export a subset; omit to export all.",
+            description: "Export all jobs (or a subset by ids) as a portable JSON envelope {version, exportedAt, jobs[]}.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -219,7 +219,7 @@ public enum JobsModule {
     private static func makeJobImport() -> ToolRegistration {
         ToolRegistration(
             name: "job_import", module: moduleName, tier: .notify,
-            description: "Import jobs from a JSON envelope. IDs are regenerated to avoid collisions. Returns counts of imported vs skipped (with reasons).",
+            description: "Import jobs from a JSON envelope produced by job_export. IDs are regenerated to avoid collisions; returns imported vs. skipped counts.",
             inputSchema: .object([
                 "type": .string("object"),
                 "required": .array([.string("json")]),
@@ -232,7 +232,7 @@ public enum JobsModule {
     private static func makeJobsPauseAll() -> ToolRegistration {
         ToolRegistration(
             name: "jobs_pause_all", module: moduleName, tier: .notify,
-            description: "Kill-switch: pause every active job in parallel via a TaskGroup.",
+            description: "Kill-switch: pause every active job in parallel. Mass operation — scope is the entire scheduler.",
             inputSchema: .object(["type": .string("object"), "properties": .object([:])]),
             handler: { args in try await JobsManager.shared.pauseAllTool(args: args) }
         )
@@ -241,7 +241,7 @@ public enum JobsModule {
     private static func makeJobsResumeAll() -> ToolRegistration {
         ToolRegistration(
             name: "jobs_resume_all", module: moduleName, tier: .notify,
-            description: "Resume every paused job in parallel via a TaskGroup.",
+            description: "Resume every paused job in parallel. Mass operation — scope is the entire scheduler.",
             inputSchema: .object(["type": .string("object"), "properties": .object([:])]),
             handler: { args in try await JobsManager.shared.resumeAllTool(args: args) }
         )

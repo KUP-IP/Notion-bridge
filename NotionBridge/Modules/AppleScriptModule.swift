@@ -28,7 +28,7 @@ public enum AppleScriptModule {
             name: "applescript_exec",
             module: moduleName,
             tier: .request,
-            description: "Run AppleScript in-process using NotionBridge's TCC grants. For app control and System Events. Preferred over shell_exec osascript — uses NotionBridge's TCC grants and avoids approval prompt.",
+            description: "Run AppleScript in-process under NotionBridge's TCC grants. Preferred over shell_exec osascript. Priority 2 on the app-control cascade (after Accessibility).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

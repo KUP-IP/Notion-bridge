@@ -41,7 +41,7 @@ public enum FileModule {
             name: "file_list",
             module: moduleName,
             tier: .open,
-            description: "List files and folders in a directory. Preferred over shell_exec ls — no approval required.",
+            description: "List a directory's contents. recursive and showHidden supported. Preferred over shell_exec ls.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -104,7 +104,7 @@ public enum FileModule {
             name: "file_search",
             module: moduleName,
             tier: .open,
-            description: "Find files by name under a folder. Preferred over shell_exec find — no approval required.",
+            description: "Find local files by name under a directory. For Spotlight-style system search use shell_exec mdfind. Preferred over shell_exec find.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -148,7 +148,7 @@ public enum FileModule {
             name: "file_metadata",
             module: moduleName,
             tier: .open,
-            description: "Get size, dates, and type for a file or folder. Preferred over shell_exec stat — no approval required.",
+            description: "Return size, created/modified dates, and type for one local path. Preferred over shell_exec stat.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -185,7 +185,7 @@ public enum FileModule {
             name: "file_read",
             module: moduleName,
             tier: .open,
-            description: "Read text from a file on your Mac. Preferred over shell_exec cat — no approval required.",
+            description: "Read a local text file (utf8/ascii/latin1). Preferred over shell_exec cat — no approval required.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -240,7 +240,7 @@ public enum FileModule {
             name: "file_write",
             module: moduleName,
             tier: .notify,
-            description: "Create or overwrite a file with text. Preferred over shell_exec echo > file — no approval required.",
+            description: "Create or overwrite a local text file. Destructive to existing content. Preferred over shell_exec echo >.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -283,7 +283,7 @@ public enum FileModule {
             name: "file_append",
             module: moduleName,
             tier: .notify,
-            description: "Append text to an existing file. Preferred over shell_exec echo >> file — no approval required.",
+            description: "Append text to an existing local file. Non-destructive. Preferred over shell_exec echo >>.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -317,7 +317,7 @@ public enum FileModule {
             name: "file_move",
             module: moduleName,
             tier: .notify,
-            description: "Move a file or folder to a new path. Preferred over shell_exec mv — no approval required.",
+            description: "Move a local file or directory to a new path. Preferred over shell_exec mv. For in-place renames use file_rename.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -351,7 +351,7 @@ public enum FileModule {
             name: "file_rename",
             module: moduleName,
             tier: .notify,
-            description: "Rename a file or folder in place. Preferred over shell_exec mv for renames — no approval required.",
+            description: "Rename a local file or directory in place (parent unchanged). For relocating use file_move.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -384,7 +384,7 @@ public enum FileModule {
             name: "file_copy",
             module: moduleName,
             tier: .notify,
-            description: "Copy a file or folder to another location. Set overwrite=true to replace an existing destination. Preferred over shell_exec cp — no approval required.",
+            description: "Copy a local file or directory. overwrite: true replaces the destination. Preferred over shell_exec cp.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -424,7 +424,7 @@ public enum FileModule {
             name: "dir_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a folder (and parent folders if needed). Preferred over shell_exec mkdir — no approval required.",
+            description: "Create a local directory, including any missing parents. Preferred over shell_exec mkdir -p.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -455,7 +455,7 @@ public enum FileModule {
             name: "clipboard_read",
             module: moduleName,
             tier: .open,
-            description: "Read plain text from the clipboard. Preferred over shell_exec pbpaste — no approval required.",
+            description: "Read plain text from the macOS clipboard. Preferred over shell_exec pbpaste.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -484,7 +484,7 @@ public enum FileModule {
             name: "clipboard_write",
             module: moduleName,
             tier: .notify,
-            description: "Put text on the clipboard. Preferred over shell_exec pbcopy — no approval required.",
+            description: "Write plain text to the macOS clipboard (replaces prior contents). Preferred over shell_exec pbcopy.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

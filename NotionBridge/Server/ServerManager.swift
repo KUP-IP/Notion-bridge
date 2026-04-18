@@ -117,7 +117,7 @@ public actor ServerManager {
             name: "echo",
             module: "builtin",
             tier: .open,
-            description: "Echo your message back to verify the connection.",
+            description: "Health-check tool — echoes the provided message back verbatim. Use to verify MCP connectivity.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

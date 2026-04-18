@@ -478,7 +478,7 @@ public enum MessagesModule {
             name: "messages_search",
             module: moduleName,
             tier: .open,
-            description: "Search Messages by keyword.",
+            description: "Keyword-search message bodies across all Messages conversations. For sender-only lookups use contacts_resolve_handle.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -516,7 +516,7 @@ public enum MessagesModule {
             name: "messages_recent",
             module: moduleName,
             tier: .open,
-            description: "List recent conversations.",
+            description: "List the N most recently active Messages conversations (chats, not individual messages).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -557,7 +557,7 @@ public enum MessagesModule {
             name: "messages_chat",
             module: moduleName,
             tier: .open,
-            description: "Read the thread with a contact.",
+            description: "Read the message thread for one contact (phone or email) in chronological order.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -595,7 +595,7 @@ public enum MessagesModule {
             name: "messages_content",
             module: moduleName,
             tier: .open,
-            description: "Fetch one message by its database id.",
+            description: "Fetch a single message by its Messages DB ROWID (full text + metadata).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -627,7 +627,7 @@ public enum MessagesModule {
             name: "messages_participants",
             module: moduleName,
             tier: .open,
-            description: "List phone numbers or emails in a chat.",
+            description: "List all handles (phones/emails) participating in one chat — useful for group-chat attribution.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -657,7 +657,7 @@ public enum MessagesModule {
             name: "messages_send",
             module: moduleName,
             tier: .request,
-            description: "Send a message (requires confirmation in the tool call).",
+            description: "Send an iMessage/SMS to a recipient. Requires confirm: 'SEND'. Service auto-detected unless specified.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

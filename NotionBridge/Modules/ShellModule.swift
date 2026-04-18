@@ -133,7 +133,7 @@ public enum ShellModule {
             name: "run_script",
             module: moduleName,
             tier: .request,
-            description: "Run an allow-listed script from the app’s scripts folder. Requires user approval. Prefer dedicated MCP tools for common operations before falling back to scripts.",
+            description: "Run an allow-listed script from NotionBridge's scripts folder. Requires user approval. Last resort after dedicated tools and shell_exec.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

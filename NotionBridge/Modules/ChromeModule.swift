@@ -33,7 +33,7 @@ public enum ChromeModule {
             name: "chrome_tabs",
             module: moduleName,
             tier: .open,
-            description: "List open Chrome tabs.",
+            description: "List all open Chrome tabs across windows. Returns windowId + tabIndex for other chrome_* tools.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -97,7 +97,7 @@ public enum ChromeModule {
             name: "chrome_navigate",
             module: moduleName,
             tier: .notify,
-            description: "Open a URL in Chrome (new tab or existing tab).",
+            description: "Navigate Chrome to a URL — new tab (newTab: true) or replace an existing tab's location.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -235,7 +235,7 @@ public enum ChromeModule {
             name: "chrome_read_page",
             module: moduleName,
             tier: .open,
-            description: "Extract content from a Chrome tab as text or HTML. Use selector to target an element.",
+            description: "Extract readable content from a Chrome tab (innerText or innerHTML), optionally scoped by CSS selector. Read-only — use chrome_execute_js to mutate.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -329,7 +329,7 @@ public enum ChromeModule {
             name: "chrome_execute_js",
             module: moduleName,
             tier: .notify,
-            description: "Execute JavaScript in a Chrome tab for DOM manipulation. Prefer chrome_read_page for reads.",
+            description: "Execute arbitrary JavaScript in a Chrome tab (DOM mutation, form fill, click). For pure reads prefer chrome_read_page.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -399,7 +399,7 @@ public enum ChromeModule {
             name: "chrome_screenshot_tab",
             module: moduleName,
             tier: .open,
-            description: "Capture the Chrome tab as PNG. Returns {filePath, width, height}. Use screen_capture for non-Chrome.",
+            description: "Screenshot a specific Chrome tab's rendered viewport as PNG. For non-Chrome windows use screen_capture.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

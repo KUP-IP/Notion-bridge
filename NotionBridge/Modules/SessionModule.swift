@@ -37,7 +37,7 @@ public enum SessionModule {
             name: "tools_list",
             module: moduleName,
             tier: .open,
-            description: "List MCP tools the bridge exposes (optionally by module).",
+            description: "List MCP tools the bridge exposes, with full description, inputs, tier, and module. Filter by module to narrow.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -112,7 +112,7 @@ public enum SessionModule {
             name: "session_info",
             module: moduleName,
             tier: .open,
-            description: "Show uptime, clients, and activity for this session.",
+            description: "Return the current bridge session's uptime, connected client count, and audit log size.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -143,7 +143,7 @@ public enum SessionModule {
             name: "session_clear",
             module: moduleName,
             tier: .notify,
-            description: "Clear the session audit log (requires explicit confirmation).",
+            description: "Clear this session's audit log. Requires confirm: true. Irreversible for the current session only.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

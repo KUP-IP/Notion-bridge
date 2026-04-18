@@ -27,7 +27,7 @@ extension ScreenModule {
             name: "screen_record_start",
             module: moduleName,
             tier: .notify,
-            description: "Start screen recording. Returns filePath immediately. Default 60s cap (max 300s). One at a time.",
+            description: "Start a screen recording (60s default, 300s cap). Returns the target filePath immediately. Only one active at a time; end with screen_record_stop.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -77,7 +77,7 @@ extension ScreenModule {
             name: "screen_record_stop",
             module: moduleName,
             tier: .notify,
-            description: "Stop recording. Returns {filePath, duration, fileSize}.",
+            description: "Stop the active screen recording and return final filePath, duration, and size.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),

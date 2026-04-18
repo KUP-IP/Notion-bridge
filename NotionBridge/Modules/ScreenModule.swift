@@ -215,7 +215,7 @@ public enum ScreenModule {
             name: "screen_capture",
             module: moduleName,
             tier: .open,
-            description: "Screenshot the screen, a window, or a region. Returns {filePath, width, height}. Target: display|window|region|all_displays. Preferred over shell_exec screencapture — no approval required.",
+            description: "Screenshot a display, window, region, or all displays as PNG/JPG. Static image only; for motion use screen_record_start.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -352,7 +352,7 @@ public enum ScreenModule {
             name: "screen_ocr",
             module: moduleName,
             tier: .open,
-            description: "OCR the screen and extract text with confidence scores and bounding boxes.",
+            description: "Run Vision OCR on a live display/window/region and return recognized text with confidences + bounding boxes. Pair with screen_capture if you also need the PNG.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

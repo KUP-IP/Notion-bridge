@@ -17,7 +17,7 @@ public enum PaymentModule {
             module: moduleName,
             tier: .request,
             neverAutoApprove: true,
-            description: "Charge a saved Stripe payment method (server-side PaymentIntent, not a checkout page).",
+            description: "Charge a Stripe payment method stored in the Keychain via a server-side PaymentIntent (no hosted checkout). Requires idempotency_key and user approval.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

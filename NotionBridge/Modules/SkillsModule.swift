@@ -88,7 +88,7 @@ public enum SkillsModule {
             name: "fetch_skill",
             module: moduleName,
             tier: .open,
-            description: "Load one skill page from Notion by name.",
+            description: "Fetch the full body of one skill page from Notion by name. Call only after the routing index has selected a skill.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -273,7 +273,7 @@ public enum SkillsModule {
             name: "list_routing_skills",
             module: moduleName,
             tier: .open,
-            description: "Refresh the skill routing index. The initial index is provided in server instructions at connection time.",
+            description: "Refresh the skill routing index (summaries + trigger phrases). Initial index is provided in server instructions at connection time — only call after a skill change.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -304,7 +304,7 @@ public enum SkillsModule {
             name: "manage_skill",
             module: moduleName,
             tier: .notify, // was .orange — no such SecurityTier member
-            description: "Add, edit, or sync your skills list and Notion metadata.",
+            description: "Add, edit, delete, toggle, rename, or sync skills + their Notion metadata (trigger phrases, anti-trigger phrases, summary, visibility).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
