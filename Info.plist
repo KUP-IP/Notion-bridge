@@ -8,8 +8,6 @@
 	<string>NotionBridge</string>
 	<key>CFBundleIconFile</key>
 	<string>NotionBridge</string>
-	<key>CFBundleIconName</key>
-	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>kup.solutions.notion-bridge</string>
 	<key>CFBundleInfoDictionaryVersion</key>

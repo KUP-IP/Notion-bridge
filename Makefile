@@ -152,8 +152,8 @@ install: notarize
 	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
 	@ditto "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
 	@spctl --assess --verbose "/Applications/Notion Bridge.app"
-	@echo "🧹 Clearing launch services cache (preserving TCC grants)..."
-	@echo "🔄 Refreshing icon caches..."
+	@echo "🔄 Re-registering with Launch Services..."
+	@/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "/Applications/Notion Bridge.app"
 	@killall Dock 2>/dev/null || true
 	@echo "✅ Installed: /Applications/Notion Bridge.app"
 
@@ -162,6 +162,8 @@ install-copy: sign
 	@echo "Installing app to /Applications (copy-only)..."
 	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
 	@ditto "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
+	@echo "🔄 Re-registering with Launch Services..."
+	@/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "/Applications/Notion Bridge.app"
 	@echo "Installed: /Applications/Notion Bridge.app"
 	@echo "Restart NotionBridge manually to pick up changes."
 
