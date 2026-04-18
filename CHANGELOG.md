@@ -1,4 +1,32 @@
 # Changelog
+## [1.9.4] — 2026-04-18
+
+### Added
+- **Jobs pane redesigned** — vertical stacked layout modeled on macOS System Settings. `HSplitView` master/detail replaced with `ScrollView` + `LazyVStack` of grouped cards. Tap a row to expand the editor inline (schedule, action-chain JSON, skip-on-battery, Run Now, Duplicate, Pause/Resume, Copy ID, Reveal Log, Delete).
+- **Segmented status filter** (All · Active · Paused) at the top of the Jobs pane.
+- **Footer toolbar** — Pause All / Resume All / Export / Import moved to a persistent bottom bar. Includes a live count chip (`N jobs · M active`) with correct pluralization.
+- **+ New Job sheet** — primary creation flow from the Jobs header and the empty state. Cron validation + action-chain JSON validation inline.
+- **97 tool descriptions rewritten** across 18 modules per the §16 audit to improve routing specificity and reduce cross-tool overlap.
+
+### Changed
+- **Settings window consolidation** — removed the duplicate SwiftUI `Settings { }` scene. A single `SettingsWindowController`-owned NSWindow is now the canonical Settings surface, with unified transparent titlebar, `setFrameAutosaveName("NotionBridgeSettings.v2")`, min 640×720, max 900×1100, default 720×900 — closer to Apple System Settings proportions.
+- **Empty-state copy** — replaced `job_create tool` jargon with "Tap **New** to create a job, or import a job export file."
+
+### Fixed
+- **Two Settings windows opening simultaneously** — root cause was the coexistence of SwiftUI `Settings {}` and the custom `SettingsWindowController`, each creating its own NSWindow with the same title. Consolidated to a single window controller.
+- **Pluralization bug in Jobs toolbar** — count chip now derives from the live list and uses correct singular/plural.
+- **Toolbar overflow at <900 px** — header reduced to Title + Search + Sort + **+ New**; bulk actions moved to footer.
+
+## [1.9.3] — 2026-04-15
+
+### Changed
+- Packaging bump alongside Sparkle / Notion module polish shipped in commit `9acabdb`. No behavior changes beyond what is captured in 1.9.2 + prior entries.
+
+## [1.9.2] — 2026-04-13
+
+### Added
+- **NBJobRunner** — dedicated launchd-invoked binary for executing scheduled jobs (commit `0058a2a`), decoupling job execution from the main app lifecycle.
+
 ## [1.9.1] — 2026-04-18
 
 ### Added

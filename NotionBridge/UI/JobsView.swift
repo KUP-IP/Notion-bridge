@@ -1,18 +1,12 @@
-// JobsView.swift — Settings > Jobs panel (v1.10.0)
+// JobsView.swift — Settings > Jobs panel (v1.9.4)
 // NotionBridge · UI
 //
-// Restored sidebar section after v1.8.5 audit removal. Adds:
-//  • status dots + cron human-preview
-//  • Run Now, Duplicate, Delete per row
-//  • inline schedule editor with live validation
-//  • action-chain JSON editor
-//  • skip_on_battery toggle
-//  • Copy ID, Reveal Log
-//  • search + sort toolbar
-//  • Pause All / Resume All kill-switches
-//  • Export / Import JSON
+// v1.9.4 redesign: vertical stacked layout matching macOS System Settings.
+// HSplitView master/detail replaced with ScrollView/LazyVStack + inline row expansion.
+// Segmented filter (All/Active/Paused), footer toolbar for bulk actions,
+// +New job sheet, adaptive collapse via ViewThatFits, count chip with correct pluralization.
 //
-// All mutations call JobsManager actor methods directly (no MCP round-trip from UI).
+// Previous: v1.10.0 restored sidebar section after v1.8.5 audit removal.
 
 import SwiftUI
 import AppKit
@@ -23,10 +17,12 @@ public struct JobsView: View {
     @State private var jobs: [JobRecord] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
-    @State private var selectedJobId: String?
+    @State private var expandedJobId: String?
     @State private var searchText: String = ""
     @State private var sortOption: SortOption = .nameAsc
+    @State private var statusFilter: StatusFilter = .all
     @State private var showImportSheet = false
+    @State private var showNewJobSheet = false
     @State private var importJSONText = ""
     @State private var bulkInProgress = false
     @State private var bulkMessage: String?
@@ -39,16 +35,25 @@ public struct JobsView: View {
         var id: String { rawValue }
     }
 
+    enum StatusFilter: String, CaseIterable, Identifiable {
+        case all = "All"
+        case active = "Active"
+        case paused = "Paused"
+        var id: String { rawValue }
+    }
+
     public init() {}
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            toolbar
+        VStack(alignment: .leading, spacing: 0) {
+            header.padding(.horizontal, 16).padding(.top, 14)
+            filterBar.padding(.horizontal, 16).padding(.top, 10)
+            searchAndSort.padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 10)
             Divider()
             content
+            Divider()
+            footerToolbar.padding(.horizontal, 16).padding(.vertical, 10)
         }
-        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task { await reload() }
         .onReceive(NotificationCenter.default.publisher(for: .jobsDidChange)) { _ in
@@ -66,78 +71,62 @@ public struct JobsView: View {
                 }
             })
         }
+        .sheet(isPresented: $showNewJobSheet) {
+            NewJobSheet(onCancel: { showNewJobSheet = false },
+                        onCreate: { await reload(); showNewJobSheet = false })
+        }
     }
 
-    // MARK: Subviews
+    // MARK: Header
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Scheduled Jobs").font(.title2.bold())
-                Text("Background automations triggered by launchd. Every job is a cron schedule + action chain.")
+                Text("Background automations triggered by launchd.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            if let msg = bulkMessage {
-                Text(msg).font(.caption).foregroundStyle(.secondary).transition(.opacity)
+            Button {
+                showNewJobSheet = true
+            } label: {
+                Label("New", systemImage: "plus.circle.fill")
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
         }
     }
 
-    private var toolbar: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search jobs", text: $searchText)
-                    .textFieldStyle(.plain)
-                    .frame(minWidth: 180)
-            }
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.1)))
+    private var filterBar: some View {
+        Picker("Filter", selection: $statusFilter) {
+            ForEach(StatusFilter.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+    }
 
+    private var searchAndSort: some View {
+        HStack(spacing: 8) {
+            searchField
             Picker("Sort", selection: $sortOption) {
                 ForEach(SortOption.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.menu)
-            .frame(maxWidth: 180)
-
-            Spacer()
-
-            Button {
-                Task { await pauseAll() }
-            } label: {
-                Label("Pause All", systemImage: "pause.circle")
-            }
-            .disabled(bulkInProgress || jobs.filter { $0.status == .active }.isEmpty)
-
-            Button {
-                Task { await resumeAll() }
-            } label: {
-                Label("Resume All", systemImage: "play.circle")
-            }
-            .disabled(bulkInProgress || jobs.filter { $0.status == .paused }.isEmpty)
-
-            Button {
-                Task { await exportAll() }
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.up")
-            }
-            .disabled(jobs.isEmpty)
-
-            Button {
-                showImportSheet = true
-            } label: {
-                Label("Import", systemImage: "square.and.arrow.down")
-            }
-
-            Button {
-                Task { await reload() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .help("Refresh")
+            .frame(maxWidth: 200)
         }
     }
+
+    private var searchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Search jobs", text: $searchText)
+                .textFieldStyle(.plain)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.1)))
+    }
+
+    // MARK: Content
 
     @ViewBuilder
     private var content: some View {
@@ -153,19 +142,22 @@ public struct JobsView: View {
         } else if filteredJobs.isEmpty {
             emptyState
         } else {
-            HSplitView {
-                jobsList.frame(minWidth: 280, idealWidth: 320)
-                if let id = selectedJobId, let job = jobs.first(where: { $0.id == id }) {
-                    JobDetailView(
-                        job: job,
-                        onChanged: { Task { await reload() } }
-                    )
-                    .frame(minWidth: 320)
-                } else {
-                    Text("Select a job")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(filteredJobs, id: \.id) { job in
+                        JobCard(
+                            job: job,
+                            isExpanded: expandedJobId == job.id,
+                            onToggle: {
+                                withAnimation(.easeInOut(duration: 0.18)) {
+                                    expandedJobId = (expandedJobId == job.id ? nil : job.id)
+                                }
+                            },
+                            onChanged: { Task { await reload() } }
+                        )
+                    }
                 }
+                .padding(16)
             }
         }
     }
@@ -176,31 +168,58 @@ public struct JobsView: View {
                 .font(.system(size: 42))
                 .foregroundStyle(.tertiary)
             Text("No scheduled jobs yet").font(.headline)
-            Text("Create one with the `job_create` tool, or import a job export file.")
+            Text("Tap **New** to create a job, or import a job export file.")
                 .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Button("Import…") { showImportSheet = true }
+            HStack {
+                Button("New Job") { showNewJobSheet = true }.buttonStyle(.borderedProminent)
+                Button("Import…") { showImportSheet = true }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var jobsList: some View {
-        List(selection: $selectedJobId) {
-            ForEach(filteredJobs, id: \.id) { job in
-                JobRow(job: job).tag(job.id)
+    // MARK: Footer toolbar
+
+    private var footerToolbar: some View {
+        HStack(spacing: 10) {
+            Text(countChip).font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button { Task { await pauseAll() } } label: { Label("Pause All", systemImage: "pause.circle") }
+                .disabled(bulkInProgress || jobs.filter { $0.status == .active }.isEmpty)
+                .controlSize(.small)
+            Button { Task { await resumeAll() } } label: { Label("Resume All", systemImage: "play.circle") }
+                .disabled(bulkInProgress || jobs.filter { $0.status == .paused }.isEmpty)
+                .controlSize(.small)
+            Button { Task { await exportAll() } } label: { Label("Export", systemImage: "square.and.arrow.up") }
+                .disabled(jobs.isEmpty)
+                .controlSize(.small)
+            Button { showImportSheet = true } label: { Label("Import", systemImage: "square.and.arrow.down") }
+                .controlSize(.small)
+            if let msg = bulkMessage {
+                Text(msg).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
         }
-        .listStyle(.inset)
+    }
+
+    private var countChip: String {
+        let n = jobs.count
+        let active = jobs.filter { $0.status == .active }.count
+        let jobLabel = n == 1 ? "job" : "jobs"
+        return "\(n) \(jobLabel) · \(active) active"
     }
 
     // MARK: Derived
 
     private var filteredJobs: [JobRecord] {
-        let base: [JobRecord]
-        if searchText.trimmingCharacters(in: .whitespaces).isEmpty {
-            base = jobs
-        } else {
+        var base = jobs
+        switch statusFilter {
+        case .all: break
+        case .active: base = base.filter { $0.status == .active }
+        case .paused: base = base.filter { $0.status == .paused }
+        }
+        if !searchText.trimmingCharacters(in: .whitespaces).isEmpty {
             let q = searchText.lowercased()
-            base = jobs.filter {
+            base = base.filter {
                 $0.name.lowercased().contains(q) ||
                 $0.schedule.lowercased().contains(q) ||
                 $0.id.lowercased().contains(q)
@@ -226,8 +245,8 @@ public struct JobsView: View {
             await MainActor.run {
                 self.jobs = all
                 self.errorMessage = nil
-                if let sel = self.selectedJobId, !all.contains(where: { $0.id == sel }) {
-                    self.selectedJobId = nil
+                if let sel = self.expandedJobId, !all.contains(where: { $0.id == sel }) {
+                    self.expandedJobId = nil
                 }
             }
         } catch {
@@ -285,34 +304,208 @@ public struct JobsView: View {
     }
 }
 
-// MARK: - JobRow
+// MARK: - JobCard (inline-expand row)
 
-private struct JobRow: View {
+private struct JobCard: View {
     let job: JobRecord
+    let isExpanded: Bool
+    let onToggle: () -> Void
+    let onChanged: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            JobCardHeader(job: job, isExpanded: isExpanded, onToggle: onToggle, onChanged: onChanged)
+            if isExpanded {
+                Divider()
+                JobDetailView(job: job, onChanged: onChanged)
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.15), lineWidth: 0.5))
+    }
+}
+
+private struct JobCardHeader: View {
+    let job: JobRecord
+    let isExpanded: Bool
+    let onToggle: () -> Void
+    let onChanged: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             Circle()
-                .fill(job.status == .active ? Color.green : Color.orange)
+                .fill(statusColor)
                 .frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(job.name).font(.body).lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(job.name).font(.body.weight(.medium)).lineLimit(1)
+                Text((CronHumanizer.describe(job.schedule) ?? job.schedule))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 HStack(spacing: 6) {
-                    Text(job.schedule).font(.caption.monospaced())
-                    Text("•").font(.caption).foregroundStyle(.tertiary)
-                    Text((CronHumanizer.describe(job.schedule) ?? job.schedule)).font(.caption)
+                    Text("\(job.actionChain.count) action\(job.actionChain.count == 1 ? "" : "s")")
+                    if let primary = job.actionChain.first {
+                        Text("·").foregroundStyle(.tertiary)
+                        Text(primary.tool).monospaced()
+                    }
+                    if job.skipOnBattery {
+                        Text("·").foregroundStyle(.tertiary)
+                        Image(systemName: "battery.25percent")
+                    }
                 }
-                .foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(.tertiary)
                 .lineLimit(1)
             }
             Spacer()
-            Text("\(job.actionChain.count) step\(job.actionChain.count == 1 ? "" : "s")")
-                .font(.caption).foregroundStyle(.tertiary)
+            Menu {
+                Button { Task { _ = try? await JobsManager.shared.runNowTool(args: .object(["id": .string(job.id)])); onChanged() } }
+                    label: { Label("Run Now", systemImage: "play.fill") }
+                Button { Task { _ = try? await JobsManager.shared.duplicateJobTool(args: .object(["id": .string(job.id)])); onChanged() } }
+                    label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(job.id, forType: .string)
+                } label: { Label("Copy ID", systemImage: "doc.on.doc") }
+                Divider()
+                if job.status == .active {
+                    Button { Task { _ = try? await JobsManager.shared.pauseJob(args: .object(["id": .string(job.id)])); onChanged() } }
+                        label: { Label("Pause", systemImage: "pause.fill") }
+                } else {
+                    Button { Task { _ = try? await JobsManager.shared.resumeJob(args: .object(["id": .string(job.id)])); onChanged() } }
+                        label: { Label("Resume", systemImage: "play.fill") }
+                }
+                Divider()
+                Button(role: .destructive) {
+                    Task { _ = try? await JobsManager.shared.deleteJob(args: .object(["id": .string(job.id)])); onChanged() }
+                } label: { Label("Delete", systemImage: "trash") }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                .foregroundStyle(.tertiary)
+                .font(.caption)
         }
-        .padding(.vertical, 4)
+        .padding(12)
+        .contentShape(Rectangle())
+        .onTapGesture { onToggle() }
+    }
+
+    private var statusColor: Color {
+        switch job.status {
+        case .active: return .green
+        case .paused: return .orange
+        default: return .gray
+        }
     }
 }
 
+// MARK: - New Job sheet
+
+private struct NewJobSheet: View {
+    let onCancel: () -> Void
+    let onCreate: () async -> Void
+
+    @State private var name = ""
+    @State private var schedule = "0 9 * * 1-5"
+    @State private var actionsJSON = """
+[
+  {
+    "tool": "shell_exec",
+    "arguments": { "command": "echo hello" }
+  }
+]
+"""
+    @State private var skipOnBattery = false
+    @State private var scheduleError: String?
+    @State private var actionsError: String?
+    @State private var creating = false
+    @State private var errorMsg: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("New Scheduled Job").font(.title2.bold())
+            Form {
+                TextField("Name", text: $name)
+                TextField("Schedule (cron)", text: $schedule)
+                    .font(.body.monospaced())
+                    .onChange(of: schedule) { _, v in validateSchedule(v) }
+                if let err = scheduleError {
+                    Text(err).font(.caption).foregroundStyle(.red)
+                } else {
+                    Text((CronHumanizer.describe(schedule) ?? schedule)).font(.caption).foregroundStyle(.secondary)
+                }
+                Toggle("Skip when on battery", isOn: $skipOnBattery)
+                VStack(alignment: .leading) {
+                    Text("Action Chain (JSON)").font(.caption).foregroundStyle(.secondary)
+                    TextEditor(text: $actionsJSON)
+                        .font(.body.monospaced())
+                        .frame(minHeight: 140)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                        .onChange(of: actionsJSON) { _, v in validateActions(v) }
+                    if let err = actionsError {
+                        Text(err).font(.caption).foregroundStyle(.red)
+                    }
+                }
+            }
+            if let err = errorMsg {
+                Text(err).font(.caption).foregroundStyle(.red)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { onCancel() }
+                Button("Create Job") { Task { await create() } }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(creating || name.isEmpty || scheduleError != nil || actionsError != nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 520, height: 560)
+        .onAppear { validateSchedule(schedule); validateActions(actionsJSON) }
+    }
+
+    private func validateSchedule(_ s: String) {
+        do { _ = try CronParser.parse(s); scheduleError = nil }
+        catch { scheduleError = "\(error)" }
+    }
+
+    private func validateActions(_ s: String) {
+        guard let data = s.data(using: .utf8) else { actionsError = "Invalid UTF-8"; return }
+        do { _ = try JSONDecoder().decode([ActionStep].self, from: data); actionsError = nil }
+        catch { actionsError = "Parse error: \(error.localizedDescription)" }
+    }
+
+    private func create() async {
+        creating = true; defer { creating = false }
+        guard let data = actionsJSON.data(using: .utf8),
+              let parsed = try? JSONDecoder().decode([ActionStep].self, from: data) else {
+            await MainActor.run { errorMsg = "Invalid action JSON" }; return
+        }
+        var mcpActions: [MCP.Value] = []
+        for step in parsed {
+            var argsObj: [String: MCP.Value] = [:]
+            for (k, v) in step.arguments { argsObj[k] = JSONValue.toMCP(v) }
+            mcpActions.append(.object([
+                "tool": .string(step.tool),
+                "arguments": .object(argsObj),
+                "onFail": .string(step.onFail.rawValue)
+            ]))
+        }
+        let payload: MCP.Value = .object([
+            "name": .string(name),
+            "schedule": .string(schedule),
+            "actions": .array(mcpActions),
+            "skipOnBattery": .bool(skipOnBattery)
+        ])
+        do {
+            _ = try await JobsManager.shared.createJob(args: payload)
+            await onCreate()
+        } catch {
+            await MainActor.run { errorMsg = "Create failed: \(error)" }
+        }
+    }
+}
 // MARK: - JobDetailView
 
 private struct JobDetailView: View {

@@ -52,9 +52,16 @@ public final class SettingsWindowController {
         let window = NSWindow(contentViewController: hostingController)
         window.title = "Notion Bridge Settings"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 723, height: 873))
-        window.minSize = NSSize(width: 620, height: 700)
-        window.center()
+        window.setContentSize(NSSize(width: 720, height: 900))
+        window.minSize = NSSize(width: 640, height: 720)
+        window.maxSize = NSSize(width: 900, height: 1100)
+        window.toolbarStyle = .unified
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.setFrameAutosaveName("NotionBridgeSettings.v2")
+        if window.frame.size == .zero || window.frame.origin == .zero {
+            window.center()
+        }
         window.isReleasedWhenClosed = false
 
         self.window = window

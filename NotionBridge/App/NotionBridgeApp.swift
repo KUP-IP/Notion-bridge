@@ -50,13 +50,5 @@ struct NotionBridgeApp: App {
             }
         }
         .menuBarExtraStyle(.window)
-
-        // Cmd+, keyboard shortcut opens Settings window
-        Settings {
-            SettingsView(
-                statusBar: appDelegate.statusBar,
-                permissionManager: appDelegate.permissionManager
-            )
-        }
     }
 }
