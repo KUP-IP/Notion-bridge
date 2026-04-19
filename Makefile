@@ -59,6 +59,7 @@ build:
 	@echo "🔨 Building release binary with strict concurrency..."
 	swift build -c release \
 		-Xswiftc -strict-concurrency=complete
+	@echo "$(CURDIR)" > $(BUILD_DIR)/.source_path
 	@echo "✅ Release build: $(RELEASE_DIR)/$(BINARY_NAME)"
 
 # ── Test ───────────────────────────────────────────────────────
@@ -164,6 +165,13 @@ jobrunner:
 
 # ── Install ────────────────────────────────────────────────────────────
 install: notarize
+	@if [ -f "$(BUILD_DIR)/.source_path" ] && [ "$$(cat $(BUILD_DIR)/.source_path)" != "$(CURDIR)" ]; then \
+		echo "❌ Stale build detected."; \
+		echo "   Built from: $$(cat $(BUILD_DIR)/.source_path)"; \
+		echo "   Current:    $(CURDIR)"; \
+		echo "   SPM bakes the build path into Bundle.module — run 'make clean' first."; \
+		exit 1; \
+	fi
 	@echo "📲 Installing notarized app to /Applications..."
 	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
 	@ditto "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
@@ -175,6 +183,13 @@ install: notarize
 
 # v1.7.0: Copy-only install (no notarize dep, no killall) (F3)
 install-copy: sign
+	@if [ -f "$(BUILD_DIR)/.source_path" ] && [ "$$(cat $(BUILD_DIR)/.source_path)" != "$(CURDIR)" ]; then \
+		echo "❌ Stale build detected."; \
+		echo "   Built from: $$(cat $(BUILD_DIR)/.source_path)"; \
+		echo "   Current:    $(CURDIR)"; \
+		echo "   SPM bakes the build path into Bundle.module — run 'make clean' first."; \
+		exit 1; \
+	fi
 	@echo "Installing app to /Applications (copy-only)..."
 	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
 	@ditto "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
