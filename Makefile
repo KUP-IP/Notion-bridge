@@ -46,7 +46,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps
+.PHONY: debug build test app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps check-stale-build
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -163,8 +163,11 @@ jobrunner:
 	swift build -c release --product $(JOB_RUNNER_NAME)
 	@echo "✅ JobRunner binary: $(RELEASE_DIR)/$(JOB_RUNNER_NAME)"
 
-# ── Install ────────────────────────────────────────────────────────────
-install: notarize
+# ── Stale-build guard ──────────────────────────────────────────────────
+# Runs BEFORE build so it reads the path from the *previous* build.
+# If the source directory was renamed since last build, aborts with a
+# clear message rather than installing a Bundle.module-crash binary.
+check-stale-build:
 	@if [ -f "$(BUILD_DIR)/.source_path" ] && [ "$$(cat $(BUILD_DIR)/.source_path)" != "$(CURDIR)" ]; then \
 		echo "❌ Stale build detected."; \
 		echo "   Built from: $$(cat $(BUILD_DIR)/.source_path)"; \
@@ -172,6 +175,9 @@ install: notarize
 		echo "   SPM bakes the build path into Bundle.module — run 'make clean' first."; \
 		exit 1; \
 	fi
+
+# ── Install ────────────────────────────────────────────────────────────
+install: check-stale-build notarize
 	@echo "📲 Installing notarized app to /Applications..."
 	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
 	@ditto "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
@@ -182,14 +188,7 @@ install: notarize
 	@echo "✅ Installed: /Applications/Notion Bridge.app"
 
 # v1.7.0: Copy-only install (no notarize dep, no killall) (F3)
-install-copy: sign
-	@if [ -f "$(BUILD_DIR)/.source_path" ] && [ "$$(cat $(BUILD_DIR)/.source_path)" != "$(CURDIR)" ]; then \
-		echo "❌ Stale build detected."; \
-		echo "   Built from: $$(cat $(BUILD_DIR)/.source_path)"; \
-		echo "   Current:    $(CURDIR)"; \
-		echo "   SPM bakes the build path into Bundle.module — run 'make clean' first."; \
-		exit 1; \
-	fi
+install-copy: check-stale-build sign
 	@echo "Installing app to /Applications (copy-only)..."
 	@rm -rf "/Applications/Notion Bridge.app" "/Applications/NotionBridge.app"
 	@ditto "$(APP_BUNDLE)" "/Applications/Notion Bridge.app"
