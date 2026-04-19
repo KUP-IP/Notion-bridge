@@ -34,13 +34,13 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "NotionBridge",
-            exclude: ["App/NotionBridgeApp.swift", "App/Resources", "App/Info.plist"]
+            exclude: ["App/NotionBridgeApp.swift", "App/Resources"]
         ),
         .executableTarget(
             name: "NotionBridge",
             dependencies: ["NotionBridgeLib"],
             path: "NotionBridge/App",
-            exclude: ["AppDelegate.swift", "StatusBarController.swift", "WindowTracker.swift", "Info.plist"],
+            exclude: ["AppDelegate.swift", "StatusBarController.swift", "WindowTracker.swift"],
             sources: ["NotionBridgeApp.swift"],
             resources: [.process("Resources")]
         ),
