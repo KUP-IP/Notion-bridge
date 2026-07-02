@@ -296,7 +296,7 @@ func runVoiceMemoHubTrustTests() async {
         await state.setListRows([.object(["id": .string("wrong-row-999"), "title": .string("Bridge v4")])])
         let router = await makeStubRouter(state)
         let intent = VoiceMemoIntent(kind: .registryUpdate, confidence: 1.0, entityKey: "project", entityHint: "Bridge v4", fields: ["status": "shipping"])
-        _ = try await VoiceMemoProcessor.executeRegistryUpdate(intent, explicitRowId: "correct-row-123", router: router)
+        _ = try await VoiceMemoProcessor.executeRegistryUpdate(intent, explicitRowId: "correct-row-123", transcript: "", router: router)
         let wrote = await state.lastUpdateId
         try expect(wrote == "correct-row-123", "explicit rowId wins over entityHint match, wrote to \(wrote ?? "nil")")
     }
