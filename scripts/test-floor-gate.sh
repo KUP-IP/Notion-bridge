@@ -1634,7 +1634,25 @@ set -euo pipefail
 # relation fails verify, explicit override wins, playersRelationKey rename-safe match).
 # Branched off pre-1065A/B/C/1041 main where its own measured green was 2870 (2863 +7);
 # reconciled at merge onto integrated floor 2910 → 2917 (2910 +7).
-FLOOR="${BRIDGE_TEST_FLOOR:-2917}"
+# 2026-07-02 (PKT-MEM-131 registry_find row-resolution swap): VoiceMemoProcessor.
+# resolveRegistryRowId now dispatches registry_find (PKT-1041) instead of hand-rolled
+# registry_list + client-side containment/regex matching, which is deleted outright (no
+# dead code left behind). Ambiguity semantics preserved from the caller's perspective —
+# single match → row id, ≥2 distinct matches → registryAmbiguous, no match →
+# registryMatchFailed — now resolved server-side by registry_find's exact-match
+# (case-insensitive) predicate on the entity's canonical title-property key (falls back to
+# the "title" convention when the entity isn't yet configured). VoiceMemoHubTrustTests'
+# stub router gained a registry_find stub mirroring registry_find's REAL matching
+# semantics (RegistryReader.find/valueMatches — exact equality, not containment); the
+# pre-existing ambiguous-hint fixture was updated to two rows sharing one exact title (the
+# realistic ambiguous case under exact-match) rather than two differently-worded titles
+# that only collided under the old containment logic. +2 tests —
+# resolveRegistryRowId_exactMatch_singleRowId, resolveRegistryRowId_noMatch_
+# throwsRegistryMatchFailed (the three cases the old implementation covered — exact/none/
+# ambiguous — now exercised against registry_find end-to-end). Branched off origin/main
+# (630a2ed, post-1041/1064/1065A-C) where measured green was 2917 (0 failed); this change
+# measures 2919 passed / 0 failed. floor 2917 → 2919.
+FLOOR="${BRIDGE_TEST_FLOOR:-2919}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

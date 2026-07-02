@@ -53,6 +53,25 @@ private func makeStubRouter(_ state: StubRegistryState) async -> ToolRouter {
         description: "stub", inputSchema: schema) { _ in
         .object(["rows": .array(await state.listRows)])
     })
+    // PKT-MEM-131: resolveRegistryRowId now dispatches registry_find instead of
+    // registry_list. Mirrors registry_find's REAL matching semantics (RegistryReader.find /
+    // valueMatches — case-insensitive EXACT string equality on the predicate key against
+    // each row's "title" field), not the old hand-rolled containment/regex — so this stub
+    // exercises resolveRegistryRowId's ambiguity routing against the same matching
+    // characteristics the real registry_find tool has (verified independently by
+    // RegistryModuleTests).
+    await router.register(ToolRegistration(name: "registry_find", module: "registry", tier: .open,
+        description: "stub", inputSchema: schema) { args in
+        guard case .object(let obj) = args, case .object(let whereObj)? = obj["where"],
+              case .string(let wanted)? = whereObj["title"] else {
+            return .object(["rows": .array([])])
+        }
+        let rows = await state.listRows.filter { row in
+            guard case .object(let rowObj) = row, case .string(let title)? = rowObj["title"] else { return false }
+            return title.compare(wanted, options: .caseInsensitive) == .orderedSame
+        }
+        return .object(["rows": .array(rows)])
+    })
     await router.register(ToolRegistration(name: "registry_get", module: "registry", tier: .open,
         description: "stub", inputSchema: schema) { _ in
         .object(["properties": .object(await state.getProperties)])
@@ -284,9 +303,12 @@ func runVoiceMemoHubTrustTests() async {
 
     await test("rowIdCommit_missingRowAndAmbiguousHint_routesToManual") {
         let state = StubRegistryState()
+        // registry_find matches by case-insensitive EXACT title equality (not
+        // containment) — two DISTINCT rows sharing the same title is the
+        // realistic ambiguous case (e.g. two "Bridge v4" rows in the data source).
         await state.setListRows([
-            .object(["id": .string("r1"), "title": .string("Bridge v4 launch")]),
-            .object(["id": .string("r2"), "title": .string("Bridge v4 ops")]),
+            .object(["id": .string("r1"), "title": .string("Bridge v4")]),
+            .object(["id": .string("r2"), "title": .string("Bridge v4")]),
         ])
         let router = await makeStubRouter(state)
         var threwAmbiguous = false
@@ -297,6 +319,32 @@ func runVoiceMemoHubTrustTests() async {
         }
         try expect(threwAmbiguous, "ambiguous hint (2 matches) ⇒ registryAmbiguous (manual), not an auto-pick")
         try expect(await state.updateCount == 0, "no write performed on ambiguous hint")
+    }
+
+    await test("resolveRegistryRowId_exactMatch_singleRowId") {
+        let state = StubRegistryState()
+        await state.setListRows([
+            .object(["id": .string("r1"), "title": .string("Bridge v4")]),
+            .object(["id": .string("r2"), "title": .string("Other project")]),
+        ])
+        let router = await makeStubRouter(state)
+        let rowId = try await VoiceMemoProcessor.resolveRegistryRowId(entityKey: "project", hint: "bridge v4", router: router)
+        try expect(rowId == "r1", "case-insensitive exact match resolves the single row id, got \(rowId)")
+    }
+
+    await test("resolveRegistryRowId_noMatch_throwsRegistryMatchFailed") {
+        let state = StubRegistryState()
+        await state.setListRows([
+            .object(["id": .string("r1"), "title": .string("Bridge v4")]),
+        ])
+        let router = await makeStubRouter(state)
+        var threwMatchFailed = false
+        do {
+            _ = try await VoiceMemoProcessor.resolveRegistryRowId(entityKey: "project", hint: "no such project", router: router)
+        } catch let error as VoiceMemoError {
+            if case .registryMatchFailed = error { threwMatchFailed = true }
+        }
+        try expect(threwMatchFailed, "no match ⇒ registryMatchFailed")
     }
 
     // MARK: Append-only protected registry fields
