@@ -1717,7 +1717,62 @@ set -euo pipefail
 # Own measured green was 2940 (2917 +23), branched independently of
 # PKT-MEM-131/132/134. Reconciled at merge onto integrated floor 2948
 # (post-131/132/134) → 2971 (2948 +23).
-FLOOR="${BRIDGE_TEST_FLOOR:-2971}"
+#
+# 2026-07-02 (PKT-MEM-136 comment disposition + idea-thread ledger): +22 tests —
+# new VoiceMemoCommentTests (comment intent kind + required purpose:idea|reflow field
+# — GOAL_CONDITION coverage). Idea-purpose happy path resolves via
+# registry_resolve_and_update (PKT-MEM-135, NOT a bespoke resolution path) then posts
+# via notion_comment_create and logs {memoId, discussionId, targetEntityKey,
+# targetPageId, postedAt, signedOffAt:nil} to the new idea-threads.json ledger;
+# reflow-purpose happy path posts identically but is asserted NEVER logged
+# (fire-and-forget, D48). Graceful-BLOCKED coverage (throws, never a crash — the
+# PKT-1064 precedent the packet cites): missing entityHint, entity not configured,
+# entity with no title-role property to predicate-match against,
+# registry_resolve_and_update no-match/ambiguous, notion_comment_create
+# success:false, missing purpose/entityKey/text — each asserted to leave the ledger
+# untouched and make zero downstream tool calls where applicable. Plus a
+# processOne-seam integration test (execute(intent:...)'s generic catch, the exact
+# code path processOne/commit() use, actually catches the failure) and pure-helper
+# wiring sanity (dryRunDetail, MemoryHubCockpitLabels.intentKind, threshold(for:),
+# cockpit intentRows/intentWritePreview/commitValuePreview round-trip purpose
+# without crashing). VoiceMemoIdeaThreadStore (new file) mirrors
+# VoiceMemoReviewStore's load/save/enqueue shape exactly (D50) — not deduped (a
+# memo may legitimately post more than one idea comment to distinct targets);
+# openEntries()/openCount exclude signed-off entries (signedOffAt stays nil for v1 —
+# D51, fully agent/manual-initiated, no automatic trigger). notion_comment_create's
+# response envelope gained one ADDITIVE key (discussionId, surfacing the Notion
+# `discussion_id` the first posted chunk started — same extraction
+# notion_discussion_create already does) so executeComment can log it without a
+# second round trip; every existing key/shape is byte-for-byte unchanged (no
+# existing notion_comment_create test asserts an exact envelope key set — verified).
+# Six pre-existing exhaustive `switch …Kind` statements needed a `.comment` arm to
+# keep compiling (VoiceMemoProcessor.execute/dryRunDetail,
+# MemoryHubGuardrails.threshold(for:), MemoryHubCockpitLabels.intentKind,
+# MemoryProcessCockpit.destinationLabel/intentWritePreview/commitValuePreview,
+# MemoryHubMemoTitle.subject) — mechanical Swift-compiler-forced wiring, not scope
+# creep. `CockpitIntentRow` gained a `purpose` stored property (threaded through
+# `intentRows` construction and `intent()` reconstruction) so a comment row
+# round-trips purpose through the Process cockpit. registry_resolve_and_update
+# requires non-empty `fields` (it is "resolve AND update", not a pure lookup — no
+# bespoke resolution path exists), so target-page resolution ALSO writes a small
+# dated receipt marker to the resolved row's `summary` field via the SAME call —
+# the same kind of append-log receipt every other voice-memo → registry write
+# already leaves (executeMemoryKeep's body append, mergeAppendRegistryFields);
+# `RegistryWriter`'s existing unbound-field guard naturally raises a clear,
+# already-tested error for an entity without `summary` bound, which the untyped
+# processOne catch-all already routes to REVIEW — no new error-handling scaffolding
+# needed for that case. No new MCP tool (Scope OUT explicitly excludes
+# `voice_memo_idea_threads_list` — flagged as a D51 follow-on need, not required for
+# this packet's DoD); staticFeatureModuleToolCount stays 200 (voice_memo_commit's
+# EXISTING schema gained one additive `purpose` field + an `intentKind` description
+# update — not a new tool, no annotation catalog change needed). Branched off
+# pkt-mem-135-registry-resolve-and-update (1327bb7) where the measured green was
+# 2940 (0 failed); stacked on 135, this branch's own NEW delta is +22 (measures
+# 2962 = 2940 +22 in its own branch, confirmed 3x deterministic). Reconciled at
+# merge: 135's +23 is already counted in the integrated floor above, so only
+# 136's own +22 applies on top — integrated floor 2971 (post-131/132/134/135)
+# → 2993 (2971 +22).
+FLOOR="${BRIDGE_TEST_FLOOR:-2993}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

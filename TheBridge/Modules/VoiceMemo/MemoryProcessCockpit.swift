@@ -21,6 +21,8 @@ public struct CockpitIntentRow: Identifiable, Sendable, Equatable {
     public let destinationField: String
     public let fields: [String: String]
     public let dueISO8601: String?
+    /// Required for `.comment` rows (PKT-MEM-136); nil for every other kind.
+    public let purpose: VoiceMemoCommentPurpose?
     /// True for the single lane that will execute (elected primary or operator override).
     public var isPrimary: Bool
     /// True for the lane the election picked (before any override).
@@ -33,7 +35,8 @@ public struct CockpitIntentRow: Identifiable, Sendable, Equatable {
     /// Rebuild a `VoiceMemoIntent` for commit/arg building.
     public func intent() -> VoiceMemoIntent {
         VoiceMemoIntent(kind: kind, confidence: confidence, entityKey: entityKey,
-                        entityHint: entityHint, title: title, dueISO8601: dueISO8601, fields: fields)
+                        entityHint: entityHint, title: title, dueISO8601: dueISO8601, fields: fields,
+                        purpose: purpose)
     }
 }
 
@@ -108,6 +111,7 @@ public enum MemoryProcessCockpit {
                 destinationField: destinationLabel(for: intent),
                 fields: intent.fields,
                 dueISO8601: intent.dueISO8601,
+                purpose: intent.purpose,
                 isPrimary: isPrimary,
                 isElectedPrimary: isElected,
                 status: status,
@@ -213,6 +217,12 @@ public enum MemoryProcessCockpit {
             if let due = row.dueISO8601 { lines.append(IntentWritePreviewLine(label: "due", value: due)) }
             if let body = row.fields["notes"] ?? row.title { lines.append(IntentWritePreviewLine(label: "notes", value: body)) }
             return lines
+        case .comment:
+            var lines: [IntentWritePreviewLine] = []
+            if let purpose = row.purpose { lines.append(IntentWritePreviewLine(label: "purpose", value: purpose.rawValue)) }
+            let text = row.title ?? plan.summary
+            if !text.isEmpty { lines.append(IntentWritePreviewLine(label: "comment text", value: String(text.prefix(500)))) }
+            return lines
         case .review:
             return [IntentWritePreviewLine(label: "status", value: "Needs manual review — no auto-write")]
         }
@@ -243,7 +253,7 @@ public enum MemoryProcessCockpit {
             }
             // Fall back to any non-empty field value so the operator still sees the payload.
             return row.fields.values.sorted().first { !$0.isEmpty }
-        case .reminder, .memoryKeep, .agentMemory, .review:
+        case .reminder, .memoryKeep, .agentMemory, .comment, .review:
             if let title = row.title, !title.isEmpty { return title }
             if let key = row.fields.keys.sorted().first, let value = row.fields[key], !value.isEmpty {
                 return value
@@ -282,6 +292,10 @@ public enum MemoryProcessCockpit {
             let entity = intent.entityKey ?? "?"
             let field = intent.fields.keys.sorted().first
             return field.map { "\(entity).\($0)" } ?? entity
+        case .comment:
+            let entity = intent.entityKey ?? "?"
+            let purpose = intent.purpose?.rawValue ?? "?"
+            return "Notion comment (\(entity), \(purpose))"
         case .review: return "Needs review"
         }
     }

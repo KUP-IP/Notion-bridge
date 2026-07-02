@@ -29,6 +29,10 @@ public enum MemoryHubCommitGuardrails {
         case .registryUpdate: return 0.86
         case .agentMemory: return 0.86
         case .memoryKeep: return 0.90
+        // PKT-MEM-136: a comment posts real external content to a Notion page —
+        // held to the same conservative bar as memory_keep/reminder, not the
+        // lower registry/agent-note threshold.
+        case .comment: return 0.90
         case .review: return 1.01   // review lanes never auto-execute
         }
     }

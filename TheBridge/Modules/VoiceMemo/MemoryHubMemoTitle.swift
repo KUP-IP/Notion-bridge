@@ -200,6 +200,10 @@ public enum MemoryHubMemoTitler {
             return g.isEmpty ? entity : "\(entity) — \(g)"
         case .memoryKeep, .agentMemory:
             return intent.title ?? intent.body ?? plan.summary
+        case .comment:
+            let entity = intent.entityHint ?? intent.entityKey ?? "Comment"
+            let g = clean(intent.body ?? intent.title ?? plan.summary, maxWords: 5)
+            return g.isEmpty ? entity : "\(entity) — \(g)"
         case .review:
             return plan.generatedTitle
         }

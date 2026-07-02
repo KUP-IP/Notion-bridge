@@ -48,6 +48,20 @@ public enum VoiceMemoIntentKind: String, Sendable, Codable, CaseIterable {
     case agentMemory = "agent_memory"
     case registryUpdate = "registry_update"
     case review
+    /// PKT-MEM-136 — posts a Notion page comment against a resolved registry
+    /// entity's page. Disposition (ledger-tracked vs fire-and-forget) is
+    /// decided by the required `VoiceMemoIntent.purpose` field, not a
+    /// separate intent kind (D48).
+    case comment
+}
+
+/// Disposition of a `.comment` intent (PKT-MEM-136 / D48). `idea`-purpose
+/// comments are logged to the idea-thread ledger (`VoiceMemoIdeaThreadStore`)
+/// for later reference/sign-off; `reflow`-purpose comments are posted the
+/// same way but never tracked (fire-and-forget).
+public enum VoiceMemoCommentPurpose: String, Sendable, Codable, CaseIterable {
+    case idea
+    case reflow
 }
 
 /// One executable intent extracted from a transcript.
@@ -63,6 +77,9 @@ public struct VoiceMemoIntent: Sendable, Equatable {
     public var dueISO8601: String?
     /// Canonical registry field keys → string values for create/update.
     public var fields: [String: String]
+    /// Required for `.comment` intents (PKT-MEM-136 / D48) — decides ledger
+    /// disposition. Unused by every other kind.
+    public var purpose: VoiceMemoCommentPurpose?
 
     public init(
         kind: VoiceMemoIntentKind,
@@ -72,7 +89,8 @@ public struct VoiceMemoIntent: Sendable, Equatable {
         title: String? = nil,
         body: String? = nil,
         dueISO8601: String? = nil,
-        fields: [String: String] = [:]
+        fields: [String: String] = [:],
+        purpose: VoiceMemoCommentPurpose? = nil
     ) {
         self.kind = kind
         self.confidence = confidence
@@ -82,6 +100,7 @@ public struct VoiceMemoIntent: Sendable, Equatable {
         self.body = body
         self.dueISO8601 = dueISO8601
         self.fields = fields
+        self.purpose = purpose
     }
 }
 

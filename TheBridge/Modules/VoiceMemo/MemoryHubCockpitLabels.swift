@@ -21,6 +21,7 @@ public enum MemoryHubCockpitLabels {
         case .memoryKeep:     return "Memory"
         case .agentMemory:    return "Agent note"
         case .registryUpdate: return "Update record"
+        case .comment:        return "Comment"
         case .review:         return "Needs review"
         }
     }

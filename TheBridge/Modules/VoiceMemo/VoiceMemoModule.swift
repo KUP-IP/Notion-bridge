@@ -361,15 +361,15 @@ public enum VoiceMemoModule {
                     ]),
                     "intentKind": .object([
                         "type": .string("string"),
-                        "description": .string("reminder | memory_keep | agent_memory | registry_update"),
+                        "description": .string("reminder | memory_keep | agent_memory | registry_update | comment"),
                     ]),
                     "entityKey": .object([
                         "type": .string("string"),
-                        "description": .string("Registry entity for registry_update / memory_keep override."),
+                        "description": .string("Registry entity for registry_update / memory_keep / comment override."),
                     ]),
                     "entityHint": .object([
                         "type": .string("string"),
-                        "description": .string("Row title hint for registry_update."),
+                        "description": .string("Row title hint for registry_update / comment target-page resolution."),
                     ]),
                     "rowId": .object([
                         "type": .string("string"),
@@ -381,7 +381,11 @@ public enum VoiceMemoModule {
                     ]),
                     "title": .object([
                         "type": .string("string"),
-                        "description": .string("Reminder title override."),
+                        "description": .string("Reminder title override; also the comment text fallback when body is unset."),
+                    ]),
+                    "purpose": .object([
+                        "type": .string("string"),
+                        "description": .string("Required for intentKind=comment: idea (ledger-tracked) | reflow (fire-and-forget, never logged)."),
                     ]),
                 ]),
                 "required": .array([.string("memoId"), .string("intentKind")]),
