@@ -1,7 +1,7 @@
 # PKT-MEM-133 — Multi-intent agent-mode documentation
 
 **Execution Class:** AUTO (doc/metadata-only, no behavior change)
-**Status:** REVIEW
+**Status:** Done
 **Blocked by:** None
 **PROJECT:** Ship The Bridge v4
 

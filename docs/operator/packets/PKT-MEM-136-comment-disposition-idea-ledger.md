@@ -1,7 +1,7 @@
 # PKT-MEM-136 — Comment disposition + idea-thread ledger
 
 **Execution Class:** REVIEW-FIRST
-**Status:** REVIEW
+**Status:** Done
 **Blocked by:** PKT-MEM-135 (registry_resolve_and_update) — entity resolution for the comment's target page should be built on the new primitive, not the pattern PKT-MEM-135 exists to replace
 **PROJECT:** Ship The Bridge v4
 

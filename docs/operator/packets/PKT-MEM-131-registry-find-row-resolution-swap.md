@@ -1,7 +1,7 @@
 # PKT-MEM-131 — registry_find row-resolution swap
 
 **Execution Class:** REVIEW-FIRST
-**Status:** REVIEW
+**Status:** Done
 **Blocked by:** None
 **PROJECT:** Ship The Bridge v4
 

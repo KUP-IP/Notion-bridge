@@ -1,7 +1,7 @@
 # PKT-MEM-135 — registry_resolve_and_update combined tool
 
 **Execution Class:** REVIEW-FIRST
-**Status:** REVIEW
+**Status:** Done
 **Blocked by:** None (hard dependency) — sequencing note: land after PKT-MEM-131 if both are in flight, since both touch the same row-resolution code path and concurrent edits there would conflict
 **PROJECT:** Bridge Platform (general-purpose registry primitive — explicitly not Memory-Hub-scoped, per D57)
 
