@@ -548,48 +548,42 @@ public enum VoiceMemoProcessor {
         return merged
     }
 
+    /// Resolve `hint` to an existing row id via `registry_find` (PKT-1041) — the
+    /// convergent, server-side, bound-property-id lookup that replaced this
+    /// function's original hand-rolled `registry_list` + containment/regex
+    /// matching (PKT-MEM-131). The predicate key is the entity's own canonical
+    /// title-property key when the entity is resolvable from the shared config
+    /// store, else the `"title"` convention (`RegistryHydration`'s default for
+    /// non-Skills entities) — so a not-yet-configured entity (first run) still
+    /// dispatches a well-formed call instead of guessing a wrong key.
+    ///
+    /// Ambiguity semantics are unchanged from the caller's perspective: a single
+    /// match returns that row id, ≥2 matches throw `registryAmbiguous` (never an
+    /// auto-picked write), and no match throws `registryMatchFailed`.
     public static func resolveRegistryRowId(entityKey: String, hint: String?, router: ToolRouter) async throws -> String {
-        let list = try await router.dispatch(toolName: "registry_list", arguments: .object([
+        let normalizedHint = hint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let normalizedHint, !normalizedHint.isEmpty else {
+            throw VoiceMemoError.registryMatchFailed(entityKey, hint)
+        }
+        let titleKey = await loadRegistryEntity(key: entityKey)?.titleProperty?.key ?? "title"
+
+        let found = try await router.dispatch(toolName: "registry_find", arguments: .object([
             "entity": .string(entityKey),
-            "limit": .int(100),
+            "where": .object([titleKey: .string(normalizedHint)]),
         ]))
-        guard case .object(let envelope) = list,
+        guard case .object(let envelope) = found,
               case .array(let rows)? = envelope["rows"] else {
             throw VoiceMemoError.registryMatchFailed(entityKey, hint)
         }
-        let normalizedHint = hint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let pairs: [(id: String, title: String)] = rows.compactMap { row in
-            guard case .object(let rowObj) = row,
-                  case .string(let id)? = rowObj["id"],
-                  case .string(let title)? = rowObj["title"] else { return nil }
-            return (id, title)
+        let ids: [String] = rows.compactMap { row in
+            guard case .object(let rowObj) = row, case .string(let id)? = rowObj["id"] else { return nil }
+            return id
         }
-
-        // Containment match — collect ALL candidates; ≥2 distinct rows ⇒ ambiguous.
+        let distinct = Set(ids)
         // PKT-MEM-106 0a: do not silently auto-pick the first of several matches; an
         // ambiguous hint must route to a manual / picker decision, never a wrong-row write.
-        if let hint = normalizedHint, !hint.isEmpty {
-            var matches: [String] = []
-            for (id, title) in pairs {
-                let t = title.lowercased()
-                if t.contains(hint) || hint.contains(t) { matches.append(id) }
-            }
-            let distinct = Set(matches)
-            if distinct.count == 1, let only = matches.first { return only }
-            if distinct.count >= 2 { throw VoiceMemoError.registryAmbiguous(entityKey, hint, distinct.count) }
-        }
-
-        // Regex fallback — same ambiguity rule.
-        if let hint = normalizedHint,
-           let regex = try? NSRegularExpression(pattern: NSRegularExpression.escapedPattern(for: hint), options: .caseInsensitive) {
-            var matches: [String] = []
-            for (id, title) in pairs where regex.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)) != nil {
-                matches.append(id)
-            }
-            let distinct = Set(matches)
-            if distinct.count == 1, let only = matches.first { return only }
-            if distinct.count >= 2 { throw VoiceMemoError.registryAmbiguous(entityKey, hint, distinct.count) }
-        }
+        if distinct.count == 1, let only = ids.first { return only }
+        if distinct.count >= 2 { throw VoiceMemoError.registryAmbiguous(entityKey, hint, distinct.count) }
         throw VoiceMemoError.registryMatchFailed(entityKey, hint)
     }
 
