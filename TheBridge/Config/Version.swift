@@ -122,7 +122,12 @@ public enum AppVersion {
     ///   (134), new general-purpose registry_resolve_and_update MCP tool (135),
     ///   comment disposition (idea|reflow) + idea-thread ledger built on it (136).
     ///   staticFeatureModuleToolCount 199 → 200. test-floor 2917 → 2993 (+76).
-    public static let build = "70"
+    /// v3.9.4: 70 → 71 — on-device smoke fix (found via live MCP demo of PKT-MEM-136):
+    ///   voice_memo_commit's real argument parser never wired a top-level "body" arg
+    ///   into intent.body — every real MCP caller of intentKind=comment silently fell
+    ///   back to the title path. Schema + handler fix, no new tool. Marketing unchanged;
+    ///   build-only re-install. test-floor 2993 → 2994.
+    public static let build = "71"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
