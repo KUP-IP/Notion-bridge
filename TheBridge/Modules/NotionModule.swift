@@ -308,6 +308,7 @@ public enum NotionModule {
                 "properties": .object([
                     "pageId": .object(["type": .string("string"), "description": .string("Notion page ID (with or without dashes)")]),
                     "properties": .object(["type": .string("string"), "description": .string("JSON string of properties to update (Notion API format)")]),
+                    "icon": .object(["type": .string("string"), "description": .string("Optional single emoji to set as the page icon (e.g. \"🎯\"). Emoji only — omit to leave the icon unchanged.")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("pageId"), .string("properties")])
@@ -318,6 +319,7 @@ public enum NotionModule {
                       case .string(let propsJSON) = args["properties"] else {
                     throw ToolRouterError.invalidArguments(toolName: "notion_page_update", reason: "missing 'pageId' or 'properties'")
                 }
+                let icon: String? = { if case .string(let e) = args["icon"] { return e }; return nil }()
 
                 guard let propsData = propsJSON.data(using: .utf8),
                       var propsObj = try? JSONSerialization.jsonObject(with: propsData) as? [String: Any] else {
@@ -340,7 +342,7 @@ public enum NotionModule {
                 let envelopeData = try JSONSerialization.data(withJSONObject: envelope)
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                let resultData = try await client.updatePage(pageId: pageId, properties: envelopeData)
+                let resultData = try await client.updatePage(pageId: pageId, properties: envelopeData, icon: icon)
 
                 guard let resultJSON = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any] else {
                     return .object(["error": .string("Failed to parse update response")])
@@ -372,6 +374,7 @@ public enum NotionModule {
                     "parentType": .object(["type": .string("string"), "description": .string("Parent type: 'page_id', 'database_id', or 'data_source_id' (default: page_id)")]),
                     "properties": .object(["type": .string("string"), "description": .string("JSON string of page properties")]),
                     "children": .object(["type": .string("string"), "description": .string("Optional JSON string of child blocks")]),
+                    "icon": .object(["type": .string("string"), "description": .string("Optional single emoji to set as the page icon (e.g. \"🎯\"). Emoji only.")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("parentId"), .string("properties")])
@@ -382,6 +385,7 @@ public enum NotionModule {
                       case .string(let propsJSON) = args["properties"] else {
                     throw ToolRouterError.invalidArguments(toolName: "notion_page_create", reason: "missing 'parentId' or 'properties'")
                 }
+                let icon: String? = { if case .string(let e) = args["icon"] { return e }; return nil }()
 
                 let parentType: String = {
                     if case .string(let pt) = args["parentType"] { return pt }
@@ -402,7 +406,8 @@ public enum NotionModule {
                     parentId: parentId,
                     parentType: parentType,
                     properties: propsData,
-                    children: childrenData
+                    children: childrenData,
+                    icon: icon
                 )
 
                 guard let resultJSON = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any] else {

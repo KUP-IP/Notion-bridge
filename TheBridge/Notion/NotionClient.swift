@@ -483,13 +483,23 @@ public actor NotionClient {
         return stripped
     }
 
-    /// Update page properties.
-    public func updatePage(pageId: String, properties: Data) async throws -> Data {
+    /// Update page properties. `icon` is an optional single emoji (Notion's
+    /// `{"type":"emoji","emoji":"…"}` icon shape); omitted ⇒ byte-identical
+    /// to the pre-icon-support body.
+    public func updatePage(pageId: String, properties: Data, icon: String? = nil) async throws -> Data {
         let cleanId = Self.normalizePageId(pageId)
+        var bodyData = properties
+        if let icon {
+            guard var bodyObj = try? JSONSerialization.jsonObject(with: properties) as? [String: Any] else {
+                throw NotionClientError.decodingError("updatePage: could not merge icon — properties body is not a JSON object")
+            }
+            bodyObj["icon"] = ["type": "emoji", "emoji": icon]
+            bodyData = try JSONSerialization.data(withJSONObject: bodyObj)
+        }
         let (data, response) = try await request(
             method: "PATCH",
             path: "/pages/\(cleanId)",
-            body: properties
+            body: bodyData
         )
         guard (200...299).contains(response.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? ""
@@ -500,9 +510,11 @@ public actor NotionClient {
 
     // MARK: - PKT-367: New API Methods (A3–A13)
 
-    /// A3: Create a page under a parent (page or database).
+    /// A3: Create a page under a parent (page or database). `icon` is an
+    /// optional single emoji (Notion's `{"type":"emoji","emoji":"…"}` icon
+    /// shape); omitted ⇒ byte-identical to the pre-icon-support body.
     /// POST /v1/pages
-    public func createPage(parentId: String, parentType: String = "page_id", properties: Data, children: Data? = nil) async throws -> Data {
+    public func createPage(parentId: String, parentType: String = "page_id", properties: Data, children: Data? = nil, icon: String? = nil) async throws -> Data {
         let cleanId = parentId.replacingOccurrences(of: "-", with: "")
         var body: [String: Any] = ["parent": [parentType: cleanId]]
 
@@ -515,6 +527,10 @@ public actor NotionClient {
         if let childrenData = children,
            let childrenObj = try? JSONSerialization.jsonObject(with: childrenData) {
             body["children"] = childrenObj
+        }
+
+        if let icon {
+            body["icon"] = ["type": "emoji", "emoji": icon]
         }
 
         let bodyData = try JSONSerialization.data(withJSONObject: body)
