@@ -416,6 +416,15 @@ private func installOverlapStubs(on router: ToolRouter, state: OverlapStubState,
         name: "registry_list", module: "stub", tier: .open,
         description: "stub", inputSchema: .object(["type": .string("object")]),
         handler: { _ in .object(["rows": .array(await state.listRows)]) })
+    // PKT-MEM-131 (merged after this branch was cut) swapped resolveRegistryRowId's
+    // registry_list + client-side matching for a direct registry_find dispatch — this
+    // stub keeps that resolution path working for every test in this file that goes
+    // through executeRegistryUpdate's hint-based resolution, mirroring `list`'s same
+    // backing rows.
+    let find = ToolRegistration(
+        name: "registry_find", module: "stub", tier: .open,
+        description: "stub", inputSchema: .object(["type": .string("object")]),
+        handler: { _ in .object(["rows": .array(await state.listRows)]) })
     let append = ToolRegistration(
         name: "notion_blocks_append", module: "stub", tier: .open,
         description: "stub", inputSchema: .object(["type": .string("object")]),
@@ -425,6 +434,7 @@ private func installOverlapStubs(on router: ToolRouter, state: OverlapStubState,
     await router.register(get)
     await router.register(update)
     await router.register(list)
+    await router.register(find)
     await router.register(append)
 }
 
