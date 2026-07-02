@@ -331,7 +331,7 @@ public enum VoiceMemoProcessor {
         case .agentMemory:
             return try await executeAgentMemory(intent, plan: plan, transcript: transcript, router: router)
         case .registryUpdate:
-            return try await executeRegistryUpdate(intent, router: router)
+            return try await executeRegistryUpdate(intent, transcript: transcript, router: router)
         case .review:
             return "queued for review — no auto-write"
         }
@@ -390,6 +390,17 @@ public enum VoiceMemoProcessor {
         entity: RegistryEntity?
     ) async throws -> String {
         var fields = resolvedMemoryKeepFields(intent: intent, plan: plan)
+
+        // PKT-MEM-132 D49 — reject a proposed field value that is a
+        // contiguous verbatim run from the raw transcript BEFORE any Notion
+        // write (registry_create below, then the summary-body append later
+        // in this function both read from `fields`). Runs on every field
+        // value, not just "summary" — an agent-supplied `fields` override
+        // can put transcript text under any key. Graceful BLOCKED → REVIEW,
+        // never a silent write of the raw transcript into Notion.
+        if let rejected = VoiceMemoTranscriptOverlapGuard.firstRejectedField(in: fields, transcript: transcript) {
+            throw VoiceMemoError.transcriptOverlapRejected(entityKey, rejected.key, rejected.runLength)
+        }
 
         // PKT-1064 — attach the ORIGINATING Player relation to the new Memory
         // row at create time. The Player is bound by property id through the
@@ -494,7 +505,12 @@ public enum VoiceMemoProcessor {
         }
     }
 
-    public static func executeRegistryUpdate(_ intent: VoiceMemoIntent, explicitRowId: String? = nil, router: ToolRouter) async throws -> String {
+    public static func executeRegistryUpdate(
+        _ intent: VoiceMemoIntent,
+        explicitRowId: String? = nil,
+        transcript: String,
+        router: ToolRouter
+    ) async throws -> String {
         guard let entityKey = intent.entityKey else {
             throw VoiceMemoError.invalidIntent("registry update missing entity key")
         }
@@ -512,6 +528,14 @@ public enum VoiceMemoProcessor {
             proposed: intent.fields,
             router: router
         )
+        // PKT-MEM-132 D49 — same pre-write guard as executeMemoryKeep, on the
+        // MERGED field set (append-only fields wrap the raw proposed value
+        // with a timestamp stamp but do not strip an embedded verbatim
+        // transcript run, so checking post-merge still catches it; checking
+        // every key also covers non-append fields the merge leaves untouched).
+        if let rejected = VoiceMemoTranscriptOverlapGuard.firstRejectedField(in: merged, transcript: transcript) {
+            throw VoiceMemoError.transcriptOverlapRejected(entityKey, rejected.key, rejected.runLength)
+        }
         let fields = merged.mapValues { Value.string($0) }
         _ = try await router.dispatch(toolName: "registry_update", arguments: .object([
             "entity": .string(entityKey),
@@ -1099,7 +1123,7 @@ public enum VoiceMemoProcessor {
         let detail: String
         do {
             if kind == .registryUpdate {
-                detail = try await executeRegistryUpdate(intent, explicitRowId: explicitRowId, router: router)
+                detail = try await executeRegistryUpdate(intent, explicitRowId: explicitRowId, transcript: transcript, router: router)
             } else {
                 detail = try await execute(intent: intent, plan: plan, transcript: transcript, router: router)
             }
@@ -1200,6 +1224,14 @@ public enum VoiceMemoError: Error, LocalizedError {
     /// The row was created but the read-back did not show the expected Player
     /// relation attached (PKT-1064 post-write verification).
     case playerRelationVerifyFailed(String, String, String)
+    /// A proposed Notion-bound field value (memory_keep body/summary,
+    /// registry_update text field) contains a contiguous verbatim run from
+    /// the memo's raw transcript at/above
+    /// `VoiceMemoTranscriptOverlapGuard.contiguousRunThreshold` — a graceful
+    /// BLOCKED → REVIEW (PKT-MEM-132 D49), never a silent raw-transcript
+    /// write, never a crash. Associated values: entity key, offending field
+    /// key, matched run length.
+    case transcriptOverlapRejected(String, String, Int)
 
     public var errorDescription: String? {
         switch self {
@@ -1212,6 +1244,8 @@ public enum VoiceMemoError: Error, LocalizedError {
             return "entity ‘\(entity)’ has no bound PLAYERS relation property — cannot attach the originating Player; bind PLAYERS via registry_introspect, then reprocess (BLOCKED, queued for review)"
         case .playerRelationVerifyFailed(let entity, let pageId, let player):
             return "originating Player \(player) not present on created \(entity) row \(pageId) after read-back — attach verification failed (queued for review)"
+        case .transcriptOverlapRejected(let entity, let field, let runLength):
+            return "entity=\(entity) field ‘\(field)’ contains a \(runLength)-char verbatim run from the raw transcript — refusing to write the transcript into Notion; provide an original summary (BLOCKED, queued for review)"
         }
     }
 }

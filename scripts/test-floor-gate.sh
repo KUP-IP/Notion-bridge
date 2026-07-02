@@ -1634,7 +1634,34 @@ set -euo pipefail
 # relation fails verify, explicit override wins, playersRelationKey rename-safe match).
 # Branched off pre-1065A/B/C/1041 main where its own measured green was 2870 (2863 +7);
 # reconciled at merge onto integrated floor 2910 → 2917 (2910 +7).
-FLOOR="${BRIDGE_TEST_FLOOR:-2917}"
+# 2026-07-02 (PKT-MEM-132 transcript-overlap write guard, D49): +20 tests —
+# VoiceMemoTranscriptOverlapGuardTests (pure-logic: locked constants, below-floor
+# short-reuse always passes, empty/tiny text passes, full verbatim paste rejected,
+# 220-char embedded run rejected, 199-char run one-under-threshold passes, long-
+# genuinely-original summary passes, re-cased/re-wrapped paste still rejected
+# [normalization], firstRejectedField scans every field key not just "summary",
+# clean field map / empty map → nil; wiring: executeMemoryKeep verbatim fields
+# override throws transcriptOverlapRejected before any registry_create dispatch,
+# short-reuse and long-original both write normally, the heuristic non-override
+# path is unaffected; executeRegistryUpdate verbatim override throws before any
+# registry_update dispatch on BOTH the explicit-rowId and hint-resolved paths,
+# short-reuse writes normally, an embedded [not full-paste] verbatim run in a
+# proposed field is still caught post-merge). New VoiceMemoTranscriptOverlapGuard
+# pure checker (named minimumLengthFloor=80 / contiguousRunThreshold=200 constants)
+# wired into both Notion-bound write paths named in the packet's Scope IN; new
+# VoiceMemoError.transcriptOverlapRejected case routes to the same graceful
+# BLOCKED → REVIEW pattern PKT-1064's playerRelationUnbound established (throw,
+# caught by the existing processOne/commit() error handling — no crash, no
+# silent write). executeRegistryUpdate gained a required `transcript` parameter
+# (threaded through its 3 production call sites + 1 test call site); the
+# VoiceMemoReviewResolver.swift registryUpdate case's explicit-rowId branch,
+# which duplicated executeRegistryUpdate's own append-merge + registry_update
+# dispatch inline (and so would have silently bypassed the new guard), was
+# consolidated to call the single guarded executeRegistryUpdate(explicitRowId:)
+# instead — same detail-string wording, zero behavior change other than gaining
+# the guard. Measured integrated green off origin/main (630a2ed) = 2937 (2917 +20).
+# floor 2917 → 2937.
+FLOOR="${BRIDGE_TEST_FLOOR:-2937}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

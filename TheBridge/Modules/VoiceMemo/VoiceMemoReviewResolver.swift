@@ -181,7 +181,7 @@ public enum VoiceMemoReviewResolver {
             )
 
         case .registryUpdate:
-            let (_, plan) = try await loadTranscriptAndPlan(for: entry)
+            let (transcript, plan) = try await loadTranscriptAndPlan(for: entry)
             guard let entity = entityKey ?? planEntityHint(from: entry) else {
                 throw VoiceMemoReviewError.missingRegistryTarget
             }
@@ -200,30 +200,13 @@ public enum VoiceMemoReviewResolver {
                 )
             if !fields.isEmpty { intent.fields = fields }
             if let entityHint { intent.entityHint = entityHint }
-            if let rowId {
-                // Append-only on the explicit-rowId path too (PKT-MEM-106 0a closes the
-                // latent breach where this path bypassed the protected-field merge and
-                // could overwrite brief/objective/summary/description).
-                let merged = try await VoiceMemoProcessor.mergeAppendRegistryFields(
-                    entityKey: entity, rowId: rowId, proposed: intent.fields, router: router
-                )
-                let updateFields = merged.mapValues { Value.string($0) }
-                _ = try await router.dispatch(toolName: "registry_update", arguments: .object([
-                    "entity": .string(entity),
-                    "id": .string(rowId),
-                    "fields": .object(updateFields),
-                ]))
-                let detail = "registry_update entity=\(entity) id=\(rowId) (append)"
-                try VoiceMemoReviewStore.resolve(id: reviewId)
-                let markedProcessed = try VoiceMemoProcessedGate.markProcessedIfClear(memoId: entry.memoId)
-                return ResolveResult(
-                    action: action.rawValue,
-                    detail: detail,
-                    markedProcessed: markedProcessed,
-                    resolved: true
-                )
-            }
-            let detail = try await VoiceMemoProcessor.executeRegistryUpdate(intent, router: router)
+            // Both the explicit-rowId path and the hint-resolved fallback route through
+            // the single guarded executeRegistryUpdate (rowId wins over entityHint —
+            // PKT-MEM-106 0a) so the PKT-MEM-132 D49 transcript-overlap guard applies to
+            // every registry_update write this resolver can produce, not just one branch.
+            let detail = try await VoiceMemoProcessor.executeRegistryUpdate(
+                intent, explicitRowId: rowId, transcript: transcript, router: router
+            )
             try VoiceMemoReviewStore.resolve(id: reviewId)
             let markedProcessed = try VoiceMemoProcessedGate.markProcessedIfClear(memoId: entry.memoId)
             return ResolveResult(

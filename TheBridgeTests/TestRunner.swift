@@ -944,6 +944,13 @@ await runMemoryHubActivityTests()
 // Memory Hub Foundation — PROCESSING provider contracts (D23 credential refs, provider chain)
 await runProcessingProviderTests()
 
+// PKT-MEM-132 (D49): pre-write transcript-overlap guard — length + contiguous-
+// substring hybrid check wired into executeMemoryKeep + executeRegistryUpdate
+// (both Notion-bound write paths). Verbatim transcript paste via an agent
+// `fields` override → transcriptOverlapRejected (graceful BLOCKED → REVIEW,
+// no write); short reuse / long-original summaries pass unaffected.
+await runVoiceMemoTranscriptOverlapGuardTests()
+
 // ============================================================
 // MARK: - Summary
 // ============================================================
