@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.9.4 — Registry consolidation + comment disposition + live UI sync — 2026-07-02
+
+- **Registry tools** — `registry_resolve_and_update` collapses the find-then-get-then-update three-round-trip pattern into one MCP call (append-merge semantics identical to the old voice-memo helper, ambiguity semantics identical to `registry_find`). `resolveRegistryRowId` now uses `registry_find` instead of hand-rolled containment/regex matching.
+- **Trust** — a pre-write transcript-overlap guard closes the gap where an agent-supplied `voice_memo_commit` `fields` override could write the raw transcript into Notion instead of a summary (length + contiguous-substring hybrid check).
+- **Comment disposition** — a new `comment` intent kind (`purpose: idea | reflow`) posts a Notion comment on a related entity instead of a property update; `idea`-purpose comments are tracked in a new local ledger for later agent sign-off, `reflow`-purpose comments are fire-and-forget.
+- **Live UI sync** — the Process tab now reflects agent-driven `voice_memo_get`/`voice_memo_commit` activity live, via a dedicated notification channel, without a manual reload.
+- **Docs** — `voice_memo_get`/`voice_memo_commit` now document that committing multiple intents per memo is normal agent-mode behavior.
+- `staticFeatureModuleToolCount` **199 → 200**. test-floor **2917 → 2993** (+76). Build **70**.
+
 ## v3.9.3 — Memory Hub opt-in Understand + summary-first keeps — 2026-06-30
 
 - **Process UX (W1)** — memo select is inspect-only (`voice_memo_get understand:false`); **Process locally** / **Process with cloud** buttons run explicit Understand with activity-phase receipts.

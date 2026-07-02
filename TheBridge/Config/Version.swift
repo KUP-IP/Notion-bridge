@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "3.9.3"
+    public static let marketing = "3.9.4"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -115,7 +115,14 @@ public enum AppVersion {
     ///   KeepReviewModel (KeepReviewStatus + KeepReviewMetadata + KeepSchemaContract +
     ///   KeepRequiredSchemaField). staticFeatureModuleToolCount 187 → 188. test-floor
     ///   2682 → 2744 (+62).
-    public static let build = "69"
+    /// v3.9.4: 69 → 70 — six-packet Memory Hub / registry batch (PKT-MEM-131–136):
+    ///   registry_find row-resolution swap (131), pre-write transcript-overlap guard
+    ///   closing an agent-commit gap (132, D49), multi-intent-per-memo agent-mode docs
+    ///   (133), UI↔agent live processing sync via a dedicated notification channel
+    ///   (134), new general-purpose registry_resolve_and_update MCP tool (135),
+    ///   comment disposition (idea|reflow) + idea-thread ledger built on it (136).
+    ///   staticFeatureModuleToolCount 199 → 200. test-floor 2917 → 2993 (+76).
+    public static let build = "70"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
