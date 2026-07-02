@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "3.9.5"
+    public static let marketing = "3.9.6"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -155,7 +155,19 @@ public enum AppVersion {
     ///   against real Notion (4/4: create+icon, update+icon, create-no-icon and
     ///   update-no-icon regression, all confirmed via live read-back). No new tool —
     ///   staticFeatureModuleToolCount unchanged (200). test-floor unchanged (2994).
-    public static let build = "72"
+    /// v3.9.6: 72 → 73 — self-heal the bridge-env LaunchAgent boot-order race
+    ///   (found live via a real restart): the RunAtLoad LaunchAgent that injects
+    ///   BRIDGE_ENABLE_HTTP + WorkOS/cloud env via `launchctl setenv` sometimes loses
+    ///   the boot-order race against Bridge's own relaunch (login item / Resume),
+    ///   leaving connectorAuth nil for that process's whole life — every real
+    ///   connector bearer token (ChatGPT, Claude.ai) rejected as structurally invalid,
+    ///   surfacing as a confusing "reconnect" error. New CloudEnvSelfHeal.swift
+    ///   detects the signature at launch (cloud access enabled + BRIDGE_ENABLE_HTTP
+    ///   absent + not already attempted) and self-heals: kick the LaunchAgent, wait
+    ///   for this process's own pid to actually exit, relaunch once (loop-guarded),
+    ///   done. No-op for the default cloud-off path. +9 tests. staticFeatureModuleToolCount
+    ///   unchanged (200). test-floor 2994 → 3003.
+    public static let build = "73"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

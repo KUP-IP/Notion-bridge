@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.9.6 — Cloud-auth boot-order self-heal — 2026-07-02
+
+- **Reliability** — a real restart surfaced a boot-order race: `solutions.kup.bridge-env`, a LaunchAgent whose only job is injecting `BRIDGE_ENABLE_HTTP` + the WorkOS/cloud env vars, could lose the race against Bridge's own relaunch (login item / window Resume), leaving the app with no cloud config for its entire session. Every real connector token (ChatGPT, Claude.ai) was then rejected as structurally invalid — no issuer/JWKS to validate against — surfacing as a confusing "reconnect" error with no path back to the cause.
+- **Fix** — new `CloudEnvSelfHeal`: on launch, if cloud access is enabled but the env didn't make it through, kick the LaunchAgent, wait for this process's own pid to actually exit (not a fixed delay), relaunch once (loop-guarded against a broken LaunchAgent), done. No-op for the default cloud-off install. A small confirmation banner in Remote Access settings surfaces when a repair fired.
+- +9 tests. test-floor unchanged in behavior, floor raised 2994 → 3003. Build **73**.
+
 ## v3.9.5 — Notion page icon write support — 2026-07-02
 
 - **Notion tools** — `notion_page_create` and `notion_page_update` both accept an optional single-emoji `icon` parameter. `NotionClient.createPage`/`updatePage` merge Notion's `{"type":"emoji","emoji":"…"}` icon shape into the request body when supplied; omitted is byte-identical to prior behavior. Pass-through only — no new Bridge-side emoji validation, matching the existing `extractIconEmoji` read-side precedent.
