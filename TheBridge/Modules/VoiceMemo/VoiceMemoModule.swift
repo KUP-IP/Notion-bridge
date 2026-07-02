@@ -301,7 +301,12 @@ public enum VoiceMemoModule {
             name: "voice_memo_get",
             module: moduleName,
             tier: .open,
-            description: "Load one voice memo: transcript, parsed plan, and intent preview (read-only; no writes). Use before voice_memo_commit in agent-deferred mode.",
+            description: """
+            Load one voice memo: transcript, parsed plan, and intent preview (read-only; no writes). \
+            The returned plan.intents array may contain more than one committable intent (e.g. a reminder \
+            AND a memory_keep from the same memo) — this is normal, not an edge case. Use before \
+            voice_memo_commit in agent-deferred mode.
+            """,
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -322,7 +327,11 @@ public enum VoiceMemoModule {
             ]),
             metadata: ToolMetadata(
                 title: "Voice Memo Get",
-                whenToUse: ["preview routing plan before commit", "agent-deferred curator Understand step"],
+                whenToUse: [
+                    "preview routing plan before commit",
+                    "agent-deferred curator Understand step",
+                    "inspect a plan with multiple intents before committing each one via voice_memo_commit"
+                ],
                 whenNotToUse: ["batch auto-execute — use voice_memo_process"],
                 relatedTools: ["voice_memo_commit", "voice_memo_process", "voice_memo_list"]
             ),
@@ -335,7 +344,14 @@ public enum VoiceMemoModule {
             name: "voice_memo_commit",
             module: moduleName,
             tier: .notify,
-            description: "Execute one approved intent for a voice memo (agent or operator commit after voice_memo_get). Marks processed when the write succeeds and no review is queued.",
+            description: """
+            Execute one approved intent for a voice memo (agent or operator commit after voice_memo_get). \
+            Calling this multiple times for the same memoId with different intentKind values — one commit \
+            call per intent — is normal, expected agent-mode behavior, not an edge case: it mirrors the \
+            Memory Hub UI's batch-confirm cockpit, where an operator can confirm several lanes (reminder, \
+            memory_keep, agent_memory, registry_update) from one memo. Marks processed when the write \
+            succeeds and no review is queued.
+            """,
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -372,7 +388,11 @@ public enum VoiceMemoModule {
             ]),
             metadata: ToolMetadata(
                 title: "Voice Memo Commit",
-                whenToUse: ["connected MCP agent approves and executes one lane", "operator confirms Process tab preview"],
+                whenToUse: [
+                    "connected MCP agent approves and executes one lane",
+                    "operator confirms Process tab preview",
+                    "call once per intentKind — repeated calls for the same memoId across multiple intents is expected, not exceptional"
+                ],
                 whenNotToUse: ["unreviewed batch — use voice_memo_process"],
                 relatedTools: ["voice_memo_get", "voice_memo_process", "registry_update", "memory_remember"]
             ),
