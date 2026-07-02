@@ -1258,6 +1258,7 @@ public enum VoiceMemoProcessor {
         if let entityKey = stringArg(obj, "entityKey") { intent.entityKey = entityKey }
         if let hint = stringArg(obj, "entityHint") { intent.entityHint = hint }
         if let title = stringArg(obj, "title") { intent.title = title }
+        if let body = stringArg(obj, "body") { intent.body = body }
         if let due = stringArg(obj, "due") { intent.dueISO8601 = due }
         if case .object(let fieldObj)? = obj["fields"] {
             intent.fields = fieldObj.compactMapValues { if case .string(let s) = $0 { return s }; return nil }

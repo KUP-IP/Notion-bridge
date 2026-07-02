@@ -451,6 +451,63 @@ func runVoiceMemoCommentTests() async {
         }
     }
 
+    // 11b. REGRESSION (found via live MCP demo, 2026-07-02): commit(args:)'s raw
+    //      argument parser never wired a top-level "body" argument into
+    //      intent.body — only "title" was threaded through, silently forcing
+    //      every real MCP caller onto the documented *fallback* path instead of
+    //      the preferred one. All prior comment tests drove executeComment/
+    //      execute directly with a hand-built VoiceMemoIntent, bypassing the
+    //      args-parsing layer entirely, so this had zero coverage. This test
+    //      goes through the actual commit(args:) entry point a real MCP call
+    //      uses, with ONLY "body" set (no "title"), proving the fix threads it.
+    await test("PKT-MEM-136: commit(args:) wires a top-level body argument into the posted comment text") {
+        defer { VoiceMemoParseRouter.providerOverride = nil }
+        VoiceMemoParseRouter.providerOverride = { _ in [HeuristicParseProvider()] }
+
+        let fm = FileManager.default
+        let fakeHome = fm.temporaryDirectory.appendingPathComponent("VoiceMemoCommentBodyArg-\(UUID().uuidString)", isDirectory: true)
+        let recordings = fakeHome.appendingPathComponent("Library/Application Support/com.apple.voicememos/Recordings", isDirectory: true)
+        try fm.createDirectory(at: recordings, withIntermediateDirectories: true)
+        BridgePaths.overrideHomeForTesting(fakeHome)
+        defer {
+            BridgePaths.overrideHomeForTesting(nil)
+            try? fm.removeItem(at: fakeHome)
+        }
+
+        let audio = recordings.appendingPathComponent("body-arg-fixture.m4a")
+        try Data([0x00]).write(to: audio)
+        let sidecar = recordings.appendingPathComponent("body-arg-fixture.txt")
+        try "Unrelated filler transcript text.".data(using: .utf8)?.write(to: sidecar)
+        guard let recording = VoiceMemoDiscovery.listRecordings(roots: [recordings]).first else {
+            throw TestError.assertion("fixture recording not discovered")
+        }
+
+        try await seedEntity(projectEntityWithTitle())
+        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let state = CommentStubState()
+        await installCommentStubs(on: router, state: state)
+        await state.setResolveMatchedId("page-body-arg")
+
+        let result = try await VoiceMemoProcessor.commit(args: .object([
+            "memoId": .string(recording.id),
+            "intentKind": .string(VoiceMemoIntentKind.comment.rawValue),
+            "entityKey": .string("project"),
+            "entityHint": .string("Bridge Platform"),
+            "purpose": .string(VoiceMemoCommentPurpose.idea.rawValue),
+            "body": .string("Posted via the body argument, not title."),
+        ]), router: router)
+
+        guard case .object(let envelope) = result, case .bool(let ok)? = envelope["ok"] else {
+            try expect(false, "expected an object envelope with ok")
+            return
+        }
+        try expect(ok, "commit(args:) should succeed with a real fixture recording + valid comment args")
+
+        let text = await state.lastCommentText
+        try expect(text == "Posted via the body argument, not title.",
+                   "the raw top-level 'body' argument must reach notion_comment_create's text, got: \(text)")
+    }
+
     // 12. registry_resolve_and_update's fields carry a non-empty receipt marker
     //     (that tool requires non-empty fields — it is resolve AND update).
     await test("PKT-MEM-136: registry_resolve_and_update call carries a non-empty receipt field") {

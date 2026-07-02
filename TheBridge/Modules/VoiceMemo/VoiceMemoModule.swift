@@ -383,6 +383,10 @@ public enum VoiceMemoModule {
                         "type": .string("string"),
                         "description": .string("Reminder title override; also the comment text fallback when body is unset."),
                     ]),
+                    "body": .object([
+                        "type": .string("string"),
+                        "description": .string("Comment text for intentKind=comment (preferred over title)."),
+                    ]),
                     "purpose": .object([
                         "type": .string("string"),
                         "description": .string("Required for intentKind=comment: idea (ledger-tracked) | reflow (fire-and-forget, never logged)."),

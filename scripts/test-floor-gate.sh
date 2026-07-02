@@ -1772,7 +1772,30 @@ set -euo pipefail
 # merge: 135's +23 is already counted in the integrated floor above, so only
 # 136's own +22 applies on top — integrated floor 2971 (post-131/132/134/135)
 # → 2993 (2971 +22).
-FLOOR="${BRIDGE_TEST_FLOOR:-2993}"
+#
+# PKT-MEM-136 post-ship bugfix (2026-07-02, found via live MCP demo): the
+# shipped `voice_memo_commit`'s real argument parser never wired a top-level
+# "body" argument into `intent.body` — only "title" was threaded through
+# (VoiceMemoProcessor.swift commit()), even though executeComment() reads
+# `intent.body ?? intent.title` and the tool's own schema doc for "title"
+# already promised "also the comment text fallback when body is unset" —
+# proof the body param was always intended but never actually wired. Every
+# prior PKT-MEM-136 test drove executeComment directly with a hand-built
+# VoiceMemoIntent, bypassing commit(args:)'s parsing layer entirely, so this
+# shipped with 2993/2993 green. Live-caught via a real MCP call (raw curl
+# JSON-RPC against a stale-tool-schema client session): fields.text and
+# fields.body both failed with "comment missing text (body/title)"; the
+# title-only fallback path DID work (real Notion comment posted + real
+# idea-threads.json ledger entry logged on the operator's Mac, verified).
+# Fixed: added a "body" schema property to VoiceMemoModule.swift's
+# makeCommit() + `if let body = stringArg(obj, "body") { intent.body = body }`
+# to commit(). Added ONE new regression test — the first in the file to go
+# through the real commit(args:) entry point instead of executeComment
+# directly — proving a top-level "body" arg reaches notion_comment_create's
+# text unmodified (not silently downgraded to the title fallback). Measured
+# 2994 passed, 0 failed (exactly 2993 +1, the single new test — no other
+# drift). FLOOR raised 2993 → 2994 per the order-inversion rule.
+FLOOR="${BRIDGE_TEST_FLOOR:-2994}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the
