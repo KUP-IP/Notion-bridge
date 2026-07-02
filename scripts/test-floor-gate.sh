@@ -1634,7 +1634,31 @@ set -euo pipefail
 # relation fails verify, explicit override wins, playersRelationKey rename-safe match).
 # Branched off pre-1065A/B/C/1041 main where its own measured green was 2870 (2863 +7);
 # reconciled at merge onto integrated floor 2910 → 2917 (2910 +7).
-FLOOR="${BRIDGE_TEST_FLOOR:-2917}"
+# 2026-07-02 (PKT-MEM-135 registry_resolve_and_update): +23 tests — RegistryModuleTests
+# (+11: exact match resolves+writes in one call, no-match not-found error/no-write,
+# ambiguous match error/no-write, append-merge on a configured key, plain overwrite on
+# a non-append key, custom appendKeys override, appendKeys:[] disables merge entirely,
+# bound-property-id rename-safe predicate match, AND semantics, unknown-entity error,
+# empty-where/empty-fields error) + new RegistryAppendMergeTests (+12: appendBlock
+# empty/nil/whitespace-only existing, non-empty existing blank-line-separated block,
+# new-content trimming, merge default-keys-append-others-overwrite, no-append-key-present
+# passthrough, appendKeys:[] disables merge, non-string/absent existing starts fresh
+# without throwing, non-string proposed value on an append key passes through, and a
+# byte-for-byte cross-check against the original VoiceMemoParser.appendVoiceMemoLog).
+# New `registry_resolve_and_update` tool (module `registry`, tier .notify) collapses the
+# find-then-get-then-update three-round-trip pattern duplicated inside
+# VoiceMemoProcessor.executeRegistryUpdate into one MCP call; ambiguity/no-match semantics
+# are identical to registry_find (single match writes; ≥2 matches or 0 matches throws, no
+# write). RegistryAppendMerge (new, RegistryWriter.swift) is the shared append-merge
+# primitive extracted per the packet's Scope IN, ported byte-for-byte from
+# VoiceMemoProcessor.mergeAppendRegistryFields — VoiceMemoProcessor itself is unchanged
+# (Scope OUT; rewiring the voice-memo caller is PKT-MEM-136's concern). Branched off
+# origin/main at 630a2ed (post PKT-1016/1064/1041/1065B/1065C merges) where the measured
+# green was 2917 (0 failed); this branch measures 2940 (0 failed). staticFeatureModuleTool
+# Count 199 → 200 (+1); ToolAnnotationCatalog entry added (idempotentHint:false — append-
+# merge fields accumulate a new dated block per call, unlike plain registry_update).
+# Floor raised 2917 → 2940 (2917 +23) per the order-inversion rule.
+FLOOR="${BRIDGE_TEST_FLOOR:-2940}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

@@ -245,7 +245,11 @@ public enum BridgeConstants {
     ///   Branched independently off pre-1065A main (197 + 1 = 198 in isolation); reconciled at
     ///   merge onto the already-integrated 198 (which already carries 1065A's bridge_initialize).
     ///   198 + 1 = 199.
-    public static let staticFeatureModuleToolCount = 199
+    /// PKT-MEM-135 registry_resolve_and_update (2026-07-02): + registry_resolve_and_update
+    ///   (find+get+update in one call — resolve a row by registry_find-identical predicate
+    ///   matching, append-merge configured fields, then write; joins the existing `registry`
+    ///   family, no new family). 199 + 1 = 200.
+    public static let staticFeatureModuleToolCount = 200
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.

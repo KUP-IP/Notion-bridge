@@ -138,6 +138,7 @@ public enum RegistryModule {
         await router.register(makeGet())
         await router.register(makeCreate())
         await router.register(makeUpdate())
+        await router.register(makeResolveAndUpdate())
         await router.register(makeDelete())
         await router.register(makePossess())
         await router.register(makeHydrate())
@@ -577,6 +578,73 @@ public enum RegistryModule {
                 let writer = RegistryWriter(gateway: gateway())
                 let row = try await writer.update(entity: entity, pageId: id, fields: fields(a))
                 return .object(["updated": .bool(true), "row": rowValue(row, stale: false)])
+            })
+    }
+
+    // MARK: - registry_resolve_and_update (PKT-MEM-135 — find+get+update in one call)
+
+    /// Collapses the find-then-get-then-update three-round-trip pattern
+    /// duplicated inside `VoiceMemoProcessor.executeRegistryUpdate` (D57: a
+    /// general-purpose registry primitive, not Memory-Hub-scoped) into ONE MCP
+    /// call: resolve a row by `registry_find`-identical predicate matching,
+    /// merge any configured append-style fields against the resolved row's
+    /// CURRENT values, then write. Ambiguity/no-match semantics are IDENTICAL
+    /// to `registry_find` (single match → write; ≥2 matches → ambiguous error,
+    /// NO write; 0 matches → not-found error, NO write) — the only difference
+    /// from `registry_find` is that ambiguous/no-match are ERRORS here rather
+    /// than a returned empty/multi-row result, because there is nothing valid
+    /// to update. Create-on-no-match (upsert) is explicitly OUT of scope
+    /// (D56) — this tool never creates a row.
+    public static func makeResolveAndUpdate() -> ToolRegistration {
+        ToolRegistration(
+            name: "registry_resolve_and_update", module: moduleName, tier: .notify,
+            description: "Resolve an EXISTING registry row by canonical field predicate(s) (identical matching to registry_find) and update it — in ONE call, replacing the find-then-get-then-update three-round-trip pattern. Pass `where` as a map of canonical field key → value (ALL must match, AND; same rename-safe bound-property-id matching as registry_find). Exactly one match is required: 0 matches is a not-found error (no write); ≥2 matches is an ambiguous error (no write, resolve the predicate further or use registry_find + registry_update directly). `fields` are the canonical field key → value pairs to write. Optional `appendKeys` (default: brief, objective, summary, description) names fields whose write value is APPENDED to the row's current value as a dated block rather than overwriting it — matches the existing voice-memo append-merge behavior exactly; every other field is a plain overwrite. Never creates a row (no upsert — see registry_create for that).",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "entity": .object(["type": .string("string"), "description": .string("Entity key.")]),
+                    "where": .object(["type": .string("object"), "description": .string("Map of canonical field key → value to match (e.g. {\"name\":\"Alpha\"}). ALL predicates must match. Exactly one row must match.")]),
+                    "fields": .object(["type": .string("object"), "description": .string("Map of canonical field key → value to write.")]),
+                    "appendKeys": .object([
+                        "type": .string("array"),
+                        "description": .string("Canonical field keys that append (existing value + new content, dated block) instead of overwrite. Defaults to [brief, objective, summary, description] — the existing voice-memo append set. Pass [] to disable append-merge entirely (all fields overwrite)."),
+                        "items": .object(["type": .string("string")]),
+                    ]),
+                ]),
+                "required": .array([.string("entity"), .string("where"), .string("fields")]),
+            ]),
+            handler: { args in
+                guard case .object(let a) = args, let key = string(a, "entity") else {
+                    throw ToolRouterError.invalidArguments(toolName: "registry_resolve_and_update", reason: "missing ‘entity’")
+                }
+                guard case .object(let predicates)? = a["where"], !predicates.isEmpty else {
+                    throw ToolRouterError.invalidArguments(toolName: "registry_resolve_and_update", reason: "missing or empty ‘where’ — supply at least one field=value predicate")
+                }
+                let input = fields(a)
+                guard !input.isEmpty else {
+                    throw ToolRouterError.invalidArguments(toolName: "registry_resolve_and_update", reason: "missing or empty ‘fields’ — supply at least one field to write")
+                }
+                let config = await loadConfig()
+                let entity = try requireEntity(key, in: config, tool: "registry_resolve_and_update")
+                var appendKeys = RegistryAppendMerge.defaultAppendKeys
+                if case .array(let arr)? = a["appendKeys"] {
+                    appendKeys = Set(arr.compactMap { v -> String? in if case .string(let s) = v { return s } else { return nil } })
+                }
+                let gw = gateway()
+                let reader = RegistryReader(gateway: gw)
+                let writer = RegistryWriter(gateway: gw)
+                do {
+                    let result = try await writer.resolveAndUpdate(
+                        entity: entity, reader: reader, predicates: predicates, fields: input, appendKeys: appendKeys)
+                    return .object(["updated": .bool(true), "matchedId": .string(result.matchedId), "row": rowValue(result.row, stale: false)])
+                } catch let e as RegistryWriter.RegistryResolveError {
+                    switch e {
+                    case .noMatch:
+                        throw ToolRouterError.invalidArguments(toolName: "registry_resolve_and_update", reason: e.errorDescription ?? "no match")
+                    case .ambiguous:
+                        throw ToolRouterError.invalidArguments(toolName: "registry_resolve_and_update", reason: e.errorDescription ?? "ambiguous match")
+                    }
+                }
             })
     }
 

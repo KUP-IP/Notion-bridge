@@ -639,7 +639,8 @@ await runRegistryConfigTests()       // Data-Source Registry W1: config model + 
 await runRegistryRowCacheTests()     // Data-Source Registry W1: generalized per-entity read-through row cache (stale-while-revalidate + offline)
 await runRegistryPropertyCodecTests() // Data-Source Registry W2: Notion property codec (typed Value ↔ Notion JSON, decode/encode/isWritable)
 await runRegistryDataPathTests()     // Data-Source Registry W2: live data path (schema binder · read-through reader · writer create-then-update · rate limiter)
-await runRegistryModuleTests()       // Data-Source Registry W3: MCP tool surface (10 tools: generic CRUD + add/remove_entity + introspect + possess, registration + handler behavior)
+await runRegistryModuleTests()       // Data-Source Registry W3: MCP tool surface (13 tools: generic CRUD + resolve_and_update + add/remove_entity + introspect + possess + hydrate, registration + handler behavior)
+await runRegistryAppendMergeTests()  // PKT-MEM-135: RegistryAppendMerge shared append-merge primitive (ported from VoiceMemoProcessor.mergeAppendRegistryFields)
 await runDataSourcesViewModelTests() // Data-Source Registry W4: Settings pane scenarios (propose→confirm, TTL, drift, errors) + BE↔FE alignment
 await runRegistryEdgeCaseTests()     // Data-Source Registry: adversarial edge cases (codec chunking, pagination, cache concurrency, config race, writer)
 await runRegistryHydrationTests()    // Packet Runner v1 (FR-1/§8.3): packet-registry-v1 one-hop hydration envelope (primary+body+relations+provenance+warnings)

@@ -100,14 +100,15 @@ func runRegistryModuleTests() async {
 
     // MARK: - Registration
 
-    await test("RegistryModule registers exactly 12 tools with expected names") {
+    await test("RegistryModule registers exactly 13 tools with expected names") {
         let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
         await RegistryModule.register(on: router)
         let tools = await router.registrations(forModule: "registry")
-        try expect(tools.count == 12, "expected 12 registry tools, got \(tools.count)")
+        try expect(tools.count == 13, "expected 13 registry tools, got \(tools.count)")
         let names = Set(tools.map { $0.name })
         try expect(names == ["registry_entities", "registry_add_entity", "registry_remove_entity", "registry_introspect",
-                             "registry_list", "registry_find", "registry_get", "registry_create", "registry_update", "registry_delete", "registry_possess",
+                             "registry_list", "registry_find", "registry_get", "registry_create", "registry_update",
+                             "registry_resolve_and_update", "registry_delete", "registry_possess",
                              "registry_hydrate"],
                    "tool names: \(names.sorted())")
     }
@@ -119,7 +120,8 @@ func runRegistryModuleTests() async {
         func tier(_ n: String) -> SecurityTier? { tools.first { $0.name == n }?.tier }
         try expect(tier("registry_delete") == .request, "delete must be .request (confirmation)")
         try expect(tier("registry_remove_entity") == .request, "remove_entity must be .request (destructive)")
-        try expect(tier("registry_create") == .notify && tier("registry_update") == .notify && tier("registry_introspect") == .notify,
+        try expect(tier("registry_create") == .notify && tier("registry_update") == .notify && tier("registry_introspect") == .notify
+                   && tier("registry_resolve_and_update") == .notify,
                    "writes are .notify")
         try expect(tier("registry_get") == .open && tier("registry_list") == .open && tier("registry_find") == .open && tier("registry_entities") == .open && tier("registry_possess") == .open,
                    "reads are .open")
@@ -564,5 +566,317 @@ func runRegistryModuleTests() async {
             catch { threw = true }
             try expect(threw, "unknown entity must throw")
         }
+    }
+
+    // MARK: - registry_resolve_and_update (PKT-MEM-135 — find+get+update in one call)
+
+    await test("registry_resolve_and_update exact match → resolves + writes in one call") {
+        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: [
+            skillRow(id: "1111000000000000000000000000aaaa", name: "Alpha"),
+            skillRow(id: "1111000000000000000000000000bbbb", name: "Beta"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            let out = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                "entity": .string("skill"),
+                "where": .object(["name": .string("Alpha")]),
+                "fields": .object(["slug": .string("alpha-slug")]),
+            ]))
+            try expect(obj(out)["updated"] == .bool(true), "resolved + updated")
+            try expect(obj(out)["matchedId"] == .string("1111000000000000000000000000aaaa"), "matched the Alpha row")
+            let updatedCalls = await fake.updated
+            try expect(updatedCalls.count == 1 && updatedCalls[0].0 == "1111000000000000000000000000aaaa", "wrote to the resolved row, not Beta")
+        }
+    }
+
+    await test("registry_resolve_and_update no match → not-found error, NO write") {
+        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: [
+            skillRow(id: "2222000000000000000000000000aaaa", name: "Alpha"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            var threw = false
+            do {
+                _ = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                    "entity": .string("skill"),
+                    "where": .object(["name": .string("DoesNotExist")]),
+                    "fields": .object(["slug": .string("x")]),
+                ]))
+            } catch let e as ToolRouterError {
+                threw = true
+                if case .invalidArguments = e {} else { throw TestError.assertion("wrong error type: \(e)") }
+            }
+            try expect(threw, "no match must throw, not silently no-op")
+            try expect(await fake.updated.isEmpty, "no write attempted on no-match")
+        }
+    }
+
+    await test("registry_resolve_and_update ambiguous match → ambiguous error, NO write") {
+        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: [
+            skillRow(id: "3333000000000000000000000000aaaa", name: "Dup"),
+            skillRow(id: "3333000000000000000000000000bbbb", name: "Dup"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            var threw = false
+            do {
+                _ = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                    "entity": .string("skill"),
+                    "where": .object(["name": .string("Dup")]),
+                    "fields": .object(["slug": .string("x")]),
+                ]))
+            } catch let e as ToolRouterError {
+                threw = true
+                if case .invalidArguments = e {} else { throw TestError.assertion("wrong error type: \(e)") }
+            }
+            try expect(threw, "ambiguous match must throw, not pick one")
+            try expect(await fake.updated.isEmpty, "no write attempted on ambiguous match")
+        }
+    }
+
+    await test("registry_resolve_and_update append-merge: configured key appends to existing value") {
+        // skillRow seeds Description="desc of Echo" ⇒ canonical 'summary' — a
+        // default append key. The write value must be APPENDED, not overwrite.
+        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: [
+            skillRow(id: "4444000000000000000000000000aaaa", name: "Echo"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            let out = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                "entity": .string("skill"),
+                "where": .object(["name": .string("Echo")]),
+                "fields": .object(["summary": .string("new voice memo content")]),
+            ]))
+            try expect(obj(out)["updated"] == .bool(true), "updated")
+            let updatedCalls = await fake.updated
+            guard let call = updatedCalls.first, let summaryField = call.1.first(where: { $0.notionName == "Description" }) else {
+                throw TestError.assertion("no Description/summary field in the PATCH payload")
+            }
+            guard case .string(let written) = summaryField.value else { throw TestError.assertion("summary value not a string") }
+            try expect(written.contains("desc of Echo"), "existing value preserved: \(written)")
+            try expect(written.contains("new voice memo content"), "new content appended: \(written)")
+            try expect(written.contains("— Voice memo "), "dated block stamp present: \(written)")
+            try expect(written != "new voice memo content", "must NOT be a plain overwrite")
+        }
+    }
+
+    await test("registry_resolve_and_update plain overwrite: non-append field replaces the value") {
+        // 'slug' is not in the default append-key set ⇒ plain overwrite.
+        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: [
+            skillRow(id: "5555000000000000000000000000aaaa", name: "Foxtrot"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            _ = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                "entity": .string("skill"),
+                "where": .object(["name": .string("Foxtrot")]),
+                "fields": .object(["slug": .string("brand-new-slug")]),
+            ]))
+            let updatedCalls = await fake.updated
+            guard let call = updatedCalls.first, let slugField = call.1.first(where: { $0.notionName == "Slug" }) else {
+                throw TestError.assertion("no Slug field in the PATCH payload")
+            }
+            try expect(slugField.value == .string("brand-new-slug"), "slug is a plain overwrite, not appended")
+        }
+    }
+
+    await test("registry_resolve_and_update custom appendKeys overrides the default set") {
+        // 'slug' is NOT a default append key, but the caller opts it in explicitly.
+        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: [
+            skillRow(id: "6666000000000000000000000000aaaa", name: "Golf"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            _ = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                "entity": .string("skill"),
+                "where": .object(["name": .string("Golf")]),
+                "fields": .object(["slug": .string("appended-slug")]),
+                "appendKeys": .array([.string("slug")]),
+            ]))
+            let updatedCalls = await fake.updated
+            guard let call = updatedCalls.first, let slugField = call.1.first(where: { $0.notionName == "Slug" }) else {
+                throw TestError.assertion("no Slug field in the PATCH payload")
+            }
+            guard case .string(let written) = slugField.value else { throw TestError.assertion("slug value not a string") }
+            try expect(written.contains("appended-slug"), "new content present: \(written)")
+            try expect(written.contains("— Voice memo "), "custom appendKeys triggers the append block: \(written)")
+        }
+    }
+
+    await test("registry_resolve_and_update empty appendKeys ([]) disables append-merge entirely") {
+        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: [
+            skillRow(id: "7777000000000000000000000000aaaa", name: "Hotel"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            _ = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                "entity": .string("skill"),
+                "where": .object(["name": .string("Hotel")]),
+                "fields": .object(["summary": .string("only this")]),
+                "appendKeys": .array([]),
+            ]))
+            let updatedCalls = await fake.updated
+            guard let call = updatedCalls.first, let summaryField = call.1.first(where: { $0.notionName == "Description" }) else {
+                throw TestError.assertion("no Description field in the PATCH payload")
+            }
+            try expect(summaryField.value == .string("only this"), "appendKeys:[] forces a plain overwrite even for the default append key")
+        }
+    }
+
+    await test("registry_resolve_and_update matches by BOUND property id (rename-safe, same as registry_find)") {
+        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: [
+            skillRow(id: "8888000000000000000000000000aaaa", name: "India"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            let out = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                "entity": .string("skill"),
+                "where": .object(["summary": .string("DESC OF INDIA")]),   // case-insensitive, matched by bound id
+                "fields": .object(["slug": .string("india-slug")]),
+            ]))
+            try expect(obj(out)["matchedId"] == .string("8888000000000000000000000000aaaa"), "resolved via bound-id predicate match")
+        }
+    }
+
+    await test("registry_resolve_and_update AND semantics: all predicates must match") {
+        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: [
+            skillRow(id: "9999000000000000000000000000aaaa", name: "Juliet"),   // status = "Stable"
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            var threw = false
+            do {
+                _ = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                    "entity": .string("skill"),
+                    "where": .object(["name": .string("Juliet"), "status": .string("Deprecated")]),
+                    "fields": .object(["slug": .string("x")]),
+                ]))
+            } catch { threw = true }
+            try expect(threw, "one predicate mismatched ⇒ no match ⇒ throw")
+            try expect(await fake.updated.isEmpty, "no write when AND predicate fails")
+        }
+    }
+
+    await test("registry_resolve_and_update unknown entity → invalidArguments error") {
+        try await withRegistryModuleEnv(ModFakeGateway(schema: skillsSchema())) {
+            do {
+                _ = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                    "entity": .string("ghost"),
+                    "where": .object(["name": .string("x")]),
+                    "fields": .object(["slug": .string("x")]),
+                ]))
+                throw TestError.assertion("expected unknown-entity error")
+            } catch let e as ToolRouterError {
+                if case .invalidArguments = e {} else { throw TestError.assertion("wrong error: \(e)") }
+            }
+        }
+    }
+
+    await test("registry_resolve_and_update missing/empty where or fields → invalidArguments error") {
+        try await withRegistryModuleEnv(ModFakeGateway(schema: skillsSchema())) {
+            do {
+                _ = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                    "entity": .string("skill"), "where": .object([:]), "fields": .object(["slug": .string("x")]),
+                ]))
+                throw TestError.assertion("expected empty-where error")
+            } catch let e as ToolRouterError {
+                if case .invalidArguments = e {} else { throw TestError.assertion("wrong error: \(e)") }
+            }
+            do {
+                _ = try await RegistryModule.makeResolveAndUpdate().handler(.object([
+                    "entity": .string("skill"), "where": .object(["name": .string("x")]), "fields": .object([:]),
+                ]))
+                throw TestError.assertion("expected empty-fields error")
+            } catch let e as ToolRouterError {
+                if case .invalidArguments = e {} else { throw TestError.assertion("wrong error: \(e)") }
+            }
+        }
+    }
+}
+
+func runRegistryAppendMergeTests() async {
+    print("\n\u{1F9F0} Data-Source Registry — RegistryAppendMerge (shared append-merge primitive)")
+
+    let fixedDate = Date(timeIntervalSince1970: 1_751_500_800)   // deterministic stamp for exact-string assertions
+    let stamp = String(ISO8601DateFormatter().string(from: fixedDate).prefix(10))
+
+    await test("RegistryAppendMerge.appendBlock: empty existing → block only, no leading separator") {
+        let out = RegistryAppendMerge.appendBlock(existing: "", newContent: "hello", now: fixedDate)
+        try expect(out == "— Voice memo \(stamp):\nhello", "got: \(out)")
+    }
+
+    await test("RegistryAppendMerge.appendBlock: nil existing → block only") {
+        let out = RegistryAppendMerge.appendBlock(existing: nil, newContent: "hello", now: fixedDate)
+        try expect(out == "— Voice memo \(stamp):\nhello", "got: \(out)")
+    }
+
+    await test("RegistryAppendMerge.appendBlock: whitespace-only existing → treated as empty") {
+        let out = RegistryAppendMerge.appendBlock(existing: "   \n  ", newContent: "hello", now: fixedDate)
+        try expect(out == "— Voice memo \(stamp):\nhello", "got: \(out)")
+    }
+
+    await test("RegistryAppendMerge.appendBlock: non-empty existing → blank-line-separated block appended") {
+        let out = RegistryAppendMerge.appendBlock(existing: "prior text", newContent: "new stuff", now: fixedDate)
+        try expect(out == "prior text\n\n— Voice memo \(stamp):\nnew stuff", "got: \(out)")
+    }
+
+    await test("RegistryAppendMerge.appendBlock: new content is trimmed") {
+        let out = RegistryAppendMerge.appendBlock(existing: "x", newContent: "  padded  \n", now: fixedDate)
+        try expect(out == "x\n\n— Voice memo \(stamp):\npadded", "got: \(out)")
+    }
+
+    await test("RegistryAppendMerge.merge: default append keys merge, other keys overwrite") {
+        let existing: Value = .object(["summary": .string("old summary"), "slug": .string("old-slug")])
+        let proposed: [String: Value] = ["summary": .string("new bit"), "slug": .string("new-slug")]
+        let merged = RegistryAppendMerge.merge(proposed: proposed, existing: existing, now: fixedDate)
+        guard case .string(let summary)? = merged["summary"] else { throw TestError.assertion("summary missing") }
+        try expect(summary == "old summary\n\n— Voice memo \(stamp):\nnew bit", "summary appended: \(summary)")
+        try expect(merged["slug"] == .string("new-slug"), "slug overwritten, not appended")
+    }
+
+    await test("RegistryAppendMerge.merge: no proposed key in appendKeys → passthrough unchanged") {
+        let existing: Value = .object(["summary": .string("old")])
+        let proposed: [String: Value] = ["slug": .string("x")]
+        let merged = RegistryAppendMerge.merge(proposed: proposed, existing: existing, now: fixedDate)
+        try expect(merged == proposed, "no append key present ⇒ proposed returned as-is")
+    }
+
+    await test("RegistryAppendMerge.merge: empty appendKeys ⇒ every field overwrites") {
+        let existing: Value = .object(["summary": .string("old")])
+        let proposed: [String: Value] = ["summary": .string("new")]
+        let merged = RegistryAppendMerge.merge(proposed: proposed, existing: existing, appendKeys: [], now: fixedDate)
+        try expect(merged["summary"] == .string("new"), "empty appendKeys disables merge entirely")
+    }
+
+    await test("RegistryAppendMerge.merge: missing/non-string existing value ⇒ starts fresh, never throws") {
+        let existing: Value = .object(["summary": .int(42)])   // malformed/non-string existing
+        let proposed: [String: Value] = ["summary": .string("first entry")]
+        let merged = RegistryAppendMerge.merge(proposed: proposed, existing: existing, now: fixedDate)
+        try expect(merged["summary"] == .string("— Voice memo \(stamp):\nfirst entry"), "non-string existing treated as empty: \(String(describing: merged["summary"]))")
+    }
+
+    await test("RegistryAppendMerge.merge: absent existing key ⇒ starts fresh") {
+        let existing: Value = .object([:])
+        let proposed: [String: Value] = ["summary": .string("first entry")]
+        let merged = RegistryAppendMerge.merge(proposed: proposed, existing: existing, now: fixedDate)
+        try expect(merged["summary"] == .string("— Voice memo \(stamp):\nfirst entry"), "absent key treated as empty")
+    }
+
+    await test("RegistryAppendMerge.merge: non-string proposed value on an append key passes through") {
+        let existing: Value = .object(["summary": .string("old")])
+        let proposed: [String: Value] = ["summary": .int(7)]
+        let merged = RegistryAppendMerge.merge(proposed: proposed, existing: existing, now: fixedDate)
+        try expect(merged["summary"] == .int(7), "non-string proposed value on an append key is passed through untouched")
+    }
+
+    await test("RegistryAppendMerge.merge matches VoiceMemoParser.appendVoiceMemoLog byte-for-byte") {
+        // The packet's GOAL_CONDITION requires exact parity with the existing
+        // VoiceMemoProcessor.mergeAppendRegistryFields behavior. Cross-check the
+        // ported primitive against the original at a fixed instant.
+        let viaVoiceMemo = VoiceMemoParser.appendVoiceMemoLog(existing: "prior", newContent: "  next  ")
+        let viaRegistry = RegistryAppendMerge.appendBlock(existing: "prior", newContent: "  next  ")
+        // Both stamp "now" independently but at the same coarse (date-only) precision,
+        // so a same-day run produces byte-identical output.
+        try expect(viaVoiceMemo == viaRegistry, "ported primitive must match the original: \(viaVoiceMemo) vs \(viaRegistry)")
     }
 }

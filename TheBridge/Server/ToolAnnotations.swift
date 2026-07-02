@@ -279,6 +279,11 @@ public enum ToolAnnotationCatalog {
         "registry_get": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, requiresConfirmation: false, openWorld: true),
         "registry_create": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),
         "registry_update": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: true, requiresConfirmation: false, openWorld: true),
+        // PKT-MEM-135 (2026-07-02): find+get+update in one call. NOT idempotent
+        // (unlike plain registry_update) — its default append-merge fields
+        // accumulate a new dated block on every call with the same arguments,
+        // so repeated calls do NOT land on the same end state.
+        "registry_resolve_and_update": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),
         "registry_delete": .init(readOnlyHint: false, destructiveHint: true, idempotentHint: true, requiresConfirmation: true, openWorld: true),
         "registry_possess": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, requiresConfirmation: false, openWorld: true),
         // packet-registry-v1 hydration (FR-1/§8.3): read-only one-hop fetch.
