@@ -285,6 +285,7 @@ public enum VoiceMemoProcessor {
                     intent: intent,
                     plan: plan,
                     transcript: transcript,
+                    memoId: recording.id,
                     router: router
                 )
                 outcomes.append(VoiceMemoIntentOutcome(kind: intent.kind, status: .executed, detail: detail))
@@ -322,7 +323,7 @@ public enum VoiceMemoProcessor {
 
     // MARK: - Execution lanes
 
-    static func execute(intent: VoiceMemoIntent, plan: VoiceMemoPlan, transcript: String, router: ToolRouter) async throws -> String {
+    public static func execute(intent: VoiceMemoIntent, plan: VoiceMemoPlan, transcript: String, memoId: String = "", router: ToolRouter) async throws -> String {
         switch intent.kind {
         case .reminder:
             return try await executeReminder(intent, router: router)
@@ -332,6 +333,8 @@ public enum VoiceMemoProcessor {
             return try await executeAgentMemory(intent, plan: plan, transcript: transcript, router: router)
         case .registryUpdate:
             return try await executeRegistryUpdate(intent, router: router)
+        case .comment:
+            return try await executeComment(intent, memoId: memoId, router: router)
         case .review:
             return "queued for review — no auto-write"
         }
@@ -519,6 +522,95 @@ public enum VoiceMemoProcessor {
             "fields": .object(fields),
         ]))
         return "registry_update entity=\(entityKey) id=\(rowId) (append)"
+    }
+
+    // MARK: - executeComment (PKT-MEM-136 / D48)
+
+    /// The canonical field a comment-post's receipt marker is appended to, as
+    /// PART of the SAME `registry_resolve_and_update` call that resolves the
+    /// target page (that tool requires non-empty `fields` — it is "resolve AND
+    /// update", not a pure lookup — so the comment-post leaves the SAME kind of
+    /// dated append-log receipt every other voice-memo → registry write already
+    /// leaves, e.g. `executeMemoryKeep`'s body append and
+    /// `mergeAppendRegistryFields`'s existing behavior). `summary` is the most
+    /// broadly-bound canonical key across configured entities; an entity
+    /// without it bound throws `RegistryWriteError`/`ToolRouterError` from the
+    /// underlying tool, which — like every other failure in this function —
+    /// propagates up to `processOne`'s catch-all (queues REVIEW, never a crash).
+    public static let commentReceiptField = "summary"
+
+    /// Executes a `.comment` intent: resolve the target page via
+    /// `registry_resolve_and_update` (PKT-MEM-135) — NOT a bespoke resolution
+    /// path (GOAL_CONDITION) — then post the comment via `notion_comment_create`.
+    /// `idea`-purpose comments are logged to `VoiceMemoIdeaThreadStore`;
+    /// `reflow`-purpose comments are posted the same way but never logged
+    /// (fire-and-forget, D48). Any resolution or post failure throws (never a
+    /// crash) so the caller's existing catch routes the memo to REVIEW.
+    public static func executeComment(_ intent: VoiceMemoIntent, memoId: String, router: ToolRouter) async throws -> String {
+        guard let entityKey = intent.entityKey else {
+            throw VoiceMemoError.invalidIntent("comment missing entity key")
+        }
+        guard let purpose = intent.purpose else {
+            throw VoiceMemoError.invalidIntent("comment missing required purpose (idea | reflow)")
+        }
+        let text = (intent.body ?? intent.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else {
+            throw VoiceMemoError.invalidIntent("comment missing text (body/title)")
+        }
+        guard let hint = intent.entityHint?.trimmingCharacters(in: .whitespacesAndNewlines), !hint.isEmpty else {
+            throw VoiceMemoError.commentTargetUnresolved(entityKey, "missing entityHint — nothing to resolve the target page against")
+        }
+        guard let entity = await Self.loadRegistryEntity(key: entityKey) else {
+            throw VoiceMemoError.commentTargetUnresolved(entityKey, "entity not configured in the registry")
+        }
+        guard let titleKey = entity.titleProperty?.key else {
+            throw VoiceMemoError.commentTargetUnresolved(entityKey, "entity has no title-role property — cannot predicate-match by entityHint")
+        }
+
+        let pageId: String
+        do {
+            let resolved = try await router.dispatch(toolName: "registry_resolve_and_update", arguments: .object([
+                "entity": .string(entityKey),
+                "where": .object([titleKey: .string(hint)]),
+                "fields": .object([commentReceiptField: .string("Voice memo comment posted (\(purpose.rawValue)).")]),
+            ]))
+            guard case .object(let envelope) = resolved,
+                  case .string(let matchedId)? = envelope["matchedId"], !matchedId.isEmpty else {
+                throw VoiceMemoError.commentTargetUnresolved(entityKey, "registry_resolve_and_update returned no matchedId")
+            }
+            pageId = matchedId
+        } catch let error as VoiceMemoError {
+            throw error
+        } catch {
+            // registry_resolve_and_update throws ToolRouterError.invalidArguments for
+            // both no-match and ambiguous-match (RegistryResolveError, re-wrapped inside
+            // the tool handler) — surface it as a graceful BLOCKED, not a crash.
+            throw VoiceMemoError.commentTargetUnresolved(entityKey, error.localizedDescription)
+        }
+
+        let commentResult = try await router.dispatch(toolName: "notion_comment_create", arguments: .object([
+            "pageId": .string(pageId),
+            "text": .string(text),
+        ]))
+        guard case .object(let commentEnvelope) = commentResult,
+              case .bool(true)? = commentEnvelope["success"] else {
+            throw VoiceMemoError.commentPostFailed(entityKey, pageId)
+        }
+        let discussionId: String = {
+            if case .string(let d)? = commentEnvelope["discussionId"] { return d }
+            return ""
+        }()
+
+        if purpose == .idea {
+            try? VoiceMemoIdeaThreadStore.enqueue(VoiceMemoIdeaThreadEntry(
+                memoId: memoId,
+                discussionId: discussionId,
+                targetEntityKey: entityKey,
+                targetPageId: pageId
+            ))
+        }
+
+        return "notion_comment_create entity=\(entityKey) id=\(pageId) purpose=\(purpose.rawValue) discussionId=\(discussionId)"
     }
 
     public static func mergeAppendRegistryFields(
@@ -829,7 +921,7 @@ public enum VoiceMemoProcessor {
 
     static func buildSummary(receipts: [VoiceMemoReceipt], dryRun: Bool) -> String {
         let prefix = dryRun ? "Dry-run:" : "Processed"
-        var reminders = 0, memoryKeep = 0, agent = 0, registry = 0, review = 0, skipped = 0
+        var reminders = 0, memoryKeep = 0, agent = 0, registry = 0, comments = 0, review = 0, skipped = 0
         for receipt in receipts {
             if receipt.skippedReason != nil { skipped += 1; continue }
             for outcome in receipt.outcomes {
@@ -838,20 +930,22 @@ public enum VoiceMemoProcessor {
                 case .memoryKeep where outcome.status == .executed || outcome.status == .dryRun: memoryKeep += 1
                 case .agentMemory where outcome.status == .executed || outcome.status == .dryRun: agent += 1
                 case .registryUpdate where outcome.status == .executed || outcome.status == .dryRun: registry += 1
+                case .comment where outcome.status == .executed || outcome.status == .dryRun: comments += 1
                 case .review: review += 1
                 default: break
                 }
             }
         }
-        return "\(prefix) \(receipts.count) memo(s): \(reminders) reminder(s), \(memoryKeep) memory_keep, \(agent) agent_memory, \(registry) registry update(s), \(review) review, \(skipped) skipped."
+        return "\(prefix) \(receipts.count) memo(s): \(reminders) reminder(s), \(memoryKeep) memory_keep, \(agent) agent_memory, \(registry) registry update(s), \(comments) comment(s), \(review) review, \(skipped) skipped."
     }
 
-    static func dryRunDetail(_ intent: VoiceMemoIntent) -> String {
+    public static func dryRunDetail(_ intent: VoiceMemoIntent) -> String {
         switch intent.kind {
         case .memoryKeep: return "would memory_keep → registry/\(intent.entityKey ?? "memory")"
         case .reminder: return "would reminders_create: \(intent.title ?? "?")"
         case .agentMemory: return "would memory_remember"
         case .registryUpdate: return "would registry_update \(intent.entityKey ?? "?") hint=\(intent.entityHint ?? "?")"
+        case .comment: return "would notion_comment_create \(intent.entityKey ?? "?") hint=\(intent.entityHint ?? "?") purpose=\(intent.purpose?.rawValue ?? "?")"
         case .review: return "would queue for review"
         }
     }
@@ -1091,6 +1185,9 @@ public enum VoiceMemoProcessor {
         if case .object(let fieldObj)? = obj["fields"] {
             intent.fields = fieldObj.compactMapValues { if case .string(let s) = $0 { return s }; return nil }
         }
+        if kind == .comment, let purposeRaw = stringArg(obj, "purpose") {
+            intent.purpose = VoiceMemoCommentPurpose(rawValue: purposeRaw)
+        }
         let explicitRowId = stringArg(obj, "rowId")
 
         // Execute the lane. registry_update threads an explicit rowId straight to the
@@ -1101,7 +1198,7 @@ public enum VoiceMemoProcessor {
             if kind == .registryUpdate {
                 detail = try await executeRegistryUpdate(intent, explicitRowId: explicitRowId, router: router)
             } else {
-                detail = try await execute(intent: intent, plan: plan, transcript: transcript, router: router)
+                detail = try await execute(intent: intent, plan: plan, transcript: transcript, memoId: recording.id, router: router)
             }
         } catch let error as VoiceMemoError {
             if case .registryAmbiguous = error {
@@ -1180,6 +1277,7 @@ public enum VoiceMemoProcessor {
         if !intent.fields.isEmpty {
             obj["fields"] = .object(intent.fields.mapValues { .string($0) })
         }
+        if let purpose = intent.purpose { obj["purpose"] = .string(purpose.rawValue) }
         return .object(obj)
     }
 
@@ -1200,6 +1298,15 @@ public enum VoiceMemoError: Error, LocalizedError {
     /// The row was created but the read-back did not show the expected Player
     /// relation attached (PKT-1064 post-write verification).
     case playerRelationVerifyFailed(String, String, String)
+    /// The `.comment` intent's target page could not be resolved via
+    /// `registry_resolve_and_update` (missing entityHint, entity not
+    /// configured, no title-role property to predicate-match against, or the
+    /// underlying tool threw no-match/ambiguous) — a graceful BLOCKED → REVIEW,
+    /// never a crash (PKT-MEM-136 / D48 GOAL_CONDITION).
+    case commentTargetUnresolved(String, String)
+    /// `notion_comment_create` did not report success after a resolved target
+    /// page (PKT-MEM-136 post-write verification, mirrors PKT-1064's pattern).
+    case commentPostFailed(String, String)
 
     public var errorDescription: String? {
         switch self {
@@ -1212,6 +1319,10 @@ public enum VoiceMemoError: Error, LocalizedError {
             return "entity ‘\(entity)’ has no bound PLAYERS relation property — cannot attach the originating Player; bind PLAYERS via registry_introspect, then reprocess (BLOCKED, queued for review)"
         case .playerRelationVerifyFailed(let entity, let pageId, let player):
             return "originating Player \(player) not present on created \(entity) row \(pageId) after read-back — attach verification failed (queued for review)"
+        case .commentTargetUnresolved(let entity, let reason):
+            return "comment target unresolved for entity ‘\(entity)’: \(reason) (BLOCKED, queued for review)"
+        case .commentPostFailed(let entity, let pageId):
+            return "notion_comment_create did not report success for entity ‘\(entity)’ page \(pageId) (queued for review)"
         }
     }
 }

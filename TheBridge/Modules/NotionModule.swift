@@ -967,6 +967,11 @@ public enum NotionModule {
                 let chunks = NotionModule.chunkCommentText(text, maxChars: 2000)
 
                 var ids: [Value] = []
+                // PKT-MEM-136: surface the Notion `discussion_id` the first posted chunk
+                // started, so callers (e.g. VoiceMemoProcessor.executeComment) can log it
+                // to a durable ledger without a second round trip. Additive — every other
+                // key/shape is byte-for-byte unchanged.
+                var discussionId = ""
                 for chunk in chunks {
                     let data = try await client.createComment(pageId: pageId, text: chunk)
                     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -979,6 +984,9 @@ public enum NotionModule {
                         ])
                     }
                     ids.append(.string(json["id"] as? String ?? ""))
+                    if discussionId.isEmpty {
+                        discussionId = json["discussion_id"] as? String ?? ""
+                    }
                 }
 
                 // Back-compat: single chunk keeps the original `id` field; multi-chunk adds `ids`.
@@ -986,7 +994,8 @@ public enum NotionModule {
                     "success": .bool(true),
                     "id": ids.first ?? .string(""),
                     "ids": .array(ids),
-                    "chunks": .int(chunks.count)
+                    "chunks": .int(chunks.count),
+                    "discussionId": .string(discussionId)
                 ])
             }
         ))
