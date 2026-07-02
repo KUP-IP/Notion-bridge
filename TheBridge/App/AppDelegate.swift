@@ -280,6 +280,21 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // Cloud-env boot-order self-heal (found live 2026-07-02): if a prior
+        // restart raced Bridge's own relaunch ahead of the bridge-env
+        // LaunchAgent, this process has no WorkOS/cloud env and every real
+        // connector token would be rejected for the rest of its life. Check
+        // BEFORE any other subsystem does real work — if we're about to
+        // repair-and-relaunch, nothing else here should run twice.
+        if CloudEnvSelfHeal.shouldAttemptRepair(
+            cloudAccessEnabled: BridgeDefaults.cloudAccessEnabledValue,
+            environment: ProcessInfo.processInfo.environment,
+            alreadyAttempted: CloudEnvSelfHeal.wasRelaunchedBySelfHeal()
+        ) {
+            CloudEnvSelfHeal.attemptRepairAndRelaunch()
+            return
+        }
+
         // PKT-1 v3.5: Rename migration. Idempotent + atomic; no-ops on every
         // launch after the first successful run. Runs BEFORE any subsystem
         // touches Application Support so they see canonical paths.

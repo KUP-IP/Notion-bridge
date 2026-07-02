@@ -215,6 +215,13 @@ public struct RemoteAccessSection: View {
         // so NO inner ScrollView here — it would nest scrolls. We mirror the
         // ConnectionsSection sibling: just the card stack + horizontal pane pad.
         VStack(spacing: BridgeTokens.Space.cardGap) {
+            // Purely additive, self-limiting: only present when THIS launch
+            // was itself the relaunch a boot-order self-heal triggered (the
+            // marker is a launch argument, not persisted — a normal next
+            // launch never carries it). See CloudEnvSelfHeal.swift.
+            if CloudEnvSelfHeal.wasRelaunchedBySelfHeal() {
+                selfHealNoticeCard
+            }
             statusCard
             securityCard
         }
@@ -242,6 +249,23 @@ public struct RemoteAccessSection: View {
             Button("Cancel", role: .cancel) { cancelDisable() }
         } message: {
             Text("Your MCP URL will stop working until re-enabled.")
+        }
+    }
+
+    // MARK: - Self-heal notice
+
+    /// Shown once, only on the relaunch a boot-order cloud-env self-heal
+    /// triggered (see `CloudEnvSelfHeal.swift`) — confirms the recovery to
+    /// the operator instead of leaving it silent.
+    private var selfHealNoticeCard: some View {
+        BridgeGlassCard {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                BridgeBadge("Reconnected", tone: .ok, showsDot: true)
+                Text("Cloud access was automatically repaired after this restart — a startup timing issue kept it from loading. If a connector (ChatGPT, Claude.ai) still shows a stale connection error, reconnecting it should now succeed.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(BridgeTokens.fg3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

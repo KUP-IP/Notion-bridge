@@ -959,6 +959,12 @@ await runVoiceMemoTranscriptOverlapGuardTests()
 // so an open Process tab live-renders without a manual reload.
 await runMemoryHubLiveProcessingTests()
 
+// Boot-order cloud-env self-heal (live-caught 2026-07-02): a restart raced
+// Bridge's own relaunch ahead of the bridge-env LaunchAgent, leaving
+// connectorAuth nil for the whole process life and rejecting every real
+// connector token. Pure decision logic + injected-seam repair action.
+await runCloudEnvSelfHealTests()
+
 // ============================================================
 // MARK: - Summary
 // ============================================================

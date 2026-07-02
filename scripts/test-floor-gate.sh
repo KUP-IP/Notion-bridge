@@ -1795,7 +1795,36 @@ set -euo pipefail
 # text unmodified (not silently downgraded to the title fallback). Measured
 # 2994 passed, 0 failed (exactly 2993 +1, the single new test — no other
 # drift). FLOOR raised 2993 → 2994 per the order-inversion rule.
-FLOOR="${BRIDGE_TEST_FLOOR:-2994}"
+#
+# CloudEnvSelfHeal (2026-07-02, found via a real restart): `solutions.kup.
+# bridge-env` — a RunAtLoad LaunchAgent whose entire job is `launchctl setenv`
+# for BRIDGE_ENABLE_HTTP + the WorkOS/cloud vars — lost the boot-order race
+# against Bridge's own relaunch (login item / Resume) after a real restart.
+# Bridge spawned with none of its cloud env; `launchctl getenv WORKOS_
+# CLIENT_ID` was confirmed empty live; connectorAuth stayed nil for that
+# process's whole life, so every real connector bearer token (ChatGPT,
+# Claude.ai) was rejected as structurally invalid — no issuer/JWKS to
+# validate against — surfacing as a confusing "reconnect" error with no path
+# back to the cause. New CloudEnvSelfHeal.swift: pure shouldAttemptRepair
+# decision (only when cloudAccessEnabled + BRIDGE_ENABLE_HTTP absent + not
+# already attempted — a loop guard) + injectable attemptRepairAndRelaunch
+# (kicks the LaunchAgent idempotently, relaunches once via a detached
+# process so it survives this process's termination and never races
+# ensureSingleInstance, then terminates). Wired into AppDelegate.
+# applicationDidFinishLaunching right after the single-instance guard, before
+# any other subsystem does real work. Purely additive for the default
+# (cloud-off) path — shouldAttemptRepair short-circuits false immediately
+# when cloudAccessEnabled is false, so a default install's launch sequence is
+# byte-for-byte unchanged. Also added a small additive confirmation banner in
+# RemoteAccessSection (self-limiting: only shown on the relaunch the repair
+# itself triggered, via the same marker argument, never persisted). New
+# CloudEnvSelfHealTests.swift contributes 9 harness `test()` blocks (5
+# shouldAttemptRepair matrix incl. the loop-guard + cloud-off-never-fires
+# cases, 2 wasRelaunchedBySelfHeal, 2 attemptRepairAndRelaunch injected-seam
+# ordering/wiring — no real launchd/NSWorkspace/NSApplication touched).
+# Measured 3003 passed, 0 failed (2994 + 9, no other drift). FLOOR raised
+# 2994 → 3003 per the order-inversion rule.
+FLOOR="${BRIDGE_TEST_FLOOR:-3003}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the
