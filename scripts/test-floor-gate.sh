@@ -1680,7 +1680,18 @@ set -euo pipefail
 # the guard. Own measured green off origin/main (630a2ed, pre-131) = 2937
 # (2917 +20), branched independently of PKT-MEM-131. Reconciled at merge onto
 # integrated floor 2919 (post-131) → 2939 (2919 +20).
-FLOOR="${BRIDGE_TEST_FLOOR:-2939}"
+# 2026-07-02 (PKT-MEM-134 UI↔agent live processing sync): +9 tests — new
+# MemoryHubLiveProcessingTests (+7: memoConsidering/memoCommitted eventType taxonomy
+# present + distinct, .memoryHubLiveProcessingDidChange is a dedicated Notification.Name
+# separate from .voiceMemoReviewDidChange, voice_memo_get(understand:true) posts +
+# durably logs memoConsidering, voice_memo_get(understand:false) posts/logs neither,
+# voice_memo_commit success posts + durably logs memoCommitted, an ambiguous
+# registry_update commit — needsManual, no write — posts/logs neither), extended
+# MemoryProcessLayoutAXTests (+2: liveProcessingBadge per-event AX id suffix +
+# distinctness). Branched off origin/main (630a2ed) where its own measured green was
+# 2926 (2917 +9), branched independently of PKT-MEM-131/132. Reconciled at merge
+# onto integrated floor 2939 (post-131/132) → 2948 (2939 +9).
+FLOOR="${BRIDGE_TEST_FLOOR:-2948}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

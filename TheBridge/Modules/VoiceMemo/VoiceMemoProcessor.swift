@@ -830,6 +830,64 @@ public enum VoiceMemoProcessor {
         try? MemoryHubActivityLog.append(event, now: now)
     }
 
+    // MARK: - Live UI sync (PKT-MEM-134)
+    //
+    // `voice_memo_get`/`voice_memo_commit` are the agent-deferred hand-off pair: a
+    // connected MCP agent calls get to propose a plan, then commit to execute one
+    // lane. Neither previously posted anything an already-open Process tab could
+    // observe — the tab only reads MemoryHubActivityLog once, on .onAppear. These
+    // two helpers durably log a receipt (so the read-through stays the single
+    // source of truth) AND post `.memoryHubLiveProcessingDidChange` so a live tab
+    // can re-read without a manual reload. The post is dispatched on the main
+    // actor (SwiftUI `.onReceive` observers expect main-thread delivery; `get`/
+    // `commit` are not themselves MainActor-isolated).
+
+    /// Agent called `voice_memo_get` with `understand:true` and received a
+    /// proposed plan — the "considering" event.
+    static func recordConsidering(recording: VoiceMemoRecording, plan: VoiceMemoPlan, now: Date = Date()) {
+        let event = MemoryHubActivityEvent(
+            timestamp: ISO8601DateFormatter().string(from: now),
+            memoId: recording.id,
+            phase: .plan,
+            eventType: .memoConsidering,
+            action: "voice_memo_get",
+            status: plan.degraded ? "degraded" : "ok",
+            provenance: plan.provenance.rawValue,
+            actor: "agent",
+            detail: "\(plan.intents.count) intent(s) proposed"
+        )
+        try? MemoryHubActivityLog.append(event, now: now)
+        Task { @MainActor in
+            NotificationCenter.default.post(name: .memoryHubLiveProcessingDidChange, object: nil)
+        }
+    }
+
+    /// Agent called `voice_memo_commit` and the write succeeded — the "committed" event.
+    static func recordCommitted(
+        recording: VoiceMemoRecording,
+        intentId: String,
+        kind: VoiceMemoIntentKind,
+        detail: String,
+        now: Date = Date()
+    ) {
+        let event = MemoryHubActivityEvent(
+            timestamp: ISO8601DateFormatter().string(from: now),
+            memoId: recording.id,
+            intentId: intentId,
+            phase: .execute,
+            eventType: .memoCommitted,
+            action: "voice_memo_commit:\(kind.rawValue)",
+            status: "executed",
+            provenance: "agent",
+            actor: "agent",
+            detail: String(detail.prefix(240))
+        )
+        try? MemoryHubActivityLog.append(event, now: now)
+        Task { @MainActor in
+            NotificationCenter.default.post(name: .memoryHubLiveProcessingDidChange, object: nil)
+        }
+    }
+
     static func resolvedRegistryFields(intent: VoiceMemoIntent, plan: VoiceMemoPlan) -> [String: String] {
         if !intent.fields.isEmpty { return intent.fields }
         var fields: [String: String] = [
@@ -948,6 +1006,7 @@ public enum VoiceMemoProcessor {
 
         if understand {
             let (transcript, plan) = try await buildPlan(for: recording, options: options, curatorMode: providerMode)
+            recordConsidering(recording: recording, plan: plan)
             return .object([
                 "memo": memoValue(recording, transcript: transcript),
                 "plan": planValue(plan),
@@ -1150,6 +1209,7 @@ public enum VoiceMemoProcessor {
             }
         }
         let markedProcessed = try VoiceMemoProcessedGate.markProcessedIfClear(memoId: recording.id)
+        recordCommitted(recording: recording, intentId: committedIntentId, kind: kind, detail: detail)
         return .object([
             "ok": .bool(true),
             "memoId": .string(recording.id),

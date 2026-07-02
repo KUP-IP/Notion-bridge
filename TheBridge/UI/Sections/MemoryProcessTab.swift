@@ -85,6 +85,16 @@ struct MemoryProcessTab: View {
         .onChange(of: selectedId) { _, _ in
             Task { await refreshTriageBanner() }
         }
+        // PKT-MEM-134 — live agent processing sync: a connected MCP agent's
+        // voice_memo_get (considering) / voice_memo_commit (committed) posts this
+        // on a dedicated channel (separate from .voiceMemoReviewDidChange, the
+        // review-queue mutation signal). Re-read the activity log + memo list so
+        // an already-open Process tab reflects the agent's work without a manual
+        // reload — the GOAL_CONDITION this packet exists to satisfy.
+        .onReceive(NotificationCenter.default.publisher(for: .memoryHubLiveProcessingDidChange)) { _ in
+            reloadActivity()
+            reloadMemos()
+        }
         .sheet(isPresented: $showRegistrySheet) {
             MemoryProcessRegistryConfigureSheet(
                 rows: registrySheetRows,
@@ -566,6 +576,7 @@ struct MemoryProcessTab: View {
                     } else {
                         ForEach(activity) { event in
                             VStack(alignment: .leading, spacing: 2) {
+                                liveProcessingBadge(for: event)
                                 Text("\(event.phase.rawValue) · \(event.status)")
                                     .font(BridgeTokens.Typeface.meta)
                                     .foregroundStyle(BridgeTokens.fg2)
@@ -589,6 +600,27 @@ struct MemoryProcessTab: View {
         .background(BridgeTokens.wellFill.opacity(0.3))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(BridgeAXID.Memory.Process.activityDrawer)
+    }
+
+    /// PKT-MEM-134 — visual distinction between an agent's proposed
+    /// (`.memoConsidering`, "considering") and executed (`.memoCommitted`,
+    /// "committed") events, so both are recognizable at a glance in the same
+    /// feed even when they share a memoId. `nil` for every other event type —
+    /// existing rows are unaffected.
+    @ViewBuilder
+    private func liveProcessingBadge(for event: MemoryHubActivityEvent) -> some View {
+        switch event.eventType {
+        case .memoConsidering:
+            BridgeBadge("Considering", systemImage: "ellipsis.circle", tone: .info, showsDot: true)
+                .padding(.bottom, 2)
+                .accessibilityIdentifier(BridgeAXID.Memory.Process.liveProcessingBadge(event.id))
+        case .memoCommitted:
+            BridgeBadge("Committed", systemImage: "checkmark.circle", tone: .ok, showsDot: true)
+                .padding(.bottom, 2)
+                .accessibilityIdentifier(BridgeAXID.Memory.Process.liveProcessingBadge(event.id))
+        default:
+            EmptyView()
+        }
     }
 
     // MARK: - Data

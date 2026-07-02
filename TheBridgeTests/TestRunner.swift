@@ -951,6 +951,12 @@ await runProcessingProviderTests()
 // no write); short reuse / long-original summaries pass unaffected.
 await runVoiceMemoTranscriptOverlapGuardTests()
 
+// PKT-MEM-134 — UI↔agent live processing sync: voice_memo_get (considering) /
+// voice_memo_commit (committed) durably log the new eventType + post the dedicated
+// .memoryHubLiveProcessingDidChange channel (separate from .voiceMemoReviewDidChange)
+// so an open Process tab live-renders without a manual reload.
+await runMemoryHubLiveProcessingTests()
+
 // ============================================================
 // MARK: - Summary
 // ============================================================

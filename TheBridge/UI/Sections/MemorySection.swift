@@ -8,6 +8,14 @@ import AppKit
 extension Notification.Name {
     /// Posted when the voice-memo review queue mutates (dismiss, enqueue, …).
     static let voiceMemoReviewDidChange = Notification.Name("com.notionbridge.voiceMemoReviewDidChange")
+    /// PKT-MEM-134 — posted from `VoiceMemoProcessor.get`/`.commit` when a connected MCP
+    /// agent proposes (`memoConsidering`) or executes (`memoCommitted`) a memo intent, so
+    /// an open Process tab can live-render the event without a manual reload. Deliberately
+    /// SEPARATE from `.voiceMemoReviewDidChange` (the review-queue mutation channel) —
+    /// this channel is agent-processing-lifecycle only. `public` (unlike the sibling
+    /// `.voiceMemoReviewDidChange`) so TheBridgeTests — a separate module that only sees
+    /// `TheBridgeLib`'s `public`/`open` surface — can assert delivery directly.
+    public static let memoryHubLiveProcessingDidChange = Notification.Name("com.notionbridge.memoryHubLiveProcessingDidChange")
 }
 
 /// Sidebar badge counter — shared so BridgeSectionNav can show pending count.

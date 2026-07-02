@@ -23,6 +23,14 @@ public enum MemoryHubActivityEventType: String, Codable, Sendable, CaseIterable 
     case memoSummarized
     case memoTitleGenerated
 
+    // Live agent processing (PKT-MEM-134) — voice_memo_get / voice_memo_commit,
+    // surfaced live to an open Process tab via .memoryHubLiveProcessingDidChange.
+    /// A connected MCP agent called `voice_memo_get` with `understand:true` and
+    /// received a proposed plan (transcript + intents) for a memo.
+    case memoConsidering
+    /// A connected MCP agent called `voice_memo_commit` and the write succeeded.
+    case memoCommitted
+
     // Disposition
     case dispositionDismissed
     case dispositionMarkHandled
