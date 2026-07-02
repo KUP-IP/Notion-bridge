@@ -378,6 +378,102 @@ The reconstructed surface must make memory handling legible to the operator, pre
 
 **Impact:** The reconstruction does not require a feature flag or parallel legacy UI. Legacy deep-link anchors still route to the new sections per D27.
 
+### D46 - Transcript-Guard Enforcement (Agent-Commit Path)
+
+**Decision:** Voice-memo commits that write to Notion (memory_keep body/summary, and any registry_update text field) are checked for near-verbatim overlap against the memo's raw transcript before the write executes; a high-overlap match is rejected rather than silently written.
+
+**Rationale:** The existing guard (FR-005 / W3) only holds on the automated heuristic path — `resolvedMemoryKeepFields` falls back to plan-derived content only when the caller supplies no `fields` override. It does nothing when a caller supplies `fields` directly, which is exactly the agent-commit path (`voice_memo_commit`) this redesign is centered on. A hard length cap alone would also block a legitimately long real summary; a similarity check targets the actual failure mode (pasting the transcript) without punishing length.
+
+**Impact:** `voice_memo_commit` (and the underlying `executeMemoryKeep` / `executeRegistryUpdate` write paths) gain a pre-write overlap check; a new failure mode (e.g. `VoiceMemoError.transcriptOverlapRejected`) needs to route to REVIEW consistent with the existing graceful-BLOCKED pattern (PKT-1064 precedent). Exact overlap algorithm/threshold is D49 (below).
+
+### D47 - Multi-Intent-Per-Memo In Agent Mode
+
+**Decision:** Agent-mode processing keeps the existing election model (one elected primary, others suppressed-to-review) as the ranking signal, but the agent is always shown the full intent set (primary + suppressed) via `voice_memo_get`, and may commit more than one via repeated `voice_memo_commit` calls — the same pattern the UI's batch-confirm cockpit already uses.
+
+**Rationale:** Reuses tested, existing machinery instead of inventing a parallel "no-primary" model for agent mode alone; keeps review/safety semantics consistent across every mode.
+
+**Impact:** No election-logic change required. Tool descriptions for `voice_memo_get` / `voice_memo_commit` should make explicit that committing multiple intents per memo is expected/normal in agent mode, not an edge case. Ready for implementation now (doc/description change only).
+
+### D48 - Comment Disposition Model
+
+**Decision:** A new `comment` intent kind is added to the voice-memo intent model, alongside `reminder | memoryKeep | agentMemory | registryUpdate`. It carries a required `purpose: idea | reflow` field. `idea`-purpose comments are posted as a new top-level Notion page comment (`notion_comment_create`) and their `discussion_id` is recorded in a local ledger for later reference/sign-off; `reflow`-purpose comments are posted the same way but never tracked in the ledger (fire-and-forget).
+
+**Rationale:** One intent kind keeps the code path singular; the `purpose` field is the single toggle deciding ledger-tracking behavior — avoids both an unstructured text-prefix-only approach and a doubled intent-kind surface (`ideaComment`/`reflowComment`).
+
+**Impact:** New `VoiceMemoIntentKind.comment` case; entity resolution reuses the same `entityKey` / `entityHint` / `rowId` path as `registryUpdate`, since a comment still needs a target page. New small local ledger store (memoId / discussion_id / purpose / postedAt) for `idea`-purpose comments only. Ledger shape is D50; sign-off-reply trigger is D51 (both below).
+
+### D49 - Transcript-Overlap Algorithm (child of D46)
+
+**Decision:** Length + substring hybrid — the guard only runs when the proposed text is above a minimum length floor, and rejects only when a contiguous run above a threshold length matches the raw transcript verbatim.
+
+**Rationale:** Targets the actual failure mode (pasting a chunk of the transcript) without false-positiving on a short summary that legitimately reuses a few real terms/phrases (names, key vocabulary) from the memo.
+
+**Impact:** Two tunable parameters needed: a minimum proposed-text length before the check runs at all, and a contiguous-verbatim-match-length threshold that triggers rejection. Exact numeric defaults are an implementation detail (named constants, not magic numbers, so they can be revisited without reopening this decision) — not surveyed further here.
+
+### D50 - Idea-Comment Ledger Shape (child of D48)
+
+**Decision:** A new lightweight JSON manifest, following the same pattern as `review.json` / `processed.json` (`VoiceMemoReviewStore` / `VoiceMemoProcessedStore`). One entry per idea-comment: memoId, discussion_id, targetEntityKey, targetPageId, postedAt, and a nullable signedOffAt.
+
+**Rationale:** Matches the existing local-state convention already proven twice in this module; avoids introducing a new registry entity or a different storage paradigm for a small piece of durable state.
+
+**Impact:** New file (e.g. `idea-threads.json`) alongside `review.json`/`processed.json`; a small store type mirroring `VoiceMemoReviewStore`'s load/save/enqueue shape.
+
+### D51 - Sign-Off Reply Trigger (child of D48)
+
+**Decision:** Fully agent-initiated/manual for v1 — no automatic trigger tied to registry or packet status changes.
+
+**Rationale:** An automatic trigger (registry-event or packet-completion based) assumes a clean idea-comment → downstream-row/packet link that doesn't exist yet; that linkage is a separate, not-yet-designed problem. Start manual, revisit once the ledger proves out in practice.
+
+**Impact:** No automation/event-watching code needed for v1. Surfaces a small follow-on need: an agent has to be able to list/query the ledger to notice its own open idea-threads (e.g. a `voice_memo_idea_threads_list` tool) — not a blocking decision, flagged for the execution-readiness pass.
+
+### D52 - Live-Sync Event Types (child of Workstream B)
+
+**Decision:** Both proposal ("considering") and commit ("committed") events are emitted to the same live feed, visually distinguished.
+
+**Rationale:** Matches what the operator explicitly asked to see — the agent's proposed dispositions, not just the aftermath of a write.
+
+**Impact:** `voice_memo_get` needs to emit a "considering" event (new `MemoryHubActivityEventType` case) in addition to whatever it already logs; `voice_memo_commit` drives the existing "committed" side. The Process tab's activity drawer needs a rendering distinction (badge/icon/color) between proposed vs. committed entries for the same memoId.
+
+### D53 - Live-Sync Transport (child of Workstream B)
+
+**Decision:** A dedicated pub/sub channel for live-processing events, separate from `voiceMemoReviewDidChange`.
+
+**Rationale:** Review-queue-changed and agent-actively-working are different signals; keeping them decoupled avoids conflating unrelated UI refresh triggers, for barely more code than reusing the existing notification.
+
+**Impact:** New `Notification.Name` posted from the processor-side event-emission points identified in D52; `MemoryProcessTab`/`MemorySection` subscribe via `onReceive`, same pattern as the existing one.
+
+### D54 - Passive Awareness (child of Workstream B)
+
+**Decision:** No passive indicator for v1 — sync is scoped to when the Process tab is open and being actively watched by the driving operator.
+
+**Rationale:** The described usage pattern is an actively-driven chat session, not unattended/background processing; ambient awareness (menu-bar badge, notifications) solves a different problem and is deferred.
+
+**Impact:** No menu-bar/notification work needed for this workstream. Revisit if unattended/scheduled agent-mode processing becomes a real use case later.
+
+### D55 - `resolveRegistryRowId` → `registry_find` Swap
+
+**Decision:** Do it now, standalone — not bundled with D56.
+
+**Rationale:** Pure win with no open design question: `registry_find` already has equivalent-or-better ambiguity semantics (exact / none / multi) to the hand-rolled containment-and-regex matcher it replaces.
+
+**Impact:** `VoiceMemoProcessor.resolveRegistryRowId` is rewritten to call `registry_find` instead of `registry_list` + client-side matching; the duplicate matching logic (containment scan, regex fallback, ambiguity counting) is deleted from `VoiceMemoProcessor.swift`.
+
+### D56 - Combined Registry Tool Shape
+
+**Decision:** A new `registry_resolve_and_update` tool — entity + match predicate + fields (+ append-keys config) → resolve, merge-append, write in one call.
+
+**Rationale:** Solves the exact 3-round-trip problem found in `mergeAppendRegistryFields`/`executeRegistryUpdate` (list-and-filter, get, update) without taking on upsert/create-vs-update disambiguation as a new problem.
+
+**Impact:** New tool in `RegistryModule.swift` alongside `registry_find`/`get`/`create`/`update`; `VoiceMemoProcessor.executeRegistryUpdate` becomes a thin caller of this primitive instead of its own resolve+merge+write orchestration.
+
+### D57 - Combined Tool Scope
+
+**Decision:** General-purpose registry primitive, living in `RegistryModule`, usable by any workflow — not a voice-memo-internal helper.
+
+**Rationale:** The "resolve by hint, then update" round-trip cost isn't voice-memo-specific; solving it once benefits every future agent/workflow, matching the "memo tools hand off to registry tools" direction already locked (D56).
+
+**Impact:** `registry_resolve_and_update` is exposed as its own MCP tool, documented alongside `registry_find`/`update` — not buried inside VoiceMemo module internals.
+
 ## Current Behavior To Preserve Or Revise
 
 - `Mark handled` currently resolves a review and marks the memo processed only if no sibling pending review remains.
