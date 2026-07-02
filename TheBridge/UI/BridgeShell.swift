@@ -269,6 +269,9 @@ public enum BridgeAXID {
             public static let processCloud       = id("process.processCloud")
             public static let processPrompt      = id("process.processPrompt")
             public static func intentInspector(_ intentId: String) -> String { id("process.intentInspector.\(intentId)") }
+            /// PKT-MEM-134 — live agent processing badge (considering/committed) on an
+            /// activity-drawer row, keyed by the event's `Identifiable.id` (== `eventId`).
+            public static func liveProcessingBadge(_ eventId: String) -> String { id("process.liveProcessingBadge.\(eventId)") }
         }
     }
 }

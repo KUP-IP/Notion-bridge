@@ -51,6 +51,20 @@ func runMemoryProcessLayoutAXTests() async {
         try expect(BridgeAXID.Memory.Process.processPrompt == p + "processPrompt", "process prompt")
     }
 
+    // PKT-MEM-134 — live agent processing (considering/committed) activity-row badge.
+    await test("axV134_liveProcessingBadge_suffixed") {
+        try expect(
+            BridgeAXID.Memory.Process.liveProcessingBadge("evt-1") == p + "liveProcessingBadge.evt-1",
+            "per-event live-processing badge id"
+        )
+    }
+
+    await test("axV134_liveProcessingBadge_distinctPerEvent") {
+        let a = BridgeAXID.Memory.Process.liveProcessingBadge("evt-considering")
+        let b = BridgeAXID.Memory.Process.liveProcessingBadge("evt-committed")
+        try expect(a != b, "distinct events must not collide on the badge id")
+    }
+
     await test("axV1_harness_manifest_includesV1Zones") {
         let memory = SettingsUIValidationHarness.expectedIdentifiers[.memory] ?? []
         for zone in [

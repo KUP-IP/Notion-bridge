@@ -944,6 +944,12 @@ await runMemoryHubActivityTests()
 // Memory Hub Foundation — PROCESSING provider contracts (D23 credential refs, provider chain)
 await runProcessingProviderTests()
 
+// PKT-MEM-134 — UI↔agent live processing sync: voice_memo_get (considering) /
+// voice_memo_commit (committed) durably log the new eventType + post the dedicated
+// .memoryHubLiveProcessingDidChange channel (separate from .voiceMemoReviewDidChange)
+// so an open Process tab live-renders without a manual reload.
+await runMemoryHubLiveProcessingTests()
+
 // ============================================================
 // MARK: - Summary
 // ============================================================

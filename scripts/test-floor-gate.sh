@@ -1634,7 +1634,17 @@ set -euo pipefail
 # relation fails verify, explicit override wins, playersRelationKey rename-safe match).
 # Branched off pre-1065A/B/C/1041 main where its own measured green was 2870 (2863 +7);
 # reconciled at merge onto integrated floor 2910 → 2917 (2910 +7).
-FLOOR="${BRIDGE_TEST_FLOOR:-2917}"
+# 2026-07-02 (PKT-MEM-134 UI↔agent live processing sync): +9 tests — new
+# MemoryHubLiveProcessingTests (+7: memoConsidering/memoCommitted eventType taxonomy
+# present + distinct, .memoryHubLiveProcessingDidChange is a dedicated Notification.Name
+# separate from .voiceMemoReviewDidChange, voice_memo_get(understand:true) posts +
+# durably logs memoConsidering, voice_memo_get(understand:false) posts/logs neither,
+# voice_memo_commit success posts + durably logs memoCommitted, an ambiguous
+# registry_update commit — needsManual, no write — posts/logs neither), extended
+# MemoryProcessLayoutAXTests (+2: liveProcessingBadge per-event AX id suffix +
+# distinctness). Branched off origin/main (630a2ed) where its own measured green was
+# 2926 (2917 +9). FLOOR raised 2917 → 2926 per the order-inversion rule.
+FLOOR="${BRIDGE_TEST_FLOOR:-2926}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the
