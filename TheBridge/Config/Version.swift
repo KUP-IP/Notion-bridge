@@ -115,6 +115,24 @@ public enum AppVersion {
     ///   KeepReviewModel (KeepReviewStatus + KeepReviewMetadata + KeepSchemaContract +
     ///   KeepRequiredSchemaField). staticFeatureModuleToolCount 187 → 188. test-floor
     ///   2682 → 2744 (+62).
+    /// v3.9.2: 67 → 68 — Ollama defaults + registry create-body + standing orders seed:
+    ///   Ollama routing-vs-summarization defaults split (Qwen generate think:false + tuned
+    ///   context, PR #67); registry_create initializes page bodies from markdown in one
+    ///   call (PR #66, +7 tests); bundled v7.0.2 standing-orders doctrine seeds fresh
+    ///   installs via seedIfEmpty (PR #68, PKT-1057, +3 tests); close-agent AGENT_FEEDBACK
+    ///   path hygiene fix. test-floor 2755 → 2783 (2765 measured immediately after the
+    ///   v3.9.2 merge; +18 net from PR #69/#70 commands + wave3 FB landed same window).
+    ///   Backfilled 2026-07-02 per focus-keepr reflow — see CHANGELOG.md for the
+    ///   original entry (this ladder had skipped straight 3.9.1 → 3.9.4).
+    /// v3.9.3: 68 → 69 — Memory Hub opt-in Understand + summary-first keeps: memo select
+    ///   is inspect-only (voice_memo_get understand:false); Process locally / Process with
+    ///   cloud buttons run explicit Understand with activity-phase receipts (W1); intent
+    ///   inspector expands intent tags to full write preview (W2); structured summary +
+    ///   action items for Notion keeps, transcript stays UI-only (W3); HITL scenario
+    ///   catalog + voice scripts + friction log under docs/operator/live-evidence/.
+    ///   test-floor 2857 → 2863 (+6 MemoryProcessInspectUnderstandTests + opt-in AX).
+    ///   Backfilled 2026-07-02 per focus-keepr reflow — see CHANGELOG.md for the
+    ///   original entry.
     /// v3.9.4: 69 → 70 — six-packet Memory Hub / registry batch (PKT-MEM-131–136):
     ///   registry_find row-resolution swap (131), pre-write transcript-overlap guard
     ///   closing an agent-commit gap (132, D49), multi-intent-per-memo agent-mode docs
