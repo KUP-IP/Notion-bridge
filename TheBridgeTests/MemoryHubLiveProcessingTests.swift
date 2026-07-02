@@ -219,17 +219,26 @@ func runMemoryHubLiveProcessingTests() async {
         // the documented registryAmbiguous → needsManual short-circuit (no write, no
         // processed-gate) — the "committed" event must NOT fire on this path.
         let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let ambiguousRows: Value = .object(["rows": .array([
+            .object(["id": .string("row-1"), "title": .string("Ambiguous Match One")]),
+            .object(["id": .string("row-2"), "title": .string("Ambiguous Match Two")]),
+        ])])
         let list = ToolRegistration(
             name: "registry_list", module: "stub", tier: .open, description: "stub",
             inputSchema: .object(["type": .string("object")]),
-            handler: { _ in
-                .object(["rows": .array([
-                    .object(["id": .string("row-1"), "title": .string("Ambiguous Match One")]),
-                    .object(["id": .string("row-2"), "title": .string("Ambiguous Match Two")]),
-                ])])
-            }
+            handler: { _ in ambiguousRows }
         )
         await router.register(list)
+        // PKT-MEM-131 (merged after this branch was cut) swapped resolveRegistryRowId's
+        // registry_list dispatch for registry_find — this stub unconditionally returns the
+        // same 2-row set (mirroring `list`) so the ambiguous-match short-circuit this test
+        // exercises is reachable via that path too.
+        let find = ToolRegistration(
+            name: "registry_find", module: "stub", tier: .open, description: "stub",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { _ in ambiguousRows }
+        )
+        await router.register(find)
         let listener = LiveProcessingListener()
         let token = NotificationCenter.default.addObserver(
             forName: .memoryHubLiveProcessingDidChange, object: nil, queue: .main
