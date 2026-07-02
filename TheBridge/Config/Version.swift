@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "3.9.4"
+    public static let marketing = "3.9.5"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -145,7 +145,17 @@ public enum AppVersion {
     ///   into intent.body — every real MCP caller of intentKind=comment silently fell
     ///   back to the title path. Schema + handler fix, no new tool. Marketing unchanged;
     ///   build-only re-install. test-floor 2993 → 2994.
-    public static let build = "71"
+    /// v3.9.5: 71 → 72 — Notion Page Icon Write Support: notion_page_create /
+    ///   notion_page_update both accept an optional single-emoji `icon` parameter
+    ///   (NotionClient.createPage/updatePage gain a trailing icon: String? = nil that
+    ///   merges Notion's {"type":"emoji","emoji":"…"} shape into the request body;
+    ///   omitted ⇒ byte-identical to prior behavior). Pass-through only, no new
+    ///   Bridge-side validation (Notion's API is the validator), matching the existing
+    ///   extractIconEmoji read-side precedent. REVIEW-FIRST packet, live-verified
+    ///   against real Notion (4/4: create+icon, update+icon, create-no-icon and
+    ///   update-no-icon regression, all confirmed via live read-back). No new tool —
+    ///   staticFeatureModuleToolCount unchanged (200). test-floor unchanged (2994).
+    public static let build = "72"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

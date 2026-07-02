@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.9.5 — Notion page icon write support — 2026-07-02
+
+- **Notion tools** — `notion_page_create` and `notion_page_update` both accept an optional single-emoji `icon` parameter. `NotionClient.createPage`/`updatePage` merge Notion's `{"type":"emoji","emoji":"…"}` icon shape into the request body when supplied; omitted is byte-identical to prior behavior. Pass-through only — no new Bridge-side emoji validation, matching the existing `extractIconEmoji` read-side precedent.
+- **Hotfix folded forward** — build 71's `voice_memo_commit` body-argument wiring fix (see v3.9.4 entry below) ships as part of this install.
+- Live-verified against real Notion (4/4: create+icon, update+icon, create-no-icon and update-no-icon regression). No new MCP tool. test-floor unchanged (2994). Build **72**.
+
 ## v3.9.4 — Registry consolidation + comment disposition + live UI sync — 2026-07-02
 
 - **Registry tools** — `registry_resolve_and_update` collapses the find-then-get-then-update three-round-trip pattern into one MCP call (append-merge semantics identical to the old voice-memo helper, ambiguity semantics identical to `registry_find`). `resolveRegistryRowId` now uses `registry_find` instead of hand-rolled containment/regex matching.
