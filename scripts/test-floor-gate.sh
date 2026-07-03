@@ -1824,7 +1824,44 @@ set -euo pipefail
 # ordering/wiring — no real launchd/NSWorkspace/NSApplication touched).
 # Measured 3003 passed, 0 failed (2994 + 9, no other drift). FLOOR raised
 # 2994 → 3003 per the order-inversion rule.
-FLOOR="${BRIDGE_TEST_FLOOR:-3003}"
+#
+# fetch_skill Archive-vs-Canonical Matcher Confidence Fix (2026-07-03, branch
+# feat/fetch-skill-matcher-confidence): fetch_skill's SkillIntentScorer could
+# silently return an archived reference-material child page as a confident
+# match when a canonical (non-archived) page with an equal-or-better keyword
+# score existed — live-reproduced this session: fetch_skill(name:
+# "close-agent") resolved to a nested "sk close agent · Archive" child at
+# matchConfidence 0.4 instead of the canonical live page
+# (6673dba8-26b1-4b1d-aa0a-6aad084a861c). Root cause: SpecialistFilter.
+# isDocPage only excludes an archive CONTAINER whose title STARTS WITH
+# "archive" — it never caught a live-looking child title that merely CARRIES
+# an archive marker as a suffix ("sk close agent · Archive"), so that title
+# reached the scorer as an ordinary candidate and won on raw keyword overlap.
+# Fix (SkillPathResolver.swift): new SpecialistFilter.isArchived(title:) — a
+# general, word-boundary "archive"/"archived" detector that catches prefix,
+# suffix, and delimited placements (broader than isDocPage's anchored
+# ^archive check). SkillIntentScorer.rank now uses it, post-scoring, to
+# DEPRIORITIZE (never unconditionally exclude) an archived candidate whose
+# raw score is >= the best non-archived candidate's score — nudged to
+# (bestNonArchived - 0.001) rather than zeroed, so it can still surface in a
+# genuine disambiguate band but never wins the confident slot over a live
+# peer. Relative + title-predicate-keyed (not a hardcoded id/name check), and
+# fail-open: an archived candidate with no non-archived sibling in the same
+# candidate set still resolves normally (mirrors isActiveSpecialist's
+# fail-open bias). New tests added to RoutingReliabilityTests.swift: the
+# isArchived predicate matrix (prefix/suffix/delimited/no-false-positive),
+# the real close-agent collision fixture (canonical wins both at an
+# unambiguous exact-title margin and at a near-tied raw-score margin),
+# archived-only fail-open, and archived-with-higher-raw-score-still-loses —
+# plus two explicit REGRESSION tests proving the separate, correctly-working
+# focus-keepr-style multi-specialist disambiguation (genuinely live
+# candidates, no archive markers) is unaffected: it still returns
+# .disambiguate across both live candidates, and a tied non-archived pair's
+# scores are byte-identical before/after (nonArchivedScores.max() over an
+# all-non-archived set is a no-op by construction). +8 tests. Measured 3011
+# passed, 0 failed (3003 + 8, no other drift, 3x deterministic). FLOOR raised
+# 3003 → 3011 per the order-inversion rule.
+FLOOR="${BRIDGE_TEST_FLOOR:-3011}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the
