@@ -11,6 +11,23 @@
 // All Notion access flows through `LiveRegistryGateway` (central rate limiter +
 // connection resolution) and the read-through `RegistryRowCache`, so reads are
 // warm-cache fast and offline-tolerant.
+//
+// `fields` result-projection scope (PKT: fields Param Across Registry Tools +
+// fetch_skill): the 6 row-shaped tools built on `rowValue(_:stale:)` —
+// registry_list/find/get/create/update/resolve_and_update — accept an opt-in
+// `fields` param (see FieldsFilter.swift) that projects the row payload down
+// to just the requested keys. The remaining 7 tools do NOT, on purpose:
+//   - registry_entities / registry_add_entity — different value shape
+//     (`entityValue`, entity-config not row-data); would need a second filter
+//     helper, not a free extension of the row-shaped one.
+//   - registry_remove_entity / registry_delete / registry_possess — already
+//     2–3 keys; nothing worth trimming.
+//   - registry_introspect — a diagnostic drift report where every key is
+//     usually wanted.
+//   - registry_hydrate — a deliberately comprehensive one-hop envelope;
+//     trimming it risks undercutting why it exists (its description carries
+//     a forward-pointer noting this).
+// Any of these becoming in-scope later is a small, separable follow-on.
 
 import CryptoKit
 import Foundation
@@ -67,6 +84,59 @@ public enum RegistryModule {
     static func fields(_ args: [String: Value]) -> [String: Value] {
         if case .object(let o)? = args["fields"] { return o }
         return [:]
+    }
+
+    // MARK: - `fields` result-projection param (shared FieldsFilter)
+    //
+    // NOTE: `registry_create` / `registry_update` / `registry_resolve_and_update`
+    // ALREADY use the key `"fields"` for their write payload — a map of
+    // canonical field key → value (see `fields(_:)` above). The new opt-in
+    // result-projection param locked by the packet also wants the name
+    // `"fields"` (industry-standard partial-response naming). Rather than
+    // invent a second parameter name, this reuses the SAME key and
+    // discriminates by Value shape: `.array` → result-projection selector
+    // (this helper); `.object` → the pre-existing write-field map (`fields(_:)`
+    // above, untouched). Every existing caller sends an object for writes, so
+    // this is fully backward compatible — a write call never accidentally
+    // hits the projection path, and a projection call never accidentally
+    // becomes an (empty) field write. `registry_get`/`registry_list`/
+    // `registry_find` have no pre-existing `fields` param, so this is a
+    // non-issue there; the same helper is used for uniformity.
+    static func resultFields(_ args: [String: Value], toolName: String) throws -> [String]? {
+        // Pure read tools (registry_get/list/find) have NO pre-existing
+        // `fields` param — every present value is unambiguously the
+        // projection selector, so it always routes through
+        // `parseFieldsArgument` (which hard-errors on any non-array shape).
+        return try FieldsFilter.parseFieldsArgument(args, toolName: toolName)
+    }
+
+    /// Variant for the 3 write tools where `fields` ALREADY means the
+    /// write-field map when it's an `.object` — see the doc comment above.
+    /// `.object` (or absent) → not the projection selector, so `nil` is
+    /// returned and `fields(_:)` reads the write payload untouched. Any
+    /// OTHER present shape — `.array` (the real selector) OR a
+    /// structurally malformed one (bare string/number/bool) — routes
+    /// through `parseFieldsArgument`, which accepts `.array` and
+    /// hard-errors on everything else. This preserves Success Criterion
+    /// #11 (malformed `fields` must ALWAYS hard-error, never silently
+    /// no-op) even though `.object` is a legitimate third shape here.
+    static func resultFieldsOnWriteTool(_ args: [String: Value], toolName: String) throws -> [String]? {
+        if case .object? = args["fields"] { return nil }
+        guard args["fields"] != nil else { return nil }
+        return try FieldsFilter.parseFieldsArgument(args, toolName: toolName)
+    }
+
+    /// Shared description snippet for the `fields` result-projection param,
+    /// reused verbatim across all 6 tools (Round 2 Decision 4 — one
+    /// mechanism, learned once, recognized everywhere).
+    static let fieldsParamDescriptionSuffix = " Optional `fields` (array of strings) narrows the returned row to only the requested top-level keys — e.g. [\"title\",\"properties.status\"] — instead of the full envelope. Bare \"properties\" keeps the whole properties map; a dotted \"properties.X\" sub-selects one property (case-insensitive). Omitted or [] → unchanged full response. Unknown keys/paths are silently absent, never an error. On write tools this NEVER filters the operation-status wrapper (created/updated/matchedId/bodyWrite/idempotentReplay/partialFailure/reason) — only the row payload."
+
+    static func fieldsParamSchema() -> Value {
+        .object([
+            "type": .string("array"),
+            "description": .string("Optional. Array of top-level keys to project the row down to (e.g. [\"title\",\"properties.status\"]). Omitted or [] → full response, byte-identical to today. Bare \"properties\" keeps the whole map; \"properties.X\" sub-selects one property (case-insensitive match). Unknown keys/paths silently absent, never an error."),
+            "items": .object(["type": .string("string")]),
+        ])
     }
 
     static func markdownHash(_ markdown: String) -> String {
@@ -287,12 +357,13 @@ public enum RegistryModule {
     public static func makeList() -> ToolRegistration {
         ToolRegistration(
             name: "registry_list", module: moduleName, tier: .open,
-            description: "List rows of a registry entity (cache-backed, offline-tolerant). Returns projected rows keyed by the entity's canonical field keys.",
+            description: "List rows of a registry entity (cache-backed, offline-tolerant). Returns projected rows keyed by the entity's canonical field keys." + fieldsParamDescriptionSuffix,
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "entity": .object(["type": .string("string"), "description": .string("Entity key.")]),
                     "limit": .object(["type": .string("integer"), "description": .string("Max rows to return (default 50, max 500; paginates internally).")]),
+                    "fields": fieldsParamSchema(),
                 ]),
                 "required": .array([.string("entity")]),
             ]),
@@ -300,6 +371,7 @@ public enum RegistryModule {
                 guard case .object(let a) = args, let key = string(a, "entity") else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_list", reason: "missing ‘entity’")
                 }
+                let requestedFields = try resultFields(a, toolName: "registry_list")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_list")
                 var limit = 50
@@ -309,7 +381,7 @@ public enum RegistryModule {
                 return .object([
                     "entity": .string(key),
                     "count": .int(rows.count),
-                    "rows": .array(rows.map { rowValue($0, stale: $0.isExpired()) }),
+                    "rows": .array(rows.map { FieldsFilter.project(rowValue($0, stale: $0.isExpired()), fields: requestedFields) }),
                 ])
             })
     }
@@ -327,13 +399,14 @@ public enum RegistryModule {
     public static func makeFind() -> ToolRegistration {
         ToolRegistration(
             name: "registry_find", module: moduleName, tier: .open,
-            description: "Find EXISTING registry rows by canonical field value(s) BEFORE creating — the resolve-before-write convergence primitive that avoids duplicate rows. Read-only, cache-backed, offline-tolerant. Pass `where` as a map of canonical field key → value (ALL must match, AND); values are matched rename-safe by the entity's bound property id, not the raw Notion name. Scalars compare case-insensitively; relation/multi-select fields match if any element equals. Returns matching rows (id + title + projected properties); no match → empty (not an error); multiple → ambiguous, all returned.",
+            description: "Find EXISTING registry rows by canonical field value(s) BEFORE creating — the resolve-before-write convergence primitive that avoids duplicate rows. Read-only, cache-backed, offline-tolerant. Pass `where` as a map of canonical field key → value (ALL must match, AND); values are matched rename-safe by the entity's bound property id, not the raw Notion name. Scalars compare case-insensitively; relation/multi-select fields match if any element equals. Returns matching rows (id + title + projected properties); no match → empty (not an error); multiple → ambiguous, all returned." + fieldsParamDescriptionSuffix,
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "entity": .object(["type": .string("string"), "description": .string("Entity key.")]),
                     "where": .object(["type": .string("object"), "description": .string("Map of canonical field key → value to match (e.g. {\"name\":\"Alpha\"} or {\"status\":\"Active\",\"slug\":\"x\"}). ALL predicates must match.")]),
                     "limit": .object(["type": .string("integer"), "description": .string("Max rows scanned/returned (default 100, max 500; paginates internally).")]),
+                    "fields": fieldsParamSchema(),
                 ]),
                 "required": .array([.string("entity"), .string("where")]),
             ]),
@@ -344,6 +417,7 @@ public enum RegistryModule {
                 guard case .object(let predicates)? = a["where"], !predicates.isEmpty else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_find", reason: "missing or empty ‘where’ — supply at least one field=value predicate")
                 }
+                let requestedFields = try resultFields(a, toolName: "registry_find")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_find")
                 var limit = 100
@@ -353,7 +427,7 @@ public enum RegistryModule {
                 return .object([
                     "entity": .string(key),
                     "count": .int(rows.count),
-                    "rows": .array(rows.map { rowValue($0, stale: $0.isExpired()) }),
+                    "rows": .array(rows.map { FieldsFilter.project(rowValue($0, stale: $0.isExpired()), fields: requestedFields) }),
                 ])
             })
     }
@@ -363,13 +437,14 @@ public enum RegistryModule {
     public static func makeGet() -> ToolRegistration {
         ToolRegistration(
             name: "registry_get", module: moduleName, tier: .open,
-            description: "Get one row of a registry entity by page id (cache-first; serves a fresh hit instantly and revalidates a stale one).",
+            description: "Get one row of a registry entity by page id (cache-first; serves a fresh hit instantly and revalidates a stale one)." + fieldsParamDescriptionSuffix,
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "entity": .object(["type": .string("string")]),
                     "id": .object(["type": .string("string"), "description": .string("Notion page id of the row.")]),
                     "forceRefresh": .object(["type": .string("boolean"), "description": .string("Bypass the cache.")]),
+                    "fields": fieldsParamSchema(),
                 ]),
                 "required": .array([.string("entity"), .string("id")]),
             ]),
@@ -377,13 +452,14 @@ public enum RegistryModule {
                 guard case .object(let a) = args, let key = string(a, "entity"), let id = string(a, "id") else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_get", reason: "missing ‘entity’ or ‘id’")
                 }
+                let requestedFields = try resultFields(a, toolName: "registry_get")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_get")
                 var force = false
                 if case .bool(let b)? = a["forceRefresh"] { force = b }
                 let reader = RegistryReader(gateway: gateway())
                 let row = try await reader.get(entity: entity, pageId: id, forceRefresh: force)
-                return rowValue(row, stale: row.isExpired())
+                return FieldsFilter.project(rowValue(row, stale: row.isExpired()), fields: requestedFields)
             })
     }
 
@@ -392,12 +468,12 @@ public enum RegistryModule {
     public static func makeCreate() -> ToolRegistration {
         ToolRegistration(
             name: "registry_create", module: moduleName, tier: .notify,
-            description: "Create a new row in a registry entity from canonical field keys. Optional bodyMarkdown initializes the newly-created Notion page body for body-bearing entities (see registry_entities hasBody=true); the supplied Markdown is copied as source content, not summarized, regenerated, or improved. Supported Markdown is Notion's page-markdown subset: headings, paragraphs, bulleted/numbered lists, code fences, block quotes, links, and inline emphasis. bodyMarkdown is optional, Max 100000 characters, and used only for initial creation via replacePageMarkdown on the new blank page. Use idempotencyKey to make retries return the first created page instead of creating duplicates. If the body write fails after row creation, the result is created=false with partialFailure=true and the page id plus body error; it is never reported as a successful creation.",
+            description: "Create a new row in a registry entity from canonical field keys. Optional bodyMarkdown initializes the newly-created Notion page body for body-bearing entities (see registry_entities hasBody=true); the supplied Markdown is copied as source content, not summarized, regenerated, or improved. Supported Markdown is Notion's page-markdown subset: headings, paragraphs, bulleted/numbered lists, code fences, block quotes, links, and inline emphasis. bodyMarkdown is optional, Max 100000 characters, and used only for initial creation via replacePageMarkdown on the new blank page. Use idempotencyKey to make retries return the first created page instead of creating duplicates. If the body write fails after row creation, the result is created=false with partialFailure=true and the page id plus body error; it is never reported as a successful creation." + fieldsParamDescriptionSuffix + " NOTE: the write-payload `fields` (object) and the result-projection `fields` (array) share one parameter name — pass an OBJECT to write, or an ARRAY to project the response; the shapes never collide.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "entity": .object(["type": .string("string")]),
-                    "fields": .object(["type": .string("object"), "description": .string("Map of canonical field key → value (e.g. {\"name\":\"…\",\"status\":\"Active\"}).")]),
+                    "fields": .object(["type": .string("object"), "description": .string("Map of canonical field key → value to WRITE (e.g. {\"name\":\"…\",\"status\":\"Active\"}). To instead PROJECT the response, pass an array of strings — see the tool description.")]),
                     "bodyMarkdown": .object(["type": .string("string"), "description": .string("Optional initial page body for body-bearing entities only. Copied verbatim as Markdown source through Notion's page-markdown writer; never summarized or rewritten. Max 100000 characters.")]),
                     "idempotencyKey": .object(["type": .string("string"), "description": .string("Optional stable retry key/source id. Reusing the same key returns the first created page and avoids duplicate packets.")]),
                 ]),
@@ -407,6 +483,7 @@ public enum RegistryModule {
                 guard case .object(let a) = args, let key = string(a, "entity") else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_create", reason: "missing ‘entity’")
                 }
+                let requestedFields = try resultFieldsOnWriteTool(a, toolName: "registry_create")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_create")
                 let bodyMarkdown = stringIfPresent(a, "bodyMarkdown")
@@ -440,7 +517,7 @@ public enum RegistryModule {
                                 "created": .bool(false),
                                 "idempotentReplay": .bool(true),
                                 "partialFailure": .bool(false),
-                                "row": rowValue(healed.row, stale: false),
+                                "row": FieldsFilter.project(rowValue(healed.row, stale: false), fields: requestedFields),
                                 "bodyWrite": bodyWriteValue(
                                     requested: true,
                                     succeeded: true,
@@ -455,7 +532,7 @@ public enum RegistryModule {
                                 "idempotentReplay": .bool(true),
                                 "partialFailure": .bool(true),
                                 "reason": .string("body_write_failed"),
-                                "row": rowValue(failed.row, stale: false),
+                                "row": FieldsFilter.project(rowValue(failed.row, stale: false), fields: requestedFields),
                                 "bodyWrite": bodyWriteValue(
                                     requested: true,
                                     succeeded: false,
@@ -469,7 +546,7 @@ public enum RegistryModule {
                         "created": .bool(false),
                         "idempotentReplay": .bool(true),
                         "partialFailure": .bool(!record.bodySucceeded && record.bodyRequested),
-                        "row": rowValue(record.row, stale: false),
+                        "row": FieldsFilter.project(rowValue(record.row, stale: false), fields: requestedFields),
                         "bodyWrite": bodyWriteValue(
                             requested: record.bodyRequested,
                             succeeded: record.bodySucceeded,
@@ -496,7 +573,7 @@ public enum RegistryModule {
                     return .object([
                         "created": .bool(true),
                         "partialFailure": .bool(false),
-                        "row": rowValue(row, stale: false),
+                        "row": FieldsFilter.project(rowValue(row, stale: false), fields: requestedFields),
                         "bodyWrite": bodyWriteValue(requested: false, succeeded: false, characters: 0, markdownHash: nil),
                     ])
                 }
@@ -517,7 +594,7 @@ public enum RegistryModule {
                     return .object([
                         "created": .bool(true),
                         "partialFailure": .bool(false),
-                        "row": rowValue(row, stale: false),
+                        "row": FieldsFilter.project(rowValue(row, stale: false), fields: requestedFields),
                         "bodyWrite": bodyWriteValue(
                             requested: true,
                             succeeded: true,
@@ -542,7 +619,7 @@ public enum RegistryModule {
                         "created": .bool(false),
                         "partialFailure": .bool(true),
                         "reason": .string("body_write_failed"),
-                        "row": rowValue(row, stale: false),
+                        "row": FieldsFilter.project(rowValue(row, stale: false), fields: requestedFields),
                         "bodyWrite": bodyWriteValue(
                             requested: true,
                             succeeded: false,
@@ -559,13 +636,13 @@ public enum RegistryModule {
     public static func makeUpdate() -> ToolRegistration {
         ToolRegistration(
             name: "registry_update", module: moduleName, tier: .notify,
-            description: "Update fields on an existing registry-entity row (by page id), keyed by canonical field key. Only the supplied fields are changed. Optional `appendKeys` names fields whose write value is APPENDED to the row's current value as a dated block rather than overwriting it — reuses the exact same merge logic as registry_resolve_and_update's appendKeys mode. Omit `appendKeys` entirely for the original plain-overwrite behavior.",
+            description: "Update fields on an existing registry-entity row (by page id), keyed by canonical field key. Only the supplied fields are changed. Optional `appendKeys` names fields whose write value is APPENDED to the row's current value as a dated block rather than overwriting it — reuses the exact same merge logic as registry_resolve_and_update's appendKeys mode. Omit `appendKeys` entirely for the original plain-overwrite behavior." + fieldsParamDescriptionSuffix + " NOTE: the write-payload `fields` (object) and the result-projection `fields` (array) share one parameter name — pass an OBJECT to write, or an ARRAY to project the response; the shapes never collide.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "entity": .object(["type": .string("string")]),
                     "id": .object(["type": .string("string")]),
-                    "fields": .object(["type": .string("object")]),
+                    "fields": .object(["type": .string("object"), "description": .string("Map of canonical field key → value to WRITE. To instead PROJECT the response, pass an array of strings — see the tool description.")]),
                     "appendKeys": .object([
                         "type": .string("array"),
                         "description": .string("Optional. Canonical field keys that append (existing value + new content, dated block) instead of overwrite — same semantics as registry_resolve_and_update's appendKeys. Omit for plain overwrite of every field (default, unchanged behavior). Pass [] to explicitly force plain-overwrite via the append-aware read path."),
@@ -578,6 +655,7 @@ public enum RegistryModule {
                 guard case .object(let a) = args, let key = string(a, "entity"), let id = string(a, "id") else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_update", reason: "missing ‘entity’ or ‘id’")
                 }
+                let requestedFields = try resultFieldsOnWriteTool(a, toolName: "registry_update")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_update")
                 let gw = gateway()
@@ -593,7 +671,7 @@ public enum RegistryModule {
                 } else {
                     row = try await writer.update(entity: entity, pageId: id, fields: fields(a))
                 }
-                return .object(["updated": .bool(true), "row": rowValue(row, stale: false)])
+                return .object(["updated": .bool(true), "row": FieldsFilter.project(rowValue(row, stale: false), fields: requestedFields)])
             })
     }
 
@@ -614,18 +692,19 @@ public enum RegistryModule {
     public static func makeResolveAndUpdate() -> ToolRegistration {
         ToolRegistration(
             name: "registry_resolve_and_update", module: moduleName, tier: .notify,
-            description: "Resolve an EXISTING registry row by canonical field predicate(s) (identical matching to registry_find) and update it — in ONE call, replacing the find-then-get-then-update three-round-trip pattern. Pass `where` as a map of canonical field key → value (ALL must match, AND; same rename-safe bound-property-id matching as registry_find). Exactly one match is required: 0 matches is a not-found error (no write); ≥2 matches is an ambiguous error (no write, resolve the predicate further or use registry_find + registry_update directly). `fields` are the canonical field key → value pairs to write. Optional `appendKeys` (default: brief, objective, summary, description) names fields whose write value is APPENDED to the row's current value as a dated block rather than overwriting it — matches the existing voice-memo append-merge behavior exactly; every other field is a plain overwrite. Never creates a row (no upsert — see registry_create for that).",
+            description: "Resolve an EXISTING registry row by canonical field predicate(s) (identical matching to registry_find) and update it — in ONE call, replacing the find-then-get-then-update three-round-trip pattern. Pass `where` as a map of canonical field key → value (ALL must match, AND; same rename-safe bound-property-id matching as registry_find). Exactly one match is required: 0 matches is a not-found error (no write); ≥2 matches is an ambiguous error (no write, resolve the predicate further or use registry_find + registry_update directly). `fields` are the canonical field key → value pairs to write (REQUIRED, non-empty object) — this tool's `fields` is always the write payload, never the result-projection selector (unlike the other 5 fields-enabled tools) because a write payload is mandatory here; use `resultFields` (array of strings) instead to narrow the response — same mechanics as the shared `fields` projector elsewhere:" + fieldsParamDescriptionSuffix + " Optional `appendKeys` (default: brief, objective, summary, description) names fields whose write value is APPENDED to the row's current value as a dated block rather than overwriting it — matches the existing voice-memo append-merge behavior exactly; every other field is a plain overwrite. Never creates a row (no upsert — see registry_create for that).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "entity": .object(["type": .string("string"), "description": .string("Entity key.")]),
                     "where": .object(["type": .string("object"), "description": .string("Map of canonical field key → value to match (e.g. {\"name\":\"Alpha\"}). ALL predicates must match. Exactly one row must match.")]),
-                    "fields": .object(["type": .string("object"), "description": .string("Map of canonical field key → value to write.")]),
+                    "fields": .object(["type": .string("object"), "description": .string("Map of canonical field key → value to write. ALWAYS the write payload on this tool (required, non-empty) — use resultFields to project the response instead.")]),
                     "appendKeys": .object([
                         "type": .string("array"),
                         "description": .string("Canonical field keys that append (existing value + new content, dated block) instead of overwrite. Defaults to [brief, objective, summary, description] — the existing voice-memo append set. Pass [] to disable append-merge entirely (all fields overwrite)."),
                         "items": .object(["type": .string("string")]),
                     ]),
+                    "resultFields": fieldsParamSchema(),
                 ]),
                 "required": .array([.string("entity"), .string("where"), .string("fields")]),
             ]),
@@ -640,6 +719,10 @@ public enum RegistryModule {
                 guard !input.isEmpty else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_resolve_and_update", reason: "missing or empty ‘fields’ — supply at least one field to write")
                 }
+                var resultFieldsArg: [String: Value] = [:]
+                if let rf = a["resultFields"] { resultFieldsArg["fields"] = rf }
+                let requestedFields = try FieldsFilter.parseFieldsArgument(
+                    resultFieldsArg, toolName: "registry_resolve_and_update")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_resolve_and_update")
                 var appendKeys = RegistryAppendMerge.defaultAppendKeys
@@ -652,7 +735,7 @@ public enum RegistryModule {
                 do {
                     let result = try await writer.resolveAndUpdate(
                         entity: entity, reader: reader, predicates: predicates, fields: input, appendKeys: appendKeys)
-                    return .object(["updated": .bool(true), "matchedId": .string(result.matchedId), "row": rowValue(result.row, stale: false)])
+                    return .object(["updated": .bool(true), "matchedId": .string(result.matchedId), "row": FieldsFilter.project(rowValue(result.row, stale: false), fields: requestedFields)])
                 } catch let e as RegistryWriter.RegistryResolveError {
                     switch e {
                     case .noMatch:
@@ -724,7 +807,7 @@ public enum RegistryModule {
     public static func makeHydrate() -> ToolRegistration {
         ToolRegistration(
             name: "registry_hydrate", module: moduleName, tier: .open,
-            description: "Hydrate one entity row into the packet-registry-v1 envelope (PRD FR-1/§8.3): primary properties + page body + curated ONE-HOP relation projections (project/skills/blockedBy/blocking/event) + provenance + unresolved-relation warnings. Read-only, one hop only — a relation's body is NOT loaded (use registry_possess for a deeper body). A missing/inaccessible relation is omitted + warned, never guessed.",
+            description: "Hydrate one entity row into the packet-registry-v1 envelope (PRD FR-1/§8.3): primary properties + page body + curated ONE-HOP relation projections (project/skills/blockedBy/blocking/event) + provenance + unresolved-relation warnings. Read-only, one hop only — a relation's body is NOT loaded (use registry_possess for a deeper body). A missing/inaccessible relation is omitted + warned, never guessed. NOTE: unlike the 6 row-shaped registry tools, this comprehensive one-hop envelope does not yet support a `fields` result-projection param — the full envelope is always returned.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

@@ -109,6 +109,122 @@ func runSkillsModuleTests() async {
     }
 
     // ============================================================
+    // MARK: - PKT: fields Param on fetch_skill (result-projection)
+    // ============================================================
+
+    await test("fetch_skill schema declares an array-typed 'fields' param") {
+        let tools = await router.registrations(forModule: "skills")
+        let tool = tools.first(where: { $0.name == "fetch_skill" })
+        try expect(tool != nil, "fetch_skill not found")
+        guard case .object(let schema) = tool!.inputSchema,
+              case .object(let props)? = schema["properties"],
+              case .object(let fieldsSchema)? = props["fields"] else {
+            throw TestError.assertion("fetch_skill schema missing a 'fields' property")
+        }
+        try expect(fieldsSchema["type"] == .string("array"), "fields must be schema-typed as an array")
+        // 'fields' must NOT be in the required list — it's opt-in.
+        if case .array(let required)? = schema["required"] {
+            let names = required.compactMap { if case .string(let s) = $0 { return s } else { return nil } }
+            try expect(!names.contains("fields"), "fields must be optional, not required")
+        }
+    }
+
+    await test("fetch_skill: malformed 'fields' (wrong type) hard-errors via invalidArguments before any Notion work") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("nonexistent_skill_xyz"), "fields": .string("content")])
+            )
+            throw TestError.assertion("expected invalidArguments for malformed fields")
+        } catch let e as ToolRouterError {
+            if case .invalidArguments(let tool, _) = e {
+                try expect(tool == "fetch_skill", "error should name fetch_skill")
+            } else {
+                throw TestError.assertion("wrong error case: \(e)")
+            }
+        }
+    }
+
+    await test("fetch_skill: fields array containing a non-string element hard-errors") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("nonexistent_skill_xyz"), "fields": .array([.string("content"), .int(1)])])
+            )
+            throw TestError.assertion("expected invalidArguments for non-string fields element")
+        } catch is ToolRouterError {
+            // expected
+        }
+    }
+
+    // The mechanism-level FieldsFilter unit tests (FieldsFilterTests.swift)
+    // cover project() exhaustively. Here we prove fetch_skill's OWN envelope
+    // shape (as produced by the exact production builder,
+    // buildSkillResultForTesting — zero network) round-trips through the
+    // shared filter correctly, including fetch_skill's specific key
+    // vocabulary (name/title/url/content/summary/triggerPhrases/
+    // antiTriggerPhrases/properties) and its properties.X dotted-path
+    // sub-selection.
+
+    await test("fields (fetch_skill envelope): projects down to just 'content'") {
+        let data = try! JSONSerialization.data(withJSONObject: ["markdown": "# Hello\n\nBody text."])
+        let md = String(data: data, encoding: .utf8)!
+        let envelope = await SkillsModule.buildSkillResultForTesting(
+            name: "demo", title: "Demo", url: "https://n/demo",
+            markdownJSONOrText: md, summary: "sum", triggerPhrases: ["t1"], antiTriggerPhrases: ["a1"]
+        ) { _ in nil }
+        let projected = FieldsFilter.project(envelope, fields: ["content"])
+        guard case .object(let dict) = projected else { throw TestError.assertion("expected object") }
+        try expect(dict.count == 1, "expected exactly 1 key, got \(dict.keys.sorted())")
+        guard case .string(let content)? = dict["content"] else { throw TestError.assertion("content missing") }
+        try expect(content.contains("Hello"), "content value preserved")
+    }
+
+    await test("fields (fetch_skill envelope): properties.X sub-selects one property from fetch_skill's own properties map") {
+        let data = try! JSONSerialization.data(withJSONObject: ["markdown": "body"])
+        let md = String(data: data, encoding: .utf8)!
+        let pageProps: [String: Any] = [
+            "Status": ["type": "status", "status": ["name": "Stable", "id": "s1"]],
+            "Domain": ["type": "select", "select": ["name": "infra", "id": "d1"]],
+        ]
+        let envelope = await SkillsModule.buildSkillResultForTesting(
+            name: "demo2", title: "Demo2", url: "https://n/demo2",
+            markdownJSONOrText: md, pageProperties: pageProps
+        ) { _ in nil }
+        let projected = FieldsFilter.project(envelope, fields: ["properties.status"])
+        guard case .object(let dict) = projected,
+              case .object(let props)? = dict["properties"] else {
+            throw TestError.assertion("expected projected properties object")
+        }
+        try expect(props.count == 1, "expected exactly 1 sub-selected property, got \(props.count)")
+        try expect(props["Status"] == .string("Stable"), "got \(props)")
+    }
+
+    await test("fields (fetch_skill envelope): omitted fields → byte-identical envelope") {
+        let data = try! JSONSerialization.data(withJSONObject: ["markdown": "unchanged body"])
+        let md = String(data: data, encoding: .utf8)!
+        let envelope = await SkillsModule.buildSkillResultForTesting(
+            name: "demo3", title: "Demo3", url: "https://n/demo3",
+            markdownJSONOrText: md, summary: "s", triggerPhrases: ["t"], antiTriggerPhrases: ["a"]
+        ) { _ in nil }
+        let untouched = FieldsFilter.project(envelope, fields: nil)
+        try expect(untouched == envelope, "omitted fields must be a byte-identical identity projection")
+        let untouchedEmpty = FieldsFilter.project(envelope, fields: [])
+        try expect(untouchedEmpty == envelope, "fields:[] must also be byte-identical")
+    }
+
+    await test("fields (fetch_skill envelope): unknown key silently absent, never an error") {
+        let data = try! JSONSerialization.data(withJSONObject: ["markdown": "body"])
+        let md = String(data: data, encoding: .utf8)!
+        let envelope = await SkillsModule.buildSkillResultForTesting(
+            name: "demo4", title: "Demo4", url: "https://n/demo4", markdownJSONOrText: md
+        ) { _ in nil }
+        let projected = FieldsFilter.project(envelope, fields: ["ghostKey", "title"])
+        guard case .object(let dict) = projected else { throw TestError.assertion("expected object") }
+        try expect(Set(dict.keys) == ["title"], "only known key survives, got \(dict.keys.sorted())")
+    }
+
+    // ============================================================
     // MARK: - P2-3: Handler-Level Error Handling Tests (PKT-373)
     // ============================================================
     // These tests dispatch through the handler to verify graceful error
