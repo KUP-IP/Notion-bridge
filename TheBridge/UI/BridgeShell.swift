@@ -232,6 +232,98 @@ public enum BridgeAXID {
         public static let processingProviderSave   = id("processing.provider.save")
         public static let processingProviderStatus = id("processing.provider.status")
 
+        // ── 2026-07-03 redesign: Settings tab (Memos/Recall/Settings consolidation) ──
+        // Fresh `settings.*` slugs for MemorySettingsTab — the real implementation of
+        // the old Processing tab + the Agent tab's inline surfacing card, now merged
+        // into one Settings tab per the mockup (page-memory.jsx SettingsTab). Distinct
+        // from the legacy `processing.*`/`agent.inject.*` slugs above (now orphaned)
+        // so the AX contract for the live tab doesn't collide with dead code.
+        public enum Settings {
+            private static func id(_ slug: String) -> String { BridgeAXID.control(.memory, slug) }
+            /// Settings pane root.
+            public static let pane = id("settings.pane")
+            /// Curator routing card + mode picker + connected-agent banner.
+            public static let curatorMode = id("settings.curator.mode")
+            public static let curatorBanner = id("settings.curator.banner")
+            /// Transcription ladder toggles.
+            public static let ladderApple = id("settings.ladder.apple")
+            public static let ladderParakeet = id("settings.ladder.parakeet")
+            public static let ladderOllama = id("settings.ladder.ollama")
+            /// Cloud enhancement card.
+            public static let cloudBaseURL = id("settings.cloud.baseURL")
+            public static let cloudModel = id("settings.cloud.model")
+            public static let cloudEnabled = id("settings.cloud.enabled")
+            public static let cloudKeyInput = id("settings.cloud.keyInput")
+            public static let cloudKeySave = id("settings.cloud.keySave")
+            public static let cloudKeyDelete = id("settings.cloud.keyDelete")
+            public static let cloudKeyStatus = id("settings.cloud.keyStatus")
+            /// Handshake memory inject card.
+            public static let injectGlobal = id("settings.inject.global")
+            public static let injectClientName = id("settings.inject.clientName")
+            public static let injectAdd = id("settings.inject.add")
+            // NOTE: no per-row container id (injectOverrideRow) — a container-level
+            // .accessibilityIdentifier shadows descendant ids in the raw AX tree (Loop 1
+            // finding, memory-swiftui-uiiter-log.md). The row is locatable via its Remove
+            // button's id below, or by its client-name text.
+            public static func injectRemove(_ client: String) -> String { id("settings.inject.remove.\(client)") }
+        }
+
+        // ── 2026-07-03 redesign: Recall tab (single-column MemoryStore browser) ──
+        // Fresh `recall.*` slugs for MemoryRecallTab — replaces the old
+        // `agent.*` ids above (now orphaned) with a naming scheme aligned to the
+        // renamed tab. Same MemoryStore-backed list, just a new AX contract to
+        // match the mockup's `.mem-recall-list` single-column card layout
+        // (page-memory.jsx `function RecallTab()`).
+        public enum Recall {
+            private static func id(_ slug: String) -> String { BridgeAXID.control(.memory, slug) }
+            /// List container.
+            public static let list = id("recall.list")
+            // NOTE: deliberately no per-row id here (mirrors MemorySettingsTab's
+            // overrideRow precedent) — a card-level .accessibilityIdentifier shadows
+            // every descendant control's own id in the raw AX tree (Loop 1 finding,
+            // memory-swiftui-uiiter-log.md). Rows are locatable by their expand/pin/
+            // forget button ids below, or by text content.
+            /// Search-by-content field.
+            public static let searchField = id("recall.search")
+            /// Show full text / Show summary expand toggle on a row.
+            public static let expandToggle = id("recall.expand")
+            /// Pin / unpin on a row.
+            public static let pinButton = id("recall.pin")
+            /// Soft-forget on a row.
+            public static let forgetButton = id("recall.forget")
+            /// Empty state (no matches / no memories).
+            public static let emptyState = id("recall.empty")
+        }
+
+        // ── 2026-07-03 redesign: Memos tab (twin master-detail, page-memory.jsx
+        //    `MemosTab()`) — consolidates the old Process cockpit + Inbox triage
+        //    queue. Fresh `memos.*` slugs for the new list/detail chrome; the
+        //    underlying cockpit engine (intent tags, confirm, registry sheet,
+        //    transcript expand/collapse, title rename/cloud) keeps its existing
+        //    `process.*` ids above — only truly NEW controls get ids here.
+        public enum Memos {
+            private static func id(_ slug: String) -> String { BridgeAXID.control(.memory, slug) }
+            /// Left-column memo list container (the twin master-detail list pane).
+            public static let list = id("memos.list")
+            /// Search-by-title/transcript field.
+            public static let search = id("memos.search")
+            /// Status filter pill bar (All/Review/Active/Filed).
+            public static let filterBar = id("memos.filterBar")
+            // NOTE (Loop 1 P1 fix, memory-swiftui-uiiter-log.md): deliberately no
+            // card-level ids here for the Status card or the Process-this-memo card —
+            // a card-level .accessibilityIdentifier shadows every descendant control's
+            // own id in the raw AX tree (the same hazard already caught and fixed in
+            // MemorySettingsTab Loop 1 and MemoryRecallTab Loop 1). Both cards are
+            // locatable via their own descendant control ids (statusStepper,
+            // technicalDetailsToggle/Body, Process.processLocal/.processCloud/.dryRun/
+            // .refreshPreview) or by text content.
+            /// The plain-language step row itself.
+            public static let statusStepper = id("memos.statusStepper")
+            /// "Technical details" disclosure toggle + body.
+            public static let technicalDetailsToggle = id("memos.technicalDetails.toggle")
+            public static let technicalDetailsBody = id("memos.technicalDetails.body")
+        }
+
         // ── PKT-MEM-106 0b Process cockpit AX contract ──────────────────
         // Stable per-zone/row/command identifiers keyed by memoId/intentId. Uses the
         // codebase `bridge.settings.memory.process.*` convention (the well-formedness
