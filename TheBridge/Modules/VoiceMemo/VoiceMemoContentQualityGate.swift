@@ -24,18 +24,22 @@
 //      text cannot carry the "structured key points, dates, decisions" the
 //      GH #81 write-up asks for — it's definitionally a fragment.
 //   3. Disfluency ratio below `disfluencyRatioCeiling` (40%): the fraction of
-//      words that are filler/disfluency tokens (um, uh, okay, like, at these,
-//      …) must stay under the ceiling. This catches "We, uh, terrible the
-//      sea" (2/5 = 40%) and "At these at these days, okay" (4/6 = 67%)
-//      without penalizing a real sentence that happens to contain one "uh".
+//      words that are verbal-disfluency tokens (um, uh, okay, like, …) must
+//      stay under the ceiling. This catches "We, uh, terrible the sea"
+//      (2/5 = 40%, "uh" is the sole disfluency word) without penalizing a
+//      real sentence that happens to contain one incidental "uh".
 //
 // Calibration: all 3 real GH #81 filler summaries fail on word count alone
-// (5–6 words, well under the 8-word floor) — the disfluency check is a
-// second, independent line of defense for a longer-but-still-hollow summary
-// (e.g. repeated filler padded past 8 words). A genuine short-but-real memo
-// ("Call Sarah about the Q3 budget by Friday" — 8 words, 0% disfluency)
-// passes both checks — the packet's "zero regression on memos that already
-// produce good summaries" constraint.
+// (5–6 words, well under the 8-word floor — including "At these at these
+// days, okay" at 6 words, which needs no disfluency reasoning at all). The
+// disfluency check is a second, independent line of defense for a
+// longer-but-still-hollow summary (e.g. repeated filler padded past 8
+// words), deliberately restricted to genuine verbal disfluencies rather than
+// any word from a specific repro string, so it can't become a false-positive
+// trap on ordinary content words. A genuine short-but-real memo ("Call Sarah
+// about the Q3 budget by Friday" — 8 words, 0% disfluency) passes both
+// checks — the packet's "zero regression on memos that already produce good
+// summaries" constraint.
 
 import Foundation
 
@@ -52,14 +56,18 @@ public enum VoiceMemoContentQualityGate {
     public static let disfluencyRatioCeiling = 0.40
 
     /// Case-insensitive whole-word disfluency/filler vocabulary. Deliberately
-    /// narrow (verbal disfluencies + a couple of repro-observed stall
-    /// fragments) — NOT a generic stopword list, so real content words are
-    /// never penalized.
+    /// narrow (verbal disfluencies only) — NOT a generic stopword list, so
+    /// real content words are never penalized. Reviewed and pruned 2026-07-03:
+    /// an earlier draft also included "at"/"these" to specifically trip the
+    /// GH #81 "At these at these days, okay" repro — but that string is only
+    /// 6 words, already rejected by `minimumWordCount` before this check ever
+    /// runs, so those two entries were inert for their stated purpose and
+    /// pure false-positive risk (ordinary function words that appear in any
+    /// legitimate summary). Removed rather than kept as dead weight.
     public static let disfluencyTokens: Set<String> = [
         "um", "uh", "uhh", "umm", "erm", "er",
         "okay", "ok",
         "like", "y'know", "yknow",
-        "at", "these", // "At these at these days" repro fragment
     ]
 
     public enum Verdict: Equatable, Sendable {
