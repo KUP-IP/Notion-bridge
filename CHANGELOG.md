@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.9.7 — Voice memo data-quality gate + reliability — 2026-07-03
+
+- **Data quality (GitHub #81)** — `voice_memo_commit` could mark a `memory_keep` record processed even when the Notion Memory page body was an empty or filler-only fragment (e.g. "I'm having fun with this idea" standing in for a real transcript summary). New `VoiceMemoContentQualityGate`: an explicit, reviewable rule (≥8 words AND <40% verbal-disfluency ratio) blocks `markedProcessed:true` on a failing summary and routes it to the review queue instead — verified against all 3 real repro memos from the issue.
+- **Discoverability** — the previously-undocumented `fields.summary` override is now a first-class top-level `summary` parameter on `voice_memo_commit`.
+- **Reliability (GitHub #73)** — `voice_memo_process` could stall with no completion payload and no review-queue entry. New per-stage timeouts wrap transcribe/understand/execute in both the batch and commit paths; every call now terminates in `{done, error, review-queue}`, never an indefinite hang.
+- **Voice-router client alias (PKT-MEM-127)** — a memo mentioning "my client, Name" produced zero registry entity hints; the registry entity key was already correctly `contact`, but no trigger phrase recognized the word "client" at all. Fixed and live-verified against the real transcript that surfaced the gap.
+- +19 tests, all driving the real MCP argument-parsing entry points (not hand-built models). No new MCP tools. test-floor 3035 → 3054. Build **75**.
+
 ## v3.9.6 — Cloud-auth boot-order self-heal — 2026-07-02
 
 - **Reliability** — a real restart surfaced a boot-order race: `solutions.kup.bridge-env`, a LaunchAgent whose only job is injecting `BRIDGE_ENABLE_HTTP` + the WorkOS/cloud env vars, could lose the race against Bridge's own relaunch (login item / window Resume), leaving the app with no cloud config for its entire session. Every real connector token (ChatGPT, Claude.ai) was then rejected as structurally invalid — no issuer/JWKS to validate against — surfacing as a confusing "reconnect" error with no path back to the cause.

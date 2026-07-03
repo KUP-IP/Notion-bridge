@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "3.9.6"
+    public static let marketing = "3.9.7"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -195,7 +195,28 @@ public enum AppVersion {
     ///   test-floor 3003 → 3035 (24 + 8, reconciled by hand at merge time since
     ///   both branches independently computed their target off the same pre-merge
     ///   3003 baseline).
-    public static let build = "74"
+    /// v3.9.7: 74 → 75 — marketing bump (real user-facing GitHub-issue fixes +
+    ///   reliability, not build-only DX like build 74). Voice Memo Commit Quality
+    ///   Gate + Reliability (packet 392cbb58889e81198c01f719a4a58675, REVIEW-FIRST,
+    ///   operator-approved): new VoiceMemoContentQualityGate.swift — an explicit,
+    ///   reviewable rule (>=8 words AND <40% disfluency-token ratio, below either
+    ///   ⇒ rejected) wired into executeMemoryKeep before any Notion write, so a
+    ///   filler/fragment summary can never reach markedProcessed:true (closes
+    ///   GitHub #81 — verified against all 3 real repro memos). Promoted the
+    ///   previously-undiscoverable fields.summary passthrough to a first-class
+    ///   top-level `summary` schema parameter on voice_memo_commit. New
+    ///   VoiceMemoStageTimeout.swift wraps transcribe/understand/execute stages in
+    ///   both the batch and commit(args:) paths so voice_memo_process always
+    ///   terminates in {done, error, review-queue}, never an indefinite hang
+    ///   (closes GitHub #73). Voice-router client alias (PKT-MEM-127): entityKey
+    ///   was already correctly "contact" — the real gap was that entityHints never
+    ///   recognized the word "client" at all; added trigger + extraction pattern,
+    ///   live-confirmed against the real "my client, Greg Flachek" transcript.
+    ///   Every new code path tested by driving the real MCP args:-parsing entry
+    ///   points, not hand-built models, per this session's own PKT-MEM-136 lesson.
+    ///   +19 tests. staticFeatureModuleToolCount unchanged (200). test-floor
+    ///   3035 → 3054.
+    public static let build = "75"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
