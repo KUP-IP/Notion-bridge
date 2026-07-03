@@ -1,6 +1,17 @@
 // MemorySection.swift — Settings → Memory pane (PKT-MEM-102 + PKT-MEM-111).
 //
-// Tabs: Process · Inbox · Notion · Agent · Processing (model settings).
+// Tabs: Memos · Recall · Settings (2026-07-03 redesign — consolidated from the old
+// 5-tab Process/Inbox/Notion/Agent/Processing surface; see
+// design/the-bridge-design-system/project/memory-uiiter-log.md for the design phase
+// and memory-swiftui-uiiter-log.md for this implementation's iteration log).
+// The old Notion tab (registry-bound "memory" entity rows) is retired — fully
+// redundant with DataSourcesSection's generic entity card, which already
+// cross-links back here (see DataSourcesSection.memoryPaneCrossLink).
+//
+// This container stays thin, matching every other tab's convention (each tab is a
+// self-contained view owning its own state/MCP calls) — the old inline Inbox
+// implementation that used to live here directly has moved into MemoryMemosTab,
+// which absorbs both the old Process cockpit and the old Inbox triage queue.
 
 import SwiftUI
 import AppKit
@@ -10,7 +21,7 @@ extension Notification.Name {
     static let voiceMemoReviewDidChange = Notification.Name("com.notionbridge.voiceMemoReviewDidChange")
     /// PKT-MEM-134 — posted from `VoiceMemoProcessor.get`/`.commit` when a connected MCP
     /// agent proposes (`memoConsidering`) or executes (`memoCommitted`) a memo intent, so
-    /// an open Process tab can live-render the event without a manual reload. Deliberately
+    /// an open Memos tab can live-render the event without a manual reload. Deliberately
     /// SEPARATE from `.voiceMemoReviewDidChange` (the review-queue mutation channel) —
     /// this channel is agent-processing-lifecycle only. `public` (unlike the sibling
     /// `.voiceMemoReviewDidChange`) so TheBridgeTests — a separate module that only sees
@@ -39,30 +50,25 @@ public struct MemorySection: View {
 
     @ObservedObject private var nav = SettingsNavigation.shared
     @State private var selection: Tab
-    @State private var entries: [VoiceMemoReviewEntry] = []
-    /// Title cache loaded ONCE per reload (mirrors the cockpit's MemoryProcessTab pattern), so
-    /// inboxRow reads in-memory instead of a full memo-titles.json read+decode per row per render.
-    @State private var titleCache: [String: MemoTitle] = [:]
-    @State private var expandedIds: Set<String> = []
-    @State private var actionMessage: String?
-    @State private var resolvingIds: Set<String> = []
-    @State private var inboxFilter: InboxFilter = .all
+    @State private var pendingFilter: InboxFilter = .all
+    @State private var pendingMemoId: String?
 
     public enum Tab: String, Hashable, CaseIterable, Sendable {
-        case process, inbox, notion, agent, processing
+        case memos, recall, settings
 
         var label: String {
             switch self {
-            case .process: return "Process"
-            case .inbox: return "Inbox"
-            case .notion: return "Notion"
-            case .agent: return "Agent"
-            case .processing: return "Processing"
+            case .memos: return "Memos"
+            case .recall: return "Recall"
+            case .settings: return "Settings"
             }
         }
     }
 
-    /// Inbox status filter — matches notification deep-link intent (PKT-MEM-104 follow-up).
+    /// Status/reason filter for the Memos tab's needs-review group — matches
+    /// notification deep-link intent (PKT-MEM-104 follow-up). Type name predates the
+    /// 2026-07-03 tab consolidation (was "Inbox"-specific); kept as-is to avoid
+    /// churning the public anchor-resolution contract for a naming-only change.
     public enum InboxFilter: String, CaseIterable, Sendable {
         case all, awaitingAgent, noTranscript, routingFailed, lowConfidence
 
@@ -79,7 +85,7 @@ public struct MemorySection: View {
 
     public init(anchor: String? = nil) {
         self.anchor = anchor
-        self._selection = State(initialValue: MemorySection.tab(for: anchor) ?? .process)
+        self._selection = State(initialValue: MemorySection.tab(for: anchor) ?? .memos)
     }
 
     public var body: some View {
@@ -100,9 +106,13 @@ public struct MemorySection: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.clear)
         .onAppear {
-            reloadEntries()
+            MemoryReviewBadgeCounter.shared.refresh()
             MemoryHubUIState.setMemorySectionVisible(true)
-            MemoryHubUIState.setProcessTabSelected(selection == .process)
+            // Memos absorbs the old Process tab's live-processing cockpit role — the
+            // notification-suppression contract (background voice-memo processing skips
+            // macOS notifications while the operator is already looking at the live
+            // cockpit) now keys off .memos instead of the old .process case.
+            MemoryHubUIState.setProcessTabSelected(selection == .memos)
             applyNavigation(from: anchor ?? nav.anchor)
             consumeNavigationAnchorIfNeeded()
         }
@@ -111,7 +121,7 @@ public struct MemorySection: View {
             MemoryHubUIState.setProcessTabSelected(false)
         }
         .onChange(of: selection) { _, newSelection in
-            MemoryHubUIState.setProcessTabSelected(newSelection == .process)
+            MemoryHubUIState.setProcessTabSelected(newSelection == .memos)
         }
         .onChange(of: anchor) { _, newAnchor in
             applyNavigation(from: newAnchor)
@@ -126,7 +136,8 @@ public struct MemorySection: View {
     private func applyNavigation(from rawAnchor: String?) {
         let res = MemoryNavigationAnchor.resolve(rawAnchor)
         if let t = res.tab { selection = t }
-        if let f = res.inboxFilter { inboxFilter = f }
+        if let f = res.inboxFilter { pendingFilter = f }
+        pendingMemoId = res.memoId
         if res.memoId != nil {
             Task { await BridgeSettingsAutomation.applyMemoryNavigationSideEffects(anchor: rawAnchor) }
         }
@@ -158,13 +169,13 @@ public struct MemorySection: View {
                         .font(BridgeTokens.Typeface.hero)
                         .foregroundStyle(BridgeTokens.fg1)
                         .accessibilityAddTraits(.isHeader)
-                    Text("Voice capture triage, Notion Memory rows, and agent recall.")
+                    Text("How memos get transcribed, understood, and remembered.")
                         .font(BridgeTokens.Typeface.meta)
                         .foregroundStyle(BridgeTokens.fg3)
                 }
                 Spacer(minLength: 8)
-                if selection == .inbox, !entries.isEmpty {
-                    BridgeBadge("\(entries.count) pending", tone: .warn, showsDot: true)
+                if selection == .memos, MemoryReviewBadgeCounter.shared.pendingCount > 0 {
+                    BridgeBadge("\(MemoryReviewBadgeCounter.shared.pendingCount) pending", tone: .warn, showsDot: true)
                 }
             }
         }
@@ -213,301 +224,11 @@ public struct MemorySection: View {
 
     @ViewBuilder
     private var tabBody: some View {
-        // PKT-MEM-121 — keep Process mounted so preview @State survives sub-tab switches.
-        ZStack {
-            MemoryProcessTab()
-                .opacity(selection == .process ? 1 : 0)
-                .allowsHitTesting(selection == .process)
-                .accessibilityHidden(selection != .process)
-            Group {
-                switch selection {
-                case .process: EmptyView()
-                case .inbox: inboxTab
-                case .notion: MemoryNotionTab()
-                case .agent: MemoryAgentTab()
-                case .processing: MemoryProcessingTab()
-                }
-            }
+        switch selection {
+        case .memos: MemoryMemosTab(initialFilter: pendingFilter, initialMemoId: pendingMemoId)
+        case .recall: MemoryRecallTab()
+        case .settings: MemorySettingsTab()
         }
-    }
-
-    // MARK: - Inbox
-
-    private var filteredEntries: [VoiceMemoReviewEntry] {
-        entries.filter { entry in
-            switch inboxFilter {
-            case .all: return true
-            case .awaitingAgent: return entry.effectiveReviewTag == .awaitingAgent
-            case .noTranscript: return entry.effectiveReviewTag == .noTranscript
-            case .routingFailed: return entry.effectiveReviewTag == .routingFailed
-            case .lowConfidence: return entry.effectiveReviewTag == .lowConfidence
-            }
-        }
-    }
-
-    private var inboxTab: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: BridgeTokens.Space.cardGap) {
-                inboxFilterBar
-                if let actionMessage {
-                    Text(actionMessage)
-                        .font(BridgeTokens.Typeface.sub)
-                        .foregroundStyle(BridgeTokens.fg3)
-                }
-                if filteredEntries.isEmpty {
-                    emptyInbox
-                } else {
-                    ForEach(filteredEntries) { entry in
-                        inboxRow(entry)
-                    }
-                }
-            }
-            .padding(.horizontal, BridgeTokens.Space.paneH)
-            .padding(.vertical, BridgeTokens.Space.cardGap)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .accessibilityIdentifier(BridgeAXID.Memory.inboxList)
-    }
-
-    private var inboxFilterBar: some View {
-        HStack(spacing: 6) {
-            ForEach(InboxFilter.allCases, id: \.self) { filter in
-                let on = inboxFilter == filter
-                Button {
-                    withAnimation(.easeInOut(duration: 0.14)) { inboxFilter = filter }
-                } label: {
-                    Text(filter.label)
-                        .font(.system(size: 11.5, weight: on ? .semibold : .regular))
-                        .foregroundStyle(on ? BridgeTokens.fg1 : BridgeTokens.fg3)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background {
-                            if on {
-                                Capsule().fill(BridgeTokens.accent.opacity(0.16))
-                            }
-                        }
-                }
-                .buttonStyle(.plain)
-                .accessibilityIdentifier(BridgeAXID.Memory.inboxFilterBar + ".\(filter.rawValue)")
-            }
-        }
-        .accessibilityIdentifier(BridgeAXID.Memory.inboxFilterBar)
-    }
-
-    private var emptyInbox: some View {
-        BridgeGlassCard {
-            VStack(alignment: .leading, spacing: 8) {
-                BridgeCardLabel("Inbox empty")
-                Text("Voice memos that need triage appear here — routing failures, low confidence, or missing transcripts.")
-                    .font(BridgeTokens.Typeface.sub)
-                    .foregroundStyle(BridgeTokens.fg4)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    private func inboxRow(_ entry: VoiceMemoReviewEntry) -> some View {
-        let expanded = expandedIds.contains(entry.id)
-        return BridgeGlassCard {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    // PKT-MEM-114 P2 — read-only consumer of the title cache: prefer the
-                    // intent-led title when one exists, else the stored memoTitle. Never generates.
-                    // Reads the once-loaded titleCache (not the store) to avoid a per-row disk read.
-                    Text(titleCache[entry.memoId]?.title ?? entry.memoTitle)
-                        .font(BridgeTokens.Typeface.name)
-                        .foregroundStyle(BridgeTokens.fg1)
-                        .lineLimit(2)
-                    Spacer(minLength: 8)
-                    BridgeBadge(transcriptSourceLabel(for: entry), tone: transcriptSourceTone(for: entry))
-                    BridgeBadge(statusLabel(for: entry), tone: statusTone(for: entry), showsDot: true)
-                }
-                HStack(spacing: 12) {
-                    if let date = formattedQueuedDate(entry.queuedAt) {
-                        Text(date)
-                            .font(BridgeTokens.Typeface.meta)
-                            .foregroundStyle(BridgeTokens.fg4)
-                    }
-                    Text("\(entry.intentKind) · \(Int(entry.confidence * 100))%")
-                        .font(BridgeTokens.Typeface.meta)
-                        .foregroundStyle(BridgeTokens.fg4)
-                }
-                Text(entry.reason)
-                    .font(BridgeTokens.Typeface.sub)
-                    .foregroundStyle(BridgeTokens.fg3)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if expanded, !entry.transcriptExcerpt.isEmpty {
-                    Text(entry.transcriptExcerpt)
-                        .font(BridgeTokens.Typeface.mono)
-                        .foregroundStyle(BridgeTokens.fg2)
-                        .textSelection(.enabled)
-                        .padding(10)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(BridgeTokens.wellFill, in: RoundedRectangle(cornerRadius: 8))
-                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(BridgeTokens.hairlineFaint, lineWidth: 0.5))
-                }
-
-                HStack(spacing: 8) {
-                    if !entry.transcriptExcerpt.isEmpty {
-                        BridgeButton(expanded ? "Hide transcript" : "Show transcript", variant: .link) {
-                            toggleExpanded(entry.id)
-                        }
-                    }
-                    if let path = entry.memoPath, !path.isEmpty {
-                        BridgeButton("Reveal in Finder", systemImage: "folder") {
-                            revealInFinder(path: path)
-                        }
-                        .accessibilityIdentifier(BridgeAXID.Memory.revealInFinder)
-                    }
-                    Spacer(minLength: 0)
-                    BridgeButton("Add reminder", variant: .link) {
-                        resolveEntry(entry, action: .reminder)
-                    }
-                    .accessibilityIdentifier(BridgeAXID.Memory.addReminder)
-                    BridgeButton("Agent should know", variant: .link) {
-                        resolveEntry(entry, action: .agentRemember)
-                    }
-                    .accessibilityIdentifier(BridgeAXID.Memory.agentRemember)
-                    BridgeButton("Retry routing", variant: .link) {
-                        resolveEntry(entry, action: .retryRouting)
-                    }
-                    .accessibilityIdentifier(BridgeAXID.Memory.retryRouting)
-                    BridgeButton("Mark handled", variant: .link) {
-                        resolveEntry(entry, action: .markHandled)
-                    }
-                    .accessibilityIdentifier(BridgeAXID.Memory.markHandled)
-                    BridgeButton("File as Memory", variant: .link) {
-                        resolveEntry(entry, action: .memoryKeep)
-                    }
-                    .accessibilityIdentifier(BridgeAXID.Memory.fileAsMemory)
-                    BridgeButton("Dismiss", variant: .default) {
-                        dismissEntry(entry)
-                    }
-                    .accessibilityIdentifier(BridgeAXID.Memory.dismiss)
-                }
-            }
-        }
-        .accessibilityIdentifier(BridgeAXID.Memory.inboxRow)
-    }
-
-    // MARK: - Actions
-
-    private func reloadEntries() {
-        entries = VoiceMemoReviewStore.pendingEntries()
-        titleCache = MemoryHubMemoTitleStore.load()   // one disk read per reload, not per row per render
-        MemoryReviewBadgeCounter.shared.refresh()
-    }
-
-    private func dismissEntry(_ entry: VoiceMemoReviewEntry) {
-        do {
-            guard try VoiceMemoReviewStore.dismiss(id: entry.id) else {
-                actionMessage = "Entry not found."
-                return
-            }
-            actionMessage = nil
-            reloadEntries()
-            NotificationCenter.default.post(name: .voiceMemoReviewDidChange, object: nil)
-        } catch {
-            actionMessage = "Dismiss failed: \(error.localizedDescription)"
-        }
-    }
-
-    private func resolveEntry(_ entry: VoiceMemoReviewEntry, action: VoiceMemoReviewAction) {
-        guard !resolvingIds.contains(entry.id) else { return }
-        resolvingIds.insert(entry.id)
-        Task {
-            defer {
-                Task { @MainActor in resolvingIds.remove(entry.id) }
-            }
-            guard let router = await JobsManager.shared.router_() else {
-                await MainActor.run { actionMessage = "MCP server not ready — try again shortly." }
-                return
-            }
-            do {
-                let result = try await VoiceMemoReviewResolver.resolve(
-                    reviewId: entry.id,
-                    action: action,
-                    router: router
-                )
-                await MainActor.run {
-                    if let warning = result.warning {
-                        actionMessage = warning
-                    } else {
-                        actionMessage = result.detail
-                    }
-                    reloadEntries()
-                    NotificationCenter.default.post(name: .voiceMemoReviewDidChange, object: nil)
-                }
-            } catch {
-                await MainActor.run {
-                    actionMessage = "Resolve failed: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    private func toggleExpanded(_ id: String) {
-        if expandedIds.contains(id) {
-            expandedIds.remove(id)
-        } else {
-            expandedIds.insert(id)
-        }
-    }
-
-    private func revealInFinder(path: String) {
-        let url = URL(fileURLWithPath: path)
-        let dir = url.deletingLastPathComponent().path
-        NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: dir)
-    }
-
-    // MARK: - Labels
-
-    private func transcriptSourceLabel(for entry: VoiceMemoReviewEntry) -> String {
-        guard let path = entry.memoPath else { return "Missing" }
-        let audio = URL(fileURLWithPath: path)
-        switch VoiceMemoDiscovery.detectTranscriptSource(for: audio) {
-        case .apple: return "Apple"
-        case .parakeet: return "Parakeet"
-        case .sidecar: return "Sidecar"
-        case .none:
-            return entry.transcriptExcerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Missing" : "Sidecar"
-        }
-    }
-
-    private func transcriptSourceTone(for entry: VoiceMemoReviewEntry) -> BridgeBadge.Tone {
-        transcriptSourceLabel(for: entry) == "Missing" ? .warn : .info
-    }
-
-    private func statusLabel(for entry: VoiceMemoReviewEntry) -> String {
-        let reason = entry.reason.lowercased()
-        if reason.contains("no transcript") || reason.contains("missing transcript") {
-            return "No transcript"
-        }
-        if reason.contains("routing") || reason.contains("classify") {
-            return "Routing failed"
-        }
-        if entry.confidence < 0.65 {
-            return "Low confidence"
-        }
-        return "Transcribed"
-    }
-
-    private func statusTone(for entry: VoiceMemoReviewEntry) -> BridgeBadge.Tone {
-        switch statusLabel(for: entry) {
-        case "No transcript": return .bad
-        case "Routing failed": return .warn
-        case "Low confidence": return .warn
-        default: return .ok
-        }
-    }
-
-    private func formattedQueuedDate(_ iso: String) -> String? {
-        guard let date = ISO8601DateFormatter().date(from: iso) else { return nil }
-        let fmt = DateFormatter()
-        fmt.dateStyle = .medium
-        fmt.timeStyle = .short
-        return fmt.string(from: date)
     }
 
     // MARK: - Deep-link anchor → tab

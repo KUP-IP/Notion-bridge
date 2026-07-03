@@ -18,7 +18,20 @@ public struct MemoryNavigationResolution: Sendable, Equatable {
 
 public enum MemoryNavigationAnchor {
 
-    /// Resolve a compound anchor string (`process/<memoId>`, `inbox/awaitingAgent`, …).
+    /// Resolve a compound anchor string (`memos/<memoId>`, `memos/awaitingAgent`, …).
+    ///
+    /// 2026-07-03 redesign — the old 5-tab surface (Process/Inbox/Notion/Agent/Processing)
+    /// consolidated into 3 (Memos/Recall/Settings). Old anchor heads stay recognized as
+    /// **aliases** so already-shipped MCP tool calls / notification payloads / bookmarked
+    /// deep-links keep resolving instead of silently landing nowhere:
+    ///   process/inbox/curator/pipeline/activity/review/voicememos/voicememo/voice → .memos
+    ///   agent/sqlite/remember  → .recall (agent long-term memory, unchanged store)
+    ///   notion/registry        → .recall (MemoryNotionTab is retired — its content was fully
+    ///                             redundant with the generic Data Sources "memory" entity card,
+    ///                             which already cross-links back here; .recall is the closest
+    ///                             surviving "browse memory-related records" destination so old
+    ///                             links land somewhere sensible rather than erroring)
+    ///   processing/models/routing → .settings
     public static func resolve(_ anchor: String?) -> MemoryNavigationResolution {
         guard let raw = anchor?
             .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -33,27 +46,24 @@ public enum MemoryNavigationAnchor {
         let tail = parts.count > 1 ? parts.dropFirst().joined(separator: "/") : nil
 
         switch head {
-        case "process", "curator", "pipeline", "activity":
-            var res = MemoryNavigationResolution(tab: .process)
-            if let tail, !tail.isEmpty { res.memoId = tail }
-            return res
-        case "inbox", "review", "voicememos", "voicememo", "voice":
-            var res = MemoryNavigationResolution(tab: .inbox)
+        case "memos", "process", "curator", "pipeline", "activity",
+             "inbox", "review", "voicememos", "voicememo", "voice":
+            var res = MemoryNavigationResolution(tab: .memos)
             if let tail, !tail.isEmpty {
                 let filterNorm = tail.lowercased().replacingOccurrences(of: "-", with: "")
                 if let f = MemorySection.InboxFilter.allCases.first(where: {
                     $0.rawValue.lowercased() == filterNorm
                 }) {
                     res.inboxFilter = f
+                } else {
+                    res.memoId = tail
                 }
             }
             return res
-        case "notion", "registry":
-            return MemoryNavigationResolution(tab: .notion)
-        case "agent", "sqlite", "remember":
-            return MemoryNavigationResolution(tab: .agent)
-        case "processing", "models", "routing":
-            return MemoryNavigationResolution(tab: .processing)
+        case "recall", "agent", "sqlite", "remember", "notion", "registry":
+            return MemoryNavigationResolution(tab: .recall)
+        case "settings", "processing", "models", "routing":
+            return MemoryNavigationResolution(tab: .settings)
         default:
             if let tab = MemorySection.tab(for: anchor) {
                 return MemoryNavigationResolution(tab: tab)

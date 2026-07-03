@@ -20,26 +20,42 @@ func runMemorySettingsTests() async {
         try expect(SettingsSection.memory.icon == "brain.head.profile", "icon drift")
     }
 
-    await test("MemorySection.tab resolves inbox|notion|agent anchors") {
+    await test("MemorySection.tab resolves new + legacy anchors (2026-07-03 3-tab redesign)") {
+        // New vocabulary
+        let memos = await MainActor.run { MemorySection.tab(for: "memos") }
+        try expect(memos == .memos, "memos anchor")
+        let recall = await MainActor.run { MemorySection.tab(for: "recall") }
+        try expect(recall == .recall, "recall anchor")
+        let settings = await MainActor.run { MemorySection.tab(for: "settings") }
+        try expect(settings == .settings, "settings anchor")
+        // Legacy 5-tab aliases — must keep resolving so already-shipped MCP calls/
+        // notifications/bookmarked deep-links don't silently land nowhere.
         let inbox = await MainActor.run { MemorySection.tab(for: "inbox") }
-        try expect(inbox == .inbox, "inbox anchor")
+        try expect(inbox == .memos, "inbox legacy anchor → memos")
+        let process = await MainActor.run { MemorySection.tab(for: "process") }
+        try expect(process == .memos, "process legacy anchor → memos")
         let notion = await MainActor.run { MemorySection.tab(for: "notion") }
-        try expect(notion == .notion, "notion anchor")
+        try expect(notion == .recall, "notion legacy anchor → recall (Notion tab retired)")
         let agent = await MainActor.run { MemorySection.tab(for: "agent") }
-        try expect(agent == .agent, "agent anchor")
+        try expect(agent == .recall, "agent legacy anchor → recall")
+        let processing = await MainActor.run { MemorySection.tab(for: "processing") }
+        try expect(processing == .settings, "processing legacy anchor → settings")
         let legacy = await MainActor.run { MemorySection.tab(for: "voice-memos") }
-        try expect(legacy == .inbox, "voice-memos legacy anchor")
+        try expect(legacy == .memos, "voice-memos legacy anchor → memos")
     }
 
-    await test("MemoryNavigationAnchor compound process/memoId and inbox filter") {
+    await test("MemoryNavigationAnchor compound memoId and filter, new + legacy heads") {
         let proc = MemoryNavigationAnchor.resolve("process/memo-xyz")
-        try expect(proc.tab == .process, "process tab")
+        try expect(proc.tab == .memos, "process legacy → memos tab")
         try expect(proc.memoId == "memo-xyz", "memo id")
+        let memos = MemoryNavigationAnchor.resolve("memos/memo-xyz")
+        try expect(memos.tab == .memos, "memos tab")
+        try expect(memos.memoId == "memo-xyz", "memo id via new head")
         let filt = MemoryNavigationAnchor.resolve("inbox/awaitingAgent")
-        try expect(filt.tab == .inbox, "inbox")
+        try expect(filt.tab == .memos, "inbox legacy → memos")
         try expect(filt.inboxFilter == .awaitingAgent, "filter")
         let activity = MemoryNavigationAnchor.resolve("activity")
-        try expect(activity.tab == .process, "activity → process")
+        try expect(activity.tab == .memos, "activity → memos")
     }
 
     await test("BridgeSettingsAutomation.memoryResolvedValue encodes tab and memoId") {
@@ -49,7 +65,7 @@ func runMemorySettingsTests() async {
         guard case .object(let obj) = val else {
             throw TestError.assertion("expected object resolved payload")
         }
-        try expect(obj["tab"] == .string("process"), "tab field")
+        try expect(obj["tab"] == .string("memos"), "tab field (process legacy anchor resolves to memos)")
         try expect(obj["memoId"] == .string("m1"), "memoId field")
     }
 
