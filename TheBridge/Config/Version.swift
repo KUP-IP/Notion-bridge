@@ -167,7 +167,35 @@ public enum AppVersion {
     ///   for this process's own pid to actually exit, relaunch once (loop-guarded),
     ///   done. No-op for the default cloud-off path. +9 tests. staticFeatureModuleToolCount
     ///   unchanged (200). test-floor 2994 → 3003.
-    public static let build = "73"
+    /// v3.9.6: 73 → 74 — build-only, two bundled backlog packets (internal DX +
+    ///   a routing bug fix, no new user-facing marketing capability, matching the
+    ///   `fields`-param packet's precedent). (1) Notion/Registry Tool Ergonomics
+    ///   Pass (packet 392cbb58889e811abe7ef9714df1dc92): notion_blocks_append gains
+    ///   a pageId+markdown shorthand alongside blockId+children; registry_update
+    ///   gains an optional appendKeys merge mode reusing registry_resolve_and_update's
+    ///   existing append logic; notion_comment_create accepts `content` as an alias
+    ///   for `text`; notion_query accepts `parentId` as an alias for `dataSourceId`;
+    ///   notion_page_create verifies children materialization post-create and
+    ///   auto-repairs via notion_blocks_append if the API accepted the page but
+    ///   produced zero blocks; the stale "project-keepr" binding in
+    ///   MemoryRoutingScopeMap.swift removed (project-keepr was retired/renamed to
+    ///   focus-keepr, not a distinct live specialist). +24 tests. (2) fetch_skill
+    ///   Archive-vs-Canonical Matcher Confidence Fix (packet
+    ///   392cbb58889e81189569ff4481764375): fetch_skill's SkillIntentScorer could
+    ///   let an archived reference-material child page (e.g. "sk close agent ·
+    ///   Archive") outrank its live canonical parent on raw keyword score alone —
+    ///   live-reproduced this session. New SpecialistFilter.isArchived(title:)
+    ///   general word-boundary detector + a relative post-scoring deprioritization
+    ///   pass (never a hard exclude — an archived page with no non-archived sibling
+    ///   still resolves normally; an archived page never wins the confident slot
+    ///   over a live peer). Disambiguation behavior for genuinely-live multi-specialist
+    ///   candidates (e.g. focus-keepr's own children) explicitly regression-tested
+    ///   unaffected. +8 tests. staticFeatureModuleToolCount unchanged (200) — both
+    ///   packets extend existing tools' parameters, add no new tool names.
+    ///   test-floor 3003 → 3035 (24 + 8, reconciled by hand at merge time since
+    ///   both branches independently computed their target off the same pre-merge
+    ///   3003 baseline).
+    public static let build = "74"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

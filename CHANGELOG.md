@@ -6,6 +6,12 @@
 - **Fix** — new `CloudEnvSelfHeal`: on launch, if cloud access is enabled but the env didn't make it through, kick the LaunchAgent, wait for this process's own pid to actually exit (not a fixed delay), relaunch once (loop-guarded against a broken LaunchAgent), done. No-op for the default cloud-off install. A small confirmation banner in Remote Access settings surfaces when a repair fired.
 - +9 tests. test-floor unchanged in behavior, floor raised 2994 → 3003. Build **73**.
 
+### Build 74 — backlog triage wave 1 (build-only, 2026-07-03)
+
+- **Notion/Registry tool ergonomics** — `notion_blocks_append` gains a `pageId`+markdown shorthand; `registry_update` gains an optional `appendKeys` merge mode (reuses `registry_resolve_and_update`'s existing append logic); `notion_comment_create` accepts `content` as an alias for `text`; `notion_query` accepts `parentId` as an alias for `dataSourceId`; `notion_page_create` verifies children materialization post-create and auto-repairs via `notion_blocks_append` if the API accepted the page but produced zero blocks; the stale `project-keepr` routing binding removed. All additive/backward-compatible. +24 tests.
+- **fetch_skill matcher fix** — an archived reference-material child page (e.g. "sk close agent · Archive") could outrank its own live canonical parent on raw keyword score alone — live-reproduced this session. Fixed with a general word-boundary archive detector + relative post-scoring deprioritization (never a hard exclude; disambiguation between genuinely-live specialists is unaffected, explicitly regression-tested). +8 tests.
+- No new MCP tools (`staticFeatureModuleToolCount` unchanged, 200). test-floor 3003 → 3035. Build **74**.
+
 ## v3.9.5 — Notion page icon write support — 2026-07-02
 
 - **Notion tools** — `notion_page_create` and `notion_page_update` both accept an optional single-emoji `icon` parameter. `NotionClient.createPage`/`updatePage` merge Notion's `{"type":"emoji","emoji":"…"}` icon shape into the request body when supplied; omitted is byte-identical to prior behavior. Pass-through only — no new Bridge-side emoji validation, matching the existing `extractIconEmoji` read-side precedent.
