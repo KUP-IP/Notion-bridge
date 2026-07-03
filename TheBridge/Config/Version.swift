@@ -216,7 +216,22 @@ public enum AppVersion {
     ///   points, not hand-built models, per this session's own PKT-MEM-136 lesson.
     ///   +19 tests. staticFeatureModuleToolCount unchanged (200). test-floor
     ///   3035 → 3054.
-    public static let build = "75"
+    /// v3.9.7: 75 → 76 — build-only hotfix. Live verification against the real
+    ///   running build-75 server (not just the harness) caught the just-shipped
+    ///   client-alias pattern producing a real false positive: build 75's pattern
+    ///   was built from a secondhand PARAPHRASE of the GH #73 transcript ("my
+    ///   client, Greg Flachek") rather than the verbatim text — the real memo
+    ///   says "Greg, Flachek, my client, and..." (name FIRST), so the
+    ///   forward-only pattern matched "client, and..." and captured "And" as the
+    ///   name. Rewrote with two narrower forms requiring a real `\bclient\b` word
+    ///   boundary (so "clients" plural never substring-matches) and a TRUE
+    ///   capitalized first letter on the captured name (overriding the pattern's
+    ///   own case-insensitive compile option), so a lowercase filler word can
+    ///   never be captured as a name — a second false positive ("of" from "some
+    ///   of my clients") was caught by a dedicated regression test written during
+    ///   this very fix and corrected before shipping, not after. +1 test.
+    ///   staticFeatureModuleToolCount unchanged (200). test-floor 3054 → 3055.
+    public static let build = "76"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

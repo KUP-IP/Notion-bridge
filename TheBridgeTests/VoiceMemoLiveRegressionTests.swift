@@ -14,23 +14,38 @@ func runVoiceMemoLiveRegressionTests() async {
         try expect(plan.intents.contains { $0.entityHint?.lowercased().contains("jacob") == true }, "Jacob hint")
     }
 
-    await test("PKT-MEM-127: 'my client, Name' extracts a contact-lane hint") {
-        // Real transcript excerpt from GH #73's memo (live-confirmed this
-        // session): "...my client, Greg Flachek...". Prior to this fix, the
-        // word "client" wasn't a recognized trigger at all — zero entity
-        // hints were produced. entityKey was already correctly "contact"
-        // (the registry entity name) — the gap was purely trigger/pattern
-        // recognition for "client" phrasing, not an entityKey mismatch.
-        let transcript = "Had a great call today, my client, Greg Flachek, wants to move forward with the proposal."
+    await test("PKT-MEM-127: real GH #73 transcript ('Name, my client') extracts the actual name, not a false-positive word") {
+        // VERBATIM excerpt from the real GH #73 memo (fetched live this
+        // session via voice_memo_get — not a paraphrase): "So, I just
+        // scheduled a meeting with Greg, Flachek, my client, and... I need to
+        // get prepared for it." Name-FIRST, "client" as an appositive AFTER
+        // the name, with a dictation-pause comma between first/last name.
+        //
+        // An earlier version of this fix used a forward-only "client <Name>"
+        // pattern built from a SECONDHAND PARAPHRASE of this transcript
+        // ("my client, Greg Flachek") rather than the real text — live
+        // verification against the actual server caught it matching
+        // "client, and..." and extracting "And" as the "name", a real
+        // false-positive shipped to production and caught only by testing
+        // against the real transcript instead of trusting a paraphrase.
+        let transcript = "So, I just scheduled a meeting with Greg, Flachek, my client, and... I need to get prepared for it."
         let plan = VoiceMemoParser.parse(transcript: transcript, fallbackTitle: "Memo")
         try expect(plan.intents.contains { $0.kind == .registryUpdate && $0.entityKey == "contact" }, "contact lane fires for client phrasing")
-        try expect(plan.intents.contains { $0.entityHint?.lowercased().contains("greg") == true }, "Greg Flachek hint extracted")
+        try expect(plan.intents.contains { $0.entityHint?.lowercased().contains("greg") == true && $0.entityHint?.lowercased().contains("flachek") == true },
+                    "Greg Flachek hint extracted (comma pause artifact collapsed to a clean name)")
+        try expect(!plan.intents.contains { $0.entityHint?.lowercased() == "and" }, "must never regress to capturing the word 'and' as a name")
     }
 
-    await test("PKT-MEM-127: 'a client named Name' also extracts a contact-lane hint") {
+    await test("PKT-MEM-127: 'a client named Name' extracts a contact-lane hint (forward form)") {
         let transcript = "I met with a client named Sarah Chen about the Q3 renewal."
         let plan = VoiceMemoParser.parse(transcript: transcript, fallbackTitle: "Memo")
         try expect(plan.intents.contains { $0.entityKey == "contact" && ($0.entityHint?.lowercased().contains("sarah") == true) }, "Sarah Chen hint extracted")
+    }
+
+    await test("PKT-MEM-127: generic plural 'clients' mention does not misfire a false contact hint") {
+        let transcript = "Some of my clients won't have notion, and that's fine for now."
+        let plan = VoiceMemoParser.parse(transcript: transcript, fallbackTitle: "Memo")
+        try expect(!plan.intents.contains { $0.entityKey == "contact" }, "plural 'clients' with no named person must not fire the contact lane")
     }
 
     await test("entityHints: bare update session does not fire contact lane") {

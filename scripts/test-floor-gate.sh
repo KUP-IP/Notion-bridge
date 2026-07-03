@@ -1961,7 +1961,24 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3035}"
 # at merge time (both branches independently computed their target off the
 # same pre-merge 3003 baseline, the exact monotonic-counter collision class
 # already documented in AGENT_FEEDBACK.md's 2026-07-02 entry).
-FLOOR="${BRIDGE_TEST_FLOOR:-3054}"
+#
+# PKT-MEM-127 hotfix (2026-07-03, shipped as v3.9.7 build 76): live
+# verification against the real running v3.9.7 build 75 server caught the
+# just-shipped client-alias pattern producing a real false positive —
+# "Greg, Flachek, my client, and..." (the real GH #73 transcript, fetched
+# live, not the earlier secondhand paraphrase "my client, Greg Flachek" the
+# original pattern was built from) matched "client, and..." and captured
+# "and" → "And" as the "name". Rewrote as two narrower forms requiring a
+# real \bclient\b word boundary (so "clients" plural never substring-matches
+# "client") and a TRUE capitalized first letter on the captured name
+# (`(?-i:[A-Z])`, overriding the pattern's own .caseInsensitive compile
+# option) so a lowercase filler word can never be captured as a name. A
+# second false positive surfaced by a dedicated regression test during this
+# very fix ("some of my clients" → captured "of") was caught and fixed
+# before shipping, not after. +1 test (3 total for PKT-MEM-127: real
+# transcript, forward "named" form, plural-noise guard). Measured 3055
+# passed, 0 failed. FLOOR raised 3054 → 3055.
+FLOOR="${BRIDGE_TEST_FLOOR:-3055}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

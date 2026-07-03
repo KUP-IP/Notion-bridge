@@ -5,8 +5,12 @@
 - **Data quality (GitHub #81)** — `voice_memo_commit` could mark a `memory_keep` record processed even when the Notion Memory page body was an empty or filler-only fragment (e.g. "I'm having fun with this idea" standing in for a real transcript summary). New `VoiceMemoContentQualityGate`: an explicit, reviewable rule (≥8 words AND <40% verbal-disfluency ratio) blocks `markedProcessed:true` on a failing summary and routes it to the review queue instead — verified against all 3 real repro memos from the issue.
 - **Discoverability** — the previously-undocumented `fields.summary` override is now a first-class top-level `summary` parameter on `voice_memo_commit`.
 - **Reliability (GitHub #73)** — `voice_memo_process` could stall with no completion payload and no review-queue entry. New per-stage timeouts wrap transcribe/understand/execute in both the batch and commit paths; every call now terminates in `{done, error, review-queue}`, never an indefinite hang.
-- **Voice-router client alias (PKT-MEM-127)** — a memo mentioning "my client, Name" produced zero registry entity hints; the registry entity key was already correctly `contact`, but no trigger phrase recognized the word "client" at all. Fixed and live-verified against the real transcript that surfaced the gap.
+- **Voice-router client alias (PKT-MEM-127)** — a memo mentioning a client's name produced zero registry entity hints; the registry entity key was already correctly `contact`, but no trigger phrase recognized the word "client" at all.
 - +19 tests, all driving the real MCP argument-parsing entry points (not hand-built models). No new MCP tools. test-floor 3035 → 3054. Build **75**.
+
+### Build 76 — client-alias hotfix (build-only, 2026-07-03)
+
+- Live verification against the real running build-75 server — not just the test harness — caught a real false positive in the client-alias pattern above: it was built from a secondhand paraphrase of the GH #73 transcript rather than the verbatim text, so it matched the wrong span and captured "And" as a contact's name. Rewrote with a real word-boundary check (so plural "clients" never substring-matches) and a true capitalization requirement (so a lowercase filler word can never be captured as a name) — a second false positive this stricter version surfaced during its own testing was caught and fixed before shipping. +1 test. test-floor 3054 → 3055. Build **76**.
 
 ## v3.9.6 — Cloud-auth boot-order self-heal — 2026-07-02
 

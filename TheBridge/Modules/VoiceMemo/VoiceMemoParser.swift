@@ -218,17 +218,47 @@ public enum VoiceMemoParser {
             #"called ([a-z][a-z'\- ]{1,30})"#,
             // PKT-MEM-127: voice-router `client` alias — the registry entity is
             // `contact` (entityKey above is already correctly "contact"), but no
-            // prior pattern recognized the word "client" at all, so a memo like
-            // "my client, Greg Flachek" produced zero entity hints. Matches
-            // "client <Name>", "my client, <Name>", "a client named <Name>".
-            #"client,?\s+(?:named\s+)?([A-Za-z][A-Za-z'\- ]{1,40})"#,
+            // prior pattern recognized the word "client" at all.
+            //
+            // Fixed 2026-07-03 (real transcript, not a paraphrase): the actual
+            // GH #73 memo says "Greg, Flachek, my client, and..." — name FIRST,
+            // "client" as an appositive AFTER the name (dictation commas as
+            // pause artifacts). An earlier version of this pattern only looked
+            // FORWARD from a bare "client <Name>", which on this exact real
+            // transcript matched "client, and..." and captured "and" as the
+            // "name" — a live-verified false positive, caught only by testing
+            // against the real transcript instead of a secondhand paraphrase of
+            // it. Split into two narrower, higher-precision forms instead of one
+            // greedy bidirectional guess. Both require: (1) `\bclient\b` — a
+            // real word boundary, so "clients" (plural, no named person) never
+            // matches as a substring of "client" the way a bare "client" literal
+            // would; (2) `(?-i:[A-Z])` — a TRUE capitalized first letter on the
+            // captured name, overriding the pattern-wide .caseInsensitive compile
+            // option just for that one check, so a lowercase filler word
+            // immediately before/after the anchor (e.g. "of" in "some of my
+            // clients") can never be captured as if it were a proper name — a
+            // second live-caught false positive from the first revision of this
+            // fix, found by a dedicated plural-noise regression test.
+            #"((?-i:[A-Z])[a-zA-Z'\-]+(?:,\s*(?-i:[A-Z])[a-zA-Z'\-]+){0,2}),?\s+my \bclient\b"#,
+            // backward: "<Name>[, <Name>], my client" — matches the real evidence.
+            #"\bclient\b\s+named\s+((?-i:[A-Z])[a-zA-Z'\- ]{1,40})"#,
+            // forward: "client named <Name>" / "a client named <Name>" — "named"
+            // is an unambiguous anchor, unlike a bare "client <anything>" which
+            // is exactly what caused the first false-positive above.
         ]
         for pattern in patterns {
             if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
                let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
                match.numberOfRanges > 1,
                let range = Range(match.range(at: 1), in: text) {
-                let name = String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+                // Dictation transcripts often insert a comma for a pause between
+                // first/last name ("Greg, Flachek, my client") — collapse any
+                // internal comma-separated capture into a clean space-joined name.
+                let name = String(text[range])
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " ")
                 if !name.isEmpty { names.append(name.capitalized) }
             }
         }
