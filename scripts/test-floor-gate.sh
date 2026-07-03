@@ -1867,7 +1867,18 @@ set -euo pipefail
 # "contact" today). Measured 3020 passed, 0 failed (3003 + 17 new tests, no
 # other drift; confirmed 3x deterministic). FLOOR raised 3003 → 3020 per the
 # order-inversion rule.
-FLOOR="${BRIDGE_TEST_FLOOR:-3020}"
+#
+# PKT-MEM-127 follow-up (2026-07-03): implemented the voice-router client
+# alias. entityKey was already correctly "contact" (the registry entity
+# name) — the real gap was that entityHints' trigger guard and regex
+# patterns never recognized the word "client" at all, so a memo mentioning
+# "my client, Greg Flachek" (the real GH #73 transcript, live-confirmed this
+# session) produced zero entity hints. Added a "client" trigger + a
+# `client,?\s+(?:named\s+)?(Name)` pattern. +2 tests (real-transcript case +
+# an "a client named X" phrasing variant). Measured 3022 passed, 0 failed
+# (3020 + 2, no other drift). FLOOR raised 3020 → 3022 per the
+# order-inversion rule.
+FLOOR="${BRIDGE_TEST_FLOOR:-3022}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

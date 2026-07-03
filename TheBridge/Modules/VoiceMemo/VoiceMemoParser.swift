@@ -207,6 +207,7 @@ public enum VoiceMemoParser {
             || lower.contains("talked to")
             || lower.contains("called ")
             || (lower.contains("update ") && (lower.contains("'s") || lower.contains(" contact")))
+            || lower.contains("client")
         else {
             return []
         }
@@ -215,6 +216,12 @@ public enum VoiceMemoParser {
             #"log that i (?:talked|spoke|called) with ([a-z][a-z'\- ]{1,40})"#,
             #"update ([a-z][a-z'\- ]{1,30})'?s"#,
             #"called ([a-z][a-z'\- ]{1,30})"#,
+            // PKT-MEM-127: voice-router `client` alias — the registry entity is
+            // `contact` (entityKey above is already correctly "contact"), but no
+            // prior pattern recognized the word "client" at all, so a memo like
+            // "my client, Greg Flachek" produced zero entity hints. Matches
+            // "client <Name>", "my client, <Name>", "a client named <Name>".
+            #"client,?\s+(?:named\s+)?([A-Za-z][A-Za-z'\- ]{1,40})"#,
         ]
         for pattern in patterns {
             if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
