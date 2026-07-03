@@ -439,7 +439,11 @@ private func installOverlapStubs(on router: ToolRouter, state: OverlapStubState,
 }
 
 private func overlapPlan() -> VoiceMemoPlan {
-    VoiceMemoPlan(generatedTitle: "Call notes", skipMemoryKeep: false, summary: "Call notes summary.", actions: [], intents: [])
+    // Real (if terse) sentence, not a filler fragment — clears
+    // VoiceMemoContentQualityGate's minimum-information floor (GH #81) so this
+    // fixture continues to exercise ONLY the transcript-overlap guard, the
+    // concern this file actually tests.
+    VoiceMemoPlan(generatedTitle: "Call notes", skipMemoryKeep: false, summary: "Call notes summary covering the Bridge v4 launch plan.", actions: [], intents: [])
 }
 
 private func overlapMemoryEntity() -> RegistryEntity {

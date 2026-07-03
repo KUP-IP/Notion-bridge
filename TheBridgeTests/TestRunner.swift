@@ -712,6 +712,7 @@ await runVoiceCuratorPhase1RemediationTests() // Voice Curator FRONTIER-FIRST (P
 await runVoiceMemoMCPRoutingTests() // PKT-MEM-120: Auto+MCP Execute defer, presence, awaiting-agent tags + notification gate
 await runVoiceMemoPlayerAttachTests() // PKT-1064: memo→Memory attaches + verifies the originating Player relation; absent/unbound PLAYERS → graceful BLOCKED
 await runVoiceMemoCommentTests() // PKT-MEM-136: comment intent (idea|reflow purpose) resolves via registry_resolve_and_update (PKT-MEM-135), posts via notion_comment_create, idea-purpose logs to VoiceMemoIdeaThreadStore ledger, reflow never logs; resolution/post failure → graceful BLOCKED (no crash)
+await runVoiceMemoContentQualityGateTests() // GH #81: minimum-information quality gate blocks markedProcessed:true on filler/short memory_keep summaries (routes to review instead), first-class voice_memo_commit `summary` schema param; GH #73: per-stage timeouts (VoiceMemoStageTimeout) guarantee process(args:)/commit(args:) always terminate in {done, error, review-queue}, never hang
 // PKT-MEM-106 0a + 0b run early in runAllTests() (flake-avoidance) — not duplicated here.
 await runMemorySettingsTests()         // PKT-MEM-102: Memory Settings section + Inbox UI
 await runOllamaModuleTests()           // Local Ollama client + module (Wave 2a)

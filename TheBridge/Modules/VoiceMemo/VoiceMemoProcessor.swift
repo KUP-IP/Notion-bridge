@@ -117,7 +117,16 @@ public enum VoiceMemoProcessor {
         let audioURL = URL(fileURLWithPath: recording.path, isDirectory: false)
         let transcript: String
         do {
-            let resolved = try await VoiceMemoDiscovery.resolveTranscript(for: audioURL)
+            // GH #73 — bound transcription so a wedged Parakeet/Apple-extractor call
+            // cannot hang the whole voice_memo_process call indefinitely. A timeout
+            // throws VoiceMemoStageTimeoutError, which this catch handles identically
+            // to any other transcription failure — enqueue review, never hang.
+            let resolved = try await VoiceMemoStageTimeout.run(
+                stage: "transcribe",
+                seconds: VoiceMemoStageTimeout.transcribeSeconds
+            ) {
+                try await VoiceMemoDiscovery.resolveTranscript(for: audioURL)
+            }
             guard let text = resolved.text else {
                 return skipNoTranscript(
                     recording: recording,
@@ -153,7 +162,13 @@ public enum VoiceMemoProcessor {
         }
 
         let llmSummary: String
-        var plan = await VoiceMemoParser.parseWithOptionalOllama(
+        // GH #73 — bound the Understand stage. parseWithOptionalOllama/summarize are
+        // non-throwing (they already `try?` their own Ollama call, which has its own
+        // OllamaClient timeoutInterval), but that per-request bound is not a bound on
+        // the WHOLE async chain — a genuinely wedged local call (the exact GH #73
+        // symptom: "Local Ollama reachable" yet the call never returned) must still
+        // degrade to the heuristic floor rather than hang voice_memo_process forever.
+        var plan = await understandStage(
             transcript: transcript,
             fallbackTitle: recording.title,
             recordingPath: recording.path
@@ -168,7 +183,7 @@ public enum VoiceMemoProcessor {
         let needsLLMSummary = plan.intents.contains { $0.kind == .memoryKeep }
             && VoiceMemoCuratorRouter.shouldSummarizeForMemoryKeep()
         if needsLLMSummary {
-            llmSummary = await VoiceMemoSummarizer.summarize(transcript: transcript, fallbackTitle: recording.title)
+            llmSummary = await summarizeStage(transcript: transcript, fallbackTitle: recording.title)
         } else {
             llmSummary = VoiceMemoParser.firstSentencePublic(in: transcript, maxLen: 280)
         }
@@ -281,13 +296,25 @@ public enum VoiceMemoProcessor {
             }
 
             do {
-                let detail = try await execute(
-                    intent: intent,
-                    plan: plan,
-                    transcript: transcript,
-                    memoId: recording.id,
-                    router: router
-                )
+                // GH #73 — bound the write/dispatch stage (Reminder/Memory/Notion writes
+                // via router.dispatch have no built-in timeout). A stuck write now times
+                // out into this SAME catch block that already handles any other execute()
+                // failure — queues review, never hangs voice_memo_process indefinitely.
+                // `plan` is snapshotted into a `let` before crossing into the @Sendable
+                // timeout-race closure (strict concurrency forbids capturing a `var`).
+                let planSnapshot = plan
+                let detail = try await VoiceMemoStageTimeout.run(
+                    stage: "execute",
+                    seconds: VoiceMemoStageTimeout.executeSeconds
+                ) {
+                    try await execute(
+                        intent: intent,
+                        plan: planSnapshot,
+                        transcript: transcript,
+                        memoId: recording.id,
+                        router: router
+                    )
+                }
                 outcomes.append(VoiceMemoIntentOutcome(kind: intent.kind, status: .executed, detail: detail))
                 executedAny = true
             } catch {
@@ -393,6 +420,20 @@ public enum VoiceMemoProcessor {
         entity: RegistryEntity?
     ) async throws -> String {
         var fields = resolvedMemoryKeepFields(intent: intent, plan: plan)
+
+        // GH #81 — minimum-information quality gate BEFORE any Notion write
+        // (registry_create below, then the summary-body append later in this
+        // function both read from `fields["summary"]`). A weak transcript-
+        // opening fragment or disfluency-dominated filler string (e.g. "I'm
+        // having fun with this idea") must never reach Notion as the sole
+        // content of a memory_keep row — graceful BLOCKED → REVIEW with the
+        // exact rejection reason, never a silent markedProcessed:true on an
+        // effectively-empty record. See VoiceMemoContentQualityGate for the
+        // written rule.
+        let candidateSummary = fields["summary"] ?? plan.summary
+        if case .rejected(let reason) = VoiceMemoContentQualityGate.evaluate(candidateSummary) {
+            throw VoiceMemoError.contentQualityRejected(entityKey, reason)
+        }
 
         // PKT-MEM-132 D49 — reject a proposed field value that is a
         // contiguous verbatim run from the raw transcript BEFORE any Notion
@@ -1161,6 +1202,78 @@ public enum VoiceMemoProcessor {
         try? MemoryHubActivityLog.append(event)
     }
 
+    // MARK: - Understand-stage timeout wrappers (GH #73)
+    //
+    // `VoiceMemoParseRouter.parse` / `VoiceMemoSummarizer.{summarize,structuredSummary}`
+    // are non-throwing — their internal Ollama call is already `try?`-guarded and
+    // falls back to the heuristic floor on failure. But that fallback only fires if
+    // the call RETURNS (even with an error); it does not bound how long the call can
+    // take before returning. These wrappers race the same work against
+    // `VoiceMemoStageTimeout` and, on timeout, substitute the identical heuristic
+    // fallback the callee would have produced on an ordinary failure — so a wedged
+    // local call degrades exactly like an unavailable one, never hangs the caller.
+
+    static func understandStage(
+        transcript: String,
+        fallbackTitle: String,
+        recordingPath: String?,
+        curatorMode: VoiceMemoCuratorMode? = nil
+    ) async -> VoiceMemoPlan {
+        do {
+            return try await VoiceMemoStageTimeout.run(
+                stage: "understand",
+                seconds: VoiceMemoStageTimeout.understandSeconds
+            ) {
+                if let curatorMode {
+                    return await VoiceMemoParseRouter.parse(
+                        transcript: transcript, fallbackTitle: fallbackTitle,
+                        recordingPath: recordingPath, curatorMode: curatorMode
+                    )
+                }
+                return await VoiceMemoParser.parseWithOptionalOllama(
+                    transcript: transcript, fallbackTitle: fallbackTitle, recordingPath: recordingPath
+                )
+            }
+        } catch {
+            // Timed out — degrade to the same heuristic-only chain the router uses as
+            // its guaranteed-non-nil floor, marked degraded so the operator can see the
+            // Understand stage fell through (mirrors the router's own degraded rule).
+            var plan = await VoiceMemoParseRouter.walk(
+                [HeuristicParseProvider()], transcript: transcript,
+                fallbackTitle: fallbackTitle, recordingPath: recordingPath
+            )
+            plan.degraded = true
+            return plan
+        }
+    }
+
+    static func summarizeStage(transcript: String, fallbackTitle: String) async -> String {
+        let structured = await structuredSummarizeStage(transcript: transcript, fallbackTitle: fallbackTitle)
+        return structured.relevantFieldText
+    }
+
+    static func structuredSummarizeStage(transcript: String, fallbackTitle: String) async -> VoiceMemoStructuredSummary {
+        do {
+            return try await VoiceMemoStageTimeout.run(
+                stage: "summarize",
+                seconds: VoiceMemoStageTimeout.understandSeconds
+            ) {
+                await VoiceMemoSummarizer.structuredSummary(transcript: transcript, fallbackTitle: fallbackTitle)
+            }
+        } catch {
+            // Timed out — same heuristic fallback structuredSummary itself would have
+            // used for an unhealthy/unreachable Ollama daemon.
+            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                return VoiceMemoStructuredSummary(paragraph: fallbackTitle, actions: [])
+            }
+            return VoiceMemoStructuredSummary(
+                paragraph: VoiceMemoParser.firstSentencePublic(in: trimmed, maxLen: 280),
+                actions: VoiceMemoParser.extractActionBulletsPublic(from: trimmed)
+            )
+        }
+    }
+
     static func buildPlan(
         for recording: VoiceMemoRecording,
         options: Options,
@@ -1173,7 +1286,15 @@ public enum VoiceMemoProcessor {
             detail: "Starting transcription ladder", eventType: .memoTranscribed
         )
         let audioURL = URL(fileURLWithPath: recording.path, isDirectory: false)
-        let resolved = try await VoiceMemoDiscovery.resolveTranscript(for: audioURL)
+        // GH #73 — same transcription bound as the batch path (processOne). A timeout
+        // throws VoiceMemoStageTimeoutError, which propagates like any other
+        // buildPlan failure to the get()/commit() callers (never a hang).
+        let resolved = try await VoiceMemoStageTimeout.run(
+            stage: "transcribe",
+            seconds: VoiceMemoStageTimeout.transcribeSeconds
+        ) {
+            try await VoiceMemoDiscovery.resolveTranscript(for: audioURL)
+        }
         guard let transcript = resolved.text else {
             throw VoiceMemoError.invalidIntent("no transcript for memo")
         }
@@ -1188,7 +1309,13 @@ public enum VoiceMemoProcessor {
             status: "running", provenance: curatorMode?.rawValue ?? "auto",
             detail: "Parsing intents", eventType: .providerCallStarted
         )
-        var plan = await VoiceMemoParseRouter.parse(
+        // GH #73 — bound the Understand/parse stage the same way as processOne's
+        // understandStage helper. VoiceMemoParseRouter.parse is non-throwing (its
+        // own chain already falls back to the heuristic floor on a nil rung), so a
+        // timeout here also degrades to the heuristic parse rather than throwing —
+        // consistent behavior whether the memo is routed via voice_memo_process or
+        // voice_memo_get/commit.
+        var plan = await understandStage(
             transcript: transcript,
             fallbackTitle: recording.title,
             recordingPath: recording.path,
@@ -1210,9 +1337,7 @@ public enum VoiceMemoProcessor {
                 status: "running", provenance: plan.provenance.rawValue,
                 detail: "Structured summary for memory_keep", eventType: .memoSummarized
             )
-            let structured = await VoiceMemoSummarizer.structuredSummary(
-                transcript: transcript, fallbackTitle: recording.title
-            )
+            let structured = await structuredSummarizeStage(transcript: transcript, fallbackTitle: recording.title)
             summary = structured.paragraph
             actions = structured.actions
             logUnderstandActivity(
@@ -1253,7 +1378,38 @@ public enum VoiceMemoProcessor {
         guard let recording = recordings.first(where: { $0.id == memoId || $0.path == memoId }) else {
             throw VoiceMemoError.invalidIntent("memo not found: \(memoId)")
         }
-        let (transcript, plan) = try await buildPlan(for: recording, options: options)
+        let transcript: String
+        let plan: VoiceMemoPlan
+        do {
+            (transcript, plan) = try await buildPlan(for: recording, options: options)
+        } catch let timeoutError as VoiceMemoStageTimeoutError {
+            // GH #73 — a transcription-stage timeout inside buildPlan must still land in
+            // the review queue, not just fail the tool call with no durable trace (no
+            // plan/intent exists yet at this point, so the entry is a generic review
+            // placeholder — mirrors skipNoTranscript's shape for the batch path).
+            try? VoiceMemoReviewStore.enqueue(VoiceMemoReviewEntry(
+                memoId: recording.id,
+                memoTitle: recording.title,
+                memoPath: recording.path,
+                intentKind: VoiceMemoIntentKind.review.rawValue,
+                confidence: 0,
+                reason: timeoutError.localizedDescription,
+                transcriptExcerpt: "",
+                intentId: VoiceMemoIntentIdentity.intentId(
+                    memoId: recording.id, kind: VoiceMemoIntentKind.review.rawValue,
+                    entityKey: nil, entityHint: nil, title: recording.title, fields: [:]
+                ),
+                provenance: "stage-timeout"
+            ))
+            return .object([
+                "ok": .bool(false),
+                "needsManual": .bool(true),
+                "memoId": .string(recording.id),
+                "intentKind": .string(kind.rawValue),
+                "detail": .string(timeoutError.localizedDescription),
+                "markedProcessed": .bool(false),
+            ])
+        }
         var intent = plan.intents.first { $0.kind == kind } ?? VoiceMemoIntent(kind: kind, confidence: 1.0)
         if let entityKey = stringArg(obj, "entityKey") { intent.entityKey = entityKey }
         if let hint = stringArg(obj, "entityHint") { intent.entityHint = hint }
@@ -1263,6 +1419,13 @@ public enum VoiceMemoProcessor {
         if case .object(let fieldObj)? = obj["fields"] {
             intent.fields = fieldObj.compactMapValues { if case .string(let s) = $0 { return s }; return nil }
         }
+        // First-class summary override (promoted from the previously-undiscoverable
+        // fields.summary passthrough — GitHub issue reported the schema didn't document
+        // it even though appendSummaryBodyToNotionPage already read fields["summary"] ??
+        // plan.summary). Applied AFTER the `fields` object above so a top-level `summary`
+        // always wins over (or fills in) a fields.summary the caller also passed —
+        // the single, unambiguous override path callers can now discover from the schema.
+        if let summary = stringArg(obj, "summary") { intent.fields["summary"] = summary }
         if kind == .comment, let purposeRaw = stringArg(obj, "purpose") {
             intent.purpose = VoiceMemoCommentPurpose(rawValue: purposeRaw)
         }
@@ -1271,15 +1434,82 @@ public enum VoiceMemoProcessor {
         // Execute the lane. registry_update threads an explicit rowId straight to the
         // writer (rowId wins over entityHint — PKT-MEM-106 0a). An ambiguous/unresolved
         // registry target surfaces as a manual outcome WITHOUT writing or marking processed.
+        // `intent` is fully built by this point — snapshotted into a `let` before crossing
+        // into the @Sendable timeout-race closure (strict concurrency forbids capturing a
+        // `var`, and `intent` is referenced again below for the review-store enqueue).
+        let intentSnapshot = intent
         let detail: String
         do {
-            if kind == .registryUpdate {
-                detail = try await executeRegistryUpdate(intent, explicitRowId: explicitRowId, transcript: transcript, router: router)
-            } else {
-                detail = try await execute(intent: intent, plan: plan, transcript: transcript, memoId: recording.id, router: router)
+            // GH #73 — bound the commit-time write/dispatch stage the same way as
+            // processOne's execute() wrap. A stuck registry/Notion write during an
+            // agent-driven commit() must still terminate (error or review-queue),
+            // never hang the MCP call indefinitely.
+            detail = try await VoiceMemoStageTimeout.run(
+                stage: "commit-execute",
+                seconds: VoiceMemoStageTimeout.executeSeconds
+            ) {
+                if kind == .registryUpdate {
+                    return try await executeRegistryUpdate(intentSnapshot, explicitRowId: explicitRowId, transcript: transcript, router: router)
+                } else {
+                    return try await execute(intent: intentSnapshot, plan: plan, transcript: transcript, memoId: recording.id, router: router)
+                }
             }
+        } catch let timeoutError as VoiceMemoStageTimeoutError {
+            // Same durable-trace treatment as contentQualityRejected below: never a bare
+            // thrown timeout with no review-queue entry (the exact GH #73 gap).
+            let intentId = VoiceMemoIntentIdentity.intentId(memoId: recording.id, intent: intent)
+            try? VoiceMemoReviewStore.enqueue(VoiceMemoReviewEntry(
+                memoId: recording.id,
+                memoTitle: plan.generatedTitle,
+                memoPath: recording.path,
+                intentKind: kind.rawValue,
+                confidence: intent.confidence,
+                reason: timeoutError.localizedDescription,
+                transcriptExcerpt: String(transcript.prefix(500)),
+                intentId: intentId,
+                entityKey: intent.entityKey,
+                entityHint: intent.entityHint,
+                provenance: "stage-timeout"
+            ))
+            return .object([
+                "ok": .bool(false),
+                "needsManual": .bool(true),
+                "memoId": .string(recording.id),
+                "intentKind": .string(kind.rawValue),
+                "detail": .string(timeoutError.localizedDescription),
+                "markedProcessed": .bool(false),
+            ])
         } catch let error as VoiceMemoError {
             if case .registryAmbiguous = error {
+                return .object([
+                    "ok": .bool(false),
+                    "needsManual": .bool(true),
+                    "memoId": .string(recording.id),
+                    "intentKind": .string(kind.rawValue),
+                    "detail": .string(error.localizedDescription),
+                    "markedProcessed": .bool(false),
+                ])
+            }
+            if case .contentQualityRejected = error {
+                // GH #81 — the commit-time counterpart of processOne's queueReview: an
+                // agent-driven commit() that fails the quality gate must land in the SAME
+                // review queue a batch run would use (packet requirement), not just fail
+                // the tool call with no durable trace. Best-effort enqueue (never blocks
+                // the graceful response on a store-write failure).
+                let intentId = VoiceMemoIntentIdentity.intentId(memoId: recording.id, intent: intent)
+                try? VoiceMemoReviewStore.enqueue(VoiceMemoReviewEntry(
+                    memoId: recording.id,
+                    memoTitle: plan.generatedTitle,
+                    memoPath: recording.path,
+                    intentKind: kind.rawValue,
+                    confidence: intent.confidence,
+                    reason: error.localizedDescription,
+                    transcriptExcerpt: String(transcript.prefix(500)),
+                    intentId: intentId,
+                    entityKey: intent.entityKey,
+                    entityHint: intent.entityHint,
+                    provenance: "content-quality-gate"
+                ))
                 return .object([
                     "ok": .bool(false),
                     "needsManual": .bool(true),
@@ -1394,6 +1624,12 @@ public enum VoiceMemoError: Error, LocalizedError {
     /// `notion_comment_create` did not report success after a resolved target
     /// page (PKT-MEM-136 post-write verification, mirrors PKT-1064's pattern).
     case commentPostFailed(String, String)
+    /// The proposed memory_keep summary/body failed the minimum-information
+    /// quality gate (GH #81) — too short or disfluency-dominated to be a
+    /// substantive record. A graceful BLOCKED → REVIEW, never a silent
+    /// markedProcessed:true on an effectively-empty Memory row. Associated
+    /// values: entity key, the gate's stated rejection reason.
+    case contentQualityRejected(String, String)
 
     public var errorDescription: String? {
         switch self {
@@ -1412,6 +1648,8 @@ public enum VoiceMemoError: Error, LocalizedError {
             return "comment target unresolved for entity ‘\(entity)’: \(reason) (BLOCKED, queued for review)"
         case .commentPostFailed(let entity, let pageId):
             return "notion_comment_create did not report success for entity ‘\(entity)’ page \(pageId) (queued for review)"
+        case .contentQualityRejected(let entity, let reason):
+            return "entity=\(entity) memory_keep summary failed the minimum-information quality gate: \(reason) (BLOCKED, queued for review — never marked processed)"
         }
     }
 }

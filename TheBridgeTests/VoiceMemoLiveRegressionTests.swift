@@ -14,6 +14,25 @@ func runVoiceMemoLiveRegressionTests() async {
         try expect(plan.intents.contains { $0.entityHint?.lowercased().contains("jacob") == true }, "Jacob hint")
     }
 
+    await test("PKT-MEM-127: 'my client, Name' extracts a contact-lane hint") {
+        // Real transcript excerpt from GH #73's memo (live-confirmed this
+        // session): "...my client, Greg Flachek...". Prior to this fix, the
+        // word "client" wasn't a recognized trigger at all — zero entity
+        // hints were produced. entityKey was already correctly "contact"
+        // (the registry entity name) — the gap was purely trigger/pattern
+        // recognition for "client" phrasing, not an entityKey mismatch.
+        let transcript = "Had a great call today, my client, Greg Flachek, wants to move forward with the proposal."
+        let plan = VoiceMemoParser.parse(transcript: transcript, fallbackTitle: "Memo")
+        try expect(plan.intents.contains { $0.kind == .registryUpdate && $0.entityKey == "contact" }, "contact lane fires for client phrasing")
+        try expect(plan.intents.contains { $0.entityHint?.lowercased().contains("greg") == true }, "Greg Flachek hint extracted")
+    }
+
+    await test("PKT-MEM-127: 'a client named Name' also extracts a contact-lane hint") {
+        let transcript = "I met with a client named Sarah Chen about the Q3 renewal."
+        let plan = VoiceMemoParser.parse(transcript: transcript, fallbackTitle: "Memo")
+        try expect(plan.intents.contains { $0.entityKey == "contact" && ($0.entityHint?.lowercased().contains("sarah") == true) }, "Sarah Chen hint extracted")
+    }
+
     await test("entityHints: bare update session does not fire contact lane") {
         let transcript = "Update session DST-8 objective to ship memory hub."
         let plan = VoiceMemoParser.parse(transcript: transcript, fallbackTitle: "Memo")
