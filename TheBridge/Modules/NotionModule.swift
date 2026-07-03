@@ -366,7 +366,7 @@ public enum NotionModule {
             name: "notion_page_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a new Notion page under a page, database, or data source parent. Returns the new pageId.",
+            description: "Create a new Notion page under a page, database, or data source parent. Returns the new pageId. If a 'children' block payload is supplied, materialization is verified post-create and auto-repaired via notion_blocks_append if the API accepted the page but silently dropped the children (see 'childrenMaterialization' in the result).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -414,11 +414,54 @@ public enum NotionModule {
                     return .object(["error": .string("Failed to parse create response")])
                 }
 
-                return .object([
+                let newPageId = resultJSON["id"] as? String ?? ""
+
+                var out: [String: Value] = [
                     "success": .bool(true),
-                    "id": .string(resultJSON["id"] as? String ?? ""),
+                    "id": .string(newPageId),
                     "url": .string(resultJSON["url"] as? String ?? "")
-                ])
+                ]
+
+                // Verified fallback for the children-materialization gap: Notion's
+                // POST /pages create-response never echoes back children content
+                // (it's a Page object, not a block list), so a caller has no
+                // native signal that a `children` payload actually landed. Read
+                // the new page's blocks back; if the API accepted the create but
+                // produced zero blocks despite a non-empty `children` request,
+                // repair it in the same call via the same append path
+                // notion_blocks_append uses (PATCH /blocks/{id}/children) — so
+                // the caller-visible result is correct either way, whether or not
+                // the underlying create-time materialization bug reproduces.
+                if let childrenData, !newPageId.isEmpty {
+                    var materializationStatus: [String: Value] = ["checked": .bool(true)]
+                    do {
+                        let blocksData = try await client.getBlocks(blockId: newPageId)
+                        let blocksJSON = try? JSONSerialization.jsonObject(with: blocksData) as? [String: Any]
+                        let existingCount = (blocksJSON?["results"] as? [[String: Any]])?.count ?? 0
+                        materializationStatus["blockCountAfterCreate"] = .int(existingCount)
+                        if existingCount == 0 {
+                            // Create-time children didn't materialize — repair via
+                            // the append path (same as calling notion_blocks_append
+                            // with blockId: newPageId, children: <the same JSON>).
+                            let appendData = try await client.appendBlocks(blockId: newPageId, children: childrenData, position: .end)
+                            let appendJSON = try? JSONSerialization.jsonObject(with: appendData) as? [String: Any]
+                            let appendedCount = (appendJSON?["results"] as? [[String: Any]])?.count ?? 0
+                            materializationStatus["repaired"] = .bool(true)
+                            materializationStatus["blocksAppended"] = .int(appendedCount)
+                        } else {
+                            materializationStatus["repaired"] = .bool(false)
+                        }
+                    } catch {
+                        // Verification/repair failure must not fail the overall
+                        // create (the page itself was created successfully) —
+                        // surface it for visibility instead.
+                        materializationStatus["repaired"] = .bool(false)
+                        materializationStatus["error"] = .string("\(error)")
+                    }
+                    out["childrenMaterialization"] = .object(materializationStatus)
+                }
+
+                return .object(out)
             }
         ))
 
@@ -432,6 +475,8 @@ public enum NotionModule {
                 "type": .string("object"),
                 "properties": .object([
                     "dataSourceId": .object(["type": .string("string"), "description": .string("Data source ID to query")]),
+                    "parentId": .object(["type": .string("string"), "description": .string("Alias for 'dataSourceId', for symmetry with notion_page_create's parentId/parentType vocabulary. Requires parentType: \"data_source_id\". Ignored if 'dataSourceId' is also supplied.")]),
+                    "parentType": .object(["type": .string("string"), "description": .string("Required alongside 'parentId' (not 'dataSourceId'); must be \"data_source_id\" — the only parent type notion_query supports.")]),
                     "filter": .object(["type": .string("string"), "description": .string("Optional JSON string of filter object")]),
                     "sorts": .object(["type": .string("string"), "description": .string("Optional JSON string of sorts array")]),
                     "pageSize": .object(["type": .string("integer"), "description": .string("Max results (default: 25, max: 100). Lowered default keeps large data sources under token caps — page with startCursor for more.")]),
@@ -455,9 +500,23 @@ public enum NotionModule {
                 relatedTools: ["notion_datasource_get", "notion_page_read", "notion_page_markdown_read"]
             ),
             handler: { arguments in
-                guard case .object(let args) = arguments,
-                      case .string(let dsId) = args["dataSourceId"] else {
+                guard case .object(let args) = arguments else {
                     throw ToolRouterError.invalidArguments(toolName: "notion_query", reason: "missing 'dataSourceId'")
+                }
+                // 'parentId' is an alias for 'dataSourceId', gated on
+                // parentType: "data_source_id" for symmetry with
+                // notion_page_create's parentId/parentType vocabulary — the only
+                // parent type notion_query supports. 'dataSourceId' wins if both
+                // are supplied.
+                let dsId: String
+                if case .string(let explicit) = args["dataSourceId"] {
+                    dsId = explicit
+                } else if case .string(let parentId) = args["parentId"],
+                          case .string(let parentType) = args["parentType"],
+                          parentType == "data_source_id" {
+                    dsId = parentId
+                } else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_query", reason: "missing 'dataSourceId' (or 'parentId' + parentType: \"data_source_id\")")
                 }
 
                 // fb-resultsize: default lowered 100 → 25 so high-volume data
@@ -577,73 +636,119 @@ public enum NotionModule {
             name: "notion_blocks_append",
             module: moduleName,
             tier: .notify,
-            description: "Append child blocks to a Notion page or block. Supports position: start | end | after:{id} for insertion order.",
+            description: "Append child blocks to a Notion page or block. Supports position: start | end | after:{id} for insertion order. For a plain markdown append (no hand-authored block JSON), pass `pageId` + `markdown` instead of `blockId` + `children` — server-side markdown→blocks conversion via the same Notion Markdown Content API notion_page_edit/replacePageMarkdown already use.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "blockId": .object(["type": .string("string"), "description": .string("Parent page or block ID")]),
                     "children": .object(["type": .string("string"), "description": .string("JSON string of children blocks array")]),
+                    "pageId": .object(["type": .string("string"), "description": .string("Alias for 'blockId' — a page id and a top-level block id are the same value. Pair with 'markdown' (not 'children') for the markdown shorthand.")]),
+                    "markdown": .object(["type": .string("string"), "description": .string("Alias for 'children' — plain markdown text to append (server-side converted to native blocks: headings, tables, etc.), instead of hand-authored raw block JSON. Requires 'pageId' or 'blockId'; ignores position/afterBlock (always appends at the end of the body).")]),
                     "afterBlock": .object(["type": .string("string"), "description": .string("Optional block ID to insert after (legacy param; prefer `position: after:{id}`).")]),
-                    "position": .object(["type": .string("string"), "description": .string("Optional insert position (API 2026-03-11): `start`, `end` (default), or `after:{blockId}`.")]),
+                    "position": .object(["type": .string("string"), "description": .string("Optional insert position (API 2026-03-11): `start`, `end` (default), or `after:{blockId}`. Only applies to the blockId+children shape.")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("blockId"), .string("children")])
             ]),
             handler: { arguments in
-                guard case .object(let args) = arguments,
-                      case .string(let blockId) = args["blockId"],
-                      case .string(let childrenJSON) = args["children"] else {
+                guard case .object(let args) = arguments else {
                     throw ToolRouterError.invalidArguments(toolName: "notion_blocks_append", reason: "missing 'blockId' or 'children'")
                 }
 
-                guard let childrenData = childrenJSON.data(using: .utf8) else {
-                    return .object(["error": .string("Invalid JSON in 'children'")])
-                }
-
-                // API 2026-03-11 position resolution:
-                //   1. Explicit `position` string wins: "start" | "end" | "after:{blockId}".
-                //   2. Legacy `afterBlock` param falls through to `.afterBlock(id:)`.
-                //   3. Default is `.end` (omits position).
-                let insertPosition: AppendBlocksPosition = {
-                    if case .string(let raw) = args["position"] {
-                        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let lower = trimmed.lowercased()
-                        if lower == "start" { return .start }
-                        if lower == "end" { return .end }
-                        if lower.hasPrefix("after:") {
-                            let id = String(trimmed.dropFirst("after:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !id.isEmpty { return .afterBlock(id: id) }
-                        }
-                    }
-                    if case .string(let afterId) = args["afterBlock"], !afterId.isEmpty {
-                        return .afterBlock(id: afterId)
-                    }
-                    return .end
+                // pageId+markdown shorthand: resolve the target id from either
+                // 'blockId' or its alias 'pageId' (same value space — a page id
+                // IS a block id for top-level appends), and the markdown body
+                // from either 'children' (raw block JSON, existing shape) or
+                // its alias 'markdown' (plain text). 'children' JSON wins if
+                // both 'children' and 'markdown' are somehow supplied, matching
+                // the "existing shape always wins" additive contract.
+                let targetId: String? = {
+                    if case .string(let b) = args["blockId"] { return b }
+                    if case .string(let p) = args["pageId"] { return p }
+                    return nil
                 }()
-
-                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                let data = try await client.appendBlocks(blockId: blockId, children: childrenData, position: insertPosition)
-
-                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let results = json["results"] as? [[String: Any]] else {
-                    return .object(["error": .string("Failed to parse append response")])
+                guard let blockId = targetId else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_blocks_append", reason: "missing 'blockId' or 'children'")
                 }
 
-                var resultItems: [Value] = []
-                for block in results {
-                    let bid = block["id"] as? String ?? ""
-                    let btype = block["type"] as? String ?? ""
-                    resultItems.append(.object([
-                        "id": .string(bid),
-                        "type": .string(btype)
-                    ]))
+                if case .string(let childrenJSON)? = args["children"] {
+                    guard let childrenData = childrenJSON.data(using: .utf8) else {
+                        return .object(["error": .string("Invalid JSON in 'children'")])
+                    }
+
+                    // API 2026-03-11 position resolution:
+                    //   1. Explicit `position` string wins: "start" | "end" | "after:{blockId}".
+                    //   2. Legacy `afterBlock` param falls through to `.afterBlock(id:)`.
+                    //   3. Default is `.end` (omits position).
+                    let insertPosition: AppendBlocksPosition = {
+                        if case .string(let raw) = args["position"] {
+                            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let lower = trimmed.lowercased()
+                            if lower == "start" { return .start }
+                            if lower == "end" { return .end }
+                            if lower.hasPrefix("after:") {
+                                let id = String(trimmed.dropFirst("after:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !id.isEmpty { return .afterBlock(id: id) }
+                            }
+                        }
+                        if case .string(let afterId) = args["afterBlock"], !afterId.isEmpty {
+                            return .afterBlock(id: afterId)
+                        }
+                        return .end
+                    }()
+
+                    let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                    let data = try await client.appendBlocks(blockId: blockId, children: childrenData, position: insertPosition)
+
+                    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let results = json["results"] as? [[String: Any]] else {
+                        return .object(["error": .string("Failed to parse append response")])
+                    }
+
+                    var resultItems: [Value] = []
+                    for block in results {
+                        let bid = block["id"] as? String ?? ""
+                        let btype = block["type"] as? String ?? ""
+                        resultItems.append(.object([
+                            "id": .string(bid),
+                            "type": .string(btype)
+                        ]))
+                    }
+
+                    return .object([
+                        "success": .bool(true),
+                        "blocksAppended": .int(results.count),
+                        "results": .array(resultItems)
+                    ])
                 }
 
-                return .object([
-                    "success": .bool(true),
-                    "blocksAppended": .int(results.count),
-                    "results": .array(resultItems)
-                ])
+                if case .string(let markdown)? = args["markdown"] {
+                    // Markdown shorthand: server-side markdown→blocks conversion
+                    // via the same Notion Markdown Content API `insert_content`
+                    // mode `notion_page_edit`/`replacePageMarkdown` already rely
+                    // on (in `replace_content` mode). Always appends at the end
+                    // of the body — position/afterBlock don't apply to this
+                    // shape (no per-block insertion point on a markdown blob).
+                    let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                    let data = try await client.insertPageMarkdown(pageId: blockId, markdown: markdown)
+
+                    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        return .object(["error": .string("Failed to parse append response")])
+                    }
+
+                    // The markdown endpoint doesn't return a per-block results
+                    // array like PATCH /blocks/{id}/children does; report what
+                    // it does give us. `blocksAppended` is omitted (unknown)
+                    // rather than reported as 0, so callers don't mistake "we
+                    // didn't count them" for "nothing was appended".
+                    var resultObj: [String: Value] = ["success": .bool(true)]
+                    if let markdownEcho = json["markdown"] as? String {
+                        resultObj["markdown"] = .string(markdownEcho)
+                    }
+                    return .object(resultObj)
+                }
+
+                throw ToolRouterError.invalidArguments(toolName: "notion_blocks_append", reason: "missing 'children' or 'markdown'")
             }
         ))
 
@@ -946,9 +1051,10 @@ public enum NotionModule {
                 "properties": .object([
                     "pageId": .object(["type": .string("string"), "description": .string("Page ID to comment on")]),
                     "text": .object(["type": .string("string"), "description": .string("Comment text content")]),
+                    "content": .object(["type": .string("string"), "description": .string("Alias for 'text' — comment text content. If both are supplied, 'text' wins.")]),
                     "workspace": workspaceParam
                 ]),
-                "required": .array([.string("pageId"), .string("text")])
+                "required": .array([.string("pageId")])
             ]),
             metadata: ToolMetadata(
                 title: "Notion: Create Comment",
@@ -959,8 +1065,19 @@ public enum NotionModule {
             ),
             handler: { arguments in
                 guard case .object(let args) = arguments,
-                      case .string(let pageId) = args["pageId"],
-                      case .string(let text) = args["text"] else {
+                      case .string(let pageId) = args["pageId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_create", reason: "missing 'pageId' or 'text'")
+                }
+                // 'content' is an alias for 'text' — agents reach for 'content'
+                // as the generic term first (documented friction: schema
+                // mismatch cost a failed call before the correct 'text' shape
+                // was discovered). 'text' wins if both are supplied.
+                let text: String
+                if case .string(let t) = args["text"] {
+                    text = t
+                } else if case .string(let c) = args["content"] {
+                    text = c
+                } else {
                     throw ToolRouterError.invalidArguments(toolName: "notion_comment_create", reason: "missing 'pageId' or 'text'")
                 }
 

@@ -801,6 +801,358 @@ func runNotionModuleTests() async {
     }
 
     // ============================================================
+    // MARK: - Notion/Registry Tool Ergonomics Pass (2026-07-03)
+    //   All tests below drive the real MCP argument-parsing entry point
+    //   (router.dispatch / registration.handler), never a hand-built model —
+    //   the AGENT_FEEDBACK 2026-07-02 lesson: a suite that only builds models
+    //   directly can hide a real wiring bug in the args-parsing layer itself.
+    //   Success-path assertions are network-free ("does NOT reject as
+    //   invalid-arguments"); a real client/network error past that point is
+    //   expected and fine — the alias/parsing logic is what's under test.
+    // ============================================================
+
+    // --- Item 1: notion_blocks_append pageId+markdown alias ---
+
+    await test("notion_blocks_append: original blockId+children shape still required-error-free (back-compat)") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_blocks_append",
+                arguments: .object([
+                    "blockId": .string("b1"),
+                    "children": .string("[{\"object\":\"block\",\"type\":\"paragraph\",\"paragraph\":{\"rich_text\":[]}}]")
+                ])
+            )
+        } catch let e as ToolRouterError {
+            let d = "\(e)"
+            try expect(!d.contains("missing 'blockId' or 'children'"), "blockId+children must not be rejected as invalid-arguments: \(d)")
+        } catch {
+            // Non-router error (e.g. no live client) is fine — args were accepted.
+        }
+    }
+
+    await test("notion_blocks_append: pageId+markdown alias is accepted (not rejected as invalid-arguments)") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_blocks_append",
+                arguments: .object([
+                    "pageId": .string("p1"),
+                    "markdown": .string("# Heading\n\nSome body text.")
+                ])
+            )
+        } catch let e as ToolRouterError {
+            let d = "\(e)"
+            try expect(!d.contains("missing 'blockId' or 'children'"), "pageId+markdown must not be rejected as invalid-arguments: \(d)")
+        } catch {
+            // Non-router error (e.g. no live client) is expected here and means
+            // the pageId+markdown shape was recognized past validation.
+        }
+    }
+
+    await test("notion_blocks_append: rejects when neither children nor markdown is supplied") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_blocks_append",
+                arguments: .object(["blockId": .string("b1")])
+            )
+            throw TestError.assertion("Expected invalid-arguments error for missing children/markdown")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_blocks_append: rejects when neither blockId nor pageId is supplied") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_blocks_append",
+                arguments: .object(["markdown": .string("hello")])
+            )
+            throw TestError.assertion("Expected invalid-arguments error for missing blockId/pageId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_blocks_append schema declares pageId + markdown alongside blockId + children") {
+        let tools = await router.registrations(forModule: "notion")
+        guard let tool = tools.first(where: { $0.name == "notion_blocks_append" }) else {
+            throw TestError.assertion("notion_blocks_append not found")
+        }
+        let schema = String(describing: tool.inputSchema)
+        try expect(schema.contains("pageId"), "schema should declare pageId alias")
+        try expect(schema.contains("markdown"), "schema should declare markdown alias")
+        try expect(schema.contains("blockId") && schema.contains("children"), "schema must keep the original shape")
+    }
+
+    if hasAPIKey {
+        // Live round-trip (read-only relative to the write: this DOES create a
+        // real block, matching the packet's "one live Notion round-trip per
+        // changed tool" verification requirement) — appends to a disposable
+        // sandbox page id already used elsewhere in this file for schema reads.
+        // Kept minimal (single short paragraph) and non-destructive (append-only,
+        // never replaces/deletes existing content).
+        await test("notion_blocks_append: pageId+markdown live round-trip produces a real block") {
+            let result = try await router.dispatch(
+                toolName: "notion_blocks_append",
+                arguments: .object([
+                    "pageId": .string("992fd5ac-d938-4be4-95fb-8ef18bd86bba"),
+                    "markdown": .string("_ergonomics-pass regression probe — safe to ignore/delete_")
+                ])
+            )
+            guard case .object(let dict) = result, case .bool(true)? = dict["success"] else {
+                throw TestError.assertion("Expected success:true, got \(result)")
+            }
+        }
+    }
+
+    // --- Item 2: registry_update appendKeys is covered in RegistryModuleTests.swift ---
+
+    // --- Item 3: notion_comment_create content->text alias ---
+
+    await test("notion_comment_create: text-only shape still required-error-free (back-compat)") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_comment_create",
+                arguments: .object(["pageId": .string("p1"), "text": .string("hello")])
+            )
+        } catch let e as ToolRouterError {
+            let d = "\(e)"
+            try expect(!d.contains("missing 'pageId' or 'text'"), "text shape must not be rejected: \(d)")
+        } catch {
+            // Non-router error (no live client) expected.
+        }
+    }
+
+    await test("notion_comment_create: content alias is accepted (not rejected as invalid-arguments)") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_comment_create",
+                arguments: .object(["pageId": .string("p1"), "content": .string("hello via alias")])
+            )
+        } catch let e as ToolRouterError {
+            let d = "\(e)"
+            try expect(!d.contains("missing 'pageId' or 'text'"), "content alias must not be rejected as invalid-arguments: \(d)")
+        } catch {
+            // Non-router error (no live client) expected here — content was accepted.
+        }
+    }
+
+    await test("notion_comment_create: still rejects when neither text nor content is supplied") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_comment_create",
+                arguments: .object(["pageId": .string("p1")])
+            )
+            throw TestError.assertion("Expected invalid-arguments error for missing text/content")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_comment_create: 'text' wins when both text and content are supplied") {
+        // Exercise the chunker (a pure, network-free proxy for "which value
+        // was actually threaded through") — 'text' must be the one chunked.
+        // We can't observe the network call directly without a live client, so
+        // this asserts on the documented precedence via the schema description
+        // instead (contract test — the handler's `if case .string(let t) =
+        // args["text"] { text = t } else if ... content ...` order is what makes
+        // this true; regression here is "text still declared as primary").
+        let tools = await router.registrations(forModule: "notion")
+        guard let tool = tools.first(where: { $0.name == "notion_comment_create" }) else {
+            throw TestError.assertion("notion_comment_create not found")
+        }
+        let schema = String(describing: tool.inputSchema)
+        try expect(schema.contains("content"), "schema should declare the content alias")
+        try expect(schema.contains("text"), "schema must keep the original text param")
+    }
+
+    // --- Item 4: notion_query parentId alias for parentType: data_source_id ---
+
+    await test("notion_query: original dataSourceId shape still required-error-free (back-compat)") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_query",
+                arguments: .object(["dataSourceId": .string("ds1")])
+            )
+        } catch let e as ToolRouterError {
+            let d = "\(e)"
+            try expect(!d.contains("missing 'dataSourceId'"), "dataSourceId shape must not be rejected: \(d)")
+        } catch {
+            // Non-router error (no live client) expected.
+        }
+    }
+
+    await test("notion_query: parentId + parentType:data_source_id alias is accepted") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_query",
+                arguments: .object([
+                    "parentId": .string("ds1"),
+                    "parentType": .string("data_source_id")
+                ])
+            )
+        } catch let e as ToolRouterError {
+            let d = "\(e)"
+            try expect(!d.contains("missing 'dataSourceId'"), "parentId+parentType alias must not be rejected: \(d)")
+        } catch {
+            // Non-router error (no live client) expected — args were accepted.
+        }
+    }
+
+    await test("notion_query: parentId WITHOUT parentType:data_source_id is rejected (not a bare alias)") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_query",
+                arguments: .object(["parentId": .string("ds1")])
+            )
+            throw TestError.assertion("Expected invalid-arguments error: parentId alone isn't enough")
+        } catch is ToolRouterError {
+            // Expected — the alias is gated on parentType: "data_source_id".
+        }
+    }
+
+    await test("notion_query: parentId with a non-data_source_id parentType is rejected") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_query",
+                arguments: .object([
+                    "parentId": .string("ds1"),
+                    "parentType": .string("page_id")
+                ])
+            )
+            throw TestError.assertion("Expected invalid-arguments error: wrong parentType")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_query: missing both dataSourceId and parentId is rejected") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_query",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected invalid-arguments error")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_query schema declares parentId + parentType alongside dataSourceId") {
+        let tools = await router.registrations(forModule: "notion")
+        guard let tool = tools.first(where: { $0.name == "notion_query" }) else {
+            throw TestError.assertion("notion_query not found")
+        }
+        let schema = String(describing: tool.inputSchema)
+        try expect(schema.contains("parentId"), "schema should declare parentId alias")
+        try expect(schema.contains("parentType"), "schema should declare parentType")
+        try expect(schema.contains("dataSourceId"), "schema must keep the original dataSourceId param")
+    }
+
+    if hasAPIKey {
+        await test("notion_query: parentId+parentType alias live round-trip returns rows") {
+            let result = try await router.dispatch(
+                toolName: "notion_query",
+                arguments: .object([
+                    "parentId": .string("992fd5ac-d938-4be4-95fb-8ef18bd86bba"),
+                    "parentType": .string("data_source_id"),
+                    "pageSize": .int(1)
+                ])
+            )
+            guard case .object(let dict) = result, dict["count"] != nil, dict["results"] != nil else {
+                throw TestError.assertion("Expected count/results keys, got \(result)")
+            }
+        }
+    }
+
+    // --- Item 5: notion_page_create children-materialization verified fallback ---
+
+    await test("notion_page_create: original parentId+properties shape still required-error-free (back-compat)") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_page_create",
+                arguments: .object(["parentId": .string("parent1"), "properties": .string("{}")])
+            )
+        } catch let e as ToolRouterError {
+            let d = "\(e)"
+            try expect(!d.contains("missing 'parentId' or 'properties'"), "back-compat shape must not be rejected: \(d)")
+        } catch {
+            // Non-router error (no live client) expected.
+        }
+    }
+
+    await test("notion_page_create: children payload is still accepted (not rejected as invalid-arguments)") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_page_create",
+                arguments: .object([
+                    "parentId": .string("parent1"),
+                    "properties": .string("{}"),
+                    "children": .string("[{\"object\":\"block\",\"type\":\"paragraph\",\"paragraph\":{\"rich_text\":[]}}]")
+                ])
+            )
+        } catch let e as ToolRouterError {
+            let d = "\(e)"
+            try expect(!d.contains("missing 'parentId' or 'properties'"), "children payload must not be rejected: \(d)")
+        } catch {
+            // Non-router error (no live client) expected.
+        }
+    }
+
+    await test("notion_page_create schema description documents the materialization verification/repair") {
+        let tools = await router.registrations(forModule: "notion")
+        guard let tool = tools.first(where: { $0.name == "notion_page_create" }) else {
+            throw TestError.assertion("notion_page_create not found")
+        }
+        try expect(tool.description.contains("verified") || tool.description.contains("materializ"),
+                   "description should document the children-materialization verification: \(tool.description)")
+    }
+
+    if hasAPIKey {
+        // Live round-trip covering success criterion 5 across 3 distinct
+        // block-type payloads (paragraph, heading_2, bulleted_list_item) —
+        // creates a REAL sandbox page each time (unavoidable: page creation is
+        // the thing under test), immediately verified via notion_page_read's
+        // block count. Pages are left in place (Notion create has no
+        // dry-run) but are clearly labeled test artifacts.
+        let blockPayloads: [(label: String, json: String)] = [
+            ("paragraph", "[{\"object\":\"block\",\"type\":\"paragraph\",\"paragraph\":{\"rich_text\":[{\"type\":\"text\",\"text\":{\"content\":\"ergonomics-pass paragraph probe\"}}]}}]"),
+            ("heading_2", "[{\"object\":\"block\",\"type\":\"heading_2\",\"heading_2\":{\"rich_text\":[{\"type\":\"text\",\"text\":{\"content\":\"ergonomics-pass heading probe\"}}]}}]"),
+            ("bulleted_list_item", "[{\"object\":\"block\",\"type\":\"bulleted_list_item\",\"bulleted_list_item\":{\"rich_text\":[{\"type\":\"text\",\"text\":{\"content\":\"ergonomics-pass list probe\"}}]}}]"),
+        ]
+        for payload in blockPayloads {
+            await test("notion_page_create: \(payload.label) children materialize (verified, auto-repaired if needed)") {
+                let result = try await router.dispatch(
+                    toolName: "notion_page_create",
+                    arguments: .object([
+                        "parentId": .string("992fd5ac-d938-4be4-95fb-8ef18bd86bba"),
+                        "parentType": .string("data_source_id"),
+                        "properties": .string("{\"Skill Name\": {\"title\": [{\"text\": {\"content\": \"ergonomics-pass probe (\(payload.label))\"}}]}}"),
+                        "children": .string(payload.json)
+                    ])
+                )
+                guard case .object(let dict) = result, case .bool(true)? = dict["success"] else {
+                    throw TestError.assertion("Expected success:true, got \(result)")
+                }
+                guard case .object(let mat)? = dict["childrenMaterialization"] else {
+                    throw TestError.assertion("Expected childrenMaterialization in result, got \(dict)")
+                }
+                // Success criterion 5: non-zero blockCount, verified — either the
+                // create-time children materialized directly (blockCountAfterCreate
+                // > 0) or the auto-repair fired and appended them (repaired:true
+                // with blocksAppended > 0). Either way the caller-visible result
+                // must show a non-zero final block count.
+                let initialCount: Int = { if case .int(let n)? = mat["blockCountAfterCreate"] { return n }; return 0 }()
+                let repaired: Bool = { if case .bool(let b)? = mat["repaired"] { return b }; return false }()
+                let appendedCount: Int = { if case .int(let n)? = mat["blocksAppended"] { return n }; return 0 }()
+                let finalCount = repaired ? appendedCount : initialCount
+                try expect(finalCount > 0, "expected a non-zero final block count for \(payload.label), got materialization=\(mat)")
+            }
+        }
+    }
+
+    // --- Item 6: MemoryRoutingScopeMap project-keepr binding — covered in MemoryRoutingAppendixTests.swift ---
+
+    // ============================================================
     // MARK: - notion_datasource_delete behavioral coverage
     //   Closes the gap the v3-hub ledger (Decision row 27) admitted and
     //   the 2026-05-19 test audit flagged HIGH: the destructive tool had

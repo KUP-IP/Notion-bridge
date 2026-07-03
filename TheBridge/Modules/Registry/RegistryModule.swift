@@ -559,13 +559,18 @@ public enum RegistryModule {
     public static func makeUpdate() -> ToolRegistration {
         ToolRegistration(
             name: "registry_update", module: moduleName, tier: .notify,
-            description: "Update fields on an existing registry-entity row (by page id), keyed by canonical field key. Only the supplied fields are changed.",
+            description: "Update fields on an existing registry-entity row (by page id), keyed by canonical field key. Only the supplied fields are changed. Optional `appendKeys` names fields whose write value is APPENDED to the row's current value as a dated block rather than overwriting it — reuses the exact same merge logic as registry_resolve_and_update's appendKeys mode. Omit `appendKeys` entirely for the original plain-overwrite behavior.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "entity": .object(["type": .string("string")]),
                     "id": .object(["type": .string("string")]),
                     "fields": .object(["type": .string("object")]),
+                    "appendKeys": .object([
+                        "type": .string("array"),
+                        "description": .string("Optional. Canonical field keys that append (existing value + new content, dated block) instead of overwrite — same semantics as registry_resolve_and_update's appendKeys. Omit for plain overwrite of every field (default, unchanged behavior). Pass [] to explicitly force plain-overwrite via the append-aware read path."),
+                        "items": .object(["type": .string("string")]),
+                    ]),
                 ]),
                 "required": .array([.string("entity"), .string("id"), .string("fields")]),
             ]),
@@ -575,8 +580,19 @@ public enum RegistryModule {
                 }
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_update")
-                let writer = RegistryWriter(gateway: gateway())
-                let row = try await writer.update(entity: entity, pageId: id, fields: fields(a))
+                let gw = gateway()
+                let writer = RegistryWriter(gateway: gw)
+                let appendKeys: Set<String>? = {
+                    guard case .array(let arr)? = a["appendKeys"] else { return nil }
+                    return Set(arr.compactMap { v -> String? in if case .string(let s) = v { return s } else { return nil } })
+                }()
+                let row: CachedRow
+                if let appendKeys {
+                    let reader = RegistryReader(gateway: gw)
+                    row = try await writer.update(entity: entity, pageId: id, fields: fields(a), reader: reader, appendKeys: appendKeys)
+                } else {
+                    row = try await writer.update(entity: entity, pageId: id, fields: fields(a))
+                }
                 return .object(["updated": .bool(true), "row": rowValue(row, stale: false)])
             })
     }
