@@ -13,9 +13,14 @@ func runMemoryRoutingAppendixTests() async {
         try expect(scopes == ["project", "global"], "got \(scopes)")
     }
 
-    await test("ScopeMap: project-keepr alias maps to project + global") {
+    // Notion/Registry Tool Ergonomics Pass (2026-07-03): the stale
+    // "project-keepr" binding was removed from the table (project-keepr was
+    // retired/renamed to focus-keepr, not a distinct live specialist) — it
+    // now falls through to the same "unknown parent" path as any other
+    // unrecognized slug, exactly like "unknown-keeper" below.
+    await test("ScopeMap: project-keepr (removed stale binding) falls back to global") {
         let scopes = MemoryRoutingScopeMap.scopes(for: "project-keepr")
-        try expect(scopes == ["project", "global"], "got \(scopes)")
+        try expect(scopes == ["global"], "project-keepr must no longer resolve to project+global, got \(scopes)")
     }
 
     await test("ScopeMap: unknown parent falls back to global") {

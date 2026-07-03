@@ -121,6 +121,35 @@ public struct RegistryWriter: Sendable {
         await cache.evict(entity: entity.key, pageId: pageId)
     }
 
+    // MARK: - Update by id, with optional append-merge (Notion/Registry Tool Ergonomics Pass)
+
+    /// `update(entity:pageId:fields:)` plus an OPTIONAL `appendKeys` merge pass,
+    /// reusing `RegistryAppendMerge.merge` — the SAME primitive
+    /// `resolveAndUpdate` uses — so `registry_update` gets append-vs-overwrite
+    /// parity with `registry_resolve_and_update` without duplicating the merge
+    /// logic. When `appendKeys` is `nil`, this is byte-identical to plain
+    /// `update` (no extra read, no behavior change) — additive/backward-compatible.
+    /// When non-nil (including `[]`, which disables merging for every key, same
+    /// as `resolveAndUpdate`), the row's CURRENT properties are read first (not
+    /// force-refreshed — same cache posture as `resolveAndUpdate`'s `reader.find`)
+    /// so append targets the live value, not a stale write-time guess.
+    @discardableResult
+    public func update(
+        entity: RegistryEntity,
+        pageId: String,
+        fields input: [String: Value],
+        reader: RegistryReader,
+        appendKeys: Set<String>?
+    ) async throws -> CachedRow {
+        guard let appendKeys else {
+            return try await update(entity: entity, pageId: pageId, fields: input)
+        }
+        let current = try await reader.get(entity: entity, pageId: pageId)
+        let merged = RegistryAppendMerge.merge(
+            proposed: input, existing: current.properties, appendKeys: appendKeys)
+        return try await update(entity: entity, pageId: pageId, fields: merged)
+    }
+
     // MARK: - Resolve + append-merge + update (PKT-MEM-135)
 
     public enum RegistryResolveError: Error, LocalizedError, Equatable {

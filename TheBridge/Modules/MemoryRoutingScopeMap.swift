@@ -17,7 +17,13 @@ public enum MemoryRoutingScopeMap {
 
     private static let table: [String: ScopePair] = [
         "focus-keepr": ScopePair(primary: "project", secondary: "global"),
-        "project-keepr": ScopePair(primary: "project", secondary: "global"),
+        // "project-keepr" removed (Notion/Registry Tool Ergonomics Pass,
+        // 2026-07-03): project-keepr was retired/renamed to focus-keepr —
+        // this binding was stale, not a distinct live specialist. A
+        // fetch_skill("project-keepr", ...) call now falls through to the
+        // `else` branch below (["global"]) like any other unrecognized
+        // parent slug, rather than silently resolving to focus-keepr's
+        // scopes under the wrong name.
         "people-keepr": ScopePair(primary: "people"),
         "mac-keepr": ScopePair(primary: "mac"),
         "notion-keepr": ScopePair(primary: "skill", secondary: "project"),

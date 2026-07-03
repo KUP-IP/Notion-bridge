@@ -672,7 +672,33 @@ public actor NotionClient {
         return data
     }
 
-
+    /// Notion/Registry Tool Ergonomics Pass: append markdown to the END of a
+    /// page's body in one call, via the same `/pages/{id}/markdown` tagged-union
+    /// endpoint as `replacePageMarkdown` but the `insert_content` mode instead of
+    /// `replace_content` (verified contract:
+    /// `{"type":"insert_content","insert_content":{"content":...}}` — see
+    /// [[notion-markdown-content-api]]). This is the server-side markdown→blocks
+    /// path backing `notion_blocks_append`'s `pageId`+`markdown` shorthand: the
+    /// API parses the markdown into native blocks (headings, tables, etc.) and
+    /// appends them — the same server-side conversion `replacePageMarkdown`
+    /// already relies on (in its `replace_content` mode) — so a
+    /// pageId+markdown call produces a native block tree without the caller
+    /// having to hand-author raw block JSON like the blockId+children shape
+    /// requires.
+    public func insertPageMarkdown(pageId: String, markdown: String) async throws -> Data {
+        let cleanId = pageId.replacingOccurrences(of: "-", with: "")
+        let body: [String: Any] = [
+            "type": "insert_content",
+            "insert_content": ["content": markdown]
+        ]
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "PATCH", path: "/pages/\(cleanId)/markdown", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
 
     /// A9a: List comments on a block or page.
     /// GET /v1/comments?block_id={id}

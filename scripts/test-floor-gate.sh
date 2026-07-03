@@ -1824,7 +1824,42 @@ set -euo pipefail
 # ordering/wiring — no real launchd/NSWorkspace/NSApplication touched).
 # Measured 3003 passed, 0 failed (2994 + 9, no other drift). FLOOR raised
 # 2994 → 3003 per the order-inversion rule.
-FLOOR="${BRIDGE_TEST_FLOOR:-3003}"
+#
+# Notion/Registry Tool Ergonomics Pass (2026-07-03, packet
+# 392cbb58889e811abe7ef9714df1dc92): six small, independently-verifiable
+# ergonomics gaps closed, additive/backward-compatible only. (1)
+# notion_blocks_append gains a pageId+markdown shorthand (server-side
+# markdown→blocks via the Notion Markdown Content API's insert_content mode —
+# NotionClient.insertPageMarkdown — alongside the existing blockId+children
+# raw-block-JSON shape). (2) registry_update gains an optional appendKeys
+# merge mode that reuses RegistryAppendMerge/RegistryWriter's existing
+# resolveAndUpdate append logic verbatim (new RegistryWriter.update(...
+# reader:appendKeys:) overload; no duplicated merge code) — omitting
+# appendKeys is byte-identical to the prior plain-overwrite behavior. (3)
+# notion_comment_create accepts `content` as an alias for `text` (`text` wins
+# if both supplied). (4) notion_query accepts `parentId` as an alias for
+# `dataSourceId`, gated on `parentType: "data_source_id"` for symmetry with
+# notion_page_create's parentId/parentType vocabulary. (5) notion_page_create
+# now verifies children materialization post-create (a block-count readback,
+# since Notion's POST /pages response never echoes children) and
+# auto-repairs via the same append path notion_blocks_append uses if the API
+# accepted the page but produced zero blocks — reported in a new, additive
+# `childrenMaterialization` result key. (6) the stale "project-keepr" binding
+# in MemoryRoutingScopeMap.swift's table was removed (it duplicated
+# focus-keepr's ScopePair; project-keepr was retired/renamed to focus-keepr,
+# not a distinct live specialist) — fetch_skill("project-keepr", ...) now
+# falls through to the same "unknown parent" → ["global"] path as any other
+# unrecognized slug; MemoryRoutingAppendixTests.swift's assertion was updated
+# to match (a live behavior change, not just a doc/comment edit). +24 new
+# regression tests across NotionModuleTests.swift (18) and
+# RegistryModuleTests.swift (6), every one driving the real MCP
+# argument-parsing entry point (router.dispatch / ToolRegistration.handler)
+# rather than a hand-built model — the AGENT_FEEDBACK 2026-07-02 lesson (a
+# suite that only builds models directly can hide a real wiring bug in the
+# args-parsing layer itself, as PKT-MEM-136's body-argument gap proved).
+# Measured 3027 passed, 0 failed (3003 + 24, no other drift). FLOOR raised
+# 3003 → 3027 per the order-inversion rule.
+FLOOR="${BRIDGE_TEST_FLOOR:-3027}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

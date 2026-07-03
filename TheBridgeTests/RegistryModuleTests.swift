@@ -723,6 +723,121 @@ func runRegistryModuleTests() async {
         }
     }
 
+    // MARK: - registry_update appendKeys mode (Notion/Registry Tool Ergonomics Pass)
+    //   Reuses RegistryAppendMerge/resolveAndUpdate's exact merge logic — these
+    //   tests drive RegistryModule.makeUpdate().handler(...) directly, the real
+    //   MCP argument-parsing entry point (not a hand-built RegistryWriter call),
+    //   per the AGENT_FEEDBACK 2026-07-02 args-parsing-bypass lesson.
+
+    await test("registry_update: original fields-only shape is unchanged (plain overwrite, no appendKeys)") {
+        let fake = ModFakeGateway(schema: skillsSchema(), pages: [
+            "aaaa000000000000000000000000aaaa": skillRow(id: "aaaa000000000000000000000000aaaa", name: "Kilo"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            let out = try await RegistryModule.makeUpdate().handler(.object([
+                "entity": .string("skill"),
+                "id": .string("aaaa000000000000000000000000aaaa"),
+                "fields": .object(["summary": .string("brand new summary")]),
+            ]))
+            try expect(obj(out)["updated"] == .bool(true), "update reports success")
+            let updatedCalls = await fake.updated
+            guard let call = updatedCalls.first, let field = call.1.first(where: { $0.notionName == "Description" }) else {
+                throw TestError.assertion("no Description field in the PATCH payload")
+            }
+            try expect(field.value == .string("brand new summary"), "no appendKeys ⇒ plain overwrite, unchanged from before this packet")
+        }
+    }
+
+    await test("registry_update: appendKeys mode appends to the row's current value instead of overwriting") {
+        let fake = ModFakeGateway(schema: skillsSchema(), pages: [
+            "bbbb000000000000000000000000bbbb": skillRow(id: "bbbb000000000000000000000000bbbb", name: "Lima"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            let out = try await RegistryModule.makeUpdate().handler(.object([
+                "entity": .string("skill"),
+                "id": .string("bbbb000000000000000000000000bbbb"),
+                "fields": .object(["summary": .string("appended content")]),
+                "appendKeys": .array([.string("summary")]),
+            ]))
+            try expect(obj(out)["updated"] == .bool(true), "update reports success")
+            let updatedCalls = await fake.updated
+            guard let call = updatedCalls.first, let field = call.1.first(where: { $0.notionName == "Description" }) else {
+                throw TestError.assertion("no Description field in the PATCH payload")
+            }
+            guard case .string(let written) = field.value else { throw TestError.assertion("summary value not a string") }
+            try expect(written.contains("desc of Lima"), "existing value preserved: \(written)")
+            try expect(written.contains("appended content"), "new content present: \(written)")
+            try expect(written.contains("— Voice memo "), "appendKeys triggers the same dated-block format as resolve_and_update: \(written)")
+        }
+    }
+
+    await test("registry_update: appendKeys mode leaves non-listed fields as plain overwrite") {
+        let fake = ModFakeGateway(schema: skillsSchema(), pages: [
+            "cccc000000000000000000000000cccc": skillRow(id: "cccc000000000000000000000000cccc", name: "Mike"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            _ = try await RegistryModule.makeUpdate().handler(.object([
+                "entity": .string("skill"),
+                "id": .string("cccc000000000000000000000000cccc"),
+                "fields": .object(["slug": .string("plain-overwrite-slug")]),
+                "appendKeys": .array([.string("summary")]),   // slug is NOT in appendKeys
+            ]))
+            let updatedCalls = await fake.updated
+            guard let call = updatedCalls.first, let field = call.1.first(where: { $0.notionName == "Slug" }) else {
+                throw TestError.assertion("no Slug field in the PATCH payload")
+            }
+            try expect(field.value == .string("plain-overwrite-slug"), "slug not in appendKeys ⇒ plain overwrite")
+        }
+    }
+
+    await test("registry_update: empty appendKeys ([]) still reads current row but forces plain overwrite") {
+        let fake = ModFakeGateway(schema: skillsSchema(), pages: [
+            "dddd000000000000000000000000dddd": skillRow(id: "dddd000000000000000000000000dddd", name: "November"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            _ = try await RegistryModule.makeUpdate().handler(.object([
+                "entity": .string("skill"),
+                "id": .string("dddd000000000000000000000000dddd"),
+                "fields": .object(["summary": .string("only this, no append")]),
+                "appendKeys": .array([]),
+            ]))
+            let updatedCalls = await fake.updated
+            guard let call = updatedCalls.first, let field = call.1.first(where: { $0.notionName == "Description" }) else {
+                throw TestError.assertion("no Description field in the PATCH payload")
+            }
+            try expect(field.value == .string("only this, no append"), "appendKeys:[] forces plain overwrite even for a would-be append key")
+        }
+    }
+
+    await test("registry_update: rejects missing entity/id exactly as before (appendKeys doesn't change the guard)") {
+        do {
+            _ = try await RegistryModule.makeUpdate().handler(.object([
+                "fields": .object(["summary": .string("x")]),
+                "appendKeys": .array([.string("summary")]),
+            ]))
+            throw TestError.assertion("Expected error for missing entity/id")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("registry_update schema declares optional appendKeys alongside entity/id/fields") {
+        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        await RegistryModule.register(on: router)
+        let tools = await router.registrations(forModule: "registry")
+        guard let tool = tools.first(where: { $0.name == "registry_update" }) else {
+            throw TestError.assertion("registry_update not found")
+        }
+        let schema = String(describing: tool.inputSchema)
+        try expect(schema.contains("appendKeys"), "schema should declare the optional appendKeys param")
+        try expect(schema.contains("entity") && schema.contains("id") && schema.contains("fields"),
+                   "schema must keep the original required params")
+    }
+
     await test("registry_resolve_and_update matches by BOUND property id (rename-safe, same as registry_find)") {
         let fake = ModFakeGateway(schema: skillsSchema(), queryRows: [
             skillRow(id: "8888000000000000000000000000aaaa", name: "India"),
