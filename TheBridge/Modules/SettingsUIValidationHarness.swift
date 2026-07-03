@@ -100,14 +100,22 @@ public enum SettingsUIValidationHarness {
                     BridgeAXID.Connection.toggleRemote,
                 ])
             case .memory:
+                // 2026-07-03 redesign — the old 5-tab surface (Process/Inbox/Notion/Agent/
+                // Processing) consolidated into 3 (Memos/Recall/Settings); see
+                // TheBridge/UI/Sections/memory-swiftui-uiiter-log.md. The manifest below
+                // lists ids actually emitted by the 3 live tabs today (MemoryMemosTab,
+                // MemoryRecallTab, MemorySettingsTab) — retired-tab-only ids (notion.*,
+                // agent.list/agentScopeFilter/agentTypeFilter/agentPinButton/
+                // agentForgetButton, processing.mode/apple/parakeet/ollama/pane,
+                // inbox.list/row) were removed with their now-deleted views
+                // (BridgeAXID.Memory audit, same date).
                 ids.append(contentsOf: [
                     BridgeAXID.Memory.tabBar,
-                    BridgeAXID.Memory.tab("process"),
-                    BridgeAXID.Memory.tab("inbox"),
-                    BridgeAXID.Memory.tab("notion"),
-                    BridgeAXID.Memory.tab("agent"),
-                    BridgeAXID.Memory.tab("processing"),
-                    // PKT-MEM-123 V1 Process layout zones (three-pane + batch Confirm).
+                    BridgeAXID.Memory.tab("memos"),
+                    BridgeAXID.Memory.tab("recall"),
+                    BridgeAXID.Memory.tab("settings"),
+                    // PKT-MEM-123 V1 Process layout zones — MemoryMemosTab still uses the
+                    // `process.*` control slug (unchanged from the old cockpit engine).
                     BridgeAXID.Memory.Process.memoList,
                     BridgeAXID.Memory.Process.centerPane,
                     BridgeAXID.Memory.Process.intentTags,
@@ -129,16 +137,49 @@ public enum SettingsUIValidationHarness {
                     BridgeAXID.Memory.Process.processLocal,
                     BridgeAXID.Memory.Process.processCloud,
                     BridgeAXID.Memory.Process.processPrompt,
-                    BridgeAXID.Memory.processingPane,
-                    BridgeAXID.Memory.processingProviderSave,
-                    BridgeAXID.Memory.processingProviderStatus,
-                    BridgeAXID.Memory.inboxList,
+                    // Inbox-triage action ids MemoryMemosTab still emits (absorbed the old
+                    // Inbox tab's disposition row).
                     BridgeAXID.Memory.dismiss,
-                    BridgeAXID.Memory.notionList,
-                    BridgeAXID.Memory.notionRefresh,
-                    BridgeAXID.Memory.agentList,
-                    BridgeAXID.Memory.agentScopeFilter,
-                    BridgeAXID.Memory.agentTypeFilter,
+                    BridgeAXID.Memory.revealInFinder,
+                    BridgeAXID.Memory.fileAsMemory,
+                    BridgeAXID.Memory.retryRouting,
+                    BridgeAXID.Memory.markHandled,
+                    BridgeAXID.Memory.addReminder,
+                    BridgeAXID.Memory.agentRemember,
+                    BridgeAXID.Memory.inboxFilterBar,
+                    // notionOpen — MemoryMemosTab's "Filed in Notion" open-in-Notion link.
+                    BridgeAXID.Memory.notionOpen,
+                    // Memos tab (2026-07-03 redesign — new list/detail chrome).
+                    BridgeAXID.Memory.Memos.list,
+                    BridgeAXID.Memory.Memos.search,
+                    BridgeAXID.Memory.Memos.filterBar,
+                    BridgeAXID.Memory.Memos.statusStepper,
+                    BridgeAXID.Memory.Memos.technicalDetailsToggle,
+                    BridgeAXID.Memory.Memos.technicalDetailsBody,
+                    // Recall tab (2026-07-03 redesign — single-column MemoryStore browser).
+                    BridgeAXID.Memory.Recall.list,
+                    BridgeAXID.Memory.Recall.searchField,
+                    BridgeAXID.Memory.Recall.expandToggle,
+                    BridgeAXID.Memory.Recall.pinButton,
+                    BridgeAXID.Memory.Recall.forgetButton,
+                    BridgeAXID.Memory.Recall.emptyState,
+                    // Settings tab (2026-07-03 redesign — Processing + Agent-surfacing merge).
+                    BridgeAXID.Memory.Settings.pane,
+                    BridgeAXID.Memory.Settings.curatorMode,
+                    BridgeAXID.Memory.Settings.curatorBanner,
+                    BridgeAXID.Memory.Settings.ladderApple,
+                    BridgeAXID.Memory.Settings.ladderParakeet,
+                    BridgeAXID.Memory.Settings.ladderOllama,
+                    BridgeAXID.Memory.Settings.cloudBaseURL,
+                    BridgeAXID.Memory.Settings.cloudModel,
+                    BridgeAXID.Memory.Settings.cloudEnabled,
+                    BridgeAXID.Memory.Settings.cloudKeyInput,
+                    BridgeAXID.Memory.Settings.cloudKeySave,
+                    BridgeAXID.Memory.Settings.cloudKeyDelete,
+                    BridgeAXID.Memory.Settings.cloudKeyStatus,
+                    BridgeAXID.Memory.Settings.injectGlobal,
+                    BridgeAXID.Memory.Settings.injectClientName,
+                    BridgeAXID.Memory.Settings.injectAdd,
                 ])
             case .datasources:
                 // Match the control slugs DataSourcesSection actually emits.

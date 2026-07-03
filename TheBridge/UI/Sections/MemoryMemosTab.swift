@@ -1609,3 +1609,89 @@ private struct MemosSearchField: View {
         .background(BridgeTokens.wellFill, in: RoundedRectangle(cornerRadius: BridgeTokens.Radius.input))
     }
 }
+
+// MARK: - Registry configure sheet (pre-Confirm)
+//
+// Relocated verbatim from the now-deleted MemoryProcessTab.swift (2026-07-03
+// integration cleanup) — this is the only piece of that file MemoryMemosTab
+// still depends on (the pre-Confirm "pick a registry row" sheet). Fully
+// self-contained: only touches the shared CockpitIntentRow/CockpitPickerState
+// types (MemoryProcessCockpit.swift) plus BridgeAXID/BridgeTokens/BridgeButton/
+// BridgeCardLabel — no dependency on MemoryProcessTab itself.
+
+struct MemoryProcessRegistryConfigureSheet: View {
+    let rows: [CockpitIntentRow]
+    let allRows: [CockpitIntentRow]
+    @Binding var selectedRowIdByIntentId: [String: String]
+    @Binding var pickerByIntentId: [String: CockpitPickerState]
+    var onLoadPicker: (CockpitIntentRow) async -> Void
+    var onSave: () -> Void
+    var onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Pick registry rows")
+                .font(BridgeTokens.Typeface.name)
+            Text("These registry intents need a row before Confirm can run.")
+                .font(BridgeTokens.Typeface.sub)
+                .foregroundStyle(BridgeTokens.fg3)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    ForEach(rows) { row in
+                        registrySection(for: row)
+                    }
+                }
+            }
+            HStack {
+                Spacer()
+                BridgeButton("Cancel") { onCancel() }
+                BridgeButton("Save", variant: .primary) { onSave() }
+                    .disabled(!allPicked)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 420, minHeight: 320)
+        .accessibilityIdentifier(BridgeAXID.Memory.Process.registryConfigureSheet)
+        .task {
+            for row in rows {
+                if pickerByIntentId[row.intentId] == nil {
+                    await onLoadPicker(row)
+                }
+            }
+        }
+    }
+
+    private var allPicked: Bool {
+        rows.allSatisfy {
+            !(selectedRowIdByIntentId[$0.intentId]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        }
+    }
+
+    @ViewBuilder
+    private func registrySection(for row: CockpitIntentRow) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            BridgeCardLabel(row.destinationField)
+            if let picker = pickerByIntentId[row.intentId] {
+                if picker.stale {
+                    Text("stale >24h").font(BridgeTokens.Typeface.meta).foregroundStyle(BridgeTokens.warn)
+                }
+                ForEach(picker.rows) { prow in
+                    Button {
+                        selectedRowIdByIntentId[row.intentId] = prow.id
+                    } label: {
+                        HStack {
+                            Image(systemName: selectedRowIdByIntentId[row.intentId] == prow.id ? "largecircle.fill.circle" : "circle")
+                                .font(.system(size: 10))
+                            Text(prow.title).font(BridgeTokens.Typeface.meta)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(BridgeAXID.Memory.Process.registryRow(entity: picker.entity, rowId: prow.id))
+                }
+            } else {
+                ProgressView("Loading rows…")
+            }
+        }
+    }
+}

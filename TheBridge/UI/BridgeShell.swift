@@ -168,11 +168,8 @@ public enum BridgeAXID {
         public static let tabBar        = id("tab.bar")
         /// Inbox tab button.
         public static func tab(_ name: String) -> String { id("tab.\(name)") }
-        /// Voice memo review list container.
-        public static let inboxList     = id("inbox.list")
-        /// A single inbox row (shared id).
-        public static let inboxRow      = id("inbox.row")
-        /// Dismiss control on an inbox row.
+        /// Dismiss control on an inbox row. Ported live into MemoryMemosTab (absorbed the
+        /// old Inbox tab's disposition row — 2026-07-03 3-tab redesign).
         public static let dismiss       = id("inbox.dismiss")
         /// Reveal in Finder control.
         public static let revealInFinder = id("inbox.reveal")
@@ -188,49 +185,21 @@ public enum BridgeAXID {
         public static let agentRemember  = id("inbox.agentRemember")
         /// Inbox filter chip bar.
         public static let inboxFilterBar = id("inbox.filterBar")
-        /// Notion tab list container.
-        public static let notionList     = id("notion.list")
-        /// A Notion Memory row.
-        public static let notionRow      = id("notion.row")
-        /// Open-in-Notion control.
+        /// Open-in-Notion control. Ported live into MemoryMemosTab's "Filed in Notion" card
+        /// (2026-07-03 3-tab redesign; the old standalone Notion tab is retired).
         public static let notionOpen     = id("notion.open")
-        /// Refresh Notion Memory rows from network.
-        public static let notionRefresh  = id("notion.refresh")
-        /// Agent tab list container.
-        public static let agentList      = id("agent.list")
-        /// An agent memory row.
-        public static let agentRow       = id("agent.row")
-        /// Agent scope filter menu.
-        public static let agentScopeFilter = id("agent.filter.scope")
-        /// Agent type filter menu.
-        public static let agentTypeFilter  = id("agent.filter.type")
-        /// Pin / unpin on an agent memory row.
-        public static let agentPinButton   = id("agent.pin")
-        /// Soft-forget on an agent memory row.
-        public static let agentForgetButton = id("agent.forget")
-        /// Surfacing settings card (inject controls).
-        public static let surfacingCard    = id("agent.surfacing")
-        /// Global handshake inject toggle.
-        public static let injectGlobalToggle = id("agent.inject.global")
-        /// New per-client override name field.
-        public static let injectClientNameField = id("agent.inject.clientName")
-        /// Add per-client override button.
-        public static let injectAddOverride = id("agent.inject.add")
-        /// Remove per-client override button (shared id).
-        public static let injectRemoveOverride = id("agent.inject.remove")
+        // NOTE (2026-07-03 integration cleanup): inboxList/inboxRow, notionList/notionRow/
+        // notionRefresh, agentList/agentRow/agentScopeFilter/agentTypeFilter/agentPinButton/
+        // agentForgetButton, surfacingCard, injectGlobalToggle/injectClientNameField/
+        // injectAddOverride/injectRemoveOverride, and processingPane/processingMode/
+        // processingApple/processingParakeet/processingOllama/processingProviderSave/
+        // processingProviderStatus were removed here — all orphaned once
+        // MemoryNotionTab/MemoryAgentTab/MemoryProcessingTab/MemorySurfacingSettingsCard
+        // were deleted in the 3-tab redesign (Memos/Recall/Settings replace them; see
+        // the Settings/Recall/Memos nested enums below for the live successors).
         // Pre-cockpit Process ids (process.list/preview/pipeline/dryRun/execute) were removed:
         // the PKT-MEM-106 0b cockpit replaced them with the `Process.*` nested enum below, and
         // they were orphaned (no view/test/manifest references).
-        /// Processing settings pane.
-        public static let processingPane   = id("processing.pane")
-        /// Curator mode picker.
-        public static let processingMode   = id("processing.mode")
-        public static let processingApple  = id("processing.apple")
-        public static let processingParakeet = id("processing.parakeet")
-        public static let processingOllama = id("processing.ollama")
-        // PKT-MEM-106 0c — OpenAI-compatible provider key controls.
-        public static let processingProviderSave   = id("processing.provider.save")
-        public static let processingProviderStatus = id("processing.provider.status")
 
         // ── 2026-07-03 redesign: Settings tab (Memos/Recall/Settings consolidation) ──
         // Fresh `settings.*` slugs for MemorySettingsTab — the real implementation of

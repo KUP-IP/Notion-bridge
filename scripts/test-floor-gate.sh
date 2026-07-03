@@ -1978,7 +1978,28 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3035}"
 # before shipping, not after. +1 test (3 total for PKT-MEM-127: real
 # transcript, forward "named" form, plural-noise guard). Measured 3055
 # passed, 0 failed. FLOOR raised 3054 → 3055.
-FLOOR="${BRIDGE_TEST_FLOOR:-3055}"
+#
+# Memory Settings 3-tab redesign integration cleanup (2026-07-03, INVESTIGATED
+# LOWER — not a regression): the 5-tab Memory surface (Process/Inbox/Notion/
+# Agent/Processing) consolidated into 3 (Memos/Recall/Settings; Wave 0 +
+# 3 tab-implementation waves landed no new TheBridgeTests/ files — pure UI
+# ports, verified via memory-swiftui-uiiter-log.md's live UI-ITER loops, not
+# unit tests). This cleanup deleted the 6 now-fully-orphaned old tab files
+# (MemoryProcessTab/MemoryProcessingTab/MemoryNotionTab/MemoryNotionViewModel/
+# MemoryAgentTab/MemorySurfacingSettingsCard — every deletion grep-confirmed
+# zero remaining references first; MemoryProcessRegistryConfigureSheet, the
+# one piece of MemoryProcessTab.swift MemoryMemosTab.swift still genuinely
+# depended on, was relocated verbatim into MemoryMemosTab.swift before
+# deleting the rest) and removed exactly one test that instantiated the
+# deleted MemoryNotionViewModel directly ("MemoryNotionViewModel reports
+# unconfigured memory entity", MemorySettingsTests.swift) — its subject type
+# no longer exists and has no live replacement (DataSourcesSection's generic
+# entity card fully absorbed that surface already, per MemorySection.swift's
+# header comment). Measured 11→10 tests in MemorySettingsTests.swift,
+# 3055→3054 passed overall, 0 failed, matching exactly (no other drift).
+# FLOOR LOWERED 3055 → 3054 — a deliberate, investigated, single-test net
+# removal for a deleted type, not a coverage regression.
+FLOOR="${BRIDGE_TEST_FLOOR:-3054}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the
