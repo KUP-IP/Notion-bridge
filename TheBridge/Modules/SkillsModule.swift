@@ -218,6 +218,11 @@ public enum SkillsModule {
                     "section": .object([
                         "type": .string("string"),
                         "description": .string("Optional heading name to return ONLY that section's slice (case-insensitive, '#' markers ignored) instead of the whole body — a granular partial fetch to avoid blowing token caps. Nested subsections are included; a sibling/shallower heading ends the slice. No match → full body + a `section-not-found` annotation.")
+                    ]),
+                    "fields": .object([
+                        "type": .string("array"),
+                        "description": .string("Optional. Array of top-level envelope keys to project the response down to — e.g. [\"content\"] or [\"title\",\"properties.status\"]. Valid keys: name, title, url, content, summary, triggerPhrases, antiTriggerPhrases, properties (no id/lastEditedTime/stale — those are registry-row-specific). Bare \"properties\" keeps the whole properties map; a dotted \"properties.X\" sub-selects one property (case-insensitive). Omitted or [] → full response, byte-identical to today. Unknown keys/paths silently absent, never an error. Composes freely with `section` — section picks WHICH slice `content` holds; fields picks WHICH top-level keys appear at all."),
+                        "items": .object(["type": .string("string")])
                     ])
                 ]),
                 "required": .array([.string("name")])
@@ -271,6 +276,13 @@ public enum SkillsModule {
                     }
                     return nil
                 }()
+                // fields Param: optional result-projection selector — parsed
+                // once up front so a structurally malformed value (wrong
+                // type, not just an unknown key) hard-errors before any
+                // work happens, on every code path below (cache hit, file-
+                // source, offline plain-hit, live Notion fetch, error
+                // envelopes are never filtered).
+                let fieldsArg = try FieldsFilter.parseFieldsArgument(args, toolName: "fetch_skill")
 
                 // Look up skill in UserDefaults config (cache key includes metadata fingerprint)
                 guard let skillConfig = lookupSkill(named: name) else {
@@ -292,11 +304,16 @@ public enum SkillsModule {
                         )
                         // fb-resultsize: apply the optional section selector
                         // to the file-source envelope's rendered `content`.
-                        return await MemoryRoutingAppendix.attach(
+                        // fields Param: project AFTER scopedMemory is
+                        // attached (the last envelope addition), so an
+                        // omitted/empty `fields` stays byte-identical and a
+                        // populated one governs the FINAL key set.
+                        let fileResult = await MemoryRoutingAppendix.attach(
                             to: Self.applySectionToEnvelope(fileEnvelope, section: sectionArg),
                             parent: name,
                             intent: intentArg
                         )
+                        return FieldsFilter.project(fileResult, fields: fieldsArg)
                     }
                     let closeMatches = closestSkillMatches(for: name)
                     let allSkills = listAvailableSkillNames()
@@ -323,11 +340,12 @@ public enum SkillsModule {
                 let cacheKey = "\(name.lowercased())|n=\(includeNested)|mb=\(maxBlocks)|md=\(maxDepth)|meta=\(skillConfig.metadataCacheToken)\(pathSelectorKey)\(sectionKey)"
 
                 if let cached = await cache.get(cacheKey) {
-                    return await MemoryRoutingAppendix.attach(
+                    let cachedResult = await MemoryRoutingAppendix.attach(
                         to: cached,
                         parent: name,
                         intent: intentArg
                     )
+                    return FieldsFilter.project(cachedResult, fields: fieldsArg)
                 }
 
                 guard skillConfig.enabled else {
@@ -402,11 +420,12 @@ public enum SkillsModule {
                             )
                         }
                     }
-                    return await MemoryRoutingAppendix.attach(
+                    let plainHitResult = await MemoryRoutingAppendix.attach(
                         to: result,
                         parent: name,
                         intent: intentArg
                     )
+                    return FieldsFilter.project(plainHitResult, fields: fieldsArg)
                 }
 
                 // Fetch from Notion API
@@ -551,11 +570,12 @@ public enum SkillsModule {
                         try? await bodyStore.write(entry)
                     }
 
-                    return await MemoryRoutingAppendix.attach(
+                    let liveResult = await MemoryRoutingAppendix.attach(
                         to: result,
                         parent: name,
                         intent: intentArg
                     )
+                    return FieldsFilter.project(liveResult, fields: fieldsArg)
                 } catch let error as NotionClientError {
                     // F10: 403 handling — structured error + "Access Lost" badge
                     if case .httpError(let code, let msg) = error, code == 403 {

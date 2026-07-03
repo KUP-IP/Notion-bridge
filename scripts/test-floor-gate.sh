@@ -1999,7 +1999,31 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3035}"
 # 3055→3054 passed overall, 0 failed, matching exactly (no other drift).
 # FLOOR LOWERED 3055 → 3054 — a deliberate, investigated, single-test net
 # removal for a deleted type, not a coverage regression.
-FLOOR="${BRIDGE_TEST_FLOOR:-3054}"
+#
+# PKT: fields Param Across Registry Tools + fetch_skill (2026-07-03): added
+# the opt-in `fields` result-projection param (array of top-level keys,
+# incl. dotted `properties.X` sub-selection) to the 6 row-shaped
+# registry_* tools (list/find/get/create/update/resolve_and_update) AND
+# fetch_skill, sharing one new pure filter primitive (FieldsFilter.swift,
+# TheBridge/Modules/) rather than 7 copies. +41 tests across 3 files:
+# FieldsFilterTests.swift (22 hermetic synthetic-Value fixture tests —
+# omitted/empty-array identity, top-level key selection, bare vs dotted
+# `properties`, permissive union, unknown key/path silent no-match,
+# case-insensitive property-path matching, malformed-type hard error,
+# non-object defensive passthrough, custom propertiesKey param);
+# RegistryModuleTests.swift (+13 wiring-proof tests — one per tool,
+# omitted-fields regression, properties.X sub-selection, the
+# write-payload-object vs result-projection-array non-collision on the 3
+# write tools sharing the `fields` key name, resolve_and_update's separate
+# `resultFields` param since its `fields` is mandatory/write-only, malformed
+# hard-error, schema declaration checks); SkillsModuleTests.swift (+6 —
+# schema shape, malformed-type + non-string-element hard errors, and 4
+# envelope-shape tests driven through the exact production
+# buildSkillResultForTesting builder proving fetch_skill's own key
+# vocabulary round-trips through the shared filter). Measured 3095 passed,
+# 0 failed (3054 baseline + 41 = 3095, matching exactly). FLOOR raised
+# 3054 → 3095.
+FLOOR="${BRIDGE_TEST_FLOOR:-3095}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the
