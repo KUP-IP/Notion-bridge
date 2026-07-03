@@ -119,11 +119,11 @@ public enum BridgeSettingsAutomation {
             return (.connection, "local")           // retired → Connection/Local
         case "remoteaccess", "remote", "cloud":
             return (.connection, "remote")          // retired → Connection/Remote
-        // Memory (voice memo inbox + Notion Memory + agent recall)
+        // Memory (Memos pipeline · Recall agent memory · Settings)
         case "memory", "memories":
             return (.memory, nil)
         case "voicememos", "voicememo", "review":
-            return (.memory, "inbox")               // legacy Advanced anchor → Memory/Inbox
+            return (.memory, "inbox")               // legacy Advanced anchor → Memory/Memos (MemoryNavigationAnchor aliases "inbox" → .memos)
         // Singular shorthands for surviving sections
         case "skill":                  return (.skills, nil)
         case "tool":                   return (.tools, nil)

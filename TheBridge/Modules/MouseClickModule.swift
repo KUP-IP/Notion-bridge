@@ -99,6 +99,16 @@ public enum MouseClickModule {
 
     /// Look up the frame (in screen coordinates, top-left origin) of the
     /// focused window of the focused application, via AX.
+    // axcrash guard (same fix as AccessibilityModule.swift): ApplicationServices AX
+    // reads are only safe on the main thread — NSAccessibility (the AppKit responder
+    // side backing AXUIElement messaging into in-process/cooperating views, which is
+    // exactly what happens when the resolved pid/focused-app IS Bridge's own Settings
+    // window) crashes the whole process if a read reaches a SwiftUI view body off-main
+    // (observed: an EXC_BREAKPOINT executor-isolation trap deep inside AttributeGraph
+    // while resolving a Picker's accessibility children from the MCP handler's async
+    // executor thread). Every AX-reading function below is @MainActor so the compiler
+    // enforces the hop; handlers already run in an async context and can `await` in.
+    @MainActor
     private static func focusedWindowFrame() throws -> CGRect {
         let sys = AXUIElementCreateSystemWide()
         var focusedAppRef: AnyObject?
@@ -139,6 +149,7 @@ public enum MouseClickModule {
     // pixel/point mismatch entirely: agents click by stable element identity,
     // never by a screenshot-derived pixel coordinate.
 
+    @MainActor
     private static func axRole(_ el: AXUIElement) -> String {
         var v: AnyObject?
         if AXUIElementCopyAttributeValue(el, kAXRoleAttribute as CFString, &v) == .success, let s = v as? String {
@@ -147,6 +158,7 @@ public enum MouseClickModule {
         return "Unknown"
     }
 
+    @MainActor
     private static func axTitle(_ el: AXUIElement) -> String? {
         var v: AnyObject?
         if AXUIElementCopyAttributeValue(el, kAXTitleAttribute as CFString, &v) == .success, let s = v as? String {
@@ -155,6 +167,7 @@ public enum MouseClickModule {
         return nil
     }
 
+    @MainActor
     private static func axChildren(_ el: AXUIElement) -> [AXUIElement] {
         var v: AnyObject?
         if AXUIElementCopyAttributeValue(el, kAXChildrenAttribute as CFString, &v) == .success, let kids = v as? [AXUIElement] {
@@ -168,6 +181,7 @@ public enum MouseClickModule {
     /// `ax_inspect`/`ax_tree` emit). Component 0 is the application root and is
     /// skipped. Each remaining `Role:Title` segment selects the first matching
     /// child (title match is exact; an empty title matches on role alone).
+    @MainActor
     private static func navigateAXPath(_ root: AXUIElement, path: String) throws -> AXUIElement {
         let parts = path.split(separator: "/").filter { !$0.isEmpty }
         var current = root
@@ -190,6 +204,7 @@ public enum MouseClickModule {
 
     /// Resolve the screen-point (top-left origin, logical points) centre of the
     /// AX element at `axPath` for the given pid (or the focused app when nil).
+    @MainActor
     private static func axElementCenter(axPath: String, pid: pid_t?) throws -> CGPoint {
         let appEl: AXUIElement
         if let pid { appEl = AXUIElementCreateApplication(pid) }
@@ -319,9 +334,9 @@ public enum MouseClickModule {
 
                     let target: CGPoint
                     if let axPath {
-                        target = try axElementCenter(axPath: axPath, pid: pidParam)
+                        target = try await axElementCenter(axPath: axPath, pid: pidParam)
                     } else if windowRel {
-                        let frame = try focusedWindowFrame()
+                        let frame = try await focusedWindowFrame()
                         target = CGPoint(x: frame.origin.x + xv, y: frame.origin.y + yv)
                     } else {
                         target = CGPoint(x: xv, y: yv)

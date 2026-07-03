@@ -85,19 +85,21 @@ func runTriageSessionTests() async {
     }
 
     await test("MemoryNavigationAnchor_compound_process_memoId") {
+        // "process" is a legacy (pre-2026-07-03 3-tab redesign) anchor head — now aliases to .memos.
         let res = MemoryNavigationAnchor.resolve("process/memo-abc")
-        try expect(res.tab == .process, "process tab")
+        try expect(res.tab == .memos, "process legacy tab → memos")
         try expect(res.memoId == "memo-abc", "memo id tail")
     }
 
     await test("MemoryNavigationAnchor_inbox_filter") {
+        // "inbox" is a legacy anchor head — now aliases to .memos.
         let res = MemoryNavigationAnchor.resolve("inbox/awaitingAgent")
-        try expect(res.tab == .inbox, "inbox tab")
+        try expect(res.tab == .memos, "inbox legacy tab → memos")
         try expect(res.inboxFilter == .awaitingAgent, "filter")
     }
 
     await test("MemoryNavigationAnchor_activity_maps_process") {
         let res = MemoryNavigationAnchor.resolve("activity")
-        try expect(res.tab == .process, "activity → process")
+        try expect(res.tab == .memos, "activity → memos")
     }
 }

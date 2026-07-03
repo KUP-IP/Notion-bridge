@@ -20,26 +20,42 @@ func runMemorySettingsTests() async {
         try expect(SettingsSection.memory.icon == "brain.head.profile", "icon drift")
     }
 
-    await test("MemorySection.tab resolves inbox|notion|agent anchors") {
+    await test("MemorySection.tab resolves new + legacy anchors (2026-07-03 3-tab redesign)") {
+        // New vocabulary
+        let memos = await MainActor.run { MemorySection.tab(for: "memos") }
+        try expect(memos == .memos, "memos anchor")
+        let recall = await MainActor.run { MemorySection.tab(for: "recall") }
+        try expect(recall == .recall, "recall anchor")
+        let settings = await MainActor.run { MemorySection.tab(for: "settings") }
+        try expect(settings == .settings, "settings anchor")
+        // Legacy 5-tab aliases — must keep resolving so already-shipped MCP calls/
+        // notifications/bookmarked deep-links don't silently land nowhere.
         let inbox = await MainActor.run { MemorySection.tab(for: "inbox") }
-        try expect(inbox == .inbox, "inbox anchor")
+        try expect(inbox == .memos, "inbox legacy anchor → memos")
+        let process = await MainActor.run { MemorySection.tab(for: "process") }
+        try expect(process == .memos, "process legacy anchor → memos")
         let notion = await MainActor.run { MemorySection.tab(for: "notion") }
-        try expect(notion == .notion, "notion anchor")
+        try expect(notion == .recall, "notion legacy anchor → recall (Notion tab retired)")
         let agent = await MainActor.run { MemorySection.tab(for: "agent") }
-        try expect(agent == .agent, "agent anchor")
+        try expect(agent == .recall, "agent legacy anchor → recall")
+        let processing = await MainActor.run { MemorySection.tab(for: "processing") }
+        try expect(processing == .settings, "processing legacy anchor → settings")
         let legacy = await MainActor.run { MemorySection.tab(for: "voice-memos") }
-        try expect(legacy == .inbox, "voice-memos legacy anchor")
+        try expect(legacy == .memos, "voice-memos legacy anchor → memos")
     }
 
-    await test("MemoryNavigationAnchor compound process/memoId and inbox filter") {
+    await test("MemoryNavigationAnchor compound memoId and filter, new + legacy heads") {
         let proc = MemoryNavigationAnchor.resolve("process/memo-xyz")
-        try expect(proc.tab == .process, "process tab")
+        try expect(proc.tab == .memos, "process legacy → memos tab")
         try expect(proc.memoId == "memo-xyz", "memo id")
+        let memos = MemoryNavigationAnchor.resolve("memos/memo-xyz")
+        try expect(memos.tab == .memos, "memos tab")
+        try expect(memos.memoId == "memo-xyz", "memo id via new head")
         let filt = MemoryNavigationAnchor.resolve("inbox/awaitingAgent")
-        try expect(filt.tab == .inbox, "inbox")
+        try expect(filt.tab == .memos, "inbox legacy → memos")
         try expect(filt.inboxFilter == .awaitingAgent, "filter")
         let activity = MemoryNavigationAnchor.resolve("activity")
-        try expect(activity.tab == .process, "activity → process")
+        try expect(activity.tab == .memos, "activity → memos")
     }
 
     await test("BridgeSettingsAutomation.memoryResolvedValue encodes tab and memoId") {
@@ -49,7 +65,7 @@ func runMemorySettingsTests() async {
         guard case .object(let obj) = val else {
             throw TestError.assertion("expected object resolved payload")
         }
-        try expect(obj["tab"] == .string("process"), "tab field")
+        try expect(obj["tab"] == .string("memos"), "tab field (process legacy anchor resolves to memos)")
         try expect(obj["memoId"] == .string("m1"), "memoId field")
     }
 
@@ -83,19 +99,20 @@ func runMemorySettingsTests() async {
         try expect(review?.anchor == "inbox", "review → inbox")
     }
 
-    await test("SettingsUIValidationHarness includes Memory AX ids") {
+    await test("SettingsUIValidationHarness includes Memory AX ids (2026-07-03 3-tab redesign)") {
         let ids = SettingsUIValidationHarness.expectedIdentifiers[.memory] ?? []
         try expect(ids.contains(BridgeAXID.Memory.tabBar), "tab bar id")
-        try expect(ids.contains(BridgeAXID.Memory.tab("inbox")), "inbox tab id")
-        try expect(ids.contains(BridgeAXID.Memory.tab("notion")), "notion tab id")
-        try expect(ids.contains(BridgeAXID.Memory.tab("agent")), "agent tab id")
-        try expect(ids.contains(BridgeAXID.Memory.inboxList), "inbox list id")
-        try expect(ids.contains(BridgeAXID.Memory.dismiss), "dismiss id")
-        try expect(ids.contains(BridgeAXID.Memory.notionList), "notion list id")
-        try expect(ids.contains(BridgeAXID.Memory.notionRefresh), "notion refresh id")
-        try expect(ids.contains(BridgeAXID.Memory.agentList), "agent list id")
-        try expect(ids.contains(BridgeAXID.Memory.agentScopeFilter), "agent scope filter id")
-        try expect(ids.contains(BridgeAXID.Memory.agentTypeFilter), "agent type filter id")
+        try expect(ids.contains(BridgeAXID.Memory.tab("memos")), "memos tab id")
+        try expect(ids.contains(BridgeAXID.Memory.tab("recall")), "recall tab id")
+        try expect(ids.contains(BridgeAXID.Memory.tab("settings")), "settings tab id")
+        try expect(ids.contains(BridgeAXID.Memory.dismiss), "dismiss id (Memos-tab inbox action)")
+        try expect(ids.contains(BridgeAXID.Memory.notionOpen), "notionOpen id (Memos-tab filed-in-Notion link)")
+        try expect(ids.contains(BridgeAXID.Memory.Memos.list), "memos list id")
+        try expect(ids.contains(BridgeAXID.Memory.Memos.search), "memos search id")
+        try expect(ids.contains(BridgeAXID.Memory.Recall.list), "recall list id")
+        try expect(ids.contains(BridgeAXID.Memory.Recall.searchField), "recall search id")
+        try expect(ids.contains(BridgeAXID.Memory.Settings.pane), "settings pane id")
+        try expect(ids.contains(BridgeAXID.Memory.Settings.curatorMode), "settings curator mode id")
         let chrome = Set([
             BridgeAXID.navRow(.memory),
             BridgeAXID.titleBar,
@@ -129,21 +146,6 @@ func runMemorySettingsTests() async {
         try expect(info[BridgeNotificationDeepLink.settingsAnchorKey] as? String == "inbox", "anchor key")
         let bare = BridgeNotificationDeepLink.userInfo(section: "Memory", anchor: nil)
         try expect(bare[BridgeNotificationDeepLink.settingsAnchorKey] == nil, "nil anchor omitted")
-    }
-
-    await test("MemoryNotionViewModel reports unconfigured memory entity") {
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("mem104-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        BridgePaths.overrideHomeForTesting(tmp)
-        defer { BridgePaths.overrideHomeForTesting(nil) }
-
-        let vm = await MainActor.run { MemoryNotionViewModel() }
-        await vm.load(limit: 5)
-        let configured = await MainActor.run { vm.entityConfigured }
-        let status = await MainActor.run { vm.status }
-        try expect(!configured, "memory entity not seeded in empty home")
-        try expect(status.contains("Data Sources"), "guides operator to Data Sources")
     }
 
     await test("BridgeSettingsHeaderPreset covers memory section") {
