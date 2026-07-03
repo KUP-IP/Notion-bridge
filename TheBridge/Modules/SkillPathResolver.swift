@@ -190,6 +190,58 @@ public enum SpecialistFilter {
         !isDocPage(title: title)
     }
 
+    // MARK: Archive-vs-canonical (matcher-confidence fix)
+
+    /// General "this title marks the page as archived reference material"
+    /// predicate — deliberately BROADER than `isDocPage`'s anchored
+    /// `^archive` container check above. `isDocPage` only catches a title
+    /// that STARTS WITH "archive" (an archive *container* page like
+    /// "Archive (old specialists)"). It does NOT catch a live-looking
+    /// specialist title that merely CARRIES an archive marker as a suffix
+    /// or delimited segment — e.g. "sk close agent · Archive" — which is
+    /// exactly the collision class this predicate exists to close: a
+    /// nested "Archived reference material" child page whose own title
+    /// still reads as a plausible specialist name to the keyword scorer.
+    ///
+    /// Matches (case-insensitive):
+    ///   • the word "archive"/"archived" anywhere, delimited by a
+    ///     non-letter boundary on both sides (so "archive" the standalone
+    ///     word matches, but a name that merely CONTAINS the letters, e.g.
+    ///     a hypothetical "archivematic", would not) — this covers prefix
+    ///     ("Archive Old Contacts"), suffix ("sk close agent · Archive"),
+    ///     and delimited-segment ("Archive: close agent") placements alike.
+    ///
+    /// This predicate is intentionally NOT used to exclude candidates
+    /// outright (that remains `isDocPage`'s job for container pages) — it
+    /// is a signal `SkillIntentScorer` uses to DEPRIORITIZE an archived
+    /// candidate relative to a non-archived one, never to hide it
+    /// unconditionally. An archived page that is the ONLY candidate still
+    /// resolves (fail-open, matching `isActiveSpecialist`'s bias).
+    public static func isArchived(title rawTitle: String) -> Bool {
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return false }
+        let lower = title.lowercased()
+        return containsArchiveWord(lower)
+    }
+
+    /// Word-boundary scan for "archive" / "archived" anywhere in an
+    /// already-lowercased string. A boundary is the string's start/end or
+    /// any non-letter character, so "archive", "archived", "· archive",
+    /// "(archived)", "archive:" all match, while a longer word merely
+    /// containing the letters ("archivematic") does not.
+    private static func containsArchiveWord(_ lower: String) -> Bool {
+        for stem in ["archived", "archive"] {
+            var searchRange = lower.startIndex..<lower.endIndex
+            while let r = lower.range(of: stem, range: searchRange) {
+                let beforeOK = r.lowerBound == lower.startIndex || !lower[lower.index(before: r.lowerBound)].isLetter
+                let afterOK = r.upperBound == lower.endIndex || !lower[r.upperBound].isLetter
+                if beforeOK && afterOK { return true }
+                searchRange = r.upperBound..<lower.endIndex
+            }
+        }
+        return false
+    }
+
     /// Pure scan for a `phase <digit>` token (case-insensitive; the input
     /// is already lowercased by the caller). Matches "phase 1", "phase  2",
     /// "phase 3.2"; does NOT match "rephrase" or "phased" alone.
@@ -392,6 +444,39 @@ public enum SkillIntentScorer {
             // No signal — omit entirely (saves the caller from
             // surfacing zero-score noise).
         }
+
+        // Archive-vs-canonical (matcher-confidence fix): a candidate whose
+        // title carries an archive marker (`SpecialistFilter.isArchived`,
+        // e.g. "sk close agent · Archive") must never silently outrank a
+        // NON-archived candidate that scored equal-or-better on raw keyword
+        // overlap. This is a GENERAL, relative rule — not a hardcoded id/
+        // title check for any one skill — and it is deliberately relative
+        // rather than exclusionary:
+        //   • it only fires when a non-archived alternative is present in
+        //     THIS candidate set with score >= the archived candidate's raw
+        //     score, so an archived page with no live sibling still wins on
+        //     its own merits (fail-open, same bias as `isActiveSpecialist`);
+        //   • it nudges the archived candidate JUST below that best
+        //     non-archived score (a tiny epsilon) rather than zeroing it
+        //     out, so the archived page can still surface in a genuine
+        //     `.disambiguate` band if the caller wants to offer it — it
+        //     simply never wins the `.confident` slot over a live peer.
+        let nonArchivedScores = scored
+            .filter { !SpecialistFilter.isArchived(title: $0.candidate.name) }
+            .map { $0.score }
+        if let bestNonArchived = nonArchivedScores.max() {
+            let epsilon = 0.001
+            scored = scored.map { entry in
+                guard SpecialistFilter.isArchived(title: entry.candidate.name),
+                      entry.score >= bestNonArchived else { return entry }
+                return SkillIntentScore(
+                    candidate: entry.candidate,
+                    score: max(0, bestNonArchived - epsilon),
+                    reason: entry.reason
+                )
+            }
+        }
+
         // Sort by score desc, then name asc for stable ordering.
         scored.sort { lhs, rhs in
             if lhs.score != rhs.score { return lhs.score > rhs.score }
