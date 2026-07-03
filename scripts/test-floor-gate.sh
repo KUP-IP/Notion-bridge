@@ -1824,7 +1824,50 @@ set -euo pipefail
 # ordering/wiring — no real launchd/NSWorkspace/NSApplication touched).
 # Measured 3003 passed, 0 failed (2994 + 9, no other drift). FLOOR raised
 # 2994 → 3003 per the order-inversion rule.
-FLOOR="${BRIDGE_TEST_FLOOR:-3003}"
+#
+# Voice Memo Commit Quality Gate + Reliability (2026-07-03, GH #81 + GH #73,
+# REVIEW-FIRST): new VoiceMemoContentQualityGate.swift — an explicit,
+# reviewable minimum-information rule (>=8 whitespace-separated words AND
+# <40% disfluency-token ratio; below either ⇒ rejected) wired into
+# executeMemoryKeep BEFORE any Notion write, so a filler/fragment summary
+# (GH #81's 3 real repro strings: "I'm having fun with this idea", "At these
+# at these days, okay", "We, uh, terrible the sea" — all correctly rejected)
+# can never reach markedProcessed:true; both processOne (batch) and
+# commit(args:) route a gate-rejected memory_keep lane to the SAME review
+# queue with a stated reason, never a silent success. Promoted the
+# previously-undiscoverable fields.summary passthrough to a first-class
+# top-level `summary` schema parameter on voice_memo_commit
+# (VoiceMemoModule.swift) — VoiceMemoProcessor.swift's commit(args:) parser
+# now documents + wires it (applied after the generic `fields` object so an
+# explicit `summary` always wins). New VoiceMemoStageTimeout.swift (GH #73)
+# — a generic race-based timeout primitive (mirrors CredentialValidator's
+# existing timeout-race pattern, generalized to async throws) wraps the
+# transcribe/understand/execute stages in both processOne and commit(args:);
+# a stage that exceeds its budget degrades to the heuristic floor (understand)
+# or throws into the SAME graceful review-queue path a normal stage failure
+# already uses (transcribe/execute) — voice_memo_process and voice_memo_commit
+# now always terminate in {done, error, review-queue}, never an indefinite
+# hang with no completion payload. Every new code path is tested by driving
+# the REAL MCP args:-parsing entry points (VoiceMemoProcessor.commit(args:) /
+# process(args:)) with a real on-disk recording fixture — not a hand-built
+# VoiceMemoIntent shortcut — per this session's own PKT-MEM-136 lesson
+# (AGENT_FEEDBACK 2026-07-02: a suite that never drives commit(args:) hid a
+# real argument-wiring bug). Fixed one pre-existing fixture
+# (VoiceMemoTranscriptOverlapGuardTests.overlapPlan()'s 3-word placeholder
+# summary) that the new gate correctly flagged as filler — replaced with a
+# realistic short sentence so that file continues to test ONLY the
+# transcript-overlap guard, its actual concern. Deferred out of this packet's
+# hard DoD (REVIEW-FIRST scope decision, recorded in the packet): Memory Hub
+# Process-tab UI intent-chip parity (PKT-MEM-128/130 — audited and found
+# ALREADY correctly wired to the structured plan payload via
+# MemoryProcessCockpit.tagLabel/intentRows, no code change needed) and the
+# voice-router client→contact entity alias map (PKT-MEM-127 — confirmed
+# unimplemented; no "client" keyword routing exists anywhere in
+# VoiceMemoParser.swift's entityHints, which is hardcoded to entityKey:
+# "contact" today). Measured 3020 passed, 0 failed (3003 + 17 new tests, no
+# other drift; confirmed 3x deterministic). FLOOR raised 3003 → 3020 per the
+# order-inversion rule.
+FLOOR="${BRIDGE_TEST_FLOOR:-3020}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

@@ -350,7 +350,10 @@ public enum VoiceMemoModule {
             call per intent — is normal, expected agent-mode behavior, not an edge case: it mirrors the \
             Memory Hub UI's batch-confirm cockpit, where an operator can confirm several lanes (reminder, \
             memory_keep, agent_memory, registry_update) from one memo. Marks processed when the write \
-            succeeds and no review is queued.
+            succeeds and no review is queued. For intentKind=memory_keep, pass `summary` with a real, \
+            substantive summary whenever the auto-generated one looks like a weak transcript fragment — \
+            a summary that is too short or filler-dominated fails the minimum-information quality gate and \
+            routes to the review queue instead of writing an incomplete Memory record.
             """,
             inputSchema: .object([
                 "type": .string("object"),
@@ -386,6 +389,10 @@ public enum VoiceMemoModule {
                     "body": .object([
                         "type": .string("string"),
                         "description": .string("Comment text for intentKind=comment (preferred over title)."),
+                    ]),
+                    "summary": .object([
+                        "type": .string("string"),
+                        "description": .string("Substantive summary override for intentKind=memory_keep — replaces the heuristic plan.summary as the Notion Memory page's summary property and body text. Recommended whenever the auto-generated summary is a weak transcript fragment; must clear the minimum-information quality gate (non-filler, not too short) or the commit is routed to the review queue instead of being written."),
                     ]),
                     "purpose": .object([
                         "type": .string("string"),
