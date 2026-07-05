@@ -95,6 +95,10 @@ public enum RemoteControlPlanePolicy {
     public static func isBlocked(tool: ToolRegistration) -> Bool {
         blockedModules.contains(tool.module) || controlWriteTools.contains(tool.name)
     }
+
+    public static func requiresGovernedSession(tool: ToolRegistration, effectiveTier: SecurityTier) -> Bool {
+        tool.tier != .open || effectiveTier != .open
+    }
 }
 
 // PKT-373 P1-5: ExecutionPlanEntry removed (was dead code)
@@ -332,6 +336,36 @@ public actor ToolRouter {
                 "origin": .string(context.origin.rawValue),
                 "message": .string("Remote tunnel callers cannot invoke this local control-plane tool.")
             ])
+        }
+
+        if context.origin == .remote,
+           BridgeDefaults.brokerRemoteControlPlaneBlockEnabled,
+           RemoteControlPlanePolicy.requiresGovernedSession(tool: tool, effectiveTier: effectiveTier) {
+            let governed = try? await sessionRegistry.isGoverned(
+                transportSessionId: context.transportSessionId
+            )
+            if governed != true {
+                await auditLog.append(AuditEntry(
+                    timestamp: Date(),
+                    toolName: toolName,
+                    tier: effectiveTier,
+                    inputSummary: stringifySummary(arguments),
+                    outputSummary: "REJECTED: ungoverned_remote_session",
+                    durationMs: Self.elapsedMs(since: start),
+                    approvalStatus: .rejected,
+                    governed: governed,
+                    origin: context.origin,
+                    transportSessionId: context.transportSessionId,
+                    governanceNote: "ungoverned_remote_session"
+                ))
+                return .object([
+                    "ok": .bool(false),
+                    "error": .string("ungoverned_remote_session"),
+                    "tool": .string(toolName),
+                    "origin": .string(context.origin.rawValue),
+                    "message": .string("Remote callers must call bridge_initialize before invoking notify/request-tier tools.")
+                ])
+            }
         }
 
         // SecurityGate enforcement (async for request-tier approvals)

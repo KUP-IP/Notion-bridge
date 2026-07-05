@@ -202,6 +202,60 @@ func runWave1BrokerTests() async {
         }
     }
 
+    await test("W1 ToolRouter: ungoverned remote notify/request tools fail closed") {
+        try await withWave1TempHome { tmp in
+            let registry = SessionRegistry(path: tmp.appendingPathComponent("sessions.sqlite"))
+            try await registry.resetForTesting()
+            let log = AuditLog()
+            let router = ToolRouter(securityGate: SecurityGate(), auditLog: log, sessionRegistry: registry)
+            await router.register(ToolRegistration(
+                name: "memory_remember",
+                module: "memory",
+                tier: .notify,
+                description: "remember",
+                inputSchema: .object(["type": .string("object")]),
+                handler: { _ in .object(["ok": .bool(true)]) }
+            ))
+            await router.register(ToolRegistration(
+                name: "messages_send",
+                module: "messages",
+                tier: .request,
+                description: "send",
+                inputSchema: .object(["type": .string("object")]),
+                handler: { _ in .object(["ok": .bool(true)]) }
+            ))
+
+            for blocked in ["memory_remember", "messages_send"] {
+                let remote = await router.dispatchFormatted(
+                    toolName: blocked,
+                    arguments: .object([:]),
+                    context: .init(transportSessionId: "remote-session", origin: .remote, client: "remote")
+                )
+                try expect(remote.isError, "\(blocked) should reject before an ungoverned remote write")
+                try expect(remote.text.contains("ungoverned_remote_session"))
+            }
+
+            _ = try await registry.open(transportSessionId: "remote-session", client: "remote", mode: .execute)
+            let governedRemote = await router.dispatchFormatted(
+                toolName: "memory_remember",
+                arguments: .object([:]),
+                context: .init(transportSessionId: "remote-session", origin: .remote, client: "remote")
+            )
+            try expect(!governedRemote.isError, "governed remote notify-tier tool should run")
+
+            let local = await router.dispatchFormatted(
+                toolName: "memory_remember",
+                arguments: .object([:]),
+                context: .localDefault
+            )
+            try expect(!local.isError, "local notify-tier tool should not require broker governance")
+
+            let rejected = await log.entries(withStatus: .rejected)
+            try expect(rejected.count == 2)
+            try expect(rejected.allSatisfy { $0.governanceNote == "ungoverned_remote_session" })
+        }
+    }
+
     await test("W1 remote control-plane fixture: predicate catches the expected tool surface") {
         let registered: [ToolRegistration] = [
             .init(name: "shell_exec", module: "shell", tier: .open, description: "", inputSchema: .null, handler: { _ in .null }),
