@@ -12,6 +12,7 @@ Keychain credentials + payment execution · iMessage/Mail identity (send-as-oper
 - Remote classification: Cloudflare tunnel header (`SSEServer.isRemoteTunnelRequest`, PKT-810); loopback-without-header is local by contract.
 - **Fail-closed bearer:** tunnel configured + no bearer token ⇒ all `POST /mcp` 401 (`MCPHTTPValidation`, Keychain `mcp_bearer_token`). OAuth gate for remote; DNS-rebinding host/origin allowlist (localhost + parsed tunnel host).
 - **Fail-closed broker gate for remote writes:** tunnel-origin notify/request-tier tools require a governed session row from `bridge_initialize`; otherwise `ToolRouter` rejects with `ungoverned_remote_session` before SecurityGate/module execution and writes an audit entry.
+- **Broker-first import surface:** `tools/list` advertises `bridge_initialize`, `bridge_status`, `tools_list`, and `session_info` first so remote clients can import the broker before any catalog cap or refresh friction.
 - SecurityGate tiers + nuclear-pattern handoffs apply to all calls regardless of origin; append-only audit log.
 - Legacy SSE endpoints refuse tunnel-origin requests (verified in `SSETransport` guards).
 
@@ -29,7 +30,7 @@ Keychain credentials + payment execution · iMessage/Mail identity (send-as-oper
 
 ## Ship Gate checklist (W1)
 
-1. Live remote test: every D9c-blocklisted tool rejected from a real tunnel-origin call; ungoverned remote notify/request tool rejected; allowed open/read tool passes; local caller unaffected.
+1. Live remote test: `bridge_initialize` is callable from the remote client; every D9c-blocklisted tool rejected from a real tunnel-origin call; ungoverned remote notify/request tool rejected; allowed open/read tool passes; local caller unaffected.
 2. Bearer fail-closed re-verified (unset token ⇒ 401).
 3. Cloudflare Access policy present on the tunnel hostname.
 4. Audit log shows origin + governed flags on remote calls.

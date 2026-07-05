@@ -101,6 +101,25 @@ public enum RemoteControlPlanePolicy {
     }
 }
 
+public enum BrokerBootstrapToolOrdering {
+    public static let priority: [String] = [
+        "bridge_initialize",
+        "bridge_status",
+        "tools_list",
+        "session_info",
+    ]
+
+    public static func prioritize(_ registrations: [ToolRegistration]) -> [ToolRegistration] {
+        let rank = Dictionary(uniqueKeysWithValues: priority.enumerated().map { ($0.element, $0.offset) })
+        return registrations.enumerated().sorted { lhs, rhs in
+            let lhsRank = rank[lhs.element.name] ?? Int.max
+            let rhsRank = rank[rhs.element.name] ?? Int.max
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+}
+
 // PKT-373 P1-5: ExecutionPlanEntry removed (was dead code)
 
 // MARK: - ToolRouter Actor

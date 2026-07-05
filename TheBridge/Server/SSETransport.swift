@@ -897,6 +897,7 @@ public actor SSEServer {
             if let allowlist = toolAllowlist {
                 regs = regs.filter { allowlist.contains($0.name) }
             }
+            regs = BrokerBootstrapToolOrdering.prioritize(regs)
             let tools: [[String: Any]] = regs.compactMap { reg in
                 guard let data = try? JSONEncoder().encode(MCPToolFactory.tool(for: reg)),
                       let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]

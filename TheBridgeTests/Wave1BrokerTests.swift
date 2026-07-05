@@ -293,6 +293,31 @@ func runWave1BrokerTests() async {
         ])
     }
 
+    await test("W1 tools/list: broker bootstrap tools are ordered first") {
+        let registered: [ToolRegistration] = [
+            .init(name: "shell_exec", module: "shell", tier: .open, description: "", inputSchema: .null, handler: { _ in .null }),
+            .init(name: "memory_remember", module: "memory", tier: .notify, description: "", inputSchema: .null, handler: { _ in .null }),
+            .init(name: "session_info", module: "session", tier: .open, description: "", inputSchema: .null, handler: { _ in .null }),
+            .init(name: "bridge_initialize", module: "standing_orders", tier: .open, description: "", inputSchema: .null, handler: { _ in .null }),
+            .init(name: "tools_list", module: "session", tier: .open, description: "", inputSchema: .null, handler: { _ in .null }),
+            .init(name: "bridge_status", module: "cloud", tier: .open, description: "", inputSchema: .null, handler: { _ in .null }),
+            .init(name: "contacts_search", module: "contacts", tier: .open, description: "", inputSchema: .null, handler: { _ in .null }),
+        ]
+
+        let ordered = BrokerBootstrapToolOrdering.prioritize(registered).map(\.name)
+        try expect(Array(ordered.prefix(4)) == [
+            "bridge_initialize",
+            "bridge_status",
+            "tools_list",
+            "session_info",
+        ])
+        try expect(Array(ordered.dropFirst(4)) == [
+            "shell_exec",
+            "memory_remember",
+            "contacts_search",
+        ], "non-bootstrap tools must keep their original relative order")
+    }
+
     await test("W1 doctrine_sync: request-tier writer refreshes doctrine core") {
         try await withWave1TempHome { _ in
             try StandingOrdersStore.shared.resetForTesting()
