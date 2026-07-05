@@ -288,7 +288,8 @@ func runRemoteOAuthBearerTests() async {
         // connector-reachable tool — across every bucket — must be allowed:
         // authentication is the grant, SecurityGate/step-up are the per-call guard.
         for tool in ["snippets_list", "snippets_create", "snippets_delete",
-                     "shell_exec", "job_run", "contacts_get", "contacts_resolve_handle"] {
+                     "shell_exec", "job_run", "bridge_initialize", "bridge_status",
+                     "tools_list", "session_info", "contacts_get", "contacts_resolve_handle"] {
             let d = await gate.evaluate(toolName: tool, grantedScopes: [])
             guard case .allow = d else {
                 throw TestError.assertion("scope-less token must reach reachable tool \(tool)")
@@ -419,6 +420,13 @@ func runRemoteOAuthBearerTests() async {
         try expect(req == ["snippets.write"], "got \(req)")
     }
 
+    await test("ScopeGate: requiredScopes — bridge session tools require bridge.session") {
+        for tool in ["bridge_initialize", "bridge_status", "tools_list", "session_info"] {
+            let req = try await gate.requiredScopes(for: tool).map(\.name)
+            try expect(req == ["bridge.session"], "\(tool) got \(req)")
+        }
+    }
+
     await test("ScopeGate: requiredScopes — unknown/non-connector tool is empty") {
         let req = try await gate.requiredScopes(for: "screen_capture")
         try expect(req.isEmpty, "non-connector tool must have no required scopes")
@@ -435,6 +443,10 @@ func runRemoteOAuthBearerTests() async {
         try expect(reachable.contains("snippets_list"))
         try expect(reachable.contains("snippets_create"))
         try expect(reachable.contains("shell_exec"))
+        try expect(reachable.contains("bridge_initialize"))
+        try expect(reachable.contains("bridge_status"))
+        try expect(reachable.contains("tools_list"))
+        try expect(reachable.contains("session_info"))
         try expect(reachable.contains("contacts_resolve_handle"))
         try expect(reachable.contains("contacts_get"),
                    "S4: the contacts.read bucket must be connector-reachable")

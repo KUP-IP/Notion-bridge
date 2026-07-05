@@ -38,13 +38,15 @@
 
 import Foundation
 
-/// Canonical connector scope identifiers (wire strings — must match the
-/// PRM `scopes_supported` contract in `ProtectedResourceMetadataProvider`).
+/// Canonical connector scope identifiers for Bridge's internal scoped-token
+/// path. The public PRM currently advertises AuthKit OpenID scopes separately
+/// because WorkOS does not mint these app-custom names.
 public enum ConnectorScopeName {
     public static let snippetsRead = "snippets.read"
     public static let snippetsWrite = "snippets.write"
     public static let voiceResolve = "voice.resolve"
     public static let runnersExec = "runners.exec"
+    public static let bridgeSession = "bridge.session"
     /// S4 (PKT-800): a dedicated scope for tools that return contact
     /// RECORDS / personal data, split out of the over-broad
     /// `voice.resolve`. Independent of `voice.resolve` (neither implies
@@ -52,7 +54,7 @@ public enum ConnectorScopeName {
     public static let contactsRead = "contacts.read"
 
     public static let all: [String] = [
-        snippetsRead, snippetsWrite, voiceResolve, runnersExec, contactsRead,
+        snippetsRead, snippetsWrite, voiceResolve, runnersExec, bridgeSession, contactsRead,
     ]
 }
 
@@ -91,6 +93,14 @@ public struct ConnectorScopeGate: ScopeGating {
         "devserver_start", "devserver_stop", "devserver_health",
     ]
 
+    /// Broker/session control-plane tools that remote connectors must be able
+    /// to reach before any domain action. These are still guarded by
+    /// SecurityGate and per-tool annotations; this bucket only makes the
+    /// connector allowlist explicit.
+    private static let bridgeSessionTools: Set<String> = [
+        "bridge_initialize", "bridge_status", "tools_list", "session_info",
+    ]
+
     /// Contact-RECORD / personal-data tools: require `contacts.read`.
     /// S4 (PKT-800): split out of `voiceResolveTools`. These return the
     /// caller's address-book entries (name, phones, emails, etc.) — the
@@ -112,13 +122,14 @@ public struct ConnectorScopeGate: ScopeGating {
         "contacts_resolve_handle", "contacts_health",
     ]
 
-    /// The complete connector-reachable tool set (union of the five
+    /// The complete connector-reachable tool set (union of the six
     /// buckets). Anything outside this set is not exposed to remote
     /// connector clients at all and is denied regardless of scope.
     public static var connectorReachableTools: Set<String> {
         snippetReadTools
             .union(snippetWriteTools)
             .union(runnerExecTools)
+            .union(bridgeSessionTools)
             .union(contactsReadTools)
             .union(voiceResolveTools)
     }
@@ -139,6 +150,9 @@ public struct ConnectorScopeGate: ScopeGating {
         }
         if Self.runnerExecTools.contains(toolName) {
             return [ConnectorScope(name: ConnectorScopeName.runnersExec)]
+        }
+        if Self.bridgeSessionTools.contains(toolName) {
+            return [ConnectorScope(name: ConnectorScopeName.bridgeSession)]
         }
         if Self.contactsReadTools.contains(toolName) {
             return [ConnectorScope(name: ConnectorScopeName.contactsRead)]
