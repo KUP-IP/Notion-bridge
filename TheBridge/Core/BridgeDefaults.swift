@@ -108,6 +108,28 @@ public enum BridgeDefaults {
     /// by `MemoryAutoInjectClientStore`.
     public static let memoryAutoInjectClientOverrides = "com.notionbridge.memory.autoInjectClientOverrides"
 
+    // MARK: - Wave 1 Broker
+
+    /// Bridge Evolution W1: when enabled, remote tunnel-origin callers cannot
+    /// invoke local control-plane tools even after OAuth. Missing key defaults
+    /// ON so every existing install receives the safety predicate immediately.
+    public static let brokerRemoteControlPlaneBlock = "com.notionbridge.broker.remoteControlPlaneBlock"
+
+    public static var brokerRemoteControlPlaneBlockEnabled: Bool {
+        if UserDefaults.standard.object(forKey: brokerRemoteControlPlaneBlock) == nil { return true }
+        return UserDefaults.standard.bool(forKey: brokerRemoteControlPlaneBlock)
+    }
+
+    /// Bridge Evolution W1: when enabled, successful tool results from a
+    /// transport session that has not called bridge_initialize carry an advisory
+    /// governance annotation. Missing key defaults ON.
+    public static let brokerAdvisoryAnnotation = "com.notionbridge.broker.advisoryAnnotation"
+
+    public static var brokerAdvisoryAnnotationEnabled: Bool {
+        if UserDefaults.standard.object(forKey: brokerAdvisoryAnnotation) == nil { return true }
+        return UserDefaults.standard.bool(forKey: brokerAdvisoryAnnotation)
+    }
+
     // MARK: - Commands Palette (cmd-ux)
 
     /// Master on/off for the Commands palette (global-hotkey command box).

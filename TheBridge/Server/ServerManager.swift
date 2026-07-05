@@ -330,7 +330,15 @@ public actor ServerManager {
                     toolName: params.name
                 )
             }
-            let (text, isError) = await router.dispatchFormatted(toolName: params.name, arguments: arguments)
+            let (text, isError) = await router.dispatchFormatted(
+                toolName: params.name,
+                arguments: arguments,
+                context: ToolDispatchContext(
+                    transportSessionId: Self.stdioSessionID,
+                    origin: .local,
+                    client: "stdio"
+                )
+            )
             if !isError { await MainActor.run { onToolCall() } }
             return .init(content: [.text(.init(text))], isError: isError)
         }

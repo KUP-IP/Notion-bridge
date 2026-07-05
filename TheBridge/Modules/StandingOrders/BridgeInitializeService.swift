@@ -97,6 +97,8 @@ public struct HandshakeReceipt: Codable, Sendable, Equatable {
     /// Operator-facing capability notes emitted by any probes that ran (empty
     /// on a data-minimal handshake). PKT-1065C.
     public let capabilityNotes: [String]
+    public let session: BrokerSessionRecord?
+    public let constitution: ConstitutionBundle?
     public let finalState: StandingOrdersStore.InitializationState
 
     public init(
@@ -120,6 +122,8 @@ public struct HandshakeReceipt: Codable, Sendable, Equatable {
         capabilityMatrix: [CapabilityEntry],
         preflightIntent: PreflightIntent = .none,
         capabilityNotes: [String] = [],
+        session: BrokerSessionRecord? = nil,
+        constitution: ConstitutionBundle? = nil,
         finalState: StandingOrdersStore.InitializationState
     ) {
         self.handshakeId = handshakeId
@@ -142,6 +146,8 @@ public struct HandshakeReceipt: Codable, Sendable, Equatable {
         self.capabilityMatrix = capabilityMatrix
         self.preflightIntent = preflightIntent
         self.capabilityNotes = capabilityNotes
+        self.session = session
+        self.constitution = constitution
         self.finalState = finalState
     }
 
@@ -185,7 +191,7 @@ public struct BridgeInitializeContext: Sendable {
 public enum BridgeInitializeService {
 
     /// Current receipt schema contract version. Bump on any shape change.
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
 
     /// A supplemental order is deliberately inert ("ignored") when it is
     /// archived OR explicitly marked as a no-op / TEMP directive. The marker
@@ -225,7 +231,9 @@ public enum BridgeInitializeService {
         handshakeId: String = UUID().uuidString,
         telemetryEventRef: String,
         intent: PreflightIntent = .none,
-        probeResults: [CapabilityProbeResult] = []
+        probeResults: [CapabilityProbeResult] = [],
+        session: BrokerSessionRecord? = nil,
+        constitution: ConstitutionBundle? = nil
     ) -> HandshakeReceipt {
         // 1–3: doctrine load + hash verify + integrity policy (init axis).
         try? StandingOrdersStore.shared.ensureInitializationContract()
@@ -251,6 +259,10 @@ public enum BridgeInitializeService {
             finalState = .incomplete
         } else if routingQuality == .sparse {
             routingWarnings.append("Routing roster is sparse — routing may be unreliable.")
+        }
+        if constitution?.doctrineFreshness == .stale && finalState == .complete {
+            routingWarnings.append("Doctrine core is stale; doctrine_sync should refresh it before release.")
+            finalState = .degraded
         }
 
         // Supplemental order tri-state (found / operative / ignored).
@@ -330,6 +342,8 @@ public enum BridgeInitializeService {
             capabilityMatrix: matrix,
             preflightIntent: intent,
             capabilityNotes: capabilityNotes,
+            session: session,
+            constitution: constitution,
             finalState: finalState
         )
     }
@@ -340,10 +354,14 @@ public enum BridgeInitializeService {
     @discardableResult
     public static func run(
         context: BridgeInitializeContext,
+        mode: BrokerSessionMode = .general,
+        includeConstitution: Bool = true,
+        sessionRegistry: SessionRegistry = .shared,
         store: StandingOrdersRecordStore = .shared,
         receiptStore: HandshakeReceiptStore = .shared,
         intent: PreflightIntent = .none,
-        preflight: CapabilityPreflightRegistry? = nil
+        preflight: CapabilityPreflightRegistry? = nil,
+        constitutionStore: ConstitutionStore = ConstitutionStore()
     ) async -> HandshakeReceipt {
         let supplemental = await store.list(includeArchived: true)
         let handshakeId = UUID().uuidString
@@ -353,13 +371,26 @@ public enum BridgeInitializeService {
         // Intent-sensitive capability preflight — a domain probe runs ONLY when
         // the opening intent requires it. `.none` (universal init) runs NONE.
         let probeResults = await preflight?.run(intent: intent) ?? []
+        let dispatchContext = ToolDispatchContext.current
+        let transportSessionId = dispatchContext?.transportSessionId ?? ServerManager.stdioSessionID
+        let brokerSession = try? await sessionRegistry.open(
+            transportSessionId: transportSessionId,
+            client: context.client ?? dispatchContext?.client,
+            mode: mode,
+            startedAt: context.now
+        )
+        let constitution = includeConstitution
+            ? (try? await constitutionStore.assemble(supplementalStore: store, commandStore: .shared))
+            : nil
         let receipt = buildReceipt(
             context: context,
             supplemental: supplemental,
             handshakeId: handshakeId,
             telemetryEventRef: telemetryEventId,
             intent: intent,
-            probeResults: probeResults
+            probeResults: probeResults,
+            session: brokerSession,
+            constitution: constitution
         )
         // Persist durably (best-effort; a write failure must not crash a
         // handshake — the receipt is still returned and telemetry still fires).
@@ -367,7 +398,7 @@ public enum BridgeInitializeService {
         // Emit the per-handshake telemetry event, linked to session telemetry.
         DeliveryLog.shared.recordHandshakeInitialized(
             eventID: telemetryEventId,
-            sessionID: context.client ?? handshakeId,
+            sessionID: brokerSession?.sessionId ?? context.client ?? handshakeId,
             clientName: context.client,
             handshakeId: handshakeId,
             finalState: receipt.finalState.rawValue,
