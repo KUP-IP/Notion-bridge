@@ -174,6 +174,11 @@ public struct ConnectorBearerValidator: Sendable {
     private let expectedAudience: String
     private let hasKeys: Bool
 
+    /// True when this validator has at least one configured verification key.
+    /// Exposed so cloud-readiness reporting can distinguish "HTTP listener is
+    /// up" from "remote OAuth can actually validate connector bearers".
+    public var hasConfiguredKeys: Bool { hasKeys }
+
     /// Designated initializer — explicit key collection (test seam).
     public init(
         keys: JWTKeyCollection,

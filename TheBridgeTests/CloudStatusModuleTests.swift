@@ -161,7 +161,7 @@ func runCloudStatusModuleTests() async {
         try expect(obj["schemaVersion"] == .int(CloudStatusPayload.schemaVersion), "schemaVersion field")
     }
 
-    await test("WS-D bridge_status: degraded is 'up'; offline/disabled are 'down'") {
+    await test("WS-D bridge_status: degraded is 'up'; connecting/offline/disabled are 'down'") {
         // Pure payload-builder checks across all five states.
         try expect(CloudStatusPayload.isUp(.online), "online up")
         try expect(CloudStatusPayload.isUp(.degraded), "degraded up")
@@ -173,6 +173,11 @@ func runCloudStatusModuleTests() async {
             try expect(deg["up"] == .bool(true) && deg["macToolsAvailable"] == .bool(true),
                        "degraded ⇒ up + macToolsAvailable true")
         } else { throw TestError.assertion("degraded payload not an object") }
+
+        if case .object(let conn) = CloudStatusPayload.make(state: .connecting) {
+            try expect(conn["up"] == .bool(false) && conn["macToolsAvailable"] == .bool(false),
+                       "connecting ⇒ up + macToolsAvailable false")
+        } else { throw TestError.assertion("connecting payload not an object") }
 
         if case .object(let off) = CloudStatusPayload.make(state: .offline) {
             try expect(off["up"] == .bool(false) && off["macToolsAvailable"] == .bool(false),
@@ -197,6 +202,14 @@ func runCloudStatusModuleTests() async {
         let filtered = ServerManager.filterForCloud(regs, cloudState: .disabled)
         try expect(Set(filtered.map(\.name)) == [CloudStatusModule.toolName],
                    "disabled cloud request must expose ONLY bridge_status")
+    }
+
+    await test("WS-D tools/list: CLOUD + .connecting → only bridge_status") {
+        var regs = sampleMacTools()
+        regs.append(CloudStatusModule.makeTool(manager: await makeManager(health: .healthy)))
+        let filtered = ServerManager.filterForCloud(regs, cloudState: .connecting)
+        try expect(Set(filtered.map(\.name)) == [CloudStatusModule.toolName],
+                   "connecting cloud request must expose ONLY bridge_status")
     }
 
     await test("WS-D tools/list: CLOUD + .online/.degraded → full list (Mac tools shown)") {

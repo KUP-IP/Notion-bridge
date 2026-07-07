@@ -23,6 +23,10 @@
 //                         grant that only needs voice-handle resolution
 //                         can no longer read the full address book —
 //                         least-privilege per data-sensitivity tier.
+//   • bootstrap        → canonical Bridge bootstrap/readiness tools
+//                         (`bridge_initialize`). These are available to any
+//                         authenticated connector grant; they mutate no
+//                         operator config and are needed before routing.
 //   • voice.resolve    → voice-resolution-specific tools ONLY: handle →
 //                         identity resolution + the resolver health probe
 //                         (`contacts_resolve_handle`, `contacts_health`).
@@ -112,6 +116,14 @@ public struct ConnectorScopeGate: ScopeGating {
         "contacts_resolve_handle", "contacts_health",
     ]
 
+    /// Bootstrap/readiness tools that are safe and necessary at connector
+    /// session start. `bridge_initialize` persists only its own evidence
+    /// receipt and returns doctrine/routing/capability state; it must be
+    /// callable before a client can route work correctly.
+    private static let bootstrapTools: Set<String> = [
+        "bridge_initialize",
+    ]
+
     /// The complete connector-reachable tool set (union of the five
     /// buckets). Anything outside this set is not exposed to remote
     /// connector clients at all and is denied regardless of scope.
@@ -121,6 +133,7 @@ public struct ConnectorScopeGate: ScopeGating {
             .union(runnerExecTools)
             .union(contactsReadTools)
             .union(voiceResolveTools)
+            .union(bootstrapTools)
     }
 
     /// Scopes that, if granted, authorize `toolName`. Empty ⇒ the tool is
@@ -146,6 +159,14 @@ public struct ConnectorScopeGate: ScopeGating {
         if Self.voiceResolveTools.contains(toolName) {
             return [ConnectorScope(name: ConnectorScopeName.voiceResolve)]
         }
+        if Self.bootstrapTools.contains(toolName) {
+            // Bootstrap is authorized by any authenticated connector grant.
+            // Returning the known custom scope set preserves the "required is
+            // non-empty means connector-reachable" contract while allowing:
+            //   • AuthKit/OpenID-only tokens via the directory fallback, and
+            //   • legacy custom-scoped tokens with any Bridge connector scope.
+            return ConnectorScopeName.all.map { ConnectorScope(name: $0) }
+        }
         return []
     }
 
@@ -162,18 +183,23 @@ public struct ConnectorScopeGate: ScopeGating {
             )
         }
         let grantedSet = Set(grantedScopes.map(\.name))
+        let grantedConnectorSet = grantedSet.intersection(Set(ConnectorScopeName.all))
         // PKT-810 directory-connector model: WorkOS AuthKit cannot mint the
         // connector's custom scopes (an authorize that requests them is
         // rejected with `invalid_scope`), so a validly-authenticated directory
-        // token arrives carrying NO connector scopes. Treat authentication as
-        // the grant for the connector-reachable ALLOWLIST: the tool is already
-        // known-reachable (`required` is non-empty above), tools outside the
-        // allowlist are still denied, and SecurityGate (open/notify/confirm) +
-        // step-up consent on destructive tools remain the real per-call safety
-        // layer. A token that DOES carry connector scopes keeps the strict
-        // per-scope intersection below (back-compatible with scoped grants).
-        if grantedSet.isEmpty { return .allow }
-        let satisfied = required.contains { grantedSet.contains($0.name) }
+        // token arrives carrying NO Bridge custom connector scopes. It may
+        // still carry standard OpenID scopes (`openid email profile
+        // offline_access`), so key the directory-model fallback off the absence
+        // of recognized Bridge scopes, not off the raw OAuth scope string being
+        // empty. Treat authentication as the grant for the connector-reachable
+        // ALLOWLIST: the tool is already known-reachable (`required` is
+        // non-empty above), tools outside the allowlist are still denied, and
+        // SecurityGate (open/notify/confirm) + step-up on destructive tools
+        // remain the per-call safety layer. A token that DOES carry Bridge
+        // connector scopes keeps the strict per-scope intersection below
+        // (back-compatible with scoped grants).
+        if grantedConnectorSet.isEmpty { return .allow }
+        let satisfied = required.contains { grantedConnectorSet.contains($0.name) }
         if satisfied { return .allow }
 
         let need = required.map(\.name).joined(separator: " | ")

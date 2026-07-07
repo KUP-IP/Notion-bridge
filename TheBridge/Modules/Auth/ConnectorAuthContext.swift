@@ -33,12 +33,13 @@ public struct ConnectorAuthContext: Sendable {
     /// where to discover the authorization server.
     public let resourceMetadataURL: String
 
-    /// Connector tool-authorization policy. DEFAULT false = full parity: an
-    /// authenticated connector token may reach every tool, gated only by the
-    /// per-tool SecurityGate at dispatch (WorkOS authenticates only the
-    /// operator, and AuthKit issues scope-less tokens, so the ConnectorScopeGate
-    /// would otherwise deny every tool). When true, the scope + step-up gates
-    /// are additionally enforced before dispatch.
+    /// Connector tool-authorization policy. DEFAULT true = enforce the remote
+    /// connector allowlist plus destructive-tool step-up before dispatch.
+    /// WorkOS/AuthKit directory tokens that carry only OpenID scopes still map
+    /// to the connector-reachable allowlist inside ConnectorScopeGate; tools
+    /// outside that allowlist are denied, and destructive tools require the
+    /// AS-minted step-up scope. Tests or legacy local shims can opt out by
+    /// passing false explicitly.
     public let strictScopes: Bool
 
     public init(
@@ -48,7 +49,7 @@ public struct ConnectorAuthContext: Sendable {
         sessionBinding: ConnectorSessionBinding = ConnectorSessionBinding(),
         diagnostics: ConnectorAuthDiagnostics = ConnectorAuthDiagnostics(),
         resourceMetadataURL: String,
-        strictScopes: Bool = false
+        strictScopes: Bool = true
     ) {
         self.validator = validator
         self.scopeGate = scopeGate

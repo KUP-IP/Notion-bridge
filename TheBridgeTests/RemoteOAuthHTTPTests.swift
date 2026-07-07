@@ -152,6 +152,28 @@ func runRemoteOAuthHTTPTests() async {
         try expect(a == b, "PRM JSON body must be byte-stable for caching")
     }
 
+    await test("PRM: serving decision threads config/baked values into the served JSON body") {
+        let decision = ProtectedResourceMetadataProvider.prmServingDecision(
+            environment: [:],
+            config: { key in
+                switch key {
+                case "oauthIssuer": return "https://config.auth.example"
+                case "publicResource": return "https://config.mcp.example/mcp"
+                default: return nil
+                }
+            },
+            baked: ""
+        )
+        guard case .serve(let data) = decision else {
+            throw TestError.assertion("configured PRM decision should serve")
+        }
+        let decoded = try JSONDecoder().decode(ProtectedResourceMetadata.self, from: data)
+        try expect(decoded.authorizationServers == ["https://config.auth.example"],
+                   "served PRM body ignored configured issuer: \(decoded.authorizationServers)")
+        try expect(decoded.resource == "https://config.mcp.example/mcp",
+                   "served PRM body ignored configured public resource: \(decoded.resource)")
+    }
+
     // MARK: - Transport gating (stdio non-regression invariant)
 
     await test("TransportRouter: default (no env) is [.stdio] only") {

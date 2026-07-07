@@ -485,8 +485,32 @@ public actor SSEServer {
 
     // MARK: - Health Endpoint (V1-QUALITY-C2)
 
+    /// Remote OAuth readiness for operator-facing health/status surfaces.
+    public struct RemoteOAuthReadiness: Sendable, Equatable {
+        public let ready: Bool
+        public let status: String
+    }
+
+    public static func remoteOAuthReadiness(
+        connectorAuth: ConnectorAuthContext?,
+        isMisconfigured: Bool = ProtectedResourceMetadataProvider.isMisconfigured()
+    ) -> RemoteOAuthReadiness {
+        guard let connectorAuth else {
+            return RemoteOAuthReadiness(ready: false, status: "inactive")
+        }
+        if isMisconfigured {
+            return RemoteOAuthReadiness(ready: false, status: "misconfigured_issuer")
+        }
+        if !connectorAuth.validator.hasConfiguredKeys {
+            return RemoteOAuthReadiness(ready: false, status: "missing_verification_keys")
+        }
+        return RemoteOAuthReadiness(ready: true, status: "ready")
+    }
+
     /// Build the JSON health response.
-    /// Returns: {"status": "running", "tools": N, "uptime": N, "version": "X.Y.Z", "clients": N}
+    /// Returns server-local health plus remote OAuth readiness. `status=running`
+    /// only means the local HTTP process is alive; `remoteOAuthReady` states
+    /// whether tunnel-origin connector calls can actually authenticate.
     private func buildHealthResponse() async -> Data {
         let appVersion = AppVersion.resolved
         let toolCount = await router.allRegistrations().count
@@ -499,6 +523,7 @@ public actor SSEServer {
         // resume and how many reconnects we've answered with the resume signal.
         let persistedCount = await sessionStore.count
         let priorRunClean = await sessionStore.priorRunEndedCleanly()
+        let oauthReadiness = Self.remoteOAuthReadiness(connectorAuth: connectorAuth)
 
         let health: [String: Any] = [
             "status": "running",
@@ -517,7 +542,9 @@ public actor SSEServer {
             "sessionsClosed": diagnostics.totalSessionsClosed,
             "sessionsPersisted": persistedCount,
             "sessionsResumeSignaled": totalSessionsResumeSignaled,
-            "priorRunEndedCleanly": priorRunClean
+            "priorRunEndedCleanly": priorRunClean,
+            "remoteOAuthReady": oauthReadiness.ready,
+            "remoteOAuthStatus": oauthReadiness.status
         ]
 
         return (try? JSONSerialization.data(withJSONObject: health, options: [.sortedKeys])) ?? Data()
@@ -618,6 +645,8 @@ public actor SSEServer {
                     for: .malformedToken("\(error)"), auth: auth
                 )
             }
+        } else if Self.isRemoteTunnelRequest(request) {
+            return Self.remoteOAuthInactiveResponse()
         }
 
         return await processStreamableHTTP(request)
@@ -718,6 +747,21 @@ public actor SSEServer {
         )
     }
 
+    /// Remote tunnel traffic reached `/mcp`, but this Bridge process did not
+    /// build a connector auth context. That is not a local-client case; it means
+    /// the cloud/OAuth startup invariant failed (for example missing
+    /// BRIDGE_ENABLE_HTTP / config at process launch). Fail loudly so remote
+    /// clients never see a green local session backed by the wrong auth model.
+    public static func remoteOAuthInactiveResponse() -> HTTPResponse {
+        .error(
+            statusCode: 503,
+            .invalidRequest(
+                "Remote OAuth is not ready: connector auth is inactive for this Bridge process. "
+                + "Verify BRIDGE_ENABLE_HTTP/config, OAuth issuer/resource/JWKS, and relaunch The Bridge."
+            )
+        )
+    }
+
     /// Post-bearer connector dispatch. The bearer is already verified.
     ///
     /// Order (all NO-dispatch on failure, distinct machine-readable
@@ -760,15 +804,12 @@ public actor SSEServer {
             )
         }
 
-        // Connector tool-authorization policy. DEFAULT = full parity: an
-        // authenticated connector token (a verified OAuth JWT from the operator's
-        // own WorkOS tenant, or the loopback static bearer) may reach every tool,
-        // exactly like a local client — the per-tool SecurityGate (tier +
-        // confirmation prompts) is the real guardrail at dispatch, and WorkOS can
-        // only ever authenticate the operator. The scope/step-up gates below are
-        // an OPTIONAL stricter layer applied ONLY when `strictScopes` is set on
-        // the ConnectorAuthContext; otherwise they would 403 every tool, since
-        // WorkOS AuthKit issues scope-less tokens (no app-custom scopes).
+        // Connector tool-authorization policy. Production defaults to strict:
+        // remote tokens may reach only the connector allowlist, with destructive
+        // tool calls requiring step-up. WorkOS/AuthKit tokens that carry only
+        // standard OpenID scopes are treated as authenticated directory tokens by
+        // ConnectorScopeGate, while tokens carrying Bridge custom scopes still
+        // use strict per-scope intersection.
         if auth.strictScopes, let toolName = Self.toolCallTarget(in: request.body) {
             // 2. Scope gate.
             let decision = await auth.scopeGate.evaluate(
@@ -844,22 +885,34 @@ public actor SSEServer {
 
         switch method {
         case "initialize":
+            var clientName: String?
             if let params = json["params"] as? [String: Any],
                let clientInfo = params["clientInfo"] as? [String: Any],
                let name = clientInfo["name"] as? String {
+                clientName = name
                 let version = clientInfo["version"] as? String ?? "unknown"
                 let onClientConnected = self.onClientConnected
                 await MainActor.run { onClientConnected(name, version) }
                 print("[SSE-Connector] Client identified: \(name) v\(version)")
             }
+            let composition = await StandingOrdersDelivery.asyncComposition(clientName: clientName)
+            DeliveryLog.shared.recordHandshakeDelivered(
+                sessionID: sessionID,
+                clientName: clientName,
+                tokenCount: composition.tokenCount,
+                contentHash: composition.contentHash
+            )
             let data = buildRPCResponse(id: requestId, result: [
                 "protocolVersion": BridgeConstants.mcpProtocolVersion,
-                "capabilities": ["tools": [:] as [String: Any]] as [String: Any],
+                "capabilities": [
+                    "tools": [:] as [String: Any],
+                    "resources": ["subscribe": true, "listChanged": true] as [String: Any],
+                ] as [String: Any],
                 "serverInfo": [
                     "name": "The Bridge",
                     "version": AppVersion.resolved
                 ] as [String: Any],
-                "instructions": "Use The Bridge tools for approved local Mac and KEEP OS actions. Prefer read-only tools first, and treat write, send, delete, payment, and calendar actions as confirmation-sensitive."
+                "instructions": composition.instructionsMarkdown
             ] as [String: Any]) ?? Data()
             return .data(data, headers: headers)
 
@@ -909,6 +962,54 @@ public actor SSEServer {
             return .data(data, headers: headers)
 
         case "ping":
+            let data = buildRPCResponse(id: requestId, result: [:] as [String: Any]) ?? Data()
+            return .data(data, headers: headers)
+
+        case "resources/list":
+            let data = buildRPCResponse(id: requestId, result: [
+                "resources": BridgeResources.listAsDictionaries
+            ] as [String: Any]) ?? Data()
+            return .data(data, headers: headers)
+
+        case "resources/read":
+            let params = json["params"] as? [String: Any] ?? [:]
+            guard let uri = params["uri"] as? String else {
+                let data = buildRPCError(id: requestId, code: -32602, message: "Missing 'uri' parameter") ?? Data()
+                return .data(data, headers: headers)
+            }
+            do {
+                let markdown = try await BridgeResources.markdown(for: uri, clientName: nil)
+                DeliveryLog.shared.recordResourceRead(
+                    sessionID: sessionID,
+                    clientName: nil,
+                    uri: uri,
+                    contentHash: StandingOrdersDelivery.composition().contentHash
+                )
+                let data = buildRPCResponse(id: requestId, result: [
+                    "contents": [[
+                        "uri": uri,
+                        "mimeType": "text/markdown",
+                        "text": markdown,
+                    ] as [String: Any]]
+                ] as [String: Any]) ?? Data()
+                return .data(data, headers: headers)
+            } catch {
+                let data = buildRPCError(id: requestId, code: -32602, message: "Unknown resource URI: \(uri)") ?? Data()
+                return .data(data, headers: headers)
+            }
+
+        case "resources/subscribe":
+            let params = json["params"] as? [String: Any] ?? [:]
+            guard params["uri"] is String else {
+                let data = buildRPCError(id: requestId, code: -32602, message: "Missing 'uri' parameter") ?? Data()
+                return .data(data, headers: headers)
+            }
+            addResourceSubscriber(sessionID: sessionID)
+            let data = buildRPCResponse(id: requestId, result: [:] as [String: Any]) ?? Data()
+            return .data(data, headers: headers)
+
+        case "resources/unsubscribe":
+            removeResourceSubscriber(sessionID: sessionID)
             let data = buildRPCResponse(id: requestId, result: [:] as [String: Any]) ?? Data()
             return .data(data, headers: headers)
 

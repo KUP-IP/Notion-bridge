@@ -112,8 +112,9 @@ public actor CloudHeartbeat {
 ///     "state": "online",               // string raw value of CloudConnectionState
 ///                                       //   one of: disabled|connecting|online|degraded|offline
 ///     "up":    true,                   // bool — true iff state ∈ {online, degraded}
-///     "macToolsAvailable": true,       // bool — true iff Mac tools are exposed to a
-///                                       //   cloud caller in this state (== `up`)
+///     "macToolsAvailable": true,       // bool — true iff Mac tools are exposed
+///                                       //   to a cloud caller in this state
+///                                       //   (same predicate as `up`)
 ///     "schemaVersion": 1               // int — payload contract version
 ///   }
 public enum CloudStatusPayload {
@@ -129,11 +130,11 @@ public enum CloudStatusPayload {
         state == .online || state == .degraded
     }
 
-    /// Whether Mac tools should be exposed to a CLOUD caller in `state`. Mac
-    /// tools are hidden when the channel is `.offline` or `.disabled`; mirrors
-    /// the tools/list conditional in `ServerManager`.
+    /// Whether Mac tools should be exposed to a CLOUD caller in `state`. Mirrors
+    /// `isUp` and the tools/list conditional in `ServerManager`: online and
+    /// degraded expose tools; disabled, connecting, and offline do not.
     public static func macToolsAvailable(_ state: CloudConnectionState) -> Bool {
-        !(state == .offline || state == .disabled)
+        isUp(state)
     }
 
     /// The canonical `bridge_status` JSON value.
