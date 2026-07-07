@@ -244,6 +244,43 @@ func runSessionModuleTests() async {
         try expect(afterCount <= 1, "Audit log should be 0 or 1 after clear (session_clear itself gets logged), got \(afterCount)")
     }
 
+    // session_info: uptime is tracked per-registration (server-boot time), NOT
+    // shared process-wide state initialized on first tool call. Regression
+    // guard for a bug where `sessionStartTime` was a lazily-initialized
+    // `static let` only touched inside the handler closures: two independent
+    // registrations would silently share one epoch (whichever registration's
+    // session_info was called first), so uptime measured "time since first
+    // call" instead of "time since this server instance booted".
+    await test("independent registrations track independent start times") {
+        let gateA = SecurityGate()
+        let logA = AuditLog()
+        let routerA = ToolRouter(securityGate: gateA, auditLog: logA)
+        await SessionModule.register(on: routerA, auditLog: logA)
+
+        try await Task.sleep(nanoseconds: 300_000_000) // 300ms
+
+        let gateB = SecurityGate()
+        let logB = AuditLog()
+        let routerB = ToolRouter(securityGate: gateB, auditLog: logB)
+        await SessionModule.register(on: routerB, auditLog: logB)
+
+        let resultA = try await routerA.dispatch(toolName: "session_info", arguments: .object([:]))
+        let resultB = try await routerB.dispatch(toolName: "session_info", arguments: .object([:]))
+
+        guard case .object(let dictA) = resultA, case .double(let uptimeA) = dictA["uptimeSeconds"],
+              case .object(let dictB) = resultB, case .double(let uptimeB) = dictB["uptimeSeconds"] else {
+            throw TestError.assertion("Expected uptimeSeconds on both routers' session_info")
+        }
+
+        // Router A was registered ~300ms before router B. If each registration
+        // tracks its own start time, A's uptime should be meaningfully larger
+        // than B's. A shared/lazy epoch would make them nearly identical.
+        try expect(
+            uptimeA - uptimeB >= 0.2,
+            "Expected router A (registered ~300ms earlier) to show more uptime than B; got A=\(uptimeA) B=\(uptimeB)"
+        )
+    }
+
     // session_clear: returns previous uptime
     await test("session_clear returns previous uptime seconds") {
         let result = try await router.dispatch(
