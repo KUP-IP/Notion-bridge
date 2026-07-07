@@ -21,9 +21,6 @@ public enum SessionModule {
 
     public static let moduleName = "session"
 
-    /// Session start timestamp for uptime tracking.
-    private static let sessionStartTime = Date()
-
     /// Register all session module tools on the given router.
     /// V1-04: now accepts auditLog for session_info and session_clear.
     public static func register(
@@ -31,6 +28,13 @@ public enum SessionModule {
         auditLog: AuditLog,
         diagnosticsProvider: (@Sendable () async -> RuntimeDiagnostics)? = nil
     ) async {
+        // Captured HERE (register() runs once, at server boot) rather than as a
+        // lazily-initialized `static let` referenced only inside the handler
+        // closures below — a lazy static's first-access moment is whenever a
+        // client first calls session_info/session_clear, not process launch,
+        // so uptime silently measured "time since first call" instead of
+        // "time since boot".
+        let sessionStartTime = Date()
 
         // tools_list – open (V1-03, preserved)
         await router.register(ToolRegistration(

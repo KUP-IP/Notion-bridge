@@ -77,9 +77,12 @@ public enum ConnectionsModule {
                 ])
             ]),
             handler: { arguments in
+                // Cached per the tool description above — validateLive:false reads
+                // last-known status (ConnectionHealthChecker's cache), no network
+                // round-trip. connections_validate is the live counterpart.
                 if case .object(let args) = arguments,
                    case .string(let connectionId) = args["connectionId"] {
-                    let connection = try await ConnectionRegistry.shared.getConnection(id: connectionId, validateLive: true)
+                    let connection = try await ConnectionRegistry.shared.getConnection(id: connectionId, validateLive: false)
                     return .object([
                         "id": .string(connection.id),
                         "provider": .string(connection.provider.rawValue),
@@ -88,7 +91,7 @@ public enum ConnectionsModule {
                     ])
                 }
 
-                let connections = try await ConnectionRegistry.shared.listConnections(validateLive: true)
+                let connections = try await ConnectionRegistry.shared.listConnections(validateLive: false)
                 let items = connections.map { connection in
                     Value.object([
                         "id": .string(connection.id),
