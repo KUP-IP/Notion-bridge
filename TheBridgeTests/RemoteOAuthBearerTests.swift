@@ -594,6 +594,48 @@ func runRemoteOAuthBearerTests() async {
         try expect(resp.statusCode == 403, "scope-insufficient call must be 403, got \(resp.statusCode)")
     }
 
+    await test("Connector-gated server: strict tools/list hides non-callable Messages tools") {
+        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        await r.register(ToolRegistration(
+            name: "snippets_list",
+            module: "snippets",
+            tier: .open,
+            description: "Allowed connector read probe.",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { _ in .array([]) }
+        ))
+        await r.register(ToolRegistration(
+            name: "messages_recent",
+            module: "messages",
+            tier: .open,
+            description: "Local-only Messages probe.",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { _ in .array([]) }
+        ))
+        await r.markModulesRegistrationComplete()
+
+        let server = SSEServer(router: r, onToolCall: {}, connectorAuth: authCtx)
+        let tok = try await keys.sign(iss: kIssuer, aud: kResource, scope: "snippets.read")
+        let body = Data(#"{"jsonrpc":"2.0","id":7,"method":"tools/list"}"#.utf8)
+        let req = HTTPRequest(
+            method: "POST",
+            headers: ["Cf-Connecting-Ip": "203.0.113.7", "Authorization": "Bearer \(tok)"],
+            body: body
+        )
+        let resp = await server.handleHTTPRequest(req)
+        try expect(resp.statusCode == 200, "tools/list must succeed, got \(resp.statusCode)")
+        guard case .data(let data, _) = resp else {
+            throw TestError.assertion("strict connector tools/list must be compact JSON data")
+        }
+        let obj = try (JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let result = obj["result"] as? [String: Any] ?? [:]
+        let tools = result["tools"] as? [[String: Any]] ?? []
+        let names = Set(tools.compactMap { $0["name"] as? String })
+        try expect(names.contains("snippets_list"), "allowed connector tool missing from tools/list: \(names.sorted())")
+        try expect(!names.contains("messages_recent"),
+                   "tools/list must not advertise a tool the same bearer will 403: \(names.sorted())")
+    }
+
     // MARK: - S1 fix: PRM resource reflects NOTION_BRIDGE_PORT
 
     await test("PRM fix: resource reflects NOTION_BRIDGE_PORT override") {

@@ -172,7 +172,9 @@ public struct ConnectorScopeGate: ScopeGating {
         let required = (try? await requiredScopes(for: toolName)) ?? []
         guard !required.isEmpty else {
             return .deny(
-                reason: "tool '\(toolName)' is not exposed to remote connector clients"
+                reason: "tool '\(toolName)' is not exposed to remote connector clients; "
+                    + "use a local Bridge client for local-only tools or explicitly "
+                    + "expose this tool in connector scope policy"
             )
         }
         let grantedSet = Set(grantedScopes.map(\.name))
