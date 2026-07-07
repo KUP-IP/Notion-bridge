@@ -161,6 +161,25 @@ func runCommandStoreTests() async {
         }
     }
 
+    await test("seeded Execute command routes through parent Keepr before executor") {
+        try await withTempHome { _ in
+            try CommandStore.shared.resetForTesting()
+            try CommandStore.shared.seedIfEmpty()
+            guard let execute = try CommandStore.shared.get(slug: "execute") else {
+                try expect(false, "expected Execute seed to exist")
+                return
+            }
+            try expect(execute.body.contains("skills_routing_list"),
+                       "Execute seed must load the live routing roster")
+            try expect(execute.body.contains("parent Keepr"),
+                       "Execute seed must route through a parent Keepr")
+            try expect(execute.body.contains("Do not route directly to `executor`"),
+                       "Execute seed must explicitly prevent direct executor routing")
+            try expect(!execute.body.contains("fetch_skill('executor')"),
+                       "Execute seed must not tell agents to fetch executor directly")
+        }
+    }
+
     await test("persistence: list survives a fresh process snapshot") {
         try await withTempHome { _ in
             try CommandStore.shared.resetForTesting()

@@ -346,9 +346,24 @@ public final class CommandStore: @unchecked Sendable {
         let body: String
     }
 
+    private static let executeSeedBody = """
+    ## Execute
+
+    Mode: delivery. A contract is approved and material work may begin.
+
+    Set in stone:
+    Resolve the parent Keepr first from the live routing roster (`skills_routing_list` / `list_routing_skills`), then load that parent contract with `fetch_skill('<parent-keepr>', intent: '<this sub-task>')`. Do not route directly to `executor` unless the active request is a packet dispatch or the parent Keepr explicitly selects executor as the specialist for this task.
+
+    For multi-domain work, build the route stack through the relevant parent Keeprs. The domain owner selects executor, orchestrator, or another specialist; the command does not bypass ownership.
+
+    Define done with tests, run them, and iterate until the evidence is green. Keep a working todo list and close loops at wave checkpoints.
+
+    Return a final summary: what shipped, test results, deltas vs the contract, and deferred items with reasons.
+    """
+
     private static let firstRunSeeds: [Seed] = [
         Seed(name: "Execute",     icon: .emoji("⚡"),  color: .orange,
-             body: "## Execute\n\nProceed with the plan we just landed. Use minimum tool calls; no narration."),
+             body: executeSeedBody),
         Seed(name: "Reflow",      icon: .emoji("🔁"),  color: .blue,
              body: "## Reflow\n\nRe-examine the plan from first principles. What changed? What's new evidence? What would you do differently if starting from scratch?"),
         Seed(name: "Discussion",  icon: .emoji("💬"),  color: .blue,

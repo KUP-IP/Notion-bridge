@@ -71,27 +71,27 @@ uses the host's own Bash/git tools inside the isolated packet branch — not a B
 
 ## Operator-supplied configuration (fail closed if any is unresolved)
 
-These come from `packet-runner/config/routine.config.json` (the filled copy of
-`routine.config.template.json`). Do NOT invent any value. If a value below is still a
-placeholder at run time, that is a **preflight FAILURE** (Step 0): abort + report, mutate
-nothing.
+These come from `packet-runner/config/routine.config.ship-the-bridge-v4.json` (the filled
+copy of `routine.config.template.json`). Do NOT invent any value. If a value below is
+still a placeholder at run time, that is a **preflight FAILURE** (Step 0): abort + report,
+mutate nothing.
 
 | Config key | Value to use |
 |---|---|
-| `taskId` | `<<OPERATOR: scheduled-task id — confirm `packet-runner-ship-the-bridge-v4`>>` |
-| `project_id` (PROJECT scoping the QUEUE) | `<<OPERATOR: "Ship The Bridge v4" PROJECT page id>>` |
+| `taskId` | `packet-runner-ship-the-bridge-v4` |
+| `project_id` (PROJECT scoping the QUEUE) | `37fcbb58-889e-81f1-867e-d71b11dd9baf` (`Ship The Bridge v4`) |
 | PACKETS data source id | `078e7c9e-e53e-4c83-a893-af64f82b5123` (canonical, §4 / SCHEMA_GAP) |
-| PACKETS registry entity name (for `registry_hydrate`) | `<<OPERATOR: registry entity name registered for PACKETS via registry_add_entity + registry_introspect>>` |
+| PACKETS registry entity name (for `registry_hydrate`) | `session` (live registry key; smoke-tested against PKT-1042 on 2026-07-07) |
 | PROJECT relation property name on PACKETS | `PROJECT` (the relation column; confirm at preflight) |
 | `brief_page_id` (canonical latest-brief) | `389cbb58-889e-8165-b407-e5e6f0bd45b3` (created 2026-06-23) |
 | Bridge Inbox target | `openSettingsSection: "Inbox"` (native Inbox pane; mirror summary + Notion brief URL) |
-| `durable_evidence_destination` + **latch location** | `<<OPERATOR: stable Notion page/db or repo evidence path; the single-writer latch lives here — see Step 1>>` |
+| `durable_evidence_destination` + **latch location** | `repo_path: packet-runner/controller/latch_state.json` (whole-file JSON latch, git-ignored) |
 | `repository` / `default_branch` / `isolation_mode` | `KUP-IP/the-bridge` / `main` / `worktree` (confirm; branch per packet = `packet/<PKT-ID>-<slug>`) |
-| `model` default + allowlist | `<<OPERATOR: default model id + approved allowlist>>` |
-| reviewer / operator / pause-authority identities | `<<OPERATOR: reviewer + operator (default Isaiah) + provider-pause authority>>` |
+| `model` default + allowlist | default `claude-sonnet-5`; allowlist `claude-sonnet-5`, `claude-opus-4-8` |
+| reviewer / operator / pause-authority identities | `Isaiah Peters` |
 | `qualification_evidence_page_id` | `389cbb58-889e-8184-b8da-fb72881782d6` (created 2026-06-23; used only when `qualification_pilot_active`) |
 | `max_packets_per_cycle` | `1` |
-| `cycle_timeout_seconds` / `packet_timeout_seconds` | from config (cycle < schedule interval; packet < 14400s) |
+| `cycle_timeout_seconds` / `packet_timeout_seconds` | `1800` / `1200` (cycle < schedule interval; packet < 14400s) |
 | `maintenance_max_items` / `maintenance_time_budget_seconds` | `10` / `120` |
 | contract versions | executor `8.1.0-packet-runner` · orchestrator `7.1.0` · close-agent `3.2.0` · registry `packet-registry-v1` · receipt `packet-runner-receipt-v1` |
 
@@ -114,8 +114,8 @@ packet is touched.
    partial writes."** (This is the daily-report pattern verbatim — do not partially write.)
 2. **Config present + consistent:** every operator value above is resolved (no
    `<<OPERATOR: …>>` placeholder remains); contract/schema versions are in the supported
-   range; `cycle_timeout < schedule interval`; `packet_timeout < 14400s`; config does not
-   allow overlapping runs (P1, P13, P14).
+   range; `packet_timeout < 14400s`; if a schedule is enabled, `cycle_timeout < schedule
+   interval`; config does not allow overlapping runs (P1, P13, P14).
 3. **Project resolvable (P2):** `notion_page_read` (or `notion_query`) confirms `project_id`
    is accessible.
 4. **Repo isolation establishable (P3):** the `KUP-IP/the-bridge` clone is present, the
