@@ -2041,7 +2041,11 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3035}"
 # the fields-param merge above. Measured 3097 passed, 0 failed on the
 # combined tree (3095 + 2, matching exactly, no other drift). FLOOR raised
 # 3095 → 3097.
-FLOOR="${BRIDGE_TEST_FLOOR:-3097}"
+# Remote connector scope-discovery fix (2026-07-07): added 1 regression
+# test proving strict connector tools/list hides local-only Messages tools
+# that the same bearer would fail to call. Measured 3098 passed, 0 failed
+# on the rebased branch (3097 + 1). FLOOR raised 3097 -> 3098.
+FLOOR="${BRIDGE_TEST_FLOOR:-3098}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the
