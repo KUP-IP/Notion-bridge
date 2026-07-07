@@ -816,7 +816,7 @@ public actor SSEServer {
         // connector clients compact JSON here, falling back to the SDK path for
         // anything processConnectorJSONRPC does not handle. The session pipeline
         // still skips the legacy static-bearer re-check (connectorAuthed).
-        if let connectorResponse = await processConnectorJSONRPC(request) {
+        if let connectorResponse = await processConnectorJSONRPC(request, token: token, auth: auth) {
             return connectorResponse
         }
         return await processStreamableHTTP(request, connectorAuthed: true)
@@ -831,7 +831,11 @@ public actor SSEServer {
     /// Returns `nil` for anything it does not handle so the caller falls back to
     /// the SDK transport. claude.ai accepts these plain responses too, so both
     /// cloud connectors share this path.
-    private func processConnectorJSONRPC(_ request: HTTPRequest) async -> HTTPResponse? {
+    private func processConnectorJSONRPC(
+        _ request: HTTPRequest,
+        token: BridgeAccessToken,
+        auth: ConnectorAuthContext
+    ) async -> HTTPResponse? {
         guard request.method.uppercased() == "POST",
               let body = request.body,
               let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
@@ -872,6 +876,7 @@ public actor SSEServer {
             if let allowlist = toolAllowlist {
                 regs = regs.filter { allowlist.contains($0.name) }
             }
+            regs = await connectorVisibleRegistrations(regs, token: token, auth: auth)
             let tools: [[String: Any]] = regs.compactMap { reg in
                 guard let data = try? JSONEncoder().encode(MCPToolFactory.tool(for: reg)),
                       let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -919,6 +924,26 @@ public actor SSEServer {
             let data = buildRPCError(id: requestId, code: -32601, message: "Method not found: \(method)") ?? Data()
             return .data(data, headers: headers)
         }
+    }
+
+    private func connectorVisibleRegistrations(
+        _ registrations: [ToolRegistration],
+        token: BridgeAccessToken,
+        auth: ConnectorAuthContext
+    ) async -> [ToolRegistration] {
+        guard auth.strictScopes else { return registrations }
+
+        var visible: [ToolRegistration] = []
+        for registration in registrations {
+            let decision = await auth.scopeGate.evaluate(
+                toolName: registration.name,
+                grantedScopes: token.connectorScopes
+            )
+            if case .allow = decision {
+                visible.append(registration)
+            }
+        }
+        return visible
     }
 
     private static func connectorJSONHeaders(sessionID: String) -> [String: String] {
