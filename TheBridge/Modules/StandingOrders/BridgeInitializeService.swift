@@ -99,6 +99,8 @@ public struct HandshakeReceipt: Codable, Sendable, Equatable {
     public let capabilityNotes: [String]
     public let session: BrokerSessionRecord?
     public let constitution: ConstitutionBundle?
+    /// PKT-1094: server-owned Routing Integrity Layer registry snapshot.
+    public let routingIntegrity: RoutingIntegrityReceipt
     public let finalState: StandingOrdersStore.InitializationState
 
     public init(
@@ -124,6 +126,7 @@ public struct HandshakeReceipt: Codable, Sendable, Equatable {
         capabilityNotes: [String] = [],
         session: BrokerSessionRecord? = nil,
         constitution: ConstitutionBundle? = nil,
+        routingIntegrity: RoutingIntegrityReceipt = ToolSkillBindingRegistry.receipt(),
         finalState: StandingOrdersStore.InitializationState
     ) {
         self.handshakeId = handshakeId
@@ -148,6 +151,7 @@ public struct HandshakeReceipt: Codable, Sendable, Equatable {
         self.capabilityNotes = capabilityNotes
         self.session = session
         self.constitution = constitution
+        self.routingIntegrity = routingIntegrity
         self.finalState = finalState
     }
 
@@ -191,7 +195,7 @@ public struct BridgeInitializeContext: Sendable {
 public enum BridgeInitializeService {
 
     /// Current receipt schema contract version. Bump on any shape change.
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
 
     /// A supplemental order is deliberately inert ("ignored") when it is
     /// archived OR explicitly marked as a no-op / TEMP directive. The marker
@@ -344,6 +348,7 @@ public enum BridgeInitializeService {
             capabilityNotes: capabilityNotes,
             session: session,
             constitution: constitution,
+            routingIntegrity: ToolSkillBindingRegistry.receipt(),
             finalState: finalState
         )
     }

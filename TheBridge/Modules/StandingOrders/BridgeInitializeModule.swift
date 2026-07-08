@@ -209,6 +209,13 @@ public enum BridgeInitializeModule {
             "connectionState": .string(r.connectionState),
             "telemetryEventRef": .string(r.telemetryEventRef),
             "routingRosterQuality": .string(r.routingRosterQuality.rawValue),
+            "routingIntegrity": .object([
+                "registryVersion": .int(r.routingIntegrity.registryVersion),
+                "boundToolCount": .int(r.routingIntegrity.boundToolCount),
+                "manifestMarkerTools": .array(r.routingIntegrity.manifestMarkerTools.map { .string($0) }),
+                "descriptionCharBudget": .int(r.routingIntegrity.descriptionCharBudget),
+                "warnings": .array(r.routingIntegrity.warnings.map { .string($0) })
+            ]),
             "preflightIntent": .string(r.preflightIntent.rawValue),
             "capabilityNotes": .array(r.capabilityNotes.map { .string($0) }),
             "operatorSummary": .string(r.operatorSummary),

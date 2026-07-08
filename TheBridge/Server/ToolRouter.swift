@@ -130,6 +130,7 @@ public actor ToolRouter {
     /// FB-4: withhold `tools/list` until `BridgeModuleRegistry` finishes so
     /// clients never cache a partial surface during startup registration.
     private var modulesRegistrationComplete = false
+    private var routingManifestSessionIDs: Set<String> = []
     private let securityGate: SecurityGate
     private let auditLog: AuditLog
     private let sessionRegistry: SessionRegistry
@@ -198,6 +199,16 @@ public actor ToolRouter {
         modulesRegistrationComplete
     }
 
+    /// Test/diagnostic seam for PKT-1094: a session is marked only after a
+    /// successful bridge_initialize / fetch_skill / routing-skill manifest call.
+    public func hasRoutingManifestMarker(sessionID: String) -> Bool {
+        routingManifestSessionIDs.contains(sessionID)
+    }
+
+    public func markRoutingManifestFetched(sessionID: String) {
+        routingManifestSessionIDs.insert(sessionID)
+    }
+
     /// Surface for MCP `tools/list` — empty until startup registration completes (FB-4).
     public func registrationsForListTools(disabledNames: Set<String>) -> [ToolRegistration] {
         guard modulesRegistrationComplete else { return [] }
@@ -263,7 +274,8 @@ public actor ToolRouter {
                 inputSummary: stringifySummary(arguments),
                 outputSummary: "REJECTED: \(kind)",
                 durationMs: ms,
-                approvalStatus: .rejected
+                approvalStatus: .rejected,
+                transportSessionId: context.transportSessionId
             ))
             throw BridgeToolError.trialExpired(toolName: toolName, kind: kind)
         }
@@ -299,7 +311,8 @@ public actor ToolRouter {
                 inputSummary: stringifySummary(arguments),
                 outputSummary: "REJECTED: module group '\(gate.groupID.displayName)' disabled",
                 durationMs: ms,
-                approvalStatus: .rejected
+                approvalStatus: .rejected,
+                transportSessionId: context.transportSessionId
             ))
             throw BridgeToolError.moduleGroupDisabled(
                 toolName: toolName,
@@ -311,6 +324,30 @@ public actor ToolRouter {
             throw ToolRouterError.invalidArguments(
                 toolName: toolName,
                 reason: "Credentials are disabled. Turn on “Keychain credentials” in The Bridge Settings → Credentials."
+            )
+        }
+
+        if let sessionID = context.transportSessionId,
+           ToolSkillBindingRegistry.requiresManifestFetch(toolName),
+           !routingManifestSessionIDs.contains(sessionID) {
+            let binding = ToolSkillBindingRegistry.binding(for: toolName)
+            let governance = binding?.governanceSummary ?? "unregistered"
+            let duration = ContinuousClock.now - start
+            let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
+                + Double(duration.components.seconds) * 1000.0
+            await auditLog.append(AuditEntry(
+                timestamp: Date(),
+                toolName: toolName,
+                tier: tool.tier,
+                inputSummary: stringifySummary(arguments),
+                outputSummary: "REJECTED: routing manifest required (\(governance))",
+                durationMs: ms,
+                approvalStatus: .rejected,
+                transportSessionId: sessionID
+            ))
+            throw ToolRouterError.routingManifestRequired(
+                toolName: toolName,
+                governingSkills: governance
             )
         }
 
@@ -411,7 +448,8 @@ public actor ToolRouter {
                 inputSummary: stringifySummary(arguments),
                 outputSummary: "REJECTED: \(reason)",
                 durationMs: ms,
-                approvalStatus: .rejected
+                approvalStatus: .rejected,
+                transportSessionId: context.transportSessionId
             ))
             throw ToolRouterError.securityRejection(toolName: toolName, reason: reason)
 
@@ -427,7 +465,8 @@ public actor ToolRouter {
                 inputSummary: stringifySummary(arguments),
                 outputSummary: "HANDOFF: \(command)",
                 durationMs: ms,
-                approvalStatus: .escalated
+                approvalStatus: .escalated,
+                transportSessionId: context.transportSessionId
             ))
             return .object([
                 "status": .string("handoff"),
@@ -456,6 +495,11 @@ public actor ToolRouter {
             } else {
                 governanceNote = nil
                 returnedResult = result
+            }
+
+            if let sessionID = context.transportSessionId,
+               ToolSkillBindingRegistry.callSatisfiesManifestMarker(toolName: toolName, result: result) {
+                routingManifestSessionIDs.insert(sessionID)
             }
 
             // F2 + PKT-552: Fire-and-forget Notify-tier notification with structured context.
@@ -497,7 +541,8 @@ public actor ToolRouter {
                 inputSummary: stringifySummary(arguments),
                 outputSummary: "ERROR: \(error.localizedDescription)",
                 durationMs: ms,
-                approvalStatus: .error
+                approvalStatus: .error,
+                transportSessionId: context.transportSessionId
             ))
             throw error
         }
@@ -723,6 +768,7 @@ public enum ToolRouterError: Error, LocalizedError {
     case unknownTool(String)
     case invalidArguments(toolName: String, reason: String)
     case securityRejection(toolName: String, reason: String)
+    case routingManifestRequired(toolName: String, governingSkills: String)
 
     public var errorDescription: String? {
         switch self {
@@ -732,6 +778,8 @@ public enum ToolRouterError: Error, LocalizedError {
             return "\(name): \(reason)"
         case .securityRejection(let name, let reason):
             return "Security gate rejected \(name): \(reason)"
+        case .routingManifestRequired(let name, let governingSkills):
+            return "\(name) requires a routing manifest before dispatch. Fetch the governing skill route first (\(governingSkills)) or run bridge_initialize for this session."
         }
     }
 }
