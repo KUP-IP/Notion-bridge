@@ -86,10 +86,10 @@ enum RunnerToolImpl {
                 "pid":        .int(Int(meta.pid)),
                 "label":      .string(label),
                 "command":    .string(command),
-                "hint":       .string("poll bg_process_status / bg_process_logs / bg_process_kill with id=\(meta.id)")
+                "hint":       .string("poll bg_poll / terminate with bg_kill, id=\(meta.id)")
             ])
         } catch {
-            return errorValue(toolName, status: "failed", reason: "bg_process_start failed: \(error)")
+            return errorValue(toolName, status: "failed", reason: "bg_run failed: \(error)")
         }
     }
 
