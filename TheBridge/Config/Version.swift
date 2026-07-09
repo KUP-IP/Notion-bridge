@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "3.9.7"
+    public static let marketing = "3.9.8"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -231,7 +231,18 @@ public enum AppVersion {
     ///   of my clients") was caught by a dedicated regression test written during
     ///   this very fix and corrected before shipping, not after. +1 test.
     ///   staticFeatureModuleToolCount unchanged (200). test-floor 3054 → 3055.
-    public static let build = "76"
+    /// v3.9.8: 76 → 77 — marketing bump. Ships v3.9.4-v3.9.7 (developed/installed
+    ///   locally but never tagged) bundled with this session's work: Wave 1 broker
+    ///   (session governance + remote control-plane blocklist) + strict
+    ///   connector-scope allowlist (ConnectorAuthContext.strictScopes default
+    ///   false → true — remote/cloud callers now allowlisted to 36 of 202 tools,
+    ///   full local parity unaffected), two notion_* schema required-field
+    ///   accuracy fixes, the install clean-tree/branch guard, the bg_process_*
+    ///   hint-text fix, plus the previously-unshipped Memory Settings 3-tab
+    ///   redesign + registry/fetch_skill fields projection + an AX-crash fix. Full
+    ///   detail in CHANGELOG.md. staticFeatureModuleToolCount 200 → 201
+    ///   (doctrine_sync). test-floor 3108 → 3118.
+    public static let build = "77"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

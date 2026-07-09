@@ -1,5 +1,63 @@
 # Changelog
 
+## v3.9.8 — Connector-scope security + session governance — 2026-07-09
+
+**Note on this release:** v3.9.4 through v3.9.7 (below) were fully developed and
+locally installed but never actually tagged/shipped — this release ships all of
+that accumulated work to Sparkle users at once, alongside everything below.
+
+- **Remote connector security (Wave 1 broker + strict scope allowlist)** — the
+  biggest change in this release. Remote/cloud MCP connector callers (ChatGPT,
+  Claude web) are now restricted to an explicit tool allowlist (36 of 202 tools
+  reachable — session bootstrap, snippets, job/process execution, contacts, and the
+  new `bg_run`/`bg_poll`/`bg_kill` background-process tools; everything else,
+  including `notion_*`, `memory_*`, `registry_*`, `mail_*`, `calendar_*`, is denied
+  outright for remote callers regardless of SecurityGate tier), previously full
+  parity gated only by SecurityGate. Local/loopback callers are completely
+  unaffected. Layered on top: remote calls to `shell_exec`/`applescript_exec`/
+  computer-control/`credential_*` tools and a handful of config-write tools
+  (`standing_orders_save`/`delete`, `doctrine_sync`, `commands_*`) are now
+  hard-blocked for remote origin regardless of scope; a new session-governance
+  requirement means the first remote call to any non-read-only tool must be
+  preceded by `bridge_initialize` in that same session, or it's rejected with
+  `ungoverned_remote_session` (open-tier tools get a non-blocking advisory note
+  instead). Both new behaviors are individually kill-switchable via `UserDefaults`
+  without a rebuild. New tool: `doctrine_sync`. `session_clear` added to the
+  always-reachable bootstrap bucket alongside `session_info`.
+- **Schema-accuracy fixes** — `notion_blocks_append` and `notion_query`'s declared
+  JSON schemas still marked their original fields (`blockId`+`children`,
+  `dataSourceId`) as unconditionally required even though both tools have accepted
+  alternative shapes (`pageId`+`markdown`, `parentId`+`parentType`) since build 74 —
+  a schema-respecting agent could never discover the shorthand. Fixed to reflect the
+  real either/or contract.
+- **Local-install safety** — `make install`/`make install-copy` now refuse to run
+  from a dirty working tree outright, and refuse a non-`main` branch unless
+  `ALLOW_NON_MAIN_INSTALL=1` is passed explicitly. Closes the exact gap that let a
+  local dirty/wrong-branch build reach production undetected twice in the past week.
+- **Fix** — background-job hint/error strings in `RunnerSupport.swift`/`GhModule.swift`
+  referenced nonexistent tool names (`bg_process_start`/`status`/`logs`/`kill`); now
+  correctly point callers at `bg_run`/`bg_poll`/`bg_kill`.
+- **Also included — developed 2026-07-03, predates this session, never independently
+  shipped:**
+  - **Memory Settings redesign** — the 5-tab Memory surface (Process/Inbox/Notion/
+    Agent/Processing) consolidates into 3 (Memos, Recall, Settings): Memos merges the
+    Process cockpit with the old Inbox triage queue into a twin master-detail layout;
+    Recall is a real port of the old Agent tab's memory browsing; Settings merges the
+    old Processing tab's curator/transcription/provider config with the Agent tab's
+    handshake-inject surfacing card. The old standalone Notion tab is retired
+    (redundant with the Data Sources pane). All old deep-link/anchor vocabulary keeps
+    resolving via alias mapping — no broken bookmarks/notifications/MCP anchors. Fixed
+    a real, 100%-reproducible crash in the Curator Mode picker (a `ForEach`-in-`Picker`
+    pattern triggered an `EXC_BREAKPOINT`/AttributeGraph dispatch-isolation trap on
+    macOS 27 beta), replaced with unrolled `Text`/`.tag` entries.
+  - **Registry/`fetch_skill` result projection** — the 6 row-shaped `registry_*` tools
+    and `fetch_skill` gain an opt-in `fields` array param that projects the response
+    down to just the requested top-level keys (including dotted `properties.X`
+    sub-selection). Omitted is byte-identical to prior behavior. No new MCP tools.
+  - +41 tests for the projection work; the Memory Settings port and the crash fix are
+    unit-untested (pure UI / compiler-enforced respectively, per existing precedent).
+- test-floor **3108 → 3118** (today's own +10). Build **77**.
+
 ## v3.9.7 — Voice memo data-quality gate + reliability — 2026-07-03
 
 - **Data quality (GitHub #81)** — `voice_memo_commit` could mark a `memory_keep` record processed even when the Notion Memory page body was an empty or filler-only fragment (e.g. "I'm having fun with this idea" standing in for a real transcript summary). New `VoiceMemoContentQualityGate`: an explicit, reviewable rule (≥8 words AND <40% verbal-disfluency ratio) blocks `markedProcessed:true` on a failing summary and routes it to the review queue instead — verified against all 3 real repro memos from the issue.
@@ -27,17 +85,33 @@
 ## v3.9.5 — Notion page icon write support — 2026-07-02
 
 - **Notion tools** — `notion_page_create` and `notion_page_update` both accept an optional single-emoji `icon` parameter. `NotionClient.createPage`/`updatePage` merge Notion's `{"type":"emoji","emoji":"…"}` icon shape into the request body when supplied; omitted is byte-identical to prior behavior. Pass-through only — no new Bridge-side emoji validation, matching the existing `extractIconEmoji` read-side precedent.
-- **Hotfix folded forward** — build 71's `voice_memo_commit` body-argument wiring fix (see v3.9.4 entry below) ships as part of this install.
-- Live-verified against real Notion (4/4: create+icon, update+icon, create-no-icon and update-no-icon regression). No new MCP tool. test-floor unchanged (2994). Build **72**.
+- **Hotfix folded forward (build 71)** — every MCP caller using `voice_memo_commit`'s `intentKind: comment` with a top-level `body` argument was silently falling back to using the memo's title as the comment text instead of the supplied body — the parser never wired a top-level `body` param through to the comment-intent path. Fixed; `body` now takes precedence as documented. *(Corrected 2026-07-09 — this bullet previously pointed at a "v3.9.4 entry below" that never actually contained this description.)*
+- Live-verified against real Notion (4/4: create+icon, update+icon, create-no-icon and update-no-icon regression). No new MCP tool. **Known gap (2026-07-09): the icon-write feature shipped with zero automated test coverage — live-verification only, nothing in test-floor exercises the icon-merge path.** test-floor unchanged (2994). Build **72**.
 
 ## v3.9.4 — Registry consolidation + comment disposition + live UI sync — 2026-07-02
 
-- **Registry tools** — `registry_resolve_and_update` collapses the find-then-get-then-update three-round-trip pattern into one MCP call (append-merge semantics identical to the old voice-memo helper, ambiguity semantics identical to `registry_find`). `resolveRegistryRowId` now uses `registry_find` instead of hand-rolled containment/regex matching.
+**Corrected 2026-07-09**: this section originally only described the last of 7 merged
+packets in this span (baseline mistakenly presented as pre-existing). Restored below.
+
+- **New MCP tool: `registry_find`** (PKT-1041) — a convergent, read-only lookup that
+  resolves a registry row by bound-property matching (reuses the `registry_list`
+  cache); `resolveRegistryRowId` now uses it internally instead of hand-rolled
+  containment/regex matching.
+- **New MCP tool: `bridge_initialize`** (PKT-1065A) — deterministic init-core handshake
+  with a persisted evidence receipt; canonical bootstrap call for any connector session.
+- **`session_info`/`bridge_status` semantics** (PKT-1065B) — clarified split (session_info
+  = local bridge process, bridge_status = cloud tunnel), plus a `notion:primary`
+  connection alias. `session_info`'s response gained a `scopes` object documenting each
+  field, and its no-diagnostics-provider fallback changed from a fabricated
+  `(connections:1, activeClients:1)` to an honest `(0, 0)`.
+- **Intent-sensitive capability preflight + Reminders adapter** (PKT-1065C).
+- **Registry tools** — `registry_resolve_and_update` collapses the find-then-get-then-update three-round-trip pattern into one MCP call (append-merge semantics identical to the old voice-memo helper, ambiguity semantics identical to `registry_find`).
+- **Player attach** (PKT-1064) — `voice_memo_commit`'s `memory_keep` write path now verifies + attaches the originating Player via a bound Notion **PLAYERS** relation on the memory registry entity; an entity without that relation bound now blocks the write (routes to review) instead of completing it silently unattributed. **Requires the memory registry entity to have a PLAYERS relation property bound** — already satisfied on the live operator install, but a fresh/reconfigured registry needs it bound before `memory_keep` writes will succeed. Defaults the originating player to the operator's own Player id unless an intent explicitly overrides it.
 - **Trust** — a pre-write transcript-overlap guard closes the gap where an agent-supplied `voice_memo_commit` `fields` override could write the raw transcript into Notion instead of a summary (length + contiguous-substring hybrid check).
 - **Comment disposition** — a new `comment` intent kind (`purpose: idea | reflow`) posts a Notion comment on a related entity instead of a property update; `idea`-purpose comments are tracked in a new local ledger for later agent sign-off, `reflow`-purpose comments are fire-and-forget.
 - **Live UI sync** — the Process tab now reflects agent-driven `voice_memo_get`/`voice_memo_commit` activity live, via a dedicated notification channel, without a manual reload.
-- **Docs** — `voice_memo_get`/`voice_memo_commit` now document that committing multiple intents per memo is normal agent-mode behavior.
-- `staticFeatureModuleToolCount` **199 → 200**. test-floor **2917 → 2993** (+76). Build **70**.
+- **Docs** — `voice_memo_get`/`voice_memo_commit` now document that committing multiple intents per memo is normal agent-mode behavior; release-rollback runbook added (PKT-1016).
+- `staticFeatureModuleToolCount` **197 → 200** (+3: `registry_find`, `bridge_initialize`, `registry_resolve_and_update`). test-floor **2863 → 2993** (+130). Build **70**.
 
 ## v3.9.3 — Memory Hub opt-in Understand + summary-first keeps — 2026-06-30
 
