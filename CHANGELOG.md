@@ -1,5 +1,27 @@
 # Changelog
 
+## v3.9.9 (build 79) — bridge_initialize origin-awareness fix — 2026-07-10
+
+- **Fix** — `bridge_initialize` always reported `connectionState: "local"` /
+  `capabilityState: "FULL"`, even for remote/cloud connector callers, because
+  its default context provider hardcoded that value instead of reading the
+  caller's real origin. Live-caught: a remote session called `bridge_initialize`,
+  was told it had full local capability, then had `shell_exec` immediately
+  refused with `origin: "remote"` by the Wave 1 broker — a real, confusing
+  contradiction between two subsystems that were never wired together. Fixed
+  to read `ToolDispatchContext.current.origin` (the same origin signal
+  `RemoteControlPlanePolicy` already uses): remote callers now correctly get
+  `connectionState: "online"` (still classifies `capabilityState: FULL` — no
+  downstream behavior change, just an honest label); local/no-ambient-context
+  callers are unaffected (`"local"`, as before).
+- Build-only release (marketing version unchanged) — this is a routine
+  internal bugfix, not a feature milestone. 3.9.9 is the mechanical next
+  version under this repo's roll-at-9 rule, but 4.0.0 is reserved for a
+  deliberate sale-ready release rather than being consumed here.
+- +2 tests (`BridgeInitializeTests.swift`): remote origin → `"online"`/`FULL`,
+  local/no-context → `"local"` (regression-proofing both directions).
+- test-floor **3126 → 3128**. Build **79**.
+
 ## v3.9.9 — Full Claude Connectors parity restored — 2026-07-09
 
 - **Reverts v3.9.8's `strictScopes` default (one day old).** An authenticated

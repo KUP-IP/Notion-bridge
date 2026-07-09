@@ -34,16 +34,31 @@ public enum BridgeInitializeModule {
     }
 
     /// Resolves the live runtime context (connection + capability + clock) for a
-    /// handshake. Injectable so ServerManager can bind live cloud state and tests
-    /// can pin a deterministic instant. The default is a direct-loopback posture:
-    /// local channel, Mac tools available, app clock.
+    /// handshake. Injectable so tests can pin a deterministic instant. The
+    /// default reads the per-request `ToolDispatchContext.current` (set by
+    /// `ToolRouter` around every dispatch, same source `RemoteControlPlanePolicy`
+    /// reads) to report the CALLER'S actual origin, rather than assuming local.
     public typealias ContextProvider = @Sendable (_ client: String?) async -> BridgeInitializeContext
 
-    /// Default provider: local channel, Mac tools available, wall-clock now.
+    /// Default provider: origin-aware connection state, Mac tools available,
+    /// wall-clock now.
+    ///
+    /// 2026-07-10 fix: previously hardcoded `connectionState: "local"`
+    /// unconditionally — a remote/cloud connector caller would be told
+    /// `connectionState: "local"` / `capabilityState: "FULL"` here, then have
+    /// control-plane tools (shell_exec, credential_*, …) refused with
+    /// `origin: "remote"` moments later by `RemoteControlPlanePolicy`. Live-
+    /// verified as a real contradiction, not a hypothetical. Now reads the same
+    /// `ToolDispatchContext.current.origin` that policy already uses: `.remote`
+    /// → `"online"` (the existing vocabulary `bridge_status` uses for a healthy
+    /// tunnel; `BridgeInitializeService.capabilityState` already treats it as
+    /// `.full` via its default case — no downstream logic change needed).
+    /// `.local` (or no ambient context, e.g. stdio/tests) → `"local"`, unchanged.
     public static let defaultContextProvider: ContextProvider = { client in
-        BridgeInitializeContext(
+        let origin = ToolDispatchContext.current?.origin ?? .local
+        return BridgeInitializeContext(
             client: client,
-            connectionState: "local",
+            connectionState: origin == .remote ? "online" : "local",
             macToolsAvailable: true,
             bridgeState: "running",
             now: Date()
