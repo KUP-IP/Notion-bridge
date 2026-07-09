@@ -64,7 +64,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps check-stale-build inject-license-key inject-remote-access
+.PHONY: debug build test app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps check-stale-build check-clean-tree inject-license-key inject-remote-access
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -241,6 +241,32 @@ check-stale-build:
 		exit 1; \
 	fi
 
+# ── Clean-tree / branch guard (2026-07-06/07 connector-scope incident) ─
+# `install`/`install-copy` write straight into the Sparkle-managed
+# /Applications bundle that live cloud connectors (ChatGPT, Claude web)
+# talk to. Twice now, a locally-built dirty/uncommitted working tree got
+# installed there with no commit or review record, silently changing
+# connector auth behavior in production (see
+# docs/proposals/cloud-oauth-readiness-deferred.md). Refuse outright on
+# any uncommitted change — there's no legitimate reason to ship one — and
+# warn loudly (with an explicit opt-out) when installing anything other
+# than main, so a non-main install can never happen silently again.
+check-clean-tree:
+	@if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
+		echo "❌ Refusing to install: working tree has uncommitted changes."; \
+		echo "   Commit or stash first — installs must come from a clean, reviewed tree."; \
+		echo "   (This is exactly how the 2026-07-06/07 connector-scope incidents happened.)"; \
+		git status --short; \
+		exit 1; \
+	fi
+	@branch="$$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"; \
+	if [ "$$branch" != "main" ] && [ -z "$$ALLOW_NON_MAIN_INSTALL" ]; then \
+		echo "❌ Refusing to install: current branch is '$$branch', not main."; \
+		echo "   Installing a non-main branch to /Applications affects live cloud connectors."; \
+		echo "   If this is intentional, re-run with ALLOW_NON_MAIN_INSTALL=1."; \
+		exit 1; \
+	fi
+
 # ── Local-install safety (2026-06-04 incident) ─────────────────────────
 # `install`/`install-copy` write directly into the Sparkle-managed
 # /Applications bundle. If the app is running or Sparkle has a staged update
@@ -277,7 +303,7 @@ endef
 # Cleanup removes the new path AND both legacy variants ("The Bridge.app"
 # from 3.x display-name installs, "TheBridge.app" from any executable-
 # name installs) so re-installs land cleanly regardless of prior state.
-install: check-stale-build notarize
+install: check-clean-tree check-stale-build notarize
 	@echo "📲 Installing notarized app to /Applications..."
 	$(PREINSTALL_SAFETY)
 	@rm -rf "/Applications/The Bridge.app" "/Applications/The Bridge.app" "/Applications/TheBridge.app"
@@ -290,7 +316,7 @@ install: check-stale-build notarize
 	@echo "✅ Installed: /Applications/The Bridge.app"
 
 # v1.7.0: Copy-only install (no notarize dep, no killall) (F3)
-install-copy: check-stale-build sign
+install-copy: check-clean-tree check-stale-build sign
 	@echo "⚠️  install-copy replaces the Sparkle-managed /Applications/The Bridge.app — the running app is quit automatically below to avoid an install/Sparkle race."
 	@echo "Installing app to /Applications (copy-only)..."
 	$(PREINSTALL_SAFETY)
