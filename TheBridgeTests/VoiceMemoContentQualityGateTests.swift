@@ -448,6 +448,42 @@ func runVoiceMemoContentQualityGateTests() async {
         }
         try expect(threw, "scaling the production understandSeconds budget down must make a 4s operation time out")
     }
+
+    await test("GH #73 parity (2026-07-09): voice_memo_get understand:true degrades gracefully on a transcribe-stage timeout instead of throwing") {
+        defer {
+            VoiceMemoDiscovery.resolveTranscriptOverride = nil
+            VoiceMemoStageTimeout.testBudgetScale = nil
+        }
+        // Force the transcribe stage itself to hang, via the dedicated test seam —
+        // deterministic and fast, unlike trying to stall the real sidecar/Apple/
+        // Parakeet ladder (which has no other injection point).
+        VoiceMemoStageTimeout.testBudgetScale = 0.01 // transcribeSeconds -> ~2s
+        VoiceMemoDiscovery.resolveTranscriptOverride = { _ in
+            try await Task.sleep(nanoseconds: 4_000_000_000) // 4s > scaled ~2s budget
+            return VoiceMemoTranscriptResolution(text: "unreachable", source: .sidecar)
+        }
+
+        let fixture = try makeFixture(name: "get-stall-fixture", transcript: "irrelevant — override wins")
+        defer { teardownFixture(fixture) }
+
+        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let start = ContinuousClock.now
+        let result = try await VoiceMemoProcessor.get(args: .object([
+            "memoId": .string(fixture.recording.id),
+            "understand": .bool(true),
+        ]), router: router)
+        let elapsed = ContinuousClock.now - start
+
+        try expect(elapsed < .seconds(10), "get(args:) must terminate promptly once the scaled-down transcribe budget elapses — got \(elapsed), it previously would have propagated the raw timeout error but NOT necessarily hung; this asserts it also returns a real payload fast")
+        guard case .object(let envelope) = result else {
+            try expect(false, "voice_memo_get must return a structured envelope on a transcribe-stage timeout, not throw")
+            return
+        }
+        try expect(envelope["understood"] == .bool(false), "a timed-out understand attempt must report understood:false, got \(envelope["understood"] as Any)")
+        try expect(envelope["needsManual"] == .bool(true), "must signal needsManual:true, matching processOne/commit's degradation shape")
+        try expect(envelope["timedOut"] == .bool(true), "must signal timedOut:true")
+        try expect(envelope["memo"] != nil, "must still return the memo identity even on a degraded outcome")
+    }
 }
 
 // MARK: - Test-only stub providers

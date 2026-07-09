@@ -1140,7 +1140,28 @@ public enum VoiceMemoProcessor {
         let providerMode = stringArg(fromValue: args, "provider").flatMap { VoiceMemoCuratorMode(rawValue: $0.lowercased()) }
 
         if understand {
-            let (transcript, plan) = try await buildPlan(for: recording, options: options, curatorMode: providerMode)
+            let transcript: String
+            let plan: VoiceMemoPlan
+            do {
+                (transcript, plan) = try await buildPlan(for: recording, options: options, curatorMode: providerMode)
+            } catch let timeoutError as VoiceMemoStageTimeoutError {
+                // GH #73 parity fix (2026-07-09): voice_memo_process (processOne) and
+                // voice_memo_commit both catch a transcribe/understand-stage timeout
+                // inside buildPlan and degrade gracefully; this understand:true path
+                // let it propagate as a raw thrown error instead — a real completion
+                // payload asymmetry, though not a hang (bounded by the same stage
+                // budgets). No review-queue enqueue here (unlike commit): get is a
+                // read-only inspect call, not a write the caller is trying to persist.
+                return .object([
+                    "memo": memoValue(recording, transcript: inspectTranscript(for: recording).text ?? ""),
+                    "understood": .bool(false),
+                    "needsManual": .bool(true),
+                    "timedOut": .bool(true),
+                    "detail": .string(timeoutError.localizedDescription),
+                    "curatorMode": .string(VoiceMemoCuratorRouter.effectiveMode().rawValue),
+                    "processed": .bool(VoiceMemoProcessedStore.isProcessed(id: recording.id)),
+                ])
+            }
             recordConsidering(recording: recording, plan: plan)
             return .object([
                 "memo": memoValue(recording, transcript: transcript),
