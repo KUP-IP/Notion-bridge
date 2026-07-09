@@ -487,7 +487,11 @@ public enum NotionModule {
                     "relationContainsId": .object(["type": .string("string"), "description": .string("Related page ID the relationProperty must contain (the PROJECT page id). Requires relationProperty.")]),
                     "workspace": workspaceParam
                 ]),
-                "required": .array([.string("dataSourceId")])
+                // Not unconditionally required: 'parentId' + parentType:
+                // "data_source_id" is a valid alternative (see property
+                // descriptions above); the handler enforces "one of the two
+                // shapes" at call time.
+                "required": .array([])
             ]),
             metadata: ToolMetadata(
                 title: "Notion: Query Data Source",
@@ -648,7 +652,10 @@ public enum NotionModule {
                     "position": .object(["type": .string("string"), "description": .string("Optional insert position (API 2026-03-11): `start`, `end` (default), or `after:{blockId}`. Only applies to the blockId+children shape.")]),
                     "workspace": workspaceParam
                 ]),
-                "required": .array([.string("blockId"), .string("children")])
+                // Not unconditionally required: 'pageId' aliases 'blockId' and
+                // 'markdown' aliases 'children' (see property descriptions
+                // above); the handler enforces "one of each pair" at call time.
+                "required": .array([])
             ]),
             handler: { arguments in
                 guard case .object(let args) = arguments else {
