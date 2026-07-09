@@ -286,7 +286,9 @@ func runBridgeInitializeTests() async {
     await test("Init: bridge_initialize has an explicit annotation catalog entry") {
         let ann = ToolAnnotationCatalog.annotations(for: "bridge_initialize")
         try expect(ann != nil, "bridge_initialize must carry an explicit annotation")
+        try expect(ann?.readOnlyHint == true, "externally read-only for connector import")
         try expect(ann?.destructiveHint == false, "not destructive")
+        try expect(ann?.idempotentHint == false, "each handshake is a distinct evidence event")
         try expect(ann?.requiresConfirmation == false, "no confirmation (tier .open)")
         try expect(ann?.openWorld == false, "touches only this app's own doctrine/evidence")
     }

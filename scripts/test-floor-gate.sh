@@ -2046,6 +2046,17 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3035}"
 # that the same bearer would fail to call. Measured 3098 passed, 0 failed
 # on the rebased branch (3097 + 1). FLOOR raised 3097 -> 3098.
 FLOOR="${BRIDGE_TEST_FLOOR:-3098}"
+# Wave 1 broker reconciliation (2026-07-07): merged origin/main into
+# feat/w1-broker — a real (non-mechanical) conflict in SSETransport.swift's
+# processConnectorJSONRPC, since main independently added scope-based
+# tools/list filtering (connectorVisibleRegistrations) the same place
+# w1-broker added broker-first tools/list ordering + session-context
+# threading. Resolved by combining both: filter by scope, then reorder the
+# filtered set; both token/auth scope-gating and session/origin context now
+# flow through the same dispatch path. +10 tests (Wave1BrokerTests.swift +
+# related session-broker coverage). Measured 3108 passed, 0 failed on the
+# merged tree (3098 + 10, no other drift). FLOOR raised 3098 -> 3108.
+FLOOR="${BRIDGE_TEST_FLOOR:-3108}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

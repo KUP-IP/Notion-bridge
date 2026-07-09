@@ -97,6 +97,15 @@ public enum BridgeInitializeModule {
                             + "reminders intent probes access + writable-list availability; a read/list "
                             + "intent additionally performs a BOUNDED content read. Omit for a universal, "
                             + "data-minimal handshake that runs NO domain probe.")
+                    ]),
+                    "mode": .object([
+                        "type": .string("string"),
+                        "enum": .array(BrokerSessionMode.allCases.map { .string($0.rawValue) }),
+                        "description": .string("Optional broker session mode: recon, execute, background, or general. Defaults to general.")
+                    ]),
+                    "includeConstitution": .object([
+                        "type": .string("boolean"),
+                        "description": .string("When true or omitted, include the W1 constitution bundle in the receipt.")
                     ])
                 ]),
                 "required": .array([])
@@ -129,12 +138,31 @@ public enum BridgeInitializeModule {
                     return nil
                 }()
                 let intent = PreflightIntent.classify(rawIntent)
+                let mode: BrokerSessionMode = {
+                    guard case .object(let a) = arguments,
+                          case .string(let raw)? = a["mode"],
+                          let mode = BrokerSessionMode(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines))
+                    else { return .general }
+                    return mode
+                }()
+                let includeConstitution: Bool = {
+                    guard case .object(let a) = arguments,
+                          let raw = a["includeConstitution"]
+                    else { return true }
+                    if case .bool(let value) = raw { return value }
+                    return true
+                }()
                 let context = await contextProvider(client)
                 // Only build a preflight registry when an intent unlocks a probe
                 // — the universal, data-minimal path stays probe-free.
                 let preflight = intent == .none ? nil : preflightProvider()
                 let receipt = await BridgeInitializeService.run(
-                    context: context, intent: intent, preflight: preflight)
+                    context: context,
+                    mode: mode,
+                    includeConstitution: includeConstitution,
+                    intent: intent,
+                    preflight: preflight
+                )
                 return receiptValue(receipt)
             }
         )
@@ -183,6 +211,51 @@ public enum BridgeInitializeModule {
         if let client = r.client { d["client"] = .string(client) }
         if let expected = r.expectedHash { d["expectedHash"] = .string(expected) }
         if let actual = r.actualHash { d["actualHash"] = .string(actual) }
+        if let session = r.session { d["session"] = sessionValue(session) }
+        if let constitution = r.constitution { d["constitution"] = constitutionValue(constitution) }
         return .object(d)
+    }
+
+    private static func sessionValue(_ session: BrokerSessionRecord) -> Value {
+        var d: [String: Value] = [
+            "sessionId": .string(session.sessionId),
+            "transportSessionId": .string(session.transportSessionId),
+            "mode": .string(session.mode.rawValue),
+            "startedAt": .string(ISO8601DateFormatter().string(from: session.startedAt)),
+            "governed": .bool(session.governed),
+        ]
+        if let client = session.client { d["client"] = .string(client) }
+        if let closedAt = session.closedAt {
+            d["closedAt"] = .string(ISO8601DateFormatter().string(from: closedAt))
+        }
+        return .object(d)
+    }
+
+    private static func constitutionValue(_ bundle: ConstitutionBundle) -> Value {
+        .object([
+            "tier0": .string(bundle.tier0),
+            "doctrineCore": .string(bundle.doctrineCore),
+            "doctrineFreshness": .string(bundle.doctrineFreshness.rawValue),
+            "doctrineVersion": .string(bundle.doctrineVersion),
+            "orders": .array(bundle.orders.map { order in
+                .object([
+                    "id": .string(order.id),
+                    "title": .string(order.title),
+                    "scope": .string(order.scope.rawValue),
+                    "updatedAt": .string(ISO8601DateFormatter().string(from: order.updatedAt)),
+                    "body": .string(order.body),
+                ])
+            }),
+            "commandsIndex": .array(bundle.commandsIndex.map { command in
+                var c: [String: Value] = [
+                    "slug": .string(command.slug),
+                    "name": .string(command.name),
+                    "icon": .string(command.icon),
+                ]
+                if let keySlot = command.keySlot { c["keySlot"] = .int(keySlot) }
+                return .object(c)
+            }),
+            "routingRoster": .string(bundle.routingRoster),
+        ])
     }
 }

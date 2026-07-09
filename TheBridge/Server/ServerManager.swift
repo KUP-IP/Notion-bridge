@@ -296,6 +296,8 @@ public actor ServerManager {
                 registrations = Self.filterForCloud(registrations, cloudState: cloudState)
             }
 
+            registrations = BrokerBootstrapToolOrdering.prioritize(registrations)
+
             // v3.0·0.5: single source of truth — same factory as SSETransport.
             let tools = registrations.map { MCPToolFactory.tool(for: $0) }
             return .init(tools: tools)
@@ -330,7 +332,15 @@ public actor ServerManager {
                     toolName: params.name
                 )
             }
-            let (text, isError) = await router.dispatchFormatted(toolName: params.name, arguments: arguments)
+            let (text, isError) = await router.dispatchFormatted(
+                toolName: params.name,
+                arguments: arguments,
+                context: ToolDispatchContext(
+                    transportSessionId: Self.stdioSessionID,
+                    origin: .local,
+                    client: "stdio"
+                )
+            )
             if !isError { await MainActor.run { onToolCall() } }
             return .init(content: [.text(.init(text))], isError: isError)
         }

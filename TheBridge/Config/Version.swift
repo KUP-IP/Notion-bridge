@@ -365,7 +365,9 @@ public enum BridgeConstants {
     ///   (find+get+update in one call — resolve a row by registry_find-identical predicate
     ///   matching, append-merge configured fields, then write; joins the existing `registry`
     ///   family, no new family). 199 + 1 = 200.
-    public static let staticFeatureModuleToolCount = 200
+    /// Bridge Evolution W1 broker: + doctrine_sync (request-tier single writer
+    ///   for doctrine-core.md, joins existing standing_orders family). 200 + 1 = 201.
+    public static let staticFeatureModuleToolCount = 201
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.

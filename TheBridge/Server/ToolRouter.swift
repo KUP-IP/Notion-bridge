@@ -73,6 +73,53 @@ public struct ToolRegistration: Sendable {
     }
 }
 
+// MARK: - Remote Control-Plane Predicate
+
+public enum RemoteControlPlanePolicy {
+    public static let blockedModules: Set<String> = [
+        "shell",
+        "applescript",
+        "computer",
+        "credential",
+    ]
+
+    public static let controlWriteTools: Set<String> = [
+        "standing_orders_save",
+        "standing_orders_delete",
+        "doctrine_sync",
+        "commands_create",
+        "commands_update",
+        "commands_delete",
+    ]
+
+    public static func isBlocked(tool: ToolRegistration) -> Bool {
+        blockedModules.contains(tool.module) || controlWriteTools.contains(tool.name)
+    }
+
+    public static func requiresGovernedSession(tool: ToolRegistration, effectiveTier: SecurityTier) -> Bool {
+        tool.tier != .open || effectiveTier != .open
+    }
+}
+
+public enum BrokerBootstrapToolOrdering {
+    public static let priority: [String] = [
+        "bridge_initialize",
+        "bridge_status",
+        "tools_list",
+        "session_info",
+    ]
+
+    public static func prioritize(_ registrations: [ToolRegistration]) -> [ToolRegistration] {
+        let rank = Dictionary(uniqueKeysWithValues: priority.enumerated().map { ($0.element, $0.offset) })
+        return registrations.enumerated().sorted { lhs, rhs in
+            let lhsRank = rank[lhs.element.name] ?? Int.max
+            let rhsRank = rank[rhs.element.name] ?? Int.max
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
+    }
+}
+
 // PKT-373 P1-5: ExecutionPlanEntry removed (was dead code)
 
 // MARK: - ToolRouter Actor
@@ -85,6 +132,7 @@ public actor ToolRouter {
     private var modulesRegistrationComplete = false
     private let securityGate: SecurityGate
     private let auditLog: AuditLog
+    private let sessionRegistry: SessionRegistry
 
     /// PKT-909 (Sell/Distribute v3 · 1) — license-gate seam. Production
     /// callers default to `LicenseManager.shared.currentStatus`; tests
@@ -98,10 +146,12 @@ public actor ToolRouter {
     public init(
         securityGate: SecurityGate,
         auditLog: AuditLog,
+        sessionRegistry: SessionRegistry = .shared,
         licenseStatusProvider: @escaping LicenseStatusProvider = { await LicenseManager.shared.currentStatus() }
     ) {
         self.securityGate = securityGate
         self.auditLog = auditLog
+        self.sessionRegistry = sessionRegistry
         self.licenseStatusProvider = licenseStatusProvider
     }
 
@@ -160,6 +210,28 @@ public actor ToolRouter {
     /// Returns the tool result or throws on rejection / handler error.
     /// For nuclear commands, returns a handoff response (not an error).
     public func dispatch(toolName: String, arguments: Value) async throws -> Value {
+        try await dispatch(
+            toolName: toolName,
+            arguments: arguments,
+            context: ToolDispatchContext.current ?? .localDefault
+        )
+    }
+
+    public func dispatch(
+        toolName: String,
+        arguments: Value,
+        context: ToolDispatchContext
+    ) async throws -> Value {
+        try await ToolDispatchContext.$current.withValue(context) {
+            try await dispatchInner(toolName: toolName, arguments: arguments, context: context)
+        }
+    }
+
+    private func dispatchInner(
+        toolName: String,
+        arguments: Value,
+        context: ToolDispatchContext
+    ) async throws -> Value {
         let start = ContinuousClock.now
 
         guard let tool = registry[toolName] else {
@@ -257,6 +329,64 @@ public actor ToolRouter {
             neverAutoApprove: tool.neverAutoApprove
         )
 
+        if context.origin == .remote,
+           BridgeDefaults.brokerRemoteControlPlaneBlockEnabled,
+           RemoteControlPlanePolicy.isBlocked(tool: tool) {
+            let governed = try? await sessionRegistry.isGoverned(
+                transportSessionId: context.transportSessionId
+            )
+            await auditLog.append(AuditEntry(
+                timestamp: Date(),
+                toolName: toolName,
+                tier: effectiveTier,
+                inputSummary: stringifySummary(arguments),
+                outputSummary: "REJECTED: control_plane_remote_blocked",
+                durationMs: Self.elapsedMs(since: start),
+                approvalStatus: .rejected,
+                governed: governed,
+                origin: context.origin,
+                transportSessionId: context.transportSessionId,
+                governanceNote: "control_plane_remote_blocked"
+            ))
+            return .object([
+                "ok": .bool(false),
+                "error": .string("control_plane_remote_blocked"),
+                "tool": .string(toolName),
+                "origin": .string(context.origin.rawValue),
+                "message": .string("Remote tunnel callers cannot invoke this local control-plane tool.")
+            ])
+        }
+
+        if context.origin == .remote,
+           BridgeDefaults.brokerRemoteControlPlaneBlockEnabled,
+           RemoteControlPlanePolicy.requiresGovernedSession(tool: tool, effectiveTier: effectiveTier) {
+            let governed = try? await sessionRegistry.isGoverned(
+                transportSessionId: context.transportSessionId
+            )
+            if governed != true {
+                await auditLog.append(AuditEntry(
+                    timestamp: Date(),
+                    toolName: toolName,
+                    tier: effectiveTier,
+                    inputSummary: stringifySummary(arguments),
+                    outputSummary: "REJECTED: ungoverned_remote_session",
+                    durationMs: Self.elapsedMs(since: start),
+                    approvalStatus: .rejected,
+                    governed: governed,
+                    origin: context.origin,
+                    transportSessionId: context.transportSessionId,
+                    governanceNote: "ungoverned_remote_session"
+                ))
+                return .object([
+                    "ok": .bool(false),
+                    "error": .string("ungoverned_remote_session"),
+                    "tool": .string(toolName),
+                    "origin": .string(context.origin.rawValue),
+                    "message": .string("Remote callers must call bridge_initialize before invoking notify/request-tier tools.")
+                ])
+            }
+        }
+
         // SecurityGate enforcement (async for request-tier approvals)
         let decision = await securityGate.enforce(
             toolName: toolName,
@@ -311,6 +441,22 @@ public actor ToolRouter {
         // Execute handler
         do {
             let result = try await tool.handler(arguments)
+            let governed = try? await sessionRegistry.isGoverned(
+                transportSessionId: context.transportSessionId
+            )
+            let governanceNote: String?
+            let returnedResult: Value
+            if Self.shouldAnnotateGovernance(
+                toolName: toolName,
+                context: context,
+                governed: governed
+            ) {
+                governanceNote = "ungoverned_session"
+                returnedResult = Self.annotatedResult(result)
+            } else {
+                governanceNote = nil
+                returnedResult = result
+            }
 
             // F2 + PKT-552: Fire-and-forget Notify-tier notification with structured context.
             // Runs after successful execution — informational only.
@@ -331,11 +477,15 @@ public actor ToolRouter {
                 toolName: toolName,
                 tier: effectiveTier,
                 inputSummary: stringifySummary(arguments),
-                outputSummary: stringifySummary(result),
+                outputSummary: stringifySummary(returnedResult),
                 durationMs: ms,
-                approvalStatus: .approved
+                approvalStatus: .approved,
+                governed: governed,
+                origin: context.origin,
+                transportSessionId: context.transportSessionId,
+                governanceNote: governanceNote
             ))
-            return result
+            return returnedResult
         } catch {
             let duration = ContinuousClock.now - start
             let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
@@ -460,8 +610,20 @@ public actor ToolRouter {
     /// used by ServerManager (stdio), SSEServer (Streamable HTTP), and legacy RPC.
     /// Returns: (text: String, isError: Bool)
     public func dispatchFormatted(toolName: String, arguments: Value) async -> (text: String, isError: Bool) {
+        await dispatchFormatted(
+            toolName: toolName,
+            arguments: arguments,
+            context: ToolDispatchContext.current ?? .localDefault
+        )
+    }
+
+    public func dispatchFormatted(
+        toolName: String,
+        arguments: Value,
+        context: ToolDispatchContext
+    ) async -> (text: String, isError: Bool) {
         do {
-            let result = try await dispatch(toolName: toolName, arguments: arguments)
+            let result = try await dispatch(toolName: toolName, arguments: arguments, context: context)
             let text: String
             switch result {
             case .string(let s):
@@ -499,6 +661,38 @@ public actor ToolRouter {
     }
 
     // MARK: Helpers
+
+    private static func shouldAnnotateGovernance(
+        toolName: String,
+        context: ToolDispatchContext,
+        governed: Bool?
+    ) -> Bool {
+        guard BridgeDefaults.brokerAdvisoryAnnotationEnabled else { return false }
+        guard context.transportSessionId?.isEmpty == false else { return false }
+        guard toolName != BridgeInitializeModule.toolName else { return false }
+        return governed != true
+    }
+
+    private static func annotatedResult(_ result: Value) -> Value {
+        let governance: Value = .object([
+            "initialized": .bool(false),
+            "note": .string("This transport session has not called bridge_initialize; result is advisory-only until initialized.")
+        ])
+        if case .object(var dict) = result {
+            dict["governance"] = governance
+            return .object(dict)
+        }
+        return .object([
+            "result": result,
+            "governance": governance
+        ])
+    }
+
+    private static func elapsedMs(since start: ContinuousClock.Instant) -> Double {
+        let duration = ContinuousClock.now - start
+        return Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
+            + Double(duration.components.seconds) * 1000.0
+    }
 
     private func stringifySummary(_ value: Value) -> String {
         switch value {

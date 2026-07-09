@@ -24,6 +24,10 @@ public struct AuditEntry: Sendable, Codable {
     public let outputSummary: String
     public let durationMs: Double
     public let approvalStatus: ApprovalStatus
+    public let governed: Bool?
+    public let origin: ToolDispatchOrigin?
+    public let transportSessionId: String?
+    public let governanceNote: String?
 
     public init(
         timestamp: Date,
@@ -32,7 +36,11 @@ public struct AuditEntry: Sendable, Codable {
         inputSummary: String,
         outputSummary: String,
         durationMs: Double,
-        approvalStatus: ApprovalStatus
+        approvalStatus: ApprovalStatus,
+        governed: Bool? = nil,
+        origin: ToolDispatchOrigin? = nil,
+        transportSessionId: String? = nil,
+        governanceNote: String? = nil
     ) {
         self.timestamp = timestamp
         self.toolName = toolName
@@ -41,6 +49,10 @@ public struct AuditEntry: Sendable, Codable {
         self.outputSummary = outputSummary
         self.durationMs = durationMs
         self.approvalStatus = approvalStatus
+        self.governed = governed
+        self.origin = origin
+        self.transportSessionId = transportSessionId
+        self.governanceNote = governanceNote
     }
 }
 
