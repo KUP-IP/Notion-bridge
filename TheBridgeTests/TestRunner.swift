@@ -880,6 +880,13 @@ await runEnableCloudAccessFlowTests()
 // {code} only) + response parse (access_token → token; non-2xx / missing → throw).
 await runWorkerTokenExchangeTests()
 
+// 2026-07-09: Notion page icon write (createPage/updatePage `icon` param,
+// c3b5699, v3.9.5) shipped with zero automated coverage — only
+// "live-verified against real Notion." URLProtocol-stubbed, same pattern as
+// WorkerTokenExchangeTests above (NotionClient gained an injectable
+// `session:` test seam for this).
+await runNotionClientIconTests()
+
 // WS-D (PKT-921, Bridge Cloud Access): heartbeat loop over the WS-C
 // BridgeCloudManager (start/stop on toggle, idempotent start), the
 // cloud-gated `bridge_status` MCP tool (gated registration + canonical

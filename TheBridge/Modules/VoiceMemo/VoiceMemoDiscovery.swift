@@ -98,11 +98,22 @@ public enum VoiceMemoDiscovery {
         return AppleVoiceMemoTranscriptExtractor.extract(from: audioURL)
     }
 
+    /// Test seam (mirrors VoiceMemoParseRouter.providerOverride) — when set,
+    /// short-circuits the real sidecar/Apple/Parakeet ladder entirely. Lets
+    /// GH #73 stage-timeout tests force a deterministic transcribe-stage hang
+    /// without depending on real transcription internals (which have no other
+    /// injection point and would otherwise make such a test flaky/slow/
+    /// environment-dependent).
+    nonisolated(unsafe) public static var resolveTranscriptOverride: (@Sendable (URL) async throws -> VoiceMemoTranscriptResolution)?
+
     /// Transcription ladder: sidecar cache → Apple tsrp → Parakeet fallback.
     public static func resolveTranscript(
         for audioURL: URL,
         forceParakeet: Bool = false
     ) async throws -> VoiceMemoTranscriptResolution {
+        if let override = resolveTranscriptOverride {
+            return try await override(audioURL)
+        }
         if !forceParakeet, let cached = loadTranscriptSidecar(for: audioURL) {
             let source = loadTranscriptMeta(for: audioURL)?.source ?? .sidecar
             return VoiceMemoTranscriptResolution(text: cached, source: source)

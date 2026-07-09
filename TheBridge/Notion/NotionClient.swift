@@ -211,7 +211,9 @@ public actor NotionClient {
 
     /// Initialize with a Notion integration API key.
     /// Resolution order: explicit parameter → NOTION_API_TOKEN env → NOTION_API_KEY env → config file
-    public init(apiKey: String? = nil) throws {
+    /// `session` is a test seam (mirrors WorkerTokenExchange's injectable-session
+    /// pattern) — omitted uses the real default-configured URLSession.
+    public init(apiKey: String? = nil, session: URLSession? = nil) throws {
         if let key = apiKey, !key.isEmpty {
             self.apiKey = key
             self.tokenSource = "explicit"
@@ -221,10 +223,14 @@ public actor NotionClient {
         } else {
             throw NotionClientError.missingAPIKey
         }
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
-        config.timeoutIntervalForResource = 60
-        self.session = URLSession(configuration: config)
+        if let session {
+            self.session = session
+        } else {
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 30
+            config.timeoutIntervalForResource = 60
+            self.session = URLSession(configuration: config)
+        }
         print("[NotionClient] Initialized — token source: \(tokenSource)")
     }
 
