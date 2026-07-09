@@ -33,13 +33,19 @@ public struct ConnectorAuthContext: Sendable {
     /// where to discover the authorization server.
     public let resourceMetadataURL: String
 
-    /// Connector tool-authorization policy. DEFAULT true = enforce the remote
-    /// connector allowlist plus destructive-tool step-up before dispatch.
-    /// WorkOS/AuthKit directory tokens that carry only OpenID scopes still map
-    /// to the connector-reachable allowlist inside ConnectorScopeGate; tools
-    /// outside that allowlist are denied, and destructive tools require the
-    /// AS-minted step-up scope. Tests or legacy local shims can opt out by
-    /// passing false explicitly.
+    /// Connector tool-authorization policy. DEFAULT false (2026-07-09, operator
+    /// decision, reverting v3.9.8's one-day default) = full parity: an
+    /// authenticated connector token may reach every tool, gated only by the
+    /// per-tool SecurityGate at dispatch (WorkOS authenticates only the
+    /// operator, and AuthKit issues scope-less tokens, so the ConnectorScopeGate
+    /// allowlist would otherwise deny most of the catalog). The v3.9.8-era
+    /// 36-tool allowlist remains available — pass strictScopes: true — for
+    /// anyone who wants it back later, e.g. as a per-client Wave 4 ceiling.
+    /// Independent of this flag: ToolRouter's Wave 1 broker (remote
+    /// control-plane blocklist for shell/applescript/computer/credential +
+    /// config-write tools, and the governed-session requirement for non-open
+    /// tools) is origin-based, not scope-based, and stays fully active either
+    /// way.
     public let strictScopes: Bool
 
     public init(
@@ -49,7 +55,7 @@ public struct ConnectorAuthContext: Sendable {
         sessionBinding: ConnectorSessionBinding = ConnectorSessionBinding(),
         diagnostics: ConnectorAuthDiagnostics = ConnectorAuthDiagnostics(),
         resourceMetadataURL: String,
-        strictScopes: Bool = true
+        strictScopes: Bool = false
     ) {
         self.validator = validator
         self.scopeGate = scopeGate

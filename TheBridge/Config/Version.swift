@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "3.9.8"
+    public static let marketing = "3.9.9"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -242,7 +242,23 @@ public enum AppVersion {
     ///   redesign + registry/fetch_skill fields projection + an AX-crash fix. Full
     ///   detail in CHANGELOG.md. staticFeatureModuleToolCount 200 → 201
     ///   (doctrine_sync). test-floor 3108 → 3118.
-    public static let build = "77"
+    /// v3.9.9: 77 -> 78 -- full Claude Connectors parity restored. Reverts
+    ///   v3.9.8's one-day-old ConnectorAuthContext.strictScopes default
+    ///   (false -> true) back to false: an authenticated connector token once
+    ///   again reaches every tool, gated only by the per-tool SecurityGate at
+    ///   dispatch, since WorkOS/AuthKit issues scope-less tokens and the
+    ///   ConnectorScopeGate allowlist would otherwise deny most of the
+    ///   catalog. The v3.9.8-era 36-tool allowlist remains available --
+    ///   ConnectorAuthContext(strictScopes: true) -- as an opt-in ceiling.
+    ///   Independent of this flag and unaffected: ToolRouter's Wave 1 broker
+    ///   (remote control-plane blocklist for shell/applescript/computer/
+    ///   credential + config-write tools, governed-session requirement) is
+    ///   origin-based, not scope-based, and stays fully active. +1 test
+    ///   (RemoteOAuthBearerTests.swift: split the old "default strictScopes"
+    ///   assertion into an explicit strictScopes:true regression test plus a
+    ///   new test asserting the false default). staticFeatureModuleToolCount
+    ///   unchanged (201). test-floor 3118 -> 3126.
+    public static let build = "78"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

@@ -1,5 +1,27 @@
 # Changelog
 
+## v3.9.9 — Full Claude Connectors parity restored — 2026-07-09
+
+- **Reverts v3.9.8's `strictScopes` default (one day old).** An authenticated
+  remote/cloud connector token (ChatGPT, Claude web) once again reaches every
+  tool — `ConnectorAuthContext.strictScopes` default flipped back `true` →
+  `false`. Gating is now, as before v3.9.8, the per-tool `SecurityGate` tier
+  at dispatch only. The v3.9.8-era 36-tool allowlist is preserved and still
+  available as an opt-in ceiling (`ConnectorAuthContext(strictScopes: true)`)
+  for anyone who wants it later, e.g. a per-client Wave 4 ceiling.
+- **What stays active regardless of this flag:** `ToolRouter`'s Wave 1 broker
+  — the remote control-plane hard-blocklist (`shell_exec`/`applescript_exec`/
+  computer-control/`credential_*` + config-write tools `standing_orders_save`/
+  `delete`/`doctrine_sync`/`commands_*`) and the governed-session requirement
+  (`bridge_initialize` must precede a non-open-tier remote call) — is
+  origin-based, not scope-based, and is untouched by this release.
+- +1 test: `RemoteOAuthBearerTests.swift`'s old "default strictScopes"
+  destructive-step-up assertion was split into an explicit
+  `strictScopes: true` regression test (preserving that coverage) plus a new
+  test asserting the `false` default.
+- test-floor **3118 → 3126** (+7 backfilled from v3.9.8/PR #93's untracked
+  gain, +1 from this release). Build **78**.
+
 ## v3.9.8 — Connector-scope security + session governance — 2026-07-09
 
 **Note on this release:** v3.9.4 through v3.9.7 (below) were fully developed and
