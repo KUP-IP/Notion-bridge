@@ -2074,6 +2074,16 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3108}"
 # MCPHTTPValidationTests.swift). Measured 3118 passed, 0 failed on the merged
 # tree (3108 + 10, no other drift). FLOOR raised 3108 -> 3118.
 FLOOR="${BRIDGE_TEST_FLOOR:-3118}"
+# v3.9.8 release + PR #93 (Notion icon tests + voice_memo_get timeout parity,
+# 2026-07-09) landed +7 tests on main without a floor bump (measured 3125
+# passed, 0 failed at that point — the floor was left stale at 3118). This
+# fix/connector-full-parity-revert branch (strictScopes default true -> false,
+# restoring full Claude Connectors tool parity) adds +1 test (the old
+# "default strictScopes" destructive-step-up test was split into an explicit
+# strictScopes:true regression test plus a new test asserting the false
+# default) for a net +8 over 3118. Measured 3126 passed, 0 failed on this
+# branch. FLOOR raised 3118 -> 3126.
+FLOOR="${BRIDGE_TEST_FLOOR:-3126}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

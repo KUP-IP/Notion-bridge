@@ -657,13 +657,18 @@ func runRemoteOAuthBearerTests() async {
         try expect(resp.statusCode == 403, "scope-insufficient call must be 403, got \(resp.statusCode)")
     }
 
-    await test("ConnectorAuthContext default strictScopes: OpenID-only destructive call requires step-up") {
+    await test("ConnectorAuthContext strictScopes=true (opt-in): OpenID-only destructive call requires step-up") {
+        // 2026-07-09: default flipped to false (full-parity revert of the
+        // v3.9.8-era default). strictScopes must now be requested explicitly
+        // to exercise the connector-layer scope/step-up gate — see the
+        // ConnectorAuthContext.strictScopes doc comment.
         let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
-        let defaultStrictAuth = ConnectorAuthContext(
+        let explicitStrictAuth = ConnectorAuthContext(
             validator: validator(keys: keys.verifyKeys),
-            resourceMetadataURL: prmURL
+            resourceMetadataURL: prmURL,
+            strictScopes: true
         )
-        let server = SSEServer(router: r, onToolCall: {}, connectorAuth: defaultStrictAuth)
+        let server = SSEServer(router: r, onToolCall: {}, connectorAuth: explicitStrictAuth)
         let tok = try await keys.sign(
             iss: kIssuer,
             aud: kResource,
@@ -672,15 +677,30 @@ func runRemoteOAuthBearerTests() async {
         let body = Data(#"{"method":"tools/call","params":{"name":"snippets_delete","arguments":{}}}"#.utf8)
         let req = HTTPRequest(
             method: "POST",
-            headers: ["Cf-Connecting-Ip": "203.0.113.7", "Authorization": "Bearer \(tok)", "Mcp-Session-Id": "default-strict"],
+            headers: ["Cf-Connecting-Ip": "203.0.113.7", "Authorization": "Bearer \(tok)", "Mcp-Session-Id": "explicit-strict"],
             body: body
         )
         let resp = await server.handleHTTPRequest(req)
         try expect(resp.statusCode == 403,
-                   "default strict auth must require step-up for destructive connector tools, got \(resp.statusCode)")
+                   "explicit strict auth must require step-up for destructive connector tools, got \(resp.statusCode)")
         let text = String(data: resp.bodyData ?? Data(), encoding: .utf8) ?? ""
         try expect(text.contains("step_up_required"),
                    "403 body must carry step_up_required, got: \(text)")
+    }
+
+    await test("ConnectorAuthContext default (strictScopes=false): connector-layer scope/step-up gate skipped") {
+        // Full-parity default: the connector-layer scope gate and step-up gate
+        // are bypassed entirely, so an insufficiently-scoped bearer is never
+        // rejected AT THIS LAYER for a destructive tool call — dispatch falls
+        // through to the tool router / SecurityGate tier, which is the sole
+        // remaining guardrail. This test only proves the connector-layer skip;
+        // it does not assert the eventual dispatch outcome (SecurityGate's
+        // `.request` tier is exercised by SecurityGate's own test suite).
+        let auth = ConnectorAuthContext(
+            validator: validator(keys: keys.verifyKeys),
+            resourceMetadataURL: prmURL
+        )
+        try expect(auth.strictScopes == false, "default strictScopes must be false (full parity)")
     }
 
     await test("Connector-gated server: strict tools/list hides non-callable Messages tools") {
