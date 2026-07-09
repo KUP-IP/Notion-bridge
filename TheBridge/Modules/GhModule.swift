@@ -13,7 +13,7 @@
 //   2. Builds gh args from the typed input schema.
 //   3. Either runs synchronously (default) and returns parsed JSON / URL,
 //      or, when `background: true`, delegates to BgProcessRuntime.start and
-//      returns a job id (caller polls via bg_process_status / bg_process_logs).
+//      returns a job id (caller polls via bg_poll).
 //   4. Returns a structured Value envelope: ok, tool, status, ...
 
 import Foundation
@@ -72,7 +72,7 @@ public enum GhModule {
                 "labels":    arrStrProp("Labels to apply."),
                 "assignees": arrStrProp("Assignees by login."),
                 "reviewers": arrStrProp("Reviewers (users or 'org/team')."),
-                "background": boolProp("Run via bg_process_start and return jobId immediately.")
+                "background": boolProp("Run via bg_run and return jobId immediately.")
             ], required: []),
             handler: { arguments in
                 guard case .object(let obj) = arguments else {
@@ -172,7 +172,7 @@ public enum GhModule {
                 "deleteBranch": boolProp("Delete the head branch after merging."),
                 "subject":      strProp("Optional commit subject (squash/merge only)."),
                 "bodyText":     strProp("Optional commit body text."),
-                "background":   boolProp("Run via bg_process_start and return jobId immediately.")
+                "background":   boolProp("Run via bg_run and return jobId immediately.")
             ], required: ["number"]),
             handler: { arguments in
                 if let cap = await ensureCapability("gh_pr_merge", runtime: runtime) { return cap }
@@ -470,14 +470,14 @@ public enum GhModule {
                 "pid":        .int(Int(meta.pid)),
                 "label":      .string(label),
                 "command":    .string(cmd),
-                "hint":       .string("poll bg_process_status / bg_process_logs with id=\(meta.id)")
+                "hint":       .string("poll bg_poll with id=\(meta.id)")
             ])
         } catch {
             return .object([
                 "ok":     .bool(false),
                 "status": .string("failed"),
                 "tool":   .string(tool),
-                "error":  .string("bg_process_start failed: \(error)")
+                "error":  .string("bg_run failed: \(error)")
             ])
         }
     }
