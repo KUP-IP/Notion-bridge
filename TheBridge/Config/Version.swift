@@ -258,7 +258,22 @@ public enum AppVersion {
     ///   assertion into an explicit strictScopes:true regression test plus a
     ///   new test asserting the false default). staticFeatureModuleToolCount
     ///   unchanged (201). test-floor 3118 -> 3126.
-    public static let build = "78"
+    /// v3.9.9: 78 -> 79 -- build-only fix (marketing unchanged; operator decision
+    ///   2026-07-10 to reserve 4.0.0 for a deliberate sale-ready release rather
+    ///   than consume it on a routine internal bugfix, even though it's the
+    ///   mechanical next version under the roll-at-9 rule). bridge_initialize's
+    ///   defaultContextProvider hardcoded connectionState:"local" for every
+    ///   caller regardless of actual origin -- live-caught: a remote/cloud
+    ///   session called bridge_initialize, was told "local"/capabilityState
+    ///   FULL, then had shell_exec refused moments later with origin:"remote"
+    ///   by RemoteControlPlanePolicy. Fixed to read the same
+    ///   ToolDispatchContext.current.origin the Wave 1 broker already uses:
+    ///   .remote -> "online" (existing bridge_status vocabulary; already
+    ///   classifies FULL via capabilityState's default case, no downstream
+    ///   logic change), .local/no-ambient-context -> "local", unchanged. +2
+    ///   tests. staticFeatureModuleToolCount unchanged (201). test-floor
+    ///   3126 -> 3128.
+    public static let build = "79"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

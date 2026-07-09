@@ -2084,6 +2084,12 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3118}"
 # default) for a net +8 over 3118. Measured 3126 passed, 0 failed on this
 # branch. FLOOR raised 3118 -> 3126.
 FLOOR="${BRIDGE_TEST_FLOOR:-3126}"
+# v3.9.9 build 79 (2026-07-10): bridge_initialize origin-awareness fix
+# (defaultContextProvider hardcoded connectionState:"local" for every caller;
+# now reads ToolDispatchContext.current.origin). +2 tests
+# (BridgeInitializeTests.swift: remote origin -> "online"/FULL, local/no-
+# context -> "local"). Measured 3128 passed, 0 failed. FLOOR raised 3126 -> 3128.
+FLOOR="${BRIDGE_TEST_FLOOR:-3128}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

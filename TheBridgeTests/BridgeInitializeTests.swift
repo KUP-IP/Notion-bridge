@@ -292,6 +292,68 @@ func runBridgeInitializeTests() async {
         try expect(ann?.requiresConfirmation == false, "no confirmation (tier .open)")
         try expect(ann?.openWorld == false, "touches only this app's own doctrine/evidence")
     }
+
+    // ── defaultContextProvider origin-awareness (2026-07-10 fix) ────────
+    // Previously hardcoded connectionState: "local" unconditionally, so a
+    // remote/cloud connector caller was told "local"/FULL capability here,
+    // then had control-plane tools refused with origin:"remote" moments
+    // later by RemoteControlPlanePolicy — a real, live-observed contradiction.
+    await test("Init: defaultContextProvider reports connectionState=online for remote-origin callers") {
+        try await withInitTempHome {
+            try StandingOrdersStore.shared.resetForTesting()
+            _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v7.0.2\n\nx")
+            let gate = SecurityGate()
+            let log = AuditLog()
+            let router = ToolRouter(securityGate: gate, auditLog: log)
+            await BridgeInitializeModule.register(on: router)
+            guard let reg = await router.allRegistrations().first(where: { $0.name == "bridge_initialize" }) else {
+                throw TestError.assertion("bridge_initialize must be registered")
+            }
+            let remoteContext = ToolDispatchContext(transportSessionId: "remote-test-session", origin: .remote)
+            let result = try await ToolDispatchContext.$current.withValue(remoteContext) {
+                try await reg.handler(.object([:]))
+            }
+            guard case .object(let d) = result else {
+                throw TestError.assertion("bridge_initialize result must be an object")
+            }
+            try expect(d["connectionState"] == .string("online"),
+                       "remote-origin caller must NOT be told connectionState=local, got \(String(describing: d["connectionState"]))")
+            try expect(d["capabilityState"] == .string("FULL"),
+                       "online + macToolsAvailable must still classify FULL")
+        }
+    }
+
+    await test("Init: defaultContextProvider reports connectionState=local for local-origin/no-ambient-context callers") {
+        try await withInitTempHome {
+            try StandingOrdersStore.shared.resetForTesting()
+            _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v7.0.2\n\nx")
+            let gate = SecurityGate()
+            let log = AuditLog()
+            let router = ToolRouter(securityGate: gate, auditLog: log)
+            await BridgeInitializeModule.register(on: router)
+            guard let reg = await router.allRegistrations().first(where: { $0.name == "bridge_initialize" }) else {
+                throw TestError.assertion("bridge_initialize must be registered")
+            }
+            // No ToolDispatchContext.current set at all (e.g. stdio/local dispatch) —
+            // must still default to "local", not silently regress to something else.
+            let result = try await reg.handler(.object([:]))
+            guard case .object(let d) = result else {
+                throw TestError.assertion("bridge_initialize result must be an object")
+            }
+            try expect(d["connectionState"] == .string("local"),
+                       "no ambient dispatch context must default to local, got \(String(describing: d["connectionState"]))")
+
+            let localContext = ToolDispatchContext(transportSessionId: nil, origin: .local)
+            let result2 = try await ToolDispatchContext.$current.withValue(localContext) {
+                try await reg.handler(.object([:]))
+            }
+            guard case .object(let d2) = result2 else {
+                throw TestError.assertion("bridge_initialize result must be an object")
+            }
+            try expect(d2["connectionState"] == .string("local"),
+                       "explicit local origin must report connectionState=local")
+        }
+    }
 }
 
 // Per-test throwaway HOME so the on-disk standing-orders + receipt stores are
