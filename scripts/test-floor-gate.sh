@@ -2023,7 +2023,57 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3035}"
 # vocabulary round-trips through the shared filter). Measured 3095 passed,
 # 0 failed (3054 baseline + 41 = 3095, matching exactly). FLOOR raised
 # 3054 → 3095.
-FLOOR="${BRIDGE_TEST_FLOOR:-3095}"
+#
+# 2026-07-06: connector-reauth triage (independent branch, computed off the
+# same pre-merge 3054 baseline as the fields-param PKT above — the exact
+# monotonic-counter collision class in AGENT_FEEDBACK.md's 2026-07-02 entry,
+# reconciled by hand here) turned up two confirmed diagnostics bugs.
+# (1) connections_health's handler passed validateLive:true in both branches,
+# contradicting its own tool description ("doesn't hit the live service") —
+# indistinguishable from connections_validate; fixed to validateLive:false.
+# (2) SessionModule.sessionStartTime was a `static let` referenced only inside
+# the session_info/session_clear handler closures, so Swift lazily
+# initialized it on first TOOL CALL rather than at register() (server boot)
+# time — uptimeSeconds silently measured "time since first call", not "time
+# since boot". Moved the capture to a local value at the top of register().
+# +2 regression tests (independent-start-times in SessionModuleTests.swift,
+# cached-lastValidatedAt in ConnectionsModuleTests.swift), rebased on top of
+# the fields-param merge above. Measured 3097 passed, 0 failed on the
+# combined tree (3095 + 2, matching exactly, no other drift). FLOOR raised
+# 3095 → 3097.
+# Remote connector scope-discovery fix (2026-07-07): added 1 regression
+# test proving strict connector tools/list hides local-only Messages tools
+# that the same bearer would fail to call. Measured 3098 passed, 0 failed
+# on the rebased branch (3097 + 1). FLOOR raised 3097 -> 3098.
+FLOOR="${BRIDGE_TEST_FLOOR:-3098}"
+# Wave 1 broker reconciliation (2026-07-07): merged origin/main into
+# feat/w1-broker — a real (non-mechanical) conflict in SSETransport.swift's
+# processConnectorJSONRPC, since main independently added scope-based
+# tools/list filtering (connectorVisibleRegistrations) the same place
+# w1-broker added broker-first tools/list ordering + session-context
+# threading. Resolved by combining both: filter by scope, then reorder the
+# filtered set; both token/auth scope-gating and session/origin context now
+# flow through the same dispatch path. +10 tests (Wave1BrokerTests.swift +
+# related session-broker coverage). Measured 3108 passed, 0 failed on the
+# merged tree (3098 + 10, no other drift). FLOOR raised 3098 -> 3108.
+FLOOR="${BRIDGE_TEST_FLOOR:-3108}"
+# codex/cloud-oauth-readiness merge (2026-07-09): rebased the deferred
+# strict-connector-scope branch onto post-w1-broker main. ConnectorScopeGate's
+# now-redundant standalone `bootstrapTools` bucket (bridge_initialize only)
+# was removed — main's `bridgeSessionTools` bucket (added by w1-broker,
+# covering bridge_initialize/bridge_status/tools_list/session_info) already
+# absorbs it — but its scope requirement was widened from the single
+# `bridge.session` scope back to "any known connector scope" to preserve
+# cloud-oauth-readiness's own pre-existing contract: a real, live-caught test
+# failure ("ScopeGate: bridge_initialize is bootstrap-reachable by any
+# connector grant", not a git-conflict artifact — it wasn't part of either
+# conflict hunk) proved these bootstrap-class tools must stay reachable by
+# any authenticated connector grant, not gated behind one specific scope.
+# +10 tests from this branch's own additions (RemoteOAuthOriginGatingTests.swift,
+# CloudStatusModuleTests.swift, RemoteOAuthHTTPTests.swift,
+# MCPHTTPValidationTests.swift). Measured 3118 passed, 0 failed on the merged
+# tree (3108 + 10, no other drift). FLOOR raised 3108 -> 3118.
+FLOOR="${BRIDGE_TEST_FLOOR:-3118}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

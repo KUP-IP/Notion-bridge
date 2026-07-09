@@ -113,10 +113,14 @@ public enum ToolAnnotationCatalog {
         // PKT-1065A: canonical init-core handshake. Reads the standing-orders
         // doctrine + routing/capability state and writes ONE local evidence
         // receipt (its own handshake file) — no operator config mutation, no
-        // secrets, no destruction. Not readOnly (it persists a receipt), but
-        // non-destructive; touches only this app's own doctrine/evidence, not an
-        // open world. Not idempotent — each handshake is a distinct evidence event.
-        "bridge_initialize": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: false),
+        // secrets, no destruction. Externally read-only for connector importers:
+        // the only write is Bridge-owned audit/evidence. Not idempotent — each
+        // handshake is a distinct evidence event.
+        "bridge_initialize": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: false),
+        // W1 broker: request-tier writer for doctrine-core.md. Mutates only
+        // local Bridge doctrine artifacts, never external state; not destructive,
+        // not idempotent because each sync stamps fresh metadata.
+        "doctrine_sync": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: true, openWorld: false),
         // WS-D (PKT-921): cloud-gated health probe. Reads the local
         // BridgeCloudManager state machine; touches nothing — pure read.
         "bridge_status": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, requiresConfirmation: false, openWorld: false),

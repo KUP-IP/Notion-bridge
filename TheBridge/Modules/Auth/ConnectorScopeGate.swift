@@ -23,10 +23,12 @@
 //                         grant that only needs voice-handle resolution
 //                         can no longer read the full address book —
 //                         least-privilege per data-sensitivity tier.
-//   • bootstrap        → canonical Bridge bootstrap/readiness tools
-//                         (`bridge_initialize`). These are available to any
-//                         authenticated connector grant; they mutate no
-//                         operator config and are needed before routing.
+//   • bridge.session   → broker/session bootstrap + management tools
+//                         (`bridge_initialize`, `bridge_status`, `tools_list`,
+//                         `session_info`, `session_clear`). Available to any
+//                         authenticated connector grant — none mutate
+//                         operator config, and the read-only members are
+//                         needed before a client can route work correctly.
 //   • voice.resolve    → voice-resolution-specific tools ONLY: handle →
 //                         identity resolution + the resolver health probe
 //                         (`contacts_resolve_handle`, `contacts_health`).
@@ -42,13 +44,15 @@
 
 import Foundation
 
-/// Canonical connector scope identifiers (wire strings — must match the
-/// PRM `scopes_supported` contract in `ProtectedResourceMetadataProvider`).
+/// Canonical connector scope identifiers for Bridge's internal scoped-token
+/// path. The public PRM currently advertises AuthKit OpenID scopes separately
+/// because WorkOS does not mint these app-custom names.
 public enum ConnectorScopeName {
     public static let snippetsRead = "snippets.read"
     public static let snippetsWrite = "snippets.write"
     public static let voiceResolve = "voice.resolve"
     public static let runnersExec = "runners.exec"
+    public static let bridgeSession = "bridge.session"
     /// S4 (PKT-800): a dedicated scope for tools that return contact
     /// RECORDS / personal data, split out of the over-broad
     /// `voice.resolve`. Independent of `voice.resolve` (neither implies
@@ -56,7 +60,7 @@ public enum ConnectorScopeName {
     public static let contactsRead = "contacts.read"
 
     public static let all: [String] = [
-        snippetsRead, snippetsWrite, voiceResolve, runnersExec, contactsRead,
+        snippetsRead, snippetsWrite, voiceResolve, runnersExec, bridgeSession, contactsRead,
     ]
 }
 
@@ -84,15 +88,32 @@ public struct ConnectorScopeGate: ScopeGating {
     ]
 
     /// Execution / process / job-runner surface: requires `runners.exec`.
+    /// `bg_run`/`bg_poll`/`bg_kill` are BgProcessModule's real tool names
+    /// (this bucket previously listed stale `bg_process_*` names that never
+    /// matched any registered tool — a live gap since strictScopes defaulted
+    /// to false and this gate went unconsulted until now). `jobs_pause_all`/
+    /// `jobs_resume_all` are explicitly deprecated in JobsModule — replaced
+    /// by `job_pause`/`job_resume` with `all: true`, already listed below —
+    /// so they're dropped rather than carried forward as dead names.
+    /// `devserver_*` are omitted: documented in
+    /// docs/operator/mcp-builder-audit-report.md but not currently
+    /// registered anywhere in the codebase; add them here if/when they ship.
     private static let runnerExecTools: Set<String> = [
         "shell_exec", "run_script",
-        "bg_process_start", "bg_process_kill", "bg_process_list",
-        "bg_process_logs", "bg_process_status",
+        "bg_run", "bg_poll", "bg_kill",
         "job_create", "job_run", "job_update", "job_delete",
         "job_pause", "job_resume", "job_duplicate", "job_import",
         "job_export", "job_get", "job_list", "job_history",
-        "job_templates", "jobs_pause_all", "jobs_resume_all",
-        "devserver_start", "devserver_stop", "devserver_health",
+        "job_templates",
+    ]
+
+    /// Broker/session control-plane tools that remote connectors must be able
+    /// to reach before any domain action. These are still guarded by
+    /// SecurityGate and per-tool annotations; this bucket only makes the
+    /// connector allowlist explicit.
+    private static let bridgeSessionTools: Set<String> = [
+        "bridge_initialize", "bridge_status", "tools_list", "session_info",
+        "session_clear",
     ]
 
     /// Contact-RECORD / personal-data tools: require `contacts.read`.
@@ -116,24 +137,16 @@ public struct ConnectorScopeGate: ScopeGating {
         "contacts_resolve_handle", "contacts_health",
     ]
 
-    /// Bootstrap/readiness tools that are safe and necessary at connector
-    /// session start. `bridge_initialize` persists only its own evidence
-    /// receipt and returns doctrine/routing/capability state; it must be
-    /// callable before a client can route work correctly.
-    private static let bootstrapTools: Set<String> = [
-        "bridge_initialize",
-    ]
-
-    /// The complete connector-reachable tool set (union of the five
+    /// The complete connector-reachable tool set (union of the six
     /// buckets). Anything outside this set is not exposed to remote
     /// connector clients at all and is denied regardless of scope.
     public static var connectorReachableTools: Set<String> {
         snippetReadTools
             .union(snippetWriteTools)
             .union(runnerExecTools)
+            .union(bridgeSessionTools)
             .union(contactsReadTools)
             .union(voiceResolveTools)
-            .union(bootstrapTools)
     }
 
     /// Scopes that, if granted, authorize `toolName`. Empty ⇒ the tool is
@@ -153,19 +166,22 @@ public struct ConnectorScopeGate: ScopeGating {
         if Self.runnerExecTools.contains(toolName) {
             return [ConnectorScope(name: ConnectorScopeName.runnersExec)]
         }
+        if Self.bridgeSessionTools.contains(toolName) {
+            // Bootstrap/session tools are authorized by any authenticated
+            // connector grant (this bucket absorbed the former standalone
+            // `bootstrapTools`, which had exactly this contract for
+            // `bridge_initialize`). Returning the known custom scope set
+            // preserves the "required is non-empty means connector-reachable"
+            // contract while allowing both AuthKit/OpenID-only tokens (via
+            // the directory fallback below) and any narrowly-scoped token to
+            // reach these read-only, no-config-mutating tools.
+            return ConnectorScopeName.all.map { ConnectorScope(name: $0) }
+        }
         if Self.contactsReadTools.contains(toolName) {
             return [ConnectorScope(name: ConnectorScopeName.contactsRead)]
         }
         if Self.voiceResolveTools.contains(toolName) {
             return [ConnectorScope(name: ConnectorScopeName.voiceResolve)]
-        }
-        if Self.bootstrapTools.contains(toolName) {
-            // Bootstrap is authorized by any authenticated connector grant.
-            // Returning the known custom scope set preserves the "required is
-            // non-empty means connector-reachable" contract while allowing:
-            //   • AuthKit/OpenID-only tokens via the directory fallback, and
-            //   • legacy custom-scoped tokens with any Bridge connector scope.
-            return ConnectorScopeName.all.map { ConnectorScope(name: $0) }
         }
         return []
     }
@@ -179,7 +195,9 @@ public struct ConnectorScopeGate: ScopeGating {
         let required = (try? await requiredScopes(for: toolName)) ?? []
         guard !required.isEmpty else {
             return .deny(
-                reason: "tool '\(toolName)' is not exposed to remote connector clients"
+                reason: "tool '\(toolName)' is not exposed to remote connector clients; "
+                    + "use a local Bridge client for local-only tools or explicitly "
+                    + "expose this tool in connector scope policy"
             )
         }
         let grantedSet = Set(grantedScopes.map(\.name))

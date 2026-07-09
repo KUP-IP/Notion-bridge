@@ -126,6 +126,37 @@ func runConnectionsModuleTests() async {
         try expect(resolved == nil, "Unknown non-alias id should not resolve")
     }
 
+    // connections_health must stay cached (validateLive:false) per its own tool
+    // description ("doesn't hit the live service"). Regression guard for a bug
+    // where the handler passed validateLive:true — indistinguishable from
+    // connections_validate. `lastValidatedAt` is the deterministic signal:
+    // ConnectionRegistry sets it to a fresh timestamp ONLY on the live path
+    // (validateLive:true) and to nil on the cached path, for every Notion
+    // connection. This assertion only fires when a real Notion connection is
+    // configured (no test seam exists for ConnectionRegistry.shared), but it
+    // is a real regression guard on any machine with a live workspace.
+    await test("connections_health does not force a live re-validation") {
+        let result = try await router.dispatch(
+            toolName: "connections_health",
+            arguments: .object([:])
+        )
+        guard case .object(let dict) = result, case .array(let connections) = dict["connections"] else {
+            throw TestError.assertion("Expected a connections array from connections_health")
+        }
+        for entry in connections {
+            guard case .object(let conn) = entry, case .string(let provider) = conn["provider"] else {
+                continue
+            }
+            if provider == "notion" {
+                let lastValidatedAt = conn["lastValidatedAt"] ?? .null
+                try expect(
+                    lastValidatedAt == .null,
+                    "connections_health should report lastValidatedAt: null for cached Notion connections (validateLive:false), got \(lastValidatedAt)"
+                )
+            }
+        }
+    }
+
     await test("resolve returns nil for primary alias when no primary exists") {
         let noPrimary = [FakeConn(id: "notion:a", primary: false)]
         let resolved = ConnectionRegistry.resolve(

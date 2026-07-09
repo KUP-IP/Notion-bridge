@@ -69,6 +69,7 @@ public enum BridgeModuleRegistry {
         await CommandsModule.register(on: router)          // PKT-1061: CommandStore-backed commands_* (6 tools)
         await StandingOrdersModule.register(on: router)
         await BridgeInitializeModule.register(on: router)  // PKT-1065A: canonical bridge_initialize handshake + persisted receipt (1 tool)
+        await DoctrineSyncModule.register(on: router)      // W1 broker: request-tier doctrine-core writer (1 tool)
         await ShortcutsModule.register(on: router)
         await MemoryModule.register(on: router)
         await RegistryModule.register(on: router)          // Data-Source Registry: generic CRUD + add/remove_entity + introspect + possess + hydrate + find (12 tools)

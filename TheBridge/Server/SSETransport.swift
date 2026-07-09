@@ -222,6 +222,7 @@ public actor SSEServer {
         var lastAccessedAt: Date
         var clientName: String?
         var clientVersion: String?
+        var origin: ToolDispatchOrigin
     }
 
     public struct SessionRuntimeDiagnostics: Sendable {
@@ -583,6 +584,7 @@ public actor SSEServer {
     }
 
     public func handleHTTPRequest(_ request: HTTPRequest) async -> HTTPResponse {
+        let requestOrigin: ToolDispatchOrigin = Self.isRemoteTunnelRequest(request) ? .remote : .local
         // PKT-800 S2 / PKT-810 — connector auth gate. ADDITIVE ISOLATION: this
         // block is a no-op (falls straight through) whenever
         // `connectorAuth == nil` (every default, stdio-only config). It is
@@ -620,7 +622,7 @@ public actor SSEServer {
                     outcome: "local.exempt",
                     detail: "loopback"
                 )
-                return await processStreamableHTTP(request)
+                return await processStreamableHTTP(request, origin: .local)
             }
             let authHeader = request.header(HTTPHeaderName.authorization)
             do {
@@ -629,7 +631,12 @@ public actor SSEServer {
                     outcome: "bearer.accepted",
                     detail: "method=\(request.method) sub-len=\(token.subject.count)"
                 )
-                return await dispatchAuthorizedConnectorRequest(request, token: token, auth: auth)
+                return await dispatchAuthorizedConnectorRequest(
+                    request,
+                    token: token,
+                    auth: auth,
+                    origin: .remote
+                )
             } catch let err as BearerValidationError {
                 await auth.diagnostics.record(
                     outcome: "bearer.rejected",
@@ -649,13 +656,17 @@ public actor SSEServer {
             return Self.remoteOAuthInactiveResponse()
         }
 
-        return await processStreamableHTTP(request)
+        return await processStreamableHTTP(request, origin: requestOrigin)
     }
 
     /// The original (pre-S2) Streamable-HTTP session handling, unchanged.
     /// Split out so both the unauthenticated default path and the
     /// post-bearer authorized path funnel through identical session logic.
-    private func processStreamableHTTP(_ request: HTTPRequest, connectorAuthed: Bool = false) async -> HTTPResponse {
+    private func processStreamableHTTP(
+        _ request: HTTPRequest,
+        connectorAuthed: Bool = false,
+        origin: ToolDispatchOrigin = .local
+    ) async -> HTTPResponse {
         let sessionID = request.header(HTTPHeaderName.sessionID)
 
         if let sessionID, var session = sessions[sessionID] {
@@ -664,7 +675,15 @@ public actor SSEServer {
             // Durability: refresh the persisted last-accessed timestamp.
             await sessionStore.touch(sessionID: sessionID, at: session.lastAccessedAt)
 
-            let response = await session.transport.handleRequest(request)
+            let response = await ToolDispatchContext.$current.withValue(
+                ToolDispatchContext(
+                    transportSessionId: sessionID,
+                    origin: origin,
+                    client: session.clientName
+                )
+            ) {
+                await session.transport.handleRequest(request)
+            }
 
             if request.method.uppercased() == "DELETE" && response.statusCode == 200 {
                 await removeSession(sessionID, reason: "closed via DELETE", incrementClosed: true)
@@ -677,7 +696,7 @@ public actor SSEServer {
            let body = request.body,
            isInitializeRequest(body)
         {
-            return await createSession(request, connectorAuthed: connectorAuthed)
+            return await createSession(request, connectorAuthed: connectorAuthed, origin: origin)
         }
 
         if let sessionID {
@@ -781,7 +800,8 @@ public actor SSEServer {
     private func dispatchAuthorizedConnectorRequest(
         _ request: HTTPRequest,
         token: BridgeAccessToken,
-        auth: ConnectorAuthContext
+        auth: ConnectorAuthContext,
+        origin: ToolDispatchOrigin
     ) async -> HTTPResponse {
         // 1. Confused-deputy isolation. The principal is derived from the
         //    VERIFIED token only (never request-supplied fields), then
@@ -857,10 +877,10 @@ public actor SSEServer {
         // connector clients compact JSON here, falling back to the SDK path for
         // anything processConnectorJSONRPC does not handle. The session pipeline
         // still skips the legacy static-bearer re-check (connectorAuthed).
-        if let connectorResponse = await processConnectorJSONRPC(request) {
+        if let connectorResponse = await processConnectorJSONRPC(request, token: token, auth: auth, origin: origin) {
             return connectorResponse
         }
-        return await processStreamableHTTP(request, connectorAuthed: true)
+        return await processStreamableHTTP(request, connectorAuthed: true, origin: origin)
     }
 
     /// Compact JSON-RPC handler for OAuth connector clients (v3.7.10). ChatGPT's
@@ -872,7 +892,12 @@ public actor SSEServer {
     /// Returns `nil` for anything it does not handle so the caller falls back to
     /// the SDK transport. claude.ai accepts these plain responses too, so both
     /// cloud connectors share this path.
-    private func processConnectorJSONRPC(_ request: HTTPRequest) async -> HTTPResponse? {
+    private func processConnectorJSONRPC(
+        _ request: HTTPRequest,
+        token: BridgeAccessToken,
+        auth: ConnectorAuthContext,
+        origin: ToolDispatchOrigin
+    ) async -> HTTPResponse? {
         guard request.method.uppercased() == "POST",
               let body = request.body,
               let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
@@ -880,7 +905,9 @@ public actor SSEServer {
         else { return nil }
 
         let requestId = json["id"]
-        let sessionID = request.header(HTTPHeaderName.sessionID) ?? UUID().uuidString
+        let requestSessionID = request.header(HTTPHeaderName.sessionID)
+        let sessionID = requestSessionID ?? UUID().uuidString
+        let brokerSessionID = requestSessionID ?? (origin == .remote ? "remote-connector-json" : sessionID)
         let headers = Self.connectorJSONHeaders(sessionID: sessionID)
 
         switch method {
@@ -925,6 +952,8 @@ public actor SSEServer {
             if let allowlist = toolAllowlist {
                 regs = regs.filter { allowlist.contains($0.name) }
             }
+            regs = await connectorVisibleRegistrations(regs, token: token, auth: auth)
+            regs = BrokerBootstrapToolOrdering.prioritize(regs)
             let tools: [[String: Any]] = regs.compactMap { reg in
                 guard let data = try? JSONEncoder().encode(MCPToolFactory.tool(for: reg)),
                       let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -953,7 +982,15 @@ public actor SSEServer {
             } else {
                 argsValue = .object([:])
             }
-            let (text, isError) = await router.dispatchFormatted(toolName: name, arguments: argsValue)
+            let (text, isError) = await router.dispatchFormatted(
+                toolName: name,
+                arguments: argsValue,
+                context: ToolDispatchContext(
+                    transportSessionId: brokerSessionID,
+                    origin: origin,
+                    client: origin == .remote ? "remote-connector" : nil
+                )
+            )
             if !isError { await MainActor.run { onToolCall() } }
             let data = buildRPCResponse(id: requestId, result: [
                 "content": [["type": "text", "text": text] as [String: Any]],
@@ -1022,6 +1059,26 @@ public actor SSEServer {
         }
     }
 
+    private func connectorVisibleRegistrations(
+        _ registrations: [ToolRegistration],
+        token: BridgeAccessToken,
+        auth: ConnectorAuthContext
+    ) async -> [ToolRegistration] {
+        guard auth.strictScopes else { return registrations }
+
+        var visible: [ToolRegistration] = []
+        for registration in registrations {
+            let decision = await auth.scopeGate.evaluate(
+                toolName: registration.name,
+                grantedScopes: token.connectorScopes
+            )
+            if case .allow = decision {
+                visible.append(registration)
+            }
+        }
+        return visible
+    }
+
     private static func connectorJSONHeaders(sessionID: String) -> [String: String] {
         [
             HTTPHeaderName.contentType: "application/json",
@@ -1031,7 +1088,11 @@ public actor SSEServer {
 
     // MARK: - Session Factory (Streamable HTTP)
 
-    private func createSession(_ request: HTTPRequest, connectorAuthed: Bool = false) async -> HTTPResponse {
+    private func createSession(
+        _ request: HTTPRequest,
+        connectorAuthed: Bool = false,
+        origin: ToolDispatchOrigin = .local
+    ) async -> HTTPResponse {
         let sessionID = UUID().uuidString
 
         // V1-QUALITY-C2: Extract clientInfo from initialize request
@@ -1180,7 +1241,16 @@ public actor SSEServer {
             if params.name == "memory_remember" {
                 arguments = MemoryModule.argumentsWithClientSource(arguments, clientName: resourceClientName)
             }
-            let (text, isError) = await router.dispatchFormatted(toolName: params.name, arguments: arguments)
+            let dispatchContext = ToolDispatchContext.current ?? ToolDispatchContext(
+                transportSessionId: resourceSessionID,
+                origin: origin,
+                client: resourceClientName
+            )
+            let (text, isError) = await router.dispatchFormatted(
+                toolName: params.name,
+                arguments: arguments,
+                context: dispatchContext
+            )
             if !isError { await MainActor.run { onToolCall() } }
             return .init(content: [.text(.init(text))], isError: isError)
         }
@@ -1195,7 +1265,8 @@ public actor SSEServer {
                 createdAt: createdAt,
                 lastAccessedAt: createdAt,
                 clientName: clientName,
-                clientVersion: clientVersion
+                clientVersion: clientVersion,
+                origin: origin
             )
             totalSessionsCreated += 1
 
@@ -1358,7 +1429,15 @@ public actor SSEServer {
                 argsValue = .object([:])
             }
 
-            let (text, isError) = await router.dispatchFormatted(toolName: name, arguments: argsValue)
+            let (text, isError) = await router.dispatchFormatted(
+                toolName: name,
+                arguments: argsValue,
+                context: ToolDispatchContext(
+                    transportSessionId: sessionID,
+                    origin: .local,
+                    client: sessionID.flatMap { legacy.clientName(sessionID: $0) }
+                )
+            )
             if !isError { await MainActor.run { onToolCall() } }
             return buildRPCResponse(id: requestId, result: [
                 "content": [["type": "text", "text": text] as [String: Any]],

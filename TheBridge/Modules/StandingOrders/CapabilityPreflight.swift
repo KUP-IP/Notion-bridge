@@ -288,16 +288,41 @@ public enum RoutingRosterQuality: String, Codable, Sendable, Equatable {
         if trimmed.isEmpty || trimmed.contains("_None registered yet._") {
             return .empty
         }
-        // Each routing skill renders as a top-level "- **" bullet.
-        let entryCount = rendered
+        // RoutingIndex.render emits top-level "- **" bullets. The live
+        // SkillsModule handshake block emits one line per skill after the
+        // "routing skill(s) available:" header.
+        let bulletEntryCount = rendered
             .split(whereSeparator: { $0.isNewline })
             .filter { $0.hasPrefix("- **") }
             .count
+        let liveEntryCount = liveRoutingInstructionsEntryCount(rendered)
+        let entryCount = max(bulletEntryCount, liveEntryCount)
         if entryCount == 0 {
             // Non-empty text but no recognizable entries → treat as empty roster.
             return .empty
         }
         return entryCount < sparseThreshold ? .sparse : .healthy
+    }
+
+    private static func liveRoutingInstructionsEntryCount(_ rendered: String) -> Int {
+        var inRoutingBlock = false
+        var count = 0
+
+        for rawLine in rendered.split(whereSeparator: { $0.isNewline }) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.contains("routing skill(s) available:") {
+                inRoutingBlock = true
+                continue
+            }
+            guard inRoutingBlock else { continue }
+            if line.isEmpty { continue }
+            if line.hasPrefix("Use fetch_skill") || line.hasPrefix("Routing protocol:") {
+                break
+            }
+            count += 1
+        }
+
+        return count
     }
 }
 

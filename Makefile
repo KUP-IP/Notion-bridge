@@ -96,7 +96,7 @@ inject-remote-access:
 
 build: inject-license-key inject-remote-access
 	@echo "🔨 Building release binary with strict concurrency..."
-	swift build -c release \
+	swift build -c release --product $(BINARY_NAME) \
 		-Xswiftc -strict-concurrency=complete
 	@echo "$(CURDIR)" > $(BUILD_DIR)/.source_path
 	@echo "✅ Release build: $(RELEASE_DIR)/$(BINARY_NAME)"

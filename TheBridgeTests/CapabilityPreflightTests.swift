@@ -249,6 +249,16 @@ func runCapabilityPreflightTests() async {
                                 description: "d", triggers: [], antiTriggers: [])
         })
         try expect(RoutingRosterQuality.assess(rendered: many) == .healthy, "5 entries → HEALTHY")
+
+        let liveStyle = """
+        The Bridge MCP server. 3 routing skill(s) available:
+        focus-keepr — Focus and session orchestration Keepr.
+        mac-keepr — Mac and local-machine operations Keepr.
+        app-dev — Master development skill.
+        Use fetch_skill to load full skill content by name. Call list_routing_skills to refresh this index.
+        """
+        try expect(RoutingRosterQuality.assess(rendered: liveStyle) == .healthy,
+                   "live SkillsModule routing instructions with entries → HEALTHY")
     }
 
     // ── operator summary ───────────────────────────────────────────────

@@ -288,8 +288,8 @@ func runRemoteOAuthBearerTests() async {
         // connector-reachable tool — across every bucket — must be allowed:
         // authentication is the grant, SecurityGate/step-up are the per-call guard.
         for tool in ["snippets_list", "snippets_create", "snippets_delete",
-                     "shell_exec", "job_run", "contacts_get", "contacts_resolve_handle",
-                     "bridge_initialize"] {
+                     "shell_exec", "job_run", "bridge_initialize", "bridge_status",
+                     "tools_list", "session_info", "contacts_get", "contacts_resolve_handle"] {
             let d = await gate.evaluate(toolName: tool, grantedScopes: [])
             guard case .allow = d else {
                 throw TestError.assertion("scope-less token must reach reachable tool \(tool)")
@@ -357,7 +357,7 @@ func runRemoteOAuthBearerTests() async {
     }
 
     await test("ScopeGate: runners.exec gates command/exec tools") {
-        for tool in ["shell_exec", "run_script", "bg_process_start", "job_run"] {
+        for tool in ["shell_exec", "run_script", "bg_run", "job_run"] {
             let denied = await gate.evaluate(
                 toolName: tool, grantedScopes: [ConnectorScope(name: "snippets.read")]
             )
@@ -441,6 +441,18 @@ func runRemoteOAuthBearerTests() async {
         try expect(req == ["snippets.write"], "got \(req)")
     }
 
+    await test("ScopeGate: requiredScopes — bridge session tools accept any known connector scope") {
+        // Bootstrap/session tools (bridge_initialize/bridge_status/tools_list/
+        // session_info) must be reachable by ANY authenticated connector
+        // grant, not gated behind the specific bridge.session scope alone —
+        // see "ScopeGate: bridge_initialize is bootstrap-reachable by any
+        // connector grant" below for the reachability half of this contract.
+        for tool in ["bridge_initialize", "bridge_status", "tools_list", "session_info"] {
+            let req = try await gate.requiredScopes(for: tool).map(\.name)
+            try expect(Set(req) == Set(ConnectorScopeName.all), "\(tool) got \(req)")
+        }
+    }
+
     await test("ScopeGate: requiredScopes — unknown/non-connector tool is empty") {
         let req = try await gate.requiredScopes(for: "screen_capture")
         try expect(req.isEmpty, "non-connector tool must have no required scopes")
@@ -470,6 +482,10 @@ func runRemoteOAuthBearerTests() async {
         try expect(reachable.contains("snippets_list"))
         try expect(reachable.contains("snippets_create"))
         try expect(reachable.contains("shell_exec"))
+        try expect(reachable.contains("bridge_initialize"))
+        try expect(reachable.contains("bridge_status"))
+        try expect(reachable.contains("tools_list"))
+        try expect(reachable.contains("session_info"))
         try expect(reachable.contains("contacts_resolve_handle"))
         try expect(reachable.contains("contacts_get"),
                    "S4: the contacts.read bucket must be connector-reachable")
@@ -665,6 +681,48 @@ func runRemoteOAuthBearerTests() async {
         let text = String(data: resp.bodyData ?? Data(), encoding: .utf8) ?? ""
         try expect(text.contains("step_up_required"),
                    "403 body must carry step_up_required, got: \(text)")
+    }
+
+    await test("Connector-gated server: strict tools/list hides non-callable Messages tools") {
+        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        await r.register(ToolRegistration(
+            name: "snippets_list",
+            module: "snippets",
+            tier: .open,
+            description: "Allowed connector read probe.",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { _ in .array([]) }
+        ))
+        await r.register(ToolRegistration(
+            name: "messages_recent",
+            module: "messages",
+            tier: .open,
+            description: "Local-only Messages probe.",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { _ in .array([]) }
+        ))
+        await r.markModulesRegistrationComplete()
+
+        let server = SSEServer(router: r, onToolCall: {}, connectorAuth: authCtx)
+        let tok = try await keys.sign(iss: kIssuer, aud: kResource, scope: "snippets.read")
+        let body = Data(#"{"jsonrpc":"2.0","id":7,"method":"tools/list"}"#.utf8)
+        let req = HTTPRequest(
+            method: "POST",
+            headers: ["Cf-Connecting-Ip": "203.0.113.7", "Authorization": "Bearer \(tok)"],
+            body: body
+        )
+        let resp = await server.handleHTTPRequest(req)
+        try expect(resp.statusCode == 200, "tools/list must succeed, got \(resp.statusCode)")
+        guard case .data(let data, _) = resp else {
+            throw TestError.assertion("strict connector tools/list must be compact JSON data")
+        }
+        let obj = try (JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let result = obj["result"] as? [String: Any] ?? [:]
+        let tools = result["tools"] as? [[String: Any]] ?? []
+        let names = Set(tools.compactMap { $0["name"] as? String })
+        try expect(names.contains("snippets_list"), "allowed connector tool missing from tools/list: \(names.sorted())")
+        try expect(!names.contains("messages_recent"),
+                   "tools/list must not advertise a tool the same bearer will 403: \(names.sorted())")
     }
 
     // MARK: - S1 fix: PRM resource reflects NOTION_BRIDGE_PORT
