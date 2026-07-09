@@ -23,6 +23,12 @@
 //                         grant that only needs voice-handle resolution
 //                         can no longer read the full address book —
 //                         least-privilege per data-sensitivity tier.
+//   • bridge.session   → broker/session bootstrap + management tools
+//                         (`bridge_initialize`, `bridge_status`, `tools_list`,
+//                         `session_info`, `session_clear`). Available to any
+//                         authenticated connector grant — none mutate
+//                         operator config, and the read-only members are
+//                         needed before a client can route work correctly.
 //   • voice.resolve    → voice-resolution-specific tools ONLY: handle →
 //                         identity resolution + the resolver health probe
 //                         (`contacts_resolve_handle`, `contacts_health`).
@@ -82,15 +88,23 @@ public struct ConnectorScopeGate: ScopeGating {
     ]
 
     /// Execution / process / job-runner surface: requires `runners.exec`.
+    /// `bg_run`/`bg_poll`/`bg_kill` are BgProcessModule's real tool names
+    /// (this bucket previously listed stale `bg_process_*` names that never
+    /// matched any registered tool — a live gap since strictScopes defaulted
+    /// to false and this gate went unconsulted until now). `jobs_pause_all`/
+    /// `jobs_resume_all` are explicitly deprecated in JobsModule — replaced
+    /// by `job_pause`/`job_resume` with `all: true`, already listed below —
+    /// so they're dropped rather than carried forward as dead names.
+    /// `devserver_*` are omitted: documented in
+    /// docs/operator/mcp-builder-audit-report.md but not currently
+    /// registered anywhere in the codebase; add them here if/when they ship.
     private static let runnerExecTools: Set<String> = [
         "shell_exec", "run_script",
-        "bg_process_start", "bg_process_kill", "bg_process_list",
-        "bg_process_logs", "bg_process_status",
+        "bg_run", "bg_poll", "bg_kill",
         "job_create", "job_run", "job_update", "job_delete",
         "job_pause", "job_resume", "job_duplicate", "job_import",
         "job_export", "job_get", "job_list", "job_history",
-        "job_templates", "jobs_pause_all", "jobs_resume_all",
-        "devserver_start", "devserver_stop", "devserver_health",
+        "job_templates",
     ]
 
     /// Broker/session control-plane tools that remote connectors must be able
@@ -99,6 +113,7 @@ public struct ConnectorScopeGate: ScopeGating {
     /// connector allowlist explicit.
     private static let bridgeSessionTools: Set<String> = [
         "bridge_initialize", "bridge_status", "tools_list", "session_info",
+        "session_clear",
     ]
 
     /// Contact-RECORD / personal-data tools: require `contacts.read`.
@@ -152,7 +167,15 @@ public struct ConnectorScopeGate: ScopeGating {
             return [ConnectorScope(name: ConnectorScopeName.runnersExec)]
         }
         if Self.bridgeSessionTools.contains(toolName) {
-            return [ConnectorScope(name: ConnectorScopeName.bridgeSession)]
+            // Bootstrap/session tools are authorized by any authenticated
+            // connector grant (this bucket absorbed the former standalone
+            // `bootstrapTools`, which had exactly this contract for
+            // `bridge_initialize`). Returning the known custom scope set
+            // preserves the "required is non-empty means connector-reachable"
+            // contract while allowing both AuthKit/OpenID-only tokens (via
+            // the directory fallback below) and any narrowly-scoped token to
+            // reach these read-only, no-config-mutating tools.
+            return ConnectorScopeName.all.map { ConnectorScope(name: $0) }
         }
         if Self.contactsReadTools.contains(toolName) {
             return [ConnectorScope(name: ConnectorScopeName.contactsRead)]
@@ -178,18 +201,23 @@ public struct ConnectorScopeGate: ScopeGating {
             )
         }
         let grantedSet = Set(grantedScopes.map(\.name))
+        let grantedConnectorSet = grantedSet.intersection(Set(ConnectorScopeName.all))
         // PKT-810 directory-connector model: WorkOS AuthKit cannot mint the
         // connector's custom scopes (an authorize that requests them is
         // rejected with `invalid_scope`), so a validly-authenticated directory
-        // token arrives carrying NO connector scopes. Treat authentication as
-        // the grant for the connector-reachable ALLOWLIST: the tool is already
-        // known-reachable (`required` is non-empty above), tools outside the
-        // allowlist are still denied, and SecurityGate (open/notify/confirm) +
-        // step-up consent on destructive tools remain the real per-call safety
-        // layer. A token that DOES carry connector scopes keeps the strict
-        // per-scope intersection below (back-compatible with scoped grants).
-        if grantedSet.isEmpty { return .allow }
-        let satisfied = required.contains { grantedSet.contains($0.name) }
+        // token arrives carrying NO Bridge custom connector scopes. It may
+        // still carry standard OpenID scopes (`openid email profile
+        // offline_access`), so key the directory-model fallback off the absence
+        // of recognized Bridge scopes, not off the raw OAuth scope string being
+        // empty. Treat authentication as the grant for the connector-reachable
+        // ALLOWLIST: the tool is already known-reachable (`required` is
+        // non-empty above), tools outside the allowlist are still denied, and
+        // SecurityGate (open/notify/confirm) + step-up on destructive tools
+        // remain the per-call safety layer. A token that DOES carry Bridge
+        // connector scopes keeps the strict per-scope intersection below
+        // (back-compatible with scoped grants).
+        if grantedConnectorSet.isEmpty { return .allow }
+        let satisfied = required.contains { grantedConnectorSet.contains($0.name) }
         if satisfied { return .allow }
 
         let need = required.map(\.name).joined(separator: " | ")

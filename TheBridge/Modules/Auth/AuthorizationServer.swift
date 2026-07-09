@@ -88,9 +88,10 @@ public enum ProtectedResourceMetadataProvider {
     /// with an empty/Bridge-only list ChatGPT cannot complete authorization.
     /// WorkOS hosted AuthKit mints exactly these standard OpenID scopes, so
     /// advertising them lets Claude AND ChatGPT request a set the AS will grant.
-    /// Authorization stays server-side: connector tokens default to full tool
-    /// parity (`strictScopes=false`); ConnectorScopeGate (opt-in) + SecurityGate
-    /// tiers + step-up consent remain the per-call guardrail.
+    /// Authorization stays server-side: standard OpenID scopes are treated as a
+    /// directory-authenticated token by ConnectorScopeGate, while production
+    /// connector dispatch still defaults to the Bridge allowlist plus step-up
+    /// consent for destructive tools.
     public static let advertisedAuthKitScopes: [String] = [
         "openid", "email", "profile", "offline_access",
     ]
@@ -260,7 +261,13 @@ public enum ProtectedResourceMetadataProvider {
         if isMisconfigured(environment: environment, config: config, baked: baked) {
             return .refuseMisconfigured
         }
-        return .serve(jsonBody(resource: resource, port: port, environment: environment))
+        return .serve(jsonBody(
+            resource: resource,
+            port: port,
+            environment: environment,
+            config: config,
+            baked: baked
+        ))
     }
 
     /// Short human-readable error message for the 503 the PRM route returns

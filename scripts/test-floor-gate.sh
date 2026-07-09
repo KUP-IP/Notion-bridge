@@ -2057,6 +2057,23 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3098}"
 # related session-broker coverage). Measured 3108 passed, 0 failed on the
 # merged tree (3098 + 10, no other drift). FLOOR raised 3098 -> 3108.
 FLOOR="${BRIDGE_TEST_FLOOR:-3108}"
+# codex/cloud-oauth-readiness merge (2026-07-09): rebased the deferred
+# strict-connector-scope branch onto post-w1-broker main. ConnectorScopeGate's
+# now-redundant standalone `bootstrapTools` bucket (bridge_initialize only)
+# was removed — main's `bridgeSessionTools` bucket (added by w1-broker,
+# covering bridge_initialize/bridge_status/tools_list/session_info) already
+# absorbs it — but its scope requirement was widened from the single
+# `bridge.session` scope back to "any known connector scope" to preserve
+# cloud-oauth-readiness's own pre-existing contract: a real, live-caught test
+# failure ("ScopeGate: bridge_initialize is bootstrap-reachable by any
+# connector grant", not a git-conflict artifact — it wasn't part of either
+# conflict hunk) proved these bootstrap-class tools must stay reachable by
+# any authenticated connector grant, not gated behind one specific scope.
+# +10 tests from this branch's own additions (RemoteOAuthOriginGatingTests.swift,
+# CloudStatusModuleTests.swift, RemoteOAuthHTTPTests.swift,
+# MCPHTTPValidationTests.swift). Measured 3118 passed, 0 failed on the merged
+# tree (3108 + 10, no other drift). FLOOR raised 3108 -> 3118.
+FLOOR="${BRIDGE_TEST_FLOOR:-3118}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

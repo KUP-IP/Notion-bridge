@@ -86,6 +86,17 @@ func runRemoteOAuthOriginGatingTests() async {
         {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"\(BridgeConstants.mcpProtocolVersion)","capabilities":{},"clientInfo":{"name":"origin-gating-check","version":"test"}}}
         """.utf8)
     }
+
+    func rpcObject(from response: HTTPResponse) throws -> [String: Any] {
+        guard let data = response.bodyData else {
+            throw TestError.assertion("expected a JSON response body")
+        }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw TestError.assertion("response body was not a JSON object: \(String(data: data, encoding: .utf8) ?? "<non-utf8>")")
+        }
+        return object
+    }
+
     let localHeaders = [
         "Host": "127.0.0.1:9700",
         "Accept": "application/json, text/event-stream",
@@ -185,6 +196,24 @@ func runRemoteOAuthOriginGatingTests() async {
         try expect(resp.statusCode == 401, "tunnel with no token must 401, got \(resp.statusCode)")
     }
 
+    await test("OriginGate: REMOTE + connectorAuth nil ⇒ 503 remote OAuth inactive") {
+        let s = SSEServer(
+            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            onToolCall: {},
+            connectorAuth: nil
+        )
+        let resp = await s.handleHTTPRequest(HTTPRequest(
+            method: "POST",
+            headers: ["Cf-Ray": "abc-123", "Host": "127.0.0.1:9700"],
+            body: initBody()
+        ))
+        try expect(resp.statusCode == 503,
+                   "remote tunnel traffic must fail closed when connector auth is inactive, got \(resp.statusCode)")
+        let body = String(data: resp.bodyData ?? Data(), encoding: .utf8) ?? ""
+        try expect(body.contains("Remote OAuth is not ready"),
+                   "503 body must name remote OAuth readiness, got: \(body)")
+    }
+
     await test("OriginGate: REMOTE + arbitrary non-JWT bearer ⇒ 401 (no static-bearer bypass)") {
         let resp = await server().handleHTTPRequest(HTTPRequest(
             method: "POST",
@@ -206,6 +235,108 @@ func runRemoteOAuthOriginGatingTests() async {
             body: Data(#"{"method":"tools/list"}"#.utf8)
         ))
         try expect(resp.statusCode != 401, "remote+valid-JWT must pass OAuth, got \(resp.statusCode)")
+    }
+
+    await test("OriginGate: REMOTE compact initialize mirrors standing orders + resources capability") {
+        let clientName = "origin-gating-connector"
+        let expected = await StandingOrdersDelivery.asyncComposition(clientName: clientName).instructionsMarkdown
+        let tok = try await keys.sign(scope: "openid email profile offline_access")
+        let body = Data("""
+        {"jsonrpc":"2.0","id":77,"method":"initialize","params":{"protocolVersion":"\(BridgeConstants.mcpProtocolVersion)","capabilities":{},"clientInfo":{"name":"\(clientName)","version":"test"}}}
+        """.utf8)
+        let resp = await server().handleHTTPRequest(HTTPRequest(
+            method: "POST",
+            headers: ["Authorization": "Bearer \(tok)", "Cf-Ray": "abc-123"],
+            body: body
+        ))
+        try expect(resp.statusCode == 200, "compact initialize should be JSON 200, got \(resp.statusCode)")
+        let root = try rpcObject(from: resp)
+        guard let result = root["result"] as? [String: Any] else {
+            throw TestError.assertion("missing result in compact initialize response")
+        }
+        try expect(result["instructions"] as? String == expected,
+                   "compact connector initialize must use StandingOrdersDelivery instructions")
+        guard let capabilities = result["capabilities"] as? [String: Any] else {
+            throw TestError.assertion("missing capabilities in initialize response")
+        }
+        try expect(capabilities["tools"] != nil, "initialize capabilities must include tools")
+        try expect(capabilities["resources"] != nil, "initialize capabilities must include resources")
+    }
+
+    await test("OriginGate: REMOTE compact resources/list returns Bridge resources") {
+        let tok = try await keys.sign(scope: "openid email profile offline_access")
+        let resp = await server().handleHTTPRequest(HTTPRequest(
+            method: "POST",
+            headers: ["Authorization": "Bearer \(tok)", "Cf-Ray": "abc-123"],
+            body: Data(#"{"jsonrpc":"2.0","id":78,"method":"resources/list"}"#.utf8)
+        ))
+        try expect(resp.statusCode == 200, "compact resources/list should be JSON 200, got \(resp.statusCode)")
+        let root = try rpcObject(from: resp)
+        guard let result = root["result"] as? [String: Any] else {
+            throw TestError.assertion("missing result in resources/list response")
+        }
+        guard let resources = result["resources"] as? [[String: Any]] else {
+            throw TestError.assertion("missing resources list in response")
+        }
+        try expect(resources.count == BridgeResources.listAsDictionaries.count,
+                   "compact resources/list count drifted: \(resources.count)")
+    }
+
+    await test("OriginGate: REMOTE compact tools/call can run canonical bridge_initialize") {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory
+            .appendingPathComponent("BridgeInitialize-remote-oauth-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        BridgePaths.overrideHomeForTesting(tmp)
+        defer {
+            BridgePaths.overrideHomeForTesting(nil)
+            try? fm.removeItem(at: tmp)
+        }
+
+        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        await BridgeInitializeModule.register(
+            on: router,
+            contextProvider: { client in
+                BridgeInitializeContext(
+                    client: client,
+                    connectionState: "remote",
+                    macToolsAvailable: true,
+                    bridgeState: "running",
+                    now: Date(timeIntervalSince1970: 1_788_000_000)
+                )
+            },
+            preflightProvider: {
+                CapabilityPreflightRegistry(probes: [])
+            }
+        )
+        let s = SSEServer(
+            router: router,
+            onToolCall: {},
+            connectorAuth: auth()
+        )
+        let tok = try await keys.sign(scope: "openid email profile offline_access")
+        let body = Data(#"{"jsonrpc":"2.0","id":79,"method":"tools/call","params":{"name":"bridge_initialize","arguments":{"client":"chatgpt-mobile"}}}"#.utf8)
+        let resp = await s.handleHTTPRequest(HTTPRequest(
+            method: "POST",
+            headers: ["Authorization": "Bearer \(tok)", "Cf-Ray": "abc-123"],
+            body: body
+        ))
+        try expect(resp.statusCode == 200,
+                   "remote bridge_initialize should be JSON 200, got \(resp.statusCode)")
+        let root = try rpcObject(from: resp)
+        guard let result = root["result"] as? [String: Any],
+              let content = result["content"] as? [[String: Any]],
+              let text = content.first?["text"] as? String else {
+            throw TestError.assertion("missing tool result text in bridge_initialize response: \(root)")
+        }
+        try expect(result["isError"] as? Bool == false,
+                   "bridge_initialize must not return an MCP error: \(result)")
+        try expect(text.contains("\"tool\" : \"bridge_initialize\"")
+                   || text.contains("\"tool\":\"bridge_initialize\""),
+                   "bridge_initialize receipt missing from tool result: \(text)")
+        try expect(text.contains("\"connectionState\" : \"remote\"")
+                   || text.contains("\"connectionState\":\"remote\""),
+                   "remote connection state missing from receipt: \(text)")
     }
 
     // MARK: - Legacy /sse + /messages are LOOPBACK-ONLY (PKT-810 R5 hardening)

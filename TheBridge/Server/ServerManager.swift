@@ -396,9 +396,9 @@ public actor ServerManager {
     public static let cloudAlwaysVisibleTools: Set<String> = [CloudStatusModule.toolName]
 
     /// Pure, unit-testable tools/list conditional. For a CLOUD request:
-    ///   • state ∈ {.offline, .disabled} → omit Mac tools (keep only
+    ///   • state ∈ {.offline, .disabled, .connecting} → omit Mac tools (keep only
     ///     `cloudAlwaysVisibleTools`, e.g. `bridge_status`).
-    ///   • state ∈ {.online, .degraded, .connecting} → full list.
+    ///   • state ∈ {.online, .degraded} → full list.
     /// A non-cloud (local) request never calls this; it always gets the full
     /// list. Mirrors `CloudStatusPayload.macToolsAvailable`.
     public static func filterForCloud(

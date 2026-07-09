@@ -357,7 +357,7 @@ func runRemoteOAuthBearerTests() async {
     }
 
     await test("ScopeGate: runners.exec gates command/exec tools") {
-        for tool in ["shell_exec", "run_script", "bg_process_start", "job_run"] {
+        for tool in ["shell_exec", "run_script", "bg_run", "job_run"] {
             let denied = await gate.evaluate(
                 toolName: tool, grantedScopes: [ConnectorScope(name: "snippets.read")]
             )
@@ -410,6 +410,27 @@ func runRemoteOAuthBearerTests() async {
         }
     }
 
+    await test("ScopeGate PKT-810: OpenID-only AuthKit token follows directory model") {
+        let openIDScopes = [
+            ConnectorScope(name: "openid"),
+            ConnectorScope(name: "email"),
+            ConnectorScope(name: "profile"),
+            ConnectorScope(name: "offline_access"),
+        ]
+        let reachable = await gate.evaluate(toolName: "snippets_list", grantedScopes: openIDScopes)
+        guard case .allow = reachable else {
+            throw TestError.assertion("OpenID-only token must reach connector allowlist tools")
+        }
+        let bootstrap = await gate.evaluate(toolName: "bridge_initialize", grantedScopes: openIDScopes)
+        guard case .allow = bootstrap else {
+            throw TestError.assertion("OpenID-only token must reach bridge_initialize")
+        }
+        let offAllowlist = await gate.evaluate(toolName: "file_write", grantedScopes: openIDScopes)
+        guard case .deny = offAllowlist else {
+            throw TestError.assertion("OpenID-only token must not reach off-allowlist tools")
+        }
+    }
+
     await test("ScopeGate: requiredScopes — read tool lists BOTH read and write") {
         let req = try await gate.requiredScopes(for: "snippets_search").map(\.name)
         try expect(Set(req) == ["snippets.read", "snippets.write"], "got \(req)")
@@ -420,16 +441,34 @@ func runRemoteOAuthBearerTests() async {
         try expect(req == ["snippets.write"], "got \(req)")
     }
 
-    await test("ScopeGate: requiredScopes — bridge session tools require bridge.session") {
+    await test("ScopeGate: requiredScopes — bridge session tools accept any known connector scope") {
+        // Bootstrap/session tools (bridge_initialize/bridge_status/tools_list/
+        // session_info) must be reachable by ANY authenticated connector
+        // grant, not gated behind the specific bridge.session scope alone —
+        // see "ScopeGate: bridge_initialize is bootstrap-reachable by any
+        // connector grant" below for the reachability half of this contract.
         for tool in ["bridge_initialize", "bridge_status", "tools_list", "session_info"] {
             let req = try await gate.requiredScopes(for: tool).map(\.name)
-            try expect(req == ["bridge.session"], "\(tool) got \(req)")
+            try expect(Set(req) == Set(ConnectorScopeName.all), "\(tool) got \(req)")
         }
     }
 
     await test("ScopeGate: requiredScopes — unknown/non-connector tool is empty") {
         let req = try await gate.requiredScopes(for: "screen_capture")
         try expect(req.isEmpty, "non-connector tool must have no required scopes")
+    }
+
+    await test("ScopeGate: bridge_initialize is bootstrap-reachable by any connector grant") {
+        let req = try await gate.requiredScopes(for: "bridge_initialize").map(\.name)
+        try expect(Set(req) == Set(ConnectorScopeName.all),
+                   "bootstrap should accept any known connector scope, got \(req)")
+        let scoped = await gate.evaluate(
+            toolName: "bridge_initialize",
+            grantedScopes: [ConnectorScope(name: "snippets.read")]
+        )
+        guard case .allow = scoped else {
+            throw TestError.assertion("bridge_initialize must be reachable with any authenticated connector grant")
+        }
     }
 
     await test("ScopeGate: connector-reachable set spans all scope buckets") {
@@ -451,6 +490,8 @@ func runRemoteOAuthBearerTests() async {
         try expect(reachable.contains("contacts_get"),
                    "S4: the contacts.read bucket must be connector-reachable")
         try expect(reachable.contains("contacts_search"))
+        try expect(reachable.contains("bridge_initialize"),
+                   "bootstrap: bridge_initialize must be connector-reachable")
         try expect(!reachable.contains("file_write"), "file_write must NOT be connector-reachable")
         try expect(!reachable.contains("notion_page_create"))
     }
@@ -494,6 +535,28 @@ func runRemoteOAuthBearerTests() async {
         try expect(wa != nil, "WWW-Authenticate header missing")
         try expect(wa?.contains("Bearer") == true, "challenge must be Bearer: \(wa ?? "nil")")
         try expect(wa?.contains(prmURL) == true, "challenge must reference PRM")
+    }
+
+    await test("SSEServer.remoteOAuthReadiness distinguishes inactive, misconfigured, missing keys, ready") {
+        let inactive = SSEServer.remoteOAuthReadiness(connectorAuth: nil, isMisconfigured: false)
+        try expect(!inactive.ready && inactive.status == "inactive",
+                   "nil auth must report inactive, got \(inactive)")
+
+        let misconfigured = SSEServer.remoteOAuthReadiness(connectorAuth: authCtx, isMisconfigured: true)
+        try expect(!misconfigured.ready && misconfigured.status == "misconfigured_issuer",
+                   "placeholder issuer must report misconfigured, got \(misconfigured)")
+
+        let missingKeys = ConnectorAuthContext(
+            validator: validator(keys: JWTKeyCollection(), hasKeys: false),
+            resourceMetadataURL: prmURL
+        )
+        let missing = SSEServer.remoteOAuthReadiness(connectorAuth: missingKeys, isMisconfigured: false)
+        try expect(!missing.ready && missing.status == "missing_verification_keys",
+                   "key-less validator must report missing keys, got \(missing)")
+
+        let ready = SSEServer.remoteOAuthReadiness(connectorAuth: authCtx, isMisconfigured: false)
+        try expect(ready.ready && ready.status == "ready",
+                   "configured auth context must report ready, got \(ready)")
     }
 
     await test("SSEServer.toolCallTarget: extracts tools/call tool name") {
@@ -592,6 +655,32 @@ func runRemoteOAuthBearerTests() async {
         )
         let resp = await server.handleHTTPRequest(req)
         try expect(resp.statusCode == 403, "scope-insufficient call must be 403, got \(resp.statusCode)")
+    }
+
+    await test("ConnectorAuthContext default strictScopes: OpenID-only destructive call requires step-up") {
+        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let defaultStrictAuth = ConnectorAuthContext(
+            validator: validator(keys: keys.verifyKeys),
+            resourceMetadataURL: prmURL
+        )
+        let server = SSEServer(router: r, onToolCall: {}, connectorAuth: defaultStrictAuth)
+        let tok = try await keys.sign(
+            iss: kIssuer,
+            aud: kResource,
+            scope: "openid email profile offline_access"
+        )
+        let body = Data(#"{"method":"tools/call","params":{"name":"snippets_delete","arguments":{}}}"#.utf8)
+        let req = HTTPRequest(
+            method: "POST",
+            headers: ["Cf-Connecting-Ip": "203.0.113.7", "Authorization": "Bearer \(tok)", "Mcp-Session-Id": "default-strict"],
+            body: body
+        )
+        let resp = await server.handleHTTPRequest(req)
+        try expect(resp.statusCode == 403,
+                   "default strict auth must require step-up for destructive connector tools, got \(resp.statusCode)")
+        let text = String(data: resp.bodyData ?? Data(), encoding: .utf8) ?? ""
+        try expect(text.contains("step_up_required"),
+                   "403 body must carry step_up_required, got: \(text)")
     }
 
     await test("Connector-gated server: strict tools/list hides non-callable Messages tools") {

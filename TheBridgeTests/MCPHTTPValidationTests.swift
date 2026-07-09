@@ -170,10 +170,9 @@ func runMCPHTTPValidationTests() async {
     // PKT-810 R5 — legacy bearer phase is origin-split too: with `tunnelURL` + a
     // static bearer configured (the cloud-connector operator install) and NO
     // connector OAuth path (connectorAuth == nil), a DIRECT-LOOPBACK /mcp request
-    // is served token-free, while a REMOTE (Cloudflare-tunnel) request still 401s
-    // for the missing bearer. This is the second gate behind the local Claude
-    // Desktop dead-end (the first being the connector OAuth gate).
-    await test("StreamableHTTP: loopback exempt from legacy static bearer; tunnel still 401") {
+    // is served token-free, while a REMOTE (Cloudflare-tunnel) request fails
+    // remote OAuth readiness instead of falling through as a local/legacy session.
+    await test("StreamableHTTP: loopback exempt; tunnel without connector auth fails OAuth readiness") {
         let ud = UserDefaults.standard
         let prevTunnel = ud.string(forKey: tunnelURLKey)
         let prevBearer = ud.string(forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey)
@@ -185,7 +184,9 @@ func runMCPHTTPValidationTests() async {
             if let prevBearer { ud.set(prevBearer, forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey) }
             else { ud.removeObject(forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey) }
         }
-        // No connectorAuth (BRIDGE_ENABLE_HTTP unset) — only the legacy gate is live.
+        // No connectorAuth (BRIDGE_ENABLE_HTTP unset). Loopback remains local and
+        // token-free; tunnel-origin traffic must now fail remote OAuth readiness
+        // before it can fall through to a local/legacy auth model.
         let server = SSEServer(
             router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
             onToolCall: {}
@@ -205,12 +206,15 @@ func runMCPHTTPValidationTests() async {
                    "loopback must be exempt from the legacy static bearer, got \(localResp.statusCode)")
         try expect(localResp.headers[HTTPHeaderName.sessionID] != nil,
                    "loopback initialize must mint a session id token-free")
-        // TUNNEL (Cf header) + NO bearer ⇒ 401 (legacy gate still applies off-loopback).
+        // TUNNEL (Cf header) + NO connector auth ⇒ 503 fail-closed readiness.
         var tunnelHeaders = localHeaders
         tunnelHeaders["Cf-Connecting-Ip"] = "203.0.113.7"
         let tunnelResp = await server.handleHTTPRequest(
             HTTPRequest(method: "POST", headers: tunnelHeaders, body: initBody))
-        try expect(tunnelResp.statusCode == 401,
-                   "tunnel must still require the legacy bearer, got \(tunnelResp.statusCode)")
+        try expect(tunnelResp.statusCode == 503,
+                   "tunnel must fail remote OAuth readiness without connector auth, got \(tunnelResp.statusCode)")
+        let body = String(data: tunnelResp.bodyData ?? Data(), encoding: .utf8) ?? ""
+        try expect(body.contains("Remote OAuth is not ready"),
+                   "503 body must explain OAuth readiness, got: \(body)")
     }
 }
