@@ -2090,6 +2090,11 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3126}"
 # (BridgeInitializeTests.swift: remote origin -> "online"/FULL, local/no-
 # context -> "local"). Measured 3128 passed, 0 failed. FLOOR raised 3126 -> 3128.
 FLOOR="${BRIDGE_TEST_FLOOR:-3128}"
+# v3.9.9 build 80 (2026-07-10): remote control-plane block defaults OFF,
+# governed-session enforcement split to an independent default-ON switch, and
+# governed remote shell parity covered end-to-end at ToolRouter dispatch. +3
+# Wave1BrokerTests. Measured 3131 passed, 0 failed. FLOOR raised 3128 -> 3131.
+FLOOR="${BRIDGE_TEST_FLOOR:-3131}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

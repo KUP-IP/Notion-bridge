@@ -8,6 +8,64 @@ import TheBridgeLib
 func runWave1BrokerTests() async {
     print("\n[Wave 1 Broker] Session broker + constitution bundle")
 
+    // The remote control-plane hard block is an operator opt-in. Keep the
+    // original predicate/gate coverage active without making the test process
+    // depend on (or permanently mutate) the operator's real preference domain.
+    let remoteBlockKey = BridgeDefaults.brokerRemoteControlPlaneBlock
+    let governedSessionKey = BridgeDefaults.brokerRemoteGovernedSessionRequired
+    let previousRemoteBlock = UserDefaults.standard.object(forKey: remoteBlockKey)
+    let previousGovernedSession = UserDefaults.standard.object(forKey: governedSessionKey)
+    UserDefaults.standard.set(true, forKey: remoteBlockKey)
+    UserDefaults.standard.set(true, forKey: governedSessionKey)
+    defer {
+        if let previousRemoteBlock {
+            UserDefaults.standard.set(previousRemoteBlock, forKey: remoteBlockKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: remoteBlockKey)
+        }
+        if let previousGovernedSession {
+            UserDefaults.standard.set(previousGovernedSession, forKey: governedSessionKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: governedSessionKey)
+        }
+    }
+
+    await test("W1 remote control-plane block defaults OFF and remains opt-in") {
+        let current = UserDefaults.standard.object(forKey: remoteBlockKey)
+        UserDefaults.standard.removeObject(forKey: remoteBlockKey)
+        defer {
+            if let current {
+                UserDefaults.standard.set(current, forKey: remoteBlockKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: remoteBlockKey)
+            }
+        }
+
+        try expect(BridgeDefaults.brokerRemoteControlPlaneBlockEnabled == false,
+                   "missing preference must preserve full remote connector parity")
+        UserDefaults.standard.set(true, forKey: remoteBlockKey)
+        try expect(BridgeDefaults.brokerRemoteControlPlaneBlockEnabled == true,
+                   "operator must still be able to opt into the remote hard block")
+    }
+
+    await test("W1 remote governed-session requirement remains fail-closed by default") {
+        let current = UserDefaults.standard.object(forKey: governedSessionKey)
+        UserDefaults.standard.removeObject(forKey: governedSessionKey)
+        defer {
+            if let current {
+                UserDefaults.standard.set(current, forKey: governedSessionKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: governedSessionKey)
+            }
+        }
+
+        try expect(BridgeDefaults.brokerRemoteGovernedSessionRequiredEnabled == true,
+                   "missing preference must require remote sessions to initialize")
+        UserDefaults.standard.set(false, forKey: governedSessionKey)
+        try expect(BridgeDefaults.brokerRemoteGovernedSessionRequiredEnabled == false,
+                   "operator must retain an explicit governance kill switch")
+    }
+
     await test("W1 SessionRegistry: open writes a governed row keyed by transport session") {
         try await withWave1TempHome { tmp in
             let registry = SessionRegistry(path: tmp.appendingPathComponent("sessions.sqlite"))
@@ -202,7 +260,63 @@ func runWave1BrokerTests() async {
         }
     }
 
+    await test("W1 ToolRouter: governed remote shell reaches SecurityGate when hard block is off") {
+        let currentRemoteBlock = UserDefaults.standard.object(forKey: remoteBlockKey)
+        UserDefaults.standard.set(false, forKey: remoteBlockKey)
+        defer {
+            if let currentRemoteBlock {
+                UserDefaults.standard.set(currentRemoteBlock, forKey: remoteBlockKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: remoteBlockKey)
+            }
+        }
+
+        try await withWave1TempHome { tmp in
+            let registry = SessionRegistry(path: tmp.appendingPathComponent("sessions.sqlite"))
+            try await registry.resetForTesting()
+            let log = AuditLog()
+            let router = ToolRouter(securityGate: SecurityGate(), auditLog: log, sessionRegistry: registry)
+            await router.register(ToolRegistration(
+                name: "shell_exec",
+                module: "shell",
+                tier: .open,
+                description: "shell",
+                inputSchema: .object(["type": .string("object")]),
+                handler: { _ in .object(["stdout": .string("BRIDGE_REMOTE_SHELL_OK")]) }
+            ))
+
+            _ = try await registry.open(
+                transportSessionId: "remote-shell-session",
+                client: "remote",
+                mode: .execute
+            )
+            let remote = await router.dispatchFormatted(
+                toolName: "shell_exec",
+                arguments: .object([:]),
+                context: .init(
+                    transportSessionId: "remote-shell-session",
+                    origin: .remote,
+                    client: "remote"
+                )
+            )
+
+            try expect(!remote.isError, "governed remote shell must reach normal dispatch when hard block is off")
+            try expect(remote.text.contains("BRIDGE_REMOTE_SHELL_OK"))
+            try expect(!remote.text.contains("control_plane_remote_blocked"))
+        }
+    }
+
     await test("W1 ToolRouter: ungoverned remote notify/request tools fail closed") {
+        let currentRemoteBlock = UserDefaults.standard.object(forKey: remoteBlockKey)
+        UserDefaults.standard.set(false, forKey: remoteBlockKey)
+        defer {
+            if let currentRemoteBlock {
+                UserDefaults.standard.set(currentRemoteBlock, forKey: remoteBlockKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: remoteBlockKey)
+            }
+        }
+
         try await withWave1TempHome { tmp in
             let registry = SessionRegistry(path: tmp.appendingPathComponent("sessions.sqlite"))
             try await registry.resetForTesting()

@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.9.9 (build 80) — Remote shell and control-plane parity — 2026-07-10
+
+- **Fix** — the Wave 1 remote control-plane preference now defaults OFF instead
+  of ON. Authenticated, governed ChatGPT and Claude connector sessions can call
+  `shell_exec` and the rest of the registered Bridge surface; each call still
+  passes through its normal `SecurityGate` tier and approval flow. Operators
+  can restore the hard remote block by explicitly setting
+  `com.notionbridge.broker.remoteControlPlaneBlock` to `true`.
+- Root cause: v3.9.9 restored connector scope parity but intentionally left the
+  independent origin-based block enabled, so `shell_exec` continued returning
+  `control_plane_remote_blocked` even after a successful `bridge_initialize`.
+- The governed-session requirement is now controlled independently by
+  `com.notionbridge.broker.remoteGovernedSessionRequired` and remains ON by
+  default. Turning off the optional hard block therefore does not let an
+  uninitialized remote session reach notify/request-tier tools.
+- +3 regression tests prove the hard block's missing-key default is OFF, its
+  explicit opt-in remains functional, remote session governance remains
+  fail-closed by default, and a governed remote shell call reaches normal
+  dispatch. Existing predicate tests still run with the opt-in enabled inside
+  the test process.
+
 ## v3.9.9 (build 79) — bridge_initialize origin-awareness fix — 2026-07-10
 
 - **Fix** — `bridge_initialize` always reported `connectionState: "local"` /

@@ -111,13 +111,25 @@ public enum BridgeDefaults {
     // MARK: - Wave 1 Broker
 
     /// Bridge Evolution W1: when enabled, remote tunnel-origin callers cannot
-    /// invoke local control-plane tools even after OAuth. Missing key defaults
-    /// ON so every existing install receives the safety predicate immediately.
+    /// invoke local control-plane tools even after OAuth. This is opt-in: the
+    /// normal connector posture is full tool parity, with each call still
+    /// governed by bridge_initialize and the tool's SecurityGate tier.
     public static let brokerRemoteControlPlaneBlock = "com.notionbridge.broker.remoteControlPlaneBlock"
 
     public static var brokerRemoteControlPlaneBlockEnabled: Bool {
-        if UserDefaults.standard.object(forKey: brokerRemoteControlPlaneBlock) == nil { return true }
+        if UserDefaults.standard.object(forKey: brokerRemoteControlPlaneBlock) == nil { return false }
         return UserDefaults.standard.bool(forKey: brokerRemoteControlPlaneBlock)
+    }
+
+    /// Bridge Evolution W1: remote notify/request-tier tools require the caller
+    /// to have completed bridge_initialize for the current transport session.
+    /// This remains fail-closed even when the optional origin-based control-
+    /// plane block is disabled for full connector tool parity.
+    public static let brokerRemoteGovernedSessionRequired = "com.notionbridge.broker.remoteGovernedSessionRequired"
+
+    public static var brokerRemoteGovernedSessionRequiredEnabled: Bool {
+        if UserDefaults.standard.object(forKey: brokerRemoteGovernedSessionRequired) == nil { return true }
+        return UserDefaults.standard.bool(forKey: brokerRemoteGovernedSessionRequired)
     }
 
     /// Bridge Evolution W1: when enabled, successful tool results from a

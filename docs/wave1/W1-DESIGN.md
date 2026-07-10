@@ -69,10 +69,27 @@ Budget: tier0 ~0.5K + core ≤3K tokens + orders — must be MEASURED, not assum
 
 - Transport already classifies remote: `SSEServer.isRemoteTunnelRequest` (Cloudflare tunnel header, PKT-810; loopback peer + no header = local by contract).
 - Thread `origin: .local | .remote` from the HTTP layer into dispatch context (same plumbing as §4's session identifier — one context struct, two fields).
-- In dispatch (before SecurityGate): if `origin == .remote && toolName ∈ ControlPlaneBlocklist` → structured rejection `{"error": "control_plane_remote_blocked", "tool": …}` + audit entry. Separately, if `origin == .remote && governed != true && tier ∈ {notify, request}` → structured rejection `{"error": "ungoverned_remote_session", "tool": …}` + audit entry.
+- In dispatch (before SecurityGate), when the operator has explicitly enabled
+  `com.notionbridge.broker.remoteControlPlaneBlock`: if `origin == .remote &&
+  toolName ∈ ControlPlaneBlocklist` → structured rejection
+  `{"error": "control_plane_remote_blocked", "tool": …}` + audit entry. The
+  block defaults OFF so authenticated connectors retain full tool parity and
+  rely on normal per-tool SecurityGate enforcement. Separately, while remote
+  session governance is enabled, `origin == .remote && governed != true && tier ∈
+  {notify, request}` → structured rejection `{"error":
+  "ungoverned_remote_session", "tool": …}` + audit entry.
 - **Blocklist = PREDICATE, not a name list (RT-G2 — decided, don't ship both).** Reject when `origin == .remote && ( module ∈ {shell, applescript, computer, credential} || tool ∈ ControlWrites )` where `ControlWrites = {standing_orders_save, standing_orders_delete, commands_create, commands_update, commands_delete}`. The predicate is rename-proof for the module-based half (a renamed `shell_exec` stays in module `shell`); only the five store-write tool names are enumerated, and those are the ones this very project renames — so they get a test that asserts the set matches the registered `standing_orders`/`commands` write tools. The 14-name list from the prior draft becomes a **test fixture only**, asserting the predicate catches each.
-- stdio and loopback callers unaffected. Override path: none in W1 (arrives with D10 override design in W4) — remote control-plane is simply closed, matching contract.
-- **RT-G3 (kill switch for the new behaviors):** both new dispatch behaviors gate behind UserDefaults flags following the codebase's established pattern (`cloudAccessEnabled`, `trustedMode`): `com.notionbridge.broker.remoteControlPlaneBlock` (default **on**) and `com.notionbridge.broker.advisoryAnnotation` (default **on**). A misbehaving annotation or an over-broad block can be disabled without reverting the shared-surface transport plumbing (AGENTS.md flags `ToolRouter`/`SSETransport` as incident-prone). Flag reads are cheap and already idiomatic here.
+- stdio and loopback callers are unaffected. Remote callers use the same
+  registered surface and SecurityGate tiers by default; an operator can opt
+  into the origin-based hard block when a deployment needs that ceiling.
+- **RT-G3 (operator switches):** broker behaviors gate behind UserDefaults
+  flags following the codebase's established pattern (`cloudAccessEnabled`,
+  `trustedMode`): `com.notionbridge.broker.remoteControlPlaneBlock` (default
+  **off**, explicit opt-in),
+  `com.notionbridge.broker.remoteGovernedSessionRequired` (default **on**), and
+  `com.notionbridge.broker.advisoryAnnotation` (default **on**). This keeps
+  initialization fail-closed independently of the optional origin-based hard
+  block. Flag reads are cheap and already idiomatic here.
 
 ## 6. Tests (standalone executable pattern, `TheBridgeTests/main.swift`)
 
