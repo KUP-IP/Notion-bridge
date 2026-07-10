@@ -6,7 +6,7 @@ Grounding: live recon 2026-07-05 of `BridgeInitializeModule.swift` (PKT-1065A), 
 
 ## 1. Principle: extend PKT-1065A, don't reinvent
 
-`bridge_initialize` v1 already: locates + loads the on-disk doctrine (orders.md + manifest.json + metadata.json), verifies SHA-256, enforces required-source policy, inspects roster + supplemental orders, runs intent-sensitive capability preflight, persists a receipt, emits telemetry. **v2 = v1 + (a) constitution content in the response, (b) session records with declared mode, (c) advisory governance annotation, (d) remote control-plane block.** The store, integrity, and receipt machinery is reused as-is.
+`bridge_initialize` v1 already: locates + loads the on-disk doctrine (orders.md + manifest.json + metadata.json), verifies SHA-256, enforces required-source policy, inspects roster + supplemental orders, runs intent-sensitive capability preflight, persists a receipt, emits telemetry. **v2 = v1 + (a) constitution content in the response, (b) session records with declared mode, (c) advisory governance annotation, (d) an opt-in remote control-plane block.** The store, integrity, and receipt machinery is reused as-is.
 
 ## 2. Constitution store (D4, kernel-boundary checked)
 
