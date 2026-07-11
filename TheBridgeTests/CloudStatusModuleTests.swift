@@ -10,10 +10,9 @@
 //   2. bridge_status registration is GATED — present after
 //      `registerCloudStatusTool`, absent after `deregister`; never in the
 //      static feature-module surface. Handler returns the canonical payload.
-//   3. CloudStatusPayload / tools/list conditional — `up` + `macToolsAvailable`
-//      by state, and `ServerManager.filterForCloud`: cloud+offline → only
-//      bridge_status; cloud+online/degraded → full; the local path is
-//      never filtered.
+//   3. CloudStatusPayload / tools-list conditional — tunnel `up` and real
+//      router dispatch availability are independent but share one
+//      `macToolsAvailable` signal between payload and filter.
 
 import Foundation
 import TheBridgeLib
@@ -45,6 +44,18 @@ private func sampleMacTools() -> [ToolRegistration] {
         )
     }
     return [mk("file_read"), mk("shell_exec"), mk("messages_send")]
+}
+
+private func makeStatusTool(
+    manager: BridgeCloudManager,
+    macToolsAvailable: Bool = true,
+    provenance: BuildProvenance = .init(gitSHA: "test-sha", gitDirty: false)
+) -> ToolRegistration {
+    CloudStatusModule.makeTool(
+        manager: manager,
+        macToolsAvailabilityProvider: { macToolsAvailable },
+        buildProvenanceProvider: { provenance }
+    )
 }
 
 func runCloudStatusModuleTests() async {
@@ -148,7 +159,7 @@ func runCloudStatusModuleTests() async {
 
     await test("WS-D bridge_status: handler returns the canonical payload shape") {
         let mgr = await makeManager(health: .healthy)   // → .online
-        let reg = CloudStatusModule.makeTool(manager: mgr)
+        let reg = makeStatusTool(manager: mgr)
         let out = try await reg.handler(.object([:]))
         guard case .object(let obj) = out else {
             throw TestError.assertion("payload must be a JSON object, got \(out)")
@@ -157,69 +168,78 @@ func runCloudStatusModuleTests() async {
         try expect(obj["ok"] == .bool(true), "ok field")
         try expect(obj["state"] == .string("online"), "state should be online, got \(String(describing: obj["state"]))")
         try expect(obj["up"] == .bool(true), "online ⇒ up=true")
-        try expect(obj["macToolsAvailable"] == .bool(true), "online ⇒ macToolsAvailable=true")
+        try expect(obj["macToolsAvailable"] == .bool(true), "injected dispatch signal")
+        try expect(obj["gitSHA"] == .string("test-sha"), "build-time SHA field")
+        try expect(obj["gitDirty"] == .bool(false), "build-time dirty field")
         try expect(obj["schemaVersion"] == .int(CloudStatusPayload.schemaVersion), "schemaVersion field")
+        try expect(CloudStatusPayload.schemaVersion == 2, "PKT-1116 payload shape must be schema v2")
     }
 
-    await test("WS-D bridge_status: degraded is 'up'; connecting/offline/disabled are 'down'") {
-        // Pure payload-builder checks across all five states.
+    await test("PKT-1116 bridge_status: up and macToolsAvailable can diverge") {
         try expect(CloudStatusPayload.isUp(.online), "online up")
         try expect(CloudStatusPayload.isUp(.degraded), "degraded up")
         try expect(!CloudStatusPayload.isUp(.connecting), "connecting not up")
         try expect(!CloudStatusPayload.isUp(.offline), "offline not up")
         try expect(!CloudStatusPayload.isUp(.disabled), "disabled not up")
 
-        if case .object(let deg) = CloudStatusPayload.make(state: .degraded) {
-            try expect(deg["up"] == .bool(true) && deg["macToolsAvailable"] == .bool(true),
-                       "degraded ⇒ up + macToolsAvailable true")
-        } else { throw TestError.assertion("degraded payload not an object") }
+        if case .object(let onlineWithoutDispatch) = CloudStatusPayload.make(
+            state: .online,
+            macToolsAvailable: false,
+            buildProvenance: .init(gitSHA: "sha", gitDirty: true)
+        ) {
+            try expect(onlineWithoutDispatch["up"] == .bool(true), "online channel must report up")
+            try expect(onlineWithoutDispatch["macToolsAvailable"] == .bool(false),
+                       "online channel must not fabricate local dispatch readiness")
+        } else { throw TestError.assertion("online payload not an object") }
 
-        if case .object(let conn) = CloudStatusPayload.make(state: .connecting) {
-            try expect(conn["up"] == .bool(false) && conn["macToolsAvailable"] == .bool(false),
-                       "connecting ⇒ up + macToolsAvailable false")
-        } else { throw TestError.assertion("connecting payload not an object") }
-
-        if case .object(let off) = CloudStatusPayload.make(state: .offline) {
-            try expect(off["up"] == .bool(false) && off["macToolsAvailable"] == .bool(false),
-                       "offline ⇒ up + macToolsAvailable false")
+        if case .object(let offlineWithDispatch) = CloudStatusPayload.make(
+            state: .offline,
+            macToolsAvailable: true,
+            buildProvenance: .init(gitSHA: "sha", gitDirty: false)
+        ) {
+            try expect(offlineWithDispatch["up"] == .bool(false), "offline channel must report down")
+            try expect(offlineWithDispatch["macToolsAvailable"] == .bool(true),
+                       "offline channel must preserve real local dispatch readiness")
         } else { throw TestError.assertion("offline payload not an object") }
     }
 
-    // MARK: - 3. tools/list conditional by state
+    await test("PKT-1116 bridge_status reads SHA and dirty flag from Info.plist shape") {
+        let clean = BuildProvenance.from(infoDictionary: [
+            BuildProvenance.gitSHAInfoKey: "abc123",
+            BuildProvenance.gitDirtyInfoKey: false
+        ])
+        try expect(clean == BuildProvenance(gitSHA: "abc123", gitDirty: false),
+                   "Info.plist build provenance must round-trip")
+        let fallback = BuildProvenance.from(infoDictionary: [:])
+        try expect(fallback.gitSHA == "unknown" && fallback.gitDirty == false,
+                   "non-app SwiftPM binaries need an explicit stable fallback")
+    }
 
-    await test("WS-D tools/list: CLOUD + .offline → only bridge_status (Mac tools hidden)") {
+    // MARK: - 3. tools/list conditional by real dispatch availability
+
+    await test("PKT-1116 tools/list: dispatch unavailable → only bridge_status") {
         var regs = sampleMacTools()
-        regs.append(CloudStatusModule.makeTool(manager: await makeManager(health: .healthy)))
-        let filtered = ServerManager.filterForCloud(regs, cloudState: .offline)
+        regs.append(makeStatusTool(manager: await makeManager(health: .healthy), macToolsAvailable: false))
+        let filtered = ServerManager.filterForCloud(regs, macToolsAvailable: false)
         let names = Set(filtered.map(\.name))
         try expect(names == [CloudStatusModule.toolName],
-                   "offline cloud request must expose ONLY bridge_status, got \(names.sorted())")
+                   "unavailable Mac dispatch must expose ONLY bridge_status, got \(names.sorted())")
     }
 
-    await test("WS-D tools/list: CLOUD + .disabled → only bridge_status") {
+    await test("PKT-1116 tools/list: dispatch available → full list regardless of channel state") {
         var regs = sampleMacTools()
-        regs.append(CloudStatusModule.makeTool(manager: await makeManager(health: .healthy)))
-        let filtered = ServerManager.filterForCloud(regs, cloudState: .disabled)
-        try expect(Set(filtered.map(\.name)) == [CloudStatusModule.toolName],
-                   "disabled cloud request must expose ONLY bridge_status")
+        regs.append(makeStatusTool(manager: await makeManager(health: .healthy)))
+        let filtered = ServerManager.filterForCloud(regs, macToolsAvailable: true)
+        try expect(filtered.count == regs.count,
+                   "available Mac dispatch must keep the full list")
     }
 
-    await test("WS-D tools/list: CLOUD + .connecting → only bridge_status") {
-        var regs = sampleMacTools()
-        regs.append(CloudStatusModule.makeTool(manager: await makeManager(health: .healthy)))
-        let filtered = ServerManager.filterForCloud(regs, cloudState: .connecting)
-        try expect(Set(filtered.map(\.name)) == [CloudStatusModule.toolName],
-                   "connecting cloud request must expose ONLY bridge_status")
-    }
-
-    await test("WS-D tools/list: CLOUD + .online/.degraded → full list (Mac tools shown)") {
-        var regs = sampleMacTools()
-        regs.append(CloudStatusModule.makeTool(manager: await makeManager(health: .healthy)))
-        for state in [CloudConnectionState.online, .degraded] {
-            let filtered = ServerManager.filterForCloud(regs, cloudState: state)
-            try expect(filtered.count == regs.count,
-                       "\(state) must keep the full list (\(filtered.count) vs \(regs.count))")
-        }
+    await test("PKT-1116 router readiness ignores bridge_status-only surface") {
+        let statusOnly = [makeStatusTool(manager: await makeManager(health: .healthy))]
+        try expect(!CloudStatusPayload.macToolsAvailable(in: statusOnly),
+                   "bridge_status alone is not a dispatchable Mac-tool surface")
+        try expect(CloudStatusPayload.macToolsAvailable(in: statusOnly + sampleMacTools()),
+                   "a non-cloud registration proves Mac-tool dispatch availability")
     }
 
     await test("WS-D tools/list: non-cloud (local) request is never filtered") {
@@ -232,7 +252,7 @@ func runCloudStatusModuleTests() async {
         // WERE applied with a non-down state, is also a no-op — assert the
         // online passthrough as the local-equivalent invariant.
         let regs = sampleMacTools()
-        let passthrough = ServerManager.filterForCloud(regs, cloudState: .online)
+        let passthrough = ServerManager.filterForCloud(regs, macToolsAvailable: true)
         try expect(passthrough.count == regs.count, "online (local-equivalent) keeps full list")
     }
 }

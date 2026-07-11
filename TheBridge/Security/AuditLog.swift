@@ -6,7 +6,7 @@ import Foundation
 
 // MARK: - Approval Status
 
-public enum ApprovalStatus: String, Sendable, Codable {
+public enum ApprovalStatus: String, Sendable, Codable, CaseIterable {
     case approved = "approved"
     case rejected = "rejected"
     case escalated = "escalated"

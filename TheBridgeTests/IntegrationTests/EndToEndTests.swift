@@ -360,7 +360,7 @@ func runEndToEndTests() async {
 
         try expect(shell.count == 2, "ShellModule: expected 2")
         try expect(file.count == 12, "FileModule: expected 12")
-        try expect(session.count == 3, "SessionModule: expected 3")
+        try expect(session.count == 4, "SessionModule: expected 4 (PKT-1116 audit_recent)")
         try expect(messages.count == 6, "MessagesModule: expected 6")
         try expect(system.count == 3, "SystemModule: expected 3")
         try expect(contacts.count == 4, "ContactsModule: expected 4")

@@ -2090,6 +2090,13 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3126}"
 # (BridgeInitializeTests.swift: remote origin -> "online"/FULL, local/no-
 # context -> "local"). Measured 3128 passed, 0 failed. FLOOR raised 3126 -> 3128.
 FLOOR="${BRIDGE_TEST_FLOOR:-3128}"
+# PKT-1116 Observability & Diagnosis (2026-07-11): +3 audit_recent tests
+# (filter/order, credential secrecy, enum/limit validation) and +5 ax_tree
+# traversal-budget tests (wide-child cap, maxChildren clamp, in-budget payload,
+# byte-budget notice, schema isolation). Cloud-status/build-provenance scenarios
+# replace/extend existing WS-D assertions without increasing their count.
+# Measured 3136 passed, 0 failed. FLOOR raised 3128 -> 3136.
+FLOOR="${BRIDGE_TEST_FLOOR:-3136}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

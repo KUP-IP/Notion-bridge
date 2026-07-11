@@ -219,6 +219,80 @@ func runAccessibilityModuleTests() async {
         }
     }
 
+    await test("PKT-1116 TraversalBudget caps a 215-child node at 100 and reports omitted count") {
+        try await MainActor.run {
+            let b = AccessibilityModule.TraversalBudget(requestedDepth: 5)
+            let allowance = b.childAllowance(totalCount: 215)
+            try expect(allowance.allowed == 100, "expected 100 admitted children, got \(allowance.allowed)")
+            try expect(allowance.truncated == 115, "childrenTruncated must report 115 omitted children")
+            try expect(b.truncation == .childrenPerNode,
+                       "wide-node clamp must mark children_per_node")
+        }
+    }
+
+    await test("PKT-1116 maxChildren request is clamped to the hard 100-child ceiling") {
+        try await MainActor.run {
+            let high = AccessibilityModule.TraversalBudget(
+                requestedDepth: 5,
+                requestedMaxChildren: 10_000)
+            let low = AccessibilityModule.TraversalBudget(
+                requestedDepth: 5,
+                requestedMaxChildren: 7)
+            try expect(high.maxChildrenPerNode == AccessibilityModule.TraversalLimits.maxChildrenPerNode,
+                       "high request must clamp to the hard ceiling")
+            try expect(low.maxChildrenPerNode == 7, "caller may lower the per-node cap")
+        }
+    }
+
+    await test("PKT-1116 byte budget keeps an in-budget payload unchanged") {
+        try await MainActor.run {
+            let b = AccessibilityModule.TraversalBudget(
+                requestedDepth: 5,
+                maxSerializedCharacters: 512)
+            let payload: Value = .object(["tree": .string("small")])
+            let result = b.enforceSerializedOutputBudget(payload)
+            try expect(result == payload, "in-budget payload must remain byte-identical")
+            try expect(b.truncation == nil, "in-budget payload must not mark truncation")
+        }
+    }
+
+    await test("PKT-1116 byte budget returns a compact marked notice under the cap") {
+        try await MainActor.run {
+            let b = AccessibilityModule.TraversalBudget(
+                requestedDepth: 5,
+                maxSerializedCharacters: 512)
+            let oversized: Value = .object(["tree": .string(String(repeating: "x", count: 2_000))])
+            let result = b.enforceSerializedOutputBudget(oversized)
+            guard case .object(let object) = result else {
+                throw TestError.assertion("byte-budget replacement must be an object")
+            }
+            try expect(object["truncated"] == .string("byte_budget"),
+                       "replacement must mark truncated:byte_budget")
+            let data = try JSONEncoder().encode(result)
+            let chars = String(data: data, encoding: .utf8)?.count ?? .max
+            try expect(chars <= b.maxSerializedCharacters,
+                       "compact notice must stay under cap: \(chars) > \(b.maxSerializedCharacters)")
+            try expect(b.truncation == .byteBudget, "budget state must record byte_budget")
+        }
+    }
+
+    await test("PKT-1116 ax_tree schema exposes maxChildren without changing ax_inspect") {
+        let tools = await router.registrations(forModule: "accessibility")
+        guard let tree = tools.first(where: { $0.name == "ax_tree" }),
+              case .object(let schema) = tree.inputSchema,
+              case .object(let properties) = schema["properties"] else {
+            throw TestError.assertion("ax_tree schema must be inspectable")
+        }
+        try expect(properties["maxChildren"] != nil, "ax_tree must expose maxChildren")
+        guard let inspect = tools.first(where: { $0.name == "ax_inspect" }),
+              case .object(let inspectSchema) = inspect.inputSchema,
+              case .object(let inspectProperties) = inspectSchema["properties"] else {
+            throw TestError.assertion("ax_inspect schema must be inspectable")
+        }
+        try expect(inspectProperties["maxChildren"] == nil,
+                   "find_element/ax_inspect traversal contract must remain unchanged")
+    }
+
     // --- PKT-1005 remainder (a): identifier is queryable in serialized output ---
     //
     // ax_tree (elementDict) and ax_inspect mode=find_element (findElementPayload)
