@@ -278,8 +278,7 @@ public actor ServerManager {
 
         // 5. Wire ListTools handler — PKT-350: filter disabled tools
         let isCloudRequest = self.isCloudRequest
-        let cloudManager = self.cloudManager
-        await server.withMethodHandler(ListTools.self) { [router, toolAllowlist, isCloudRequest, cloudManager] _ in
+        await server.withMethodHandler(ListTools.self) { [router, toolAllowlist, isCloudRequest] _ in
             let disabledNames = CredentialsFeature.mergedDisabledToolNames()
             var registrations = await router.registrationsForListTools(disabledNames: disabledNames)
 
@@ -287,13 +286,16 @@ public actor ServerManager {
                 registrations = registrations.filter { allowlist.contains($0.name) }
             }
 
-            // WS-D (PKT-921): on a CLOUD request, hide Mac tools when the cloud
-            // channel is offline/disabled. A local stdio/SSE request (the
-            // default — `isCloudRequest` resolves false) always sees the full
-            // surface, so this is behaviour-preserving for existing clients.
+            // PKT-1116: use the same real router-dispatch signal that
+            // bridge_status reports. Tunnel health (`up`) and local dispatch
+            // availability are orthogonal; neither is inferred from the other.
             if await isCloudRequest() {
-                let cloudState = await cloudManager?.state ?? .disabled
-                registrations = Self.filterForCloud(registrations, cloudState: cloudState)
+                let allRegistrations = await router.allRegistrations()
+                let macToolsAvailable = CloudStatusPayload.macToolsAvailable(in: allRegistrations)
+                registrations = Self.filterForCloud(
+                    registrations,
+                    macToolsAvailable: macToolsAvailable
+                )
             }
 
             registrations = BrokerBootstrapToolOrdering.prioritize(registrations)
@@ -390,22 +392,20 @@ public actor ServerManager {
 
     // MARK: - WS-D (PKT-921): Bridge Cloud Access — heartbeat + tools/list filter
 
-    /// The set of tools a CLOUD caller may always see, regardless of channel
-    /// health. `bridge_status` is the cloud-safe probe; everything else is a
-    /// "Mac tool" hidden when the channel is offline/disabled.
+    /// The set of tools a CLOUD caller may always see. `bridge_status` is the
+    /// cloud-safe probe; everything else is hidden when the live router has no
+    /// dispatchable Mac-tool surface.
     public static let cloudAlwaysVisibleTools: Set<String> = [CloudStatusModule.toolName]
 
-    /// Pure, unit-testable tools/list conditional. For a CLOUD request:
-    ///   • state ∈ {.offline, .disabled, .connecting} → omit Mac tools (keep only
-    ///     `cloudAlwaysVisibleTools`, e.g. `bridge_status`).
-    ///   • state ∈ {.online, .degraded} → full list.
-    /// A non-cloud (local) request never calls this; it always gets the full
-    /// list. Mirrors `CloudStatusPayload.macToolsAvailable`.
+    /// Pure, unit-testable tools/list conditional. For a CLOUD request, expose
+    /// the same Mac-tool surface reported by `bridge_status.macToolsAvailable`.
+    /// Channel health is reported separately as `up` and does not stand in for
+    /// router readiness. A non-cloud request never calls this filter.
     public static func filterForCloud(
         _ registrations: [ToolRegistration],
-        cloudState: CloudConnectionState
+        macToolsAvailable: Bool
     ) -> [ToolRegistration] {
-        guard CloudStatusPayload.macToolsAvailable(cloudState) else {
+        guard macToolsAvailable else {
             return registrations.filter { cloudAlwaysVisibleTools.contains($0.name) }
         }
         return registrations

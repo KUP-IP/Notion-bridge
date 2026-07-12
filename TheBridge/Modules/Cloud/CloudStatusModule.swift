@@ -105,23 +105,23 @@ public actor CloudHeartbeat {
 
 /// Builds the canonical `bridge_status` payload from a `CloudConnectionState`.
 ///
-/// SCHEMA (v1) — the WS-B static Worker JSON (PKT-920) MUST mirror this:
+/// SCHEMA (v2) — the WS-B static Worker JSON (PKT-920) MUST mirror this:
 ///   {
 ///     "tool":  "bridge_status",        // string, constant
 ///     "ok":    true,                   // bool, constant (the probe itself succeeded)
 ///     "state": "online",               // string raw value of CloudConnectionState
 ///                                       //   one of: disabled|connecting|online|degraded|offline
 ///     "up":    true,                   // bool — true iff state ∈ {online, degraded}
-///     "macToolsAvailable": true,       // bool — true iff Mac tools are exposed
-///                                       //   to a cloud caller in this state
-///                                       //   (same predicate as `up`)
-///     "schemaVersion": 1               // int — payload contract version
+///     "macToolsAvailable": true,       // bool — actual local dispatch surface
+///     "gitSHA": "0123abcd...",        // string — build-time commit
+///     "gitDirty": false,               // bool — build-time tree state
+///     "schemaVersion": 2               // int — payload contract version
 ///   }
 public enum CloudStatusPayload {
 
     /// Current payload contract version. Bump on any shape change so WS-B can
     /// detect drift.
-    public static let schemaVersion = 1
+    public static let schemaVersion = 2
 
     /// Whether the channel is "up" for serving delegated work. `.online` and
     /// `.degraded` both count as up (degraded = channel impaired but present);
@@ -130,21 +130,28 @@ public enum CloudStatusPayload {
         state == .online || state == .degraded
     }
 
-    /// Whether Mac tools should be exposed to a CLOUD caller in `state`. Mirrors
-    /// `isUp` and the tools/list conditional in `ServerManager`: online and
-    /// degraded expose tools; disabled, connecting, and offline do not.
-    public static func macToolsAvailable(_ state: CloudConnectionState) -> Bool {
-        isUp(state)
+    /// Whether the live router has any dispatchable Mac tools beyond the
+    /// always-visible cloud probe itself. This is intentionally independent of
+    /// tunnel state: `up` answers channel health; `macToolsAvailable` answers
+    /// local dispatch readiness.
+    public static func macToolsAvailable(in registrations: [ToolRegistration]) -> Bool {
+        registrations.contains { !ServerManager.cloudAlwaysVisibleTools.contains($0.name) }
     }
 
     /// The canonical `bridge_status` JSON value.
-    public static func make(state: CloudConnectionState) -> Value {
+    public static func make(
+        state: CloudConnectionState,
+        macToolsAvailable: Bool,
+        buildProvenance: BuildProvenance = .current
+    ) -> Value {
         .object([
             "tool":               .string("bridge_status"),
             "ok":                 .bool(true),
             "state":              .string(state.rawValue),
             "up":                 .bool(isUp(state)),
-            "macToolsAvailable":  .bool(macToolsAvailable(state)),
+            "macToolsAvailable":  .bool(macToolsAvailable),
+            "gitSHA":             .string(buildProvenance.gitSHA),
+            "gitDirty":           .bool(buildProvenance.gitDirty),
             "schemaVersion":      .int(schemaVersion)
         ])
     }
@@ -165,20 +172,30 @@ public enum CloudStatusModule {
     /// `manager`. Handler is `.open` tier (pure read of local cloud state —
     /// no Keychain, no tunnel mutation, no network).
     public static func register(on router: ToolRouter, manager: BridgeCloudManager) async {
-        await router.register(makeTool(manager: manager))
+        await router.register(makeTool(
+            manager: manager,
+            macToolsAvailabilityProvider: {
+                CloudStatusPayload.macToolsAvailable(in: await router.allRegistrations())
+            }
+        ))
     }
 
     /// Factory for the `bridge_status` registration (exposed for tests).
-    public static func makeTool(manager: BridgeCloudManager) -> ToolRegistration {
+    public static func makeTool(
+        manager: BridgeCloudManager,
+        macToolsAvailabilityProvider: @escaping @Sendable () async -> Bool,
+        buildProvenanceProvider: @escaping @Sendable () -> BuildProvenance = { .current }
+    ) -> ToolRegistration {
         ToolRegistration(
             name: toolName,
             module: moduleName,
             tier: .open,
             description: "Report Bridge Cloud Access health for this Mac. Returns the "
                 + "connection state (disabled|connecting|online|degraded|offline), whether the "
-                + "channel is up (online/degraded), and whether Mac tools are exposed to a cloud "
-                + "caller in the current state. Pure read of local cloud state — no side effects. "
-                + "Returns { tool, ok, state, up, macToolsAvailable, schemaVersion }.",
+                + "channel is up (online/degraded), whether local Mac-tool dispatch is available, "
+                + "and the packaged build git SHA/dirty stamp. "
+                + "Pure read of local state — no side effects. Returns { tool, ok, state, up, "
+                + "macToolsAvailable, gitSHA, gitDirty, schemaVersion }.",
             inputSchema: .object([
                 "type":       .string("object"),
                 "properties": .object([:]),
@@ -196,7 +213,12 @@ public enum CloudStatusModule {
             ),
             handler: { _ in
                 let state = await manager.state
-                return CloudStatusPayload.make(state: state)
+                let macToolsAvailable = await macToolsAvailabilityProvider()
+                return CloudStatusPayload.make(
+                    state: state,
+                    macToolsAvailable: macToolsAvailable,
+                    buildProvenance: buildProvenanceProvider()
+                )
             }
         )
     }

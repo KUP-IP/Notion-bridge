@@ -2097,6 +2097,13 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3128}"
 # (codex/remote-shell-parity, diverged from main at 3128 before PR #87
 # landed). FLOOR raised 3128 -> 3131.
 FLOOR="${BRIDGE_TEST_FLOOR:-3131}"
+# PKT-1116 Observability & Diagnosis (2026-07-11): +3 audit_recent tests
+# (filter/order, credential secrecy, enum/limit validation) and +5 ax_tree
+# traversal-budget tests (wide-child cap, maxChildren clamp, in-budget payload,
+# byte-budget notice, schema isolation). Cloud-status/build-provenance scenarios
+# replace/extend existing WS-D assertions without increasing their count.
+# Measured 3136 passed, 0 failed. FLOOR raised 3128 -> 3136.
+FLOOR="${BRIDGE_TEST_FLOOR:-3136}"
 # PR #87 reconciliation (2026-07-11): merged codex/ship-v4-packet-closeout's
 # Routing Integrity Layer (PKT-1094 — ToolSkillBindingRegistry, per-tool
 # manifest-fetch gate, HandshakeReceipt.routingIntegrity, schemaVersion 2->3)
@@ -2137,6 +2144,34 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3138}"
 # (RIL) = 3141 expected; measured 3141 passed, 0 failed on the merged tree.
 # FLOOR raised 3138 -> 3141.
 FLOOR="${BRIDGE_TEST_FLOOR:-3141}"
+# codex/pkt-1116-observability-diagnosis merge (2026-07-11): merged origin/main
+# (which already carried the PR #87 Routing Integrity Layer reconciliation
+# above) into this branch. No textual conflicts outside this file — AuditLog.swift
+# (CaseIterable + entries(forSessionID:)) auto-merged clean, and
+# ServerManager.swift/AccessibilityModule.swift/CloudStatusModule.swift/
+# SessionModule.swift/ToolAnnotations.swift were untouched by main since the
+# merge base so this branch's PKT-1116 diagnostics logic (router-dispatch-based
+# tools/list filtering, ax_tree traversal budgets, audit_recent, build
+# provenance) carried over unmodified. This file's own FLOOR chain was the only
+# conflict, resolved by keeping both blocks above in sequence. Combined tree
+# carries this branch's own +8 (audit_recent/ax_tree, 3128 -> 3136) together
+# with main's +10 (RoutingIntegrityLayerTests, 3128 -> 3138) on top of the
+# shared 3128 base. Measured 3146 passed, 0 failed on the merged tree
+# (3128 + 8 + 10, no other drift). FLOOR raised 3128 -> 3146. This PR (#99)
+# merged to main before #101 (this branch), which is what makes the next
+# entry below necessary.
+FLOOR="${BRIDGE_TEST_FLOOR:-3146}"
+# Three-way reconciliation (2026-07-11): #99 (pkt-1116, +8) merged to main
+# first, landing floor 3146 there. This branch (#101, +3, already carrying
+# its own prior reconciliation with PR #87's RIL above at 3141) then merged
+# that updated main — a second real textual conflict in this same file,
+# since both #99 and #101 had independently appended a FLOOR line after the
+# shared 3138 (RIL) baseline. All three independent additions on top of the
+# original 3128 base are additive and non-overlapping (different test files
+# entirely: Wave1BrokerTests +3, audit_recent/ax_tree +8, RoutingIntegrityLayerTests
+# +10) -> 3128 + 3 + 8 + 10 = 3149 expected. Measured 3149 passed, 0 failed on
+# the fully-merged tree. FLOOR raised 3146 -> 3149.
+FLOOR="${BRIDGE_TEST_FLOOR:-3149}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

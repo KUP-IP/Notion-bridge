@@ -20,9 +20,9 @@ func runSessionModuleTests() async {
     )
 
     // Registration
-    await test("SessionModule registers 3 tools") {
+    await test("SessionModule registers 4 tools") {
         let tools = await router.registrations(forModule: "session")
-        try expect(tools.count == 3, "Expected 3 session tools, got \(tools.count)")
+        try expect(tools.count == 4, "Expected 4 session tools, got \(tools.count)")
     }
 
     await test("SessionModule tool names match spec") {
@@ -30,6 +30,7 @@ func runSessionModuleTests() async {
         let names = Set(tools.map(\.name))
         try expect(names.contains("tools_list"), "Missing tools_list")
         try expect(names.contains("session_info"), "Missing session_info")
+        try expect(names.contains("audit_recent"), "Missing audit_recent")
         try expect(names.contains("session_clear"), "Missing session_clear")
     }
 
@@ -39,6 +40,7 @@ func runSessionModuleTests() async {
         let tierMap = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0.tier) })
         try expect(tierMap["tools_list"] == .open, "tools_list should be green")
         try expect(tierMap["session_info"] == .open, "session_info should be green")
+        try expect(tierMap["audit_recent"] == .open, "audit_recent should be green")
         try expect(tierMap["session_clear"] == .notify, "session_clear should be orange")
     }
 
@@ -49,7 +51,7 @@ func runSessionModuleTests() async {
             arguments: .object([:])
         )
         if case .array(let tools) = result {
-            try expect(tools.count == 3, "Expected 3 tools from session-only router, got \(tools.count)")
+            try expect(tools.count == 4, "Expected 4 tools from session-only router, got \(tools.count)")
         } else {
             throw TestError.assertion("Expected array result from tools_list")
         }
@@ -70,7 +72,7 @@ func runSessionModuleTests() async {
             arguments: .object(["module": .string("session")])
         )
         if case .array(let tools) = result {
-            try expect(tools.count == 3, "Module filter should return only session tools, got \(tools.count)")
+            try expect(tools.count == 4, "Module filter should return only session tools, got \(tools.count)")
             for tool in tools {
                 if case .object(let dict) = tool,
                    case .string(let mod) = dict["module"] {
@@ -188,6 +190,89 @@ func runSessionModuleTests() async {
         }
         try expect(connections == 0, "Expected 0 connections with no provider, got \(connections)")
         try expect(activeClients == 0, "Expected 0 activeClients with no provider, got \(activeClients)")
+    }
+
+    // audit_recent: read-only refusal trail with composable filters and no
+    // caller input echo. Use a dedicated log/router so existing test traffic
+    // cannot obscure ordering or filter assertions.
+    await test("audit_recent returns newest entries and composes tool/status/tier filters") {
+        let auditGate = SecurityGate()
+        let auditLog = AuditLog()
+        let auditRouter = ToolRouter(securityGate: auditGate, auditLog: auditLog)
+        await SessionModule.register(on: auditRouter, auditLog: auditLog)
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        await auditLog.append(AuditEntry(
+            timestamp: base, toolName: "shell_exec", tier: .request,
+            inputSummary: "secret-old", outputSummary: "denied-old",
+            durationMs: 2, approvalStatus: .rejected,
+            origin: .remote, transportSessionId: "session-old"))
+        await auditLog.append(AuditEntry(
+            timestamp: base.addingTimeInterval(1), toolName: "shell_exec", tier: .request,
+            inputSummary: "secret-new", outputSummary: "denied-new",
+            durationMs: 3, approvalStatus: .rejected,
+            origin: .local, transportSessionId: "session-new"))
+        await auditLog.append(AuditEntry(
+            timestamp: base.addingTimeInterval(2), toolName: "shell_exec", tier: .request,
+            inputSummary: "approved-input", outputSummary: "approved-output",
+            durationMs: 4, approvalStatus: .approved))
+
+        let result = try await auditRouter.dispatch(
+            toolName: "audit_recent",
+            arguments: .object([
+                "tool": .string("shell_exec"),
+                "status": .string("rejected"),
+                "tier": .string("request"),
+                "limit": .int(1)
+            ]))
+        guard case .object(let object) = result,
+              case .array(let entries) = object["entries"], entries.count == 1,
+              case .object(let newest) = entries[0] else {
+            throw TestError.assertion("Expected one filtered audit entry, got \(result)")
+        }
+        try expect(newest["outputSummary"] == .string("denied-new"), "newest matching entry must win")
+        try expect(newest["origin"] == .string("local"), "origin must be projected")
+        try expect(newest["transportSessionId"] == .string("session-new"), "transport session id must be projected")
+        try expect(newest["inputSummary"] == nil, "audit_recent must never expose inputSummary")
+        try expect(object["inputSummaryIncluded"] == .bool(false), "response must declare input omission")
+    }
+
+    await test("audit_recent redacts credential summaries and omits secret-bearing fields") {
+        let secret = "sk-proj-super-secret-value"
+        let entry = AuditEntry(
+            timestamp: Date(), toolName: "credential_read", tier: .request,
+            inputSummary: secret, outputSummary: secret,
+            durationMs: 1, approvalStatus: .approved,
+            governed: true, origin: .remote,
+            transportSessionId: "remote-credential-session",
+            governanceNote: secret)
+        let value = SessionModule.auditEntryValue(entry)
+        guard case .object(let object) = value else {
+            throw TestError.assertion("Expected audit projection object")
+        }
+        try expect(object["inputSummary"] == nil, "credential input summary must be omitted")
+        try expect(object["governanceNote"] == nil, "governance note must be omitted")
+        try expect(object["outputSummary"] == .string("<redacted: credential tool>"),
+                   "credential output summary must be redacted")
+        let encoded = String(data: try JSONEncoder().encode(value), encoding: .utf8) ?? ""
+        try expect(!encoded.contains(secret), "serialized audit projection must not contain credential material")
+    }
+
+    await test("audit_recent validates filter enums and clamps limit") {
+        let invalid = try await router.dispatch(
+            toolName: "audit_recent",
+            arguments: .object(["status": .string("nope")]))
+        guard case .object(let invalidObject) = invalid,
+              case .string = invalidObject["error"] else {
+            throw TestError.assertion("invalid status must return a structured error")
+        }
+        let clamped = try await router.dispatch(
+            toolName: "audit_recent",
+            arguments: .object(["limit": .int(10_000)]))
+        guard case .object(let clampedObject) = clamped else {
+            throw TestError.assertion("clamped response must be an object")
+        }
+        try expect(clampedObject["limit"] == .int(SessionModule.auditRecentMaximumLimit),
+                   "limit must clamp to the documented maximum")
     }
 
     // session_clear: requires confirm = true

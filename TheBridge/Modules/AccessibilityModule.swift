@@ -98,6 +98,12 @@ public enum AccessibilityModule {
         public static let maxDepthCeiling = 60
         /// Absolute cap on total visited nodes per traversal.
         public static let maxNodes = 20_000
+        /// Hard ceiling for the number of direct children serialized from any
+        /// one node. Prevents a single 200+ sibling group from dominating the
+        /// traversal before the global node budget can help.
+        public static let maxChildrenPerNode = 100
+        /// Hard cap for the final compact JSON payload returned by ax_tree.
+        public static let maxSerializedCharacters = 100_000
         /// Wall-clock budget for a single traversal.
         public static let timeBudget: TimeInterval = 8.0
         /// Per-message AX timeout (seconds). Bounds a single hung AX read so an
@@ -110,6 +116,8 @@ public enum AccessibilityModule {
     public enum TruncationReason: String, Sendable {
         case depth
         case nodeCount = "node_count"
+        case childrenPerNode = "children_per_node"
+        case byteBudget = "byte_budget"
         case time
         case cancelled
     }
@@ -122,18 +130,24 @@ public enum AccessibilityModule {
     public final class TraversalBudget {
         public let maxDepth: Int
         public let maxNodes: Int
+        public let maxChildrenPerNode: Int
+        public let maxSerializedCharacters: Int
         public let deadline: Date
         public private(set) var visited = 0
         public private(set) var truncation: TruncationReason?
 
         public init(requestedDepth: Int,
+                    requestedMaxChildren: Int = TraversalLimits.maxChildrenPerNode,
                     maxNodes: Int = TraversalLimits.maxNodes,
+                    maxSerializedCharacters: Int = TraversalLimits.maxSerializedCharacters,
                     timeBudget: TimeInterval = TraversalLimits.timeBudget,
                     now: Date = Date()) {
             // Clamp requested depth to [0, ceiling]; negative requests collapse
             // to a single-node read rather than an error.
             self.maxDepth = max(0, min(requestedDepth, TraversalLimits.maxDepthCeiling))
+            self.maxChildrenPerNode = max(1, min(requestedMaxChildren, TraversalLimits.maxChildrenPerNode))
             self.maxNodes = maxNodes
+            self.maxSerializedCharacters = max(256, maxSerializedCharacters)
             self.deadline = now.addingTimeInterval(timeBudget)
         }
 
@@ -169,6 +183,43 @@ public enum AccessibilityModule {
                 return false
             }
             return true
+        }
+
+        /// Pure per-node child allowance used only by ax_tree. Search traversal
+        /// intentionally does not call this method, preserving ax_inspect /
+        /// find_element behavior exactly.
+        public func childAllowance(totalCount: Int) -> (allowed: Int, truncated: Int) {
+            let safeTotal = max(0, totalCount)
+            let allowed = min(safeTotal, maxChildrenPerNode)
+            let truncated = safeTotal - allowed
+            if truncated > 0, truncation == nil { truncation = .childrenPerNode }
+            return (allowed, truncated)
+        }
+
+        /// Enforce the final serialized-output budget. If the full payload
+        /// would exceed the cap, replace it with a compact diagnostic instead
+        /// of returning a partial or invalid JSON document.
+        public func enforceSerializedOutputBudget(_ payload: Value) -> Value {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            guard let data = try? encoder.encode(payload),
+                  let json = String(data: data, encoding: .utf8) else {
+                truncation = .byteBudget
+                return byteBudgetNotice(estimatedCharacters: nil)
+            }
+            guard json.count > maxSerializedCharacters else { return payload }
+            truncation = .byteBudget
+            return byteBudgetNotice(estimatedCharacters: json.count)
+        }
+
+        private func byteBudgetNotice(estimatedCharacters: Int?) -> Value {
+            var notice: [String: Value] = [
+                "truncated": .string(TruncationReason.byteBudget.rawValue),
+                "characterBudget": .int(maxSerializedCharacters),
+                "message": .string("ax_tree output exceeded the serialized character budget; narrow maxDepth/maxChildren or use ax_inspect.")
+            ]
+            if let estimatedCharacters { notice["estimatedCharacters"] = .int(estimatedCharacters) }
+            return .object(notice)
         }
     }
 
@@ -365,22 +416,33 @@ public enum AccessibilityModule {
             position: position(el), size: size(el))
 
         if flat {
-            results.append(.object(d))
+            var admittedChildren: ArraySlice<AXUIElement> = []
             if budget.canDescend(currentDepth: depth) {
-                for child in children(el) {
+                let kids = children(el)
+                let allowance = budget.childAllowance(totalCount: kids.count)
+                if allowance.truncated > 0 {
+                    d["childrenTruncated"] = .int(allowance.truncated)
+                }
+                admittedChildren = kids.prefix(allowance.allowed)
+            }
+            results.append(.object(d))
+            for child in admittedChildren {
                     guard budget.admit() else { break }
                     _ = elementDict(child, depth: depth + 1, budget: budget,
                                     flat: true, path: curPath, results: &results)
-                }
             }
             return .null
         } else {
             if budget.canDescend(currentDepth: depth) {
                 let kids = children(el)
                 if !kids.isEmpty {
+                    let allowance = budget.childAllowance(totalCount: kids.count)
+                    if allowance.truncated > 0 {
+                        d["childrenTruncated"] = .int(allowance.truncated)
+                    }
                     var childValues: [Value] = []
-                    childValues.reserveCapacity(kids.count)
-                    for child in kids {
+                    childValues.reserveCapacity(allowance.allowed)
+                    for child in kids.prefix(allowance.allowed) {
                         guard budget.admit() else { break }
                         childValues.append(
                             elementDict(child, depth: depth + 1, budget: budget,
@@ -593,6 +655,9 @@ public enum AccessibilityModule {
         do {
             let pid = try resolvePid(params)
             let maxD = intParam(params, "maxDepth", default: 5)
+            let maxChildren = intParam(
+                params, "maxChildren",
+                default: TraversalLimits.maxChildrenPerNode)
             let flat = boolParam(params, "flat", default: false)
             let appEl = AXUIElementCreateApplication(pid)
             applyMessagingTimeout(appEl)
@@ -600,7 +665,9 @@ public enum AccessibilityModule {
                 throw AXModuleError.appNotFound(pid: pid)
             }
 
-            let budget = TraversalBudget(requestedDepth: maxD)
+            let budget = TraversalBudget(
+                requestedDepth: maxD,
+                requestedMaxChildren: maxChildren)
             _ = budget.admit() // count the root
             var flatResults: [Value] = []
             let tree = elementDict(appEl, depth: 0, budget: budget,
@@ -614,7 +681,7 @@ public enum AccessibilityModule {
                 out["tree"] = tree
             }
             if let reason = budget.truncation { out["truncated"] = .string(reason.rawValue) }
-            return .object(out)
+            return budget.enforceSerializedOutputBudget(.object(out))
         } catch let e as AXModuleError { return e.toResponse() } catch { return .object(["error": .string("Unexpected: \(error)")]) }
     }
 
@@ -755,12 +822,13 @@ public enum AccessibilityModule {
             name: "ax_tree",
             module: moduleName,
             tier: .open,
-            description: "Dump the full AX element tree for one app. Each element carries its stable AX `identifier` (the SwiftUI `.accessibilityIdentifier`) when set, so elements can be resolved by id rather than by volatile label. Expensive — cap with maxDepth. Use ax_inspect (mode='find_element') for targeted lookups.",
+            description: "Dump the bounded AX element tree for one app. Each element carries its stable AX `identifier` when set. Direct children are capped at 100 per node by default and the final JSON is capped at ~100k characters; truncation is marked. Use maxDepth/maxChildren to narrow output or ax_inspect (mode='find_element') for targeted lookups.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "pid":      .object(["type": .string("integer"), "description": .string("Process ID. Omit for frontmost app.")]),
                     "maxDepth": .object(["type": .string("integer"), "description": .string("Max traversal depth (default: 5)")]),
+                    "maxChildren": .object(["type": .string("integer"), "description": .string("Maximum direct children per node (default/hard ceiling: 100).")]),
                     "flat":     .object(["type": .string("boolean"), "description": .string("Return flat array instead of tree (default: false)")])
                 ])
             ]),
