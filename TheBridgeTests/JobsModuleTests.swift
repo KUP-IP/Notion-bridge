@@ -422,14 +422,14 @@ func runJobsModuleTests() async {
         }
     }
 
-    // --- job_templates handler (pure: 3 built-in presets) ---
+    // --- job_templates handler (pure built-in presets) ---
 
-    await test("job_templates: returns the 3 built-in presets with valid cron + non-empty action chains") {
+    await test("job_templates: returns built-in presets with valid cron + non-empty action chains") {
         let out = try await JobsManager.shared.listTemplates(args: .object([:]))
         guard case .object(let o) = out, case .array(let templates)? = o["templates"] else {
             throw TestError.assertion("shape")
         }
-        try expect(templates.count == 3, "expected 3 presets, got \(templates.count)")
+        try expect(templates.count == 4, "expected 4 presets, got \(templates.count)")
         var idSet = Set<String>()
         for t in templates {
             guard case .object(let tpl) = t else { throw TestError.assertion("template shape") }
@@ -440,7 +440,12 @@ func runJobsModuleTests() async {
             guard case .array(let actions)? = tpl["actions"] else { throw TestError.assertion("template missing actions") }
             try expect(!actions.isEmpty, "preset \(tid) must have a non-empty action chain")
         }
-        try expect(idSet == Set(["daily-desktop-cleanup", "hourly-screenshot-tidy", "friday-status-digest"]),
+        try expect(idSet == Set([
+            "daily-desktop-cleanup",
+            "hourly-screenshot-tidy",
+            "friday-status-digest",
+            "weekly-amendment-collapse-scan",
+        ]),
                    "unexpected preset id set: \(idSet)")
     }
 

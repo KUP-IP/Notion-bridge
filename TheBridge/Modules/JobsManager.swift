@@ -1282,7 +1282,8 @@ public actor JobsManager {
                 "schedule": .string("0 17 * * 5"),
                 "description": .string("Compile a weekly status summary every Friday at 5pm."),
                 "actions": .array([.object(["tool": .string("shell_exec"), "arguments": .object(["command": .string("echo 'customize this template'")])])])
-            ]
+            ],
+            AmendmentLifecycle.jobTemplate()
         ]
         return .object(["templates": .array(templates.map { .object($0) })])
     }

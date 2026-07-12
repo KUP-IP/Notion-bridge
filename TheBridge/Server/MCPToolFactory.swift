@@ -41,6 +41,10 @@ public enum BridgeToolDescriptionRenderer {
             }
         }
 
+        if let governance = ToolSkillBindingRegistry.governanceDescription(for: reg.name) {
+            parts.append(governance)
+        }
+
         var s = parts.joined(separator: " — ")
         if s.count > charBudget {
             s = String(s.prefix(charBudget - 1)) + "\u{2026}"
