@@ -2090,6 +2090,13 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3126}"
 # (BridgeInitializeTests.swift: remote origin -> "online"/FULL, local/no-
 # context -> "local"). Measured 3128 passed, 0 failed. FLOOR raised 3126 -> 3128.
 FLOOR="${BRIDGE_TEST_FLOOR:-3128}"
+# v3.9.9 build 80 (2026-07-10): remote control-plane block defaults OFF,
+# governed-session enforcement split to an independent default-ON switch, and
+# governed remote shell parity covered end-to-end at ToolRouter dispatch. +3
+# Wave1BrokerTests. Measured 3131 passed, 0 failed on this branch alone
+# (codex/remote-shell-parity, diverged from main at 3128 before PR #87
+# landed). FLOOR raised 3128 -> 3131.
+FLOOR="${BRIDGE_TEST_FLOOR:-3131}"
 # PKT-1116 Observability & Diagnosis (2026-07-11): +3 audit_recent tests
 # (filter/order, credential secrecy, enum/limit validation) and +5 ax_tree
 # traversal-budget tests (wide-child cap, maxChildren clamp, in-budget payload,
@@ -2111,8 +2118,32 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3136}"
 # check to run after the broker's origin-level gates, not by changing the
 # test. +10 tests (RoutingIntegrityLayerTests.swift). Measured 3138 passed,
 # 0 failed on the merged tree (3128 + 10, no other drift). FLOOR raised
-# 3128 -> 3138.
+# 3128 -> 3138. This landed on main independently of, and in parallel with,
+# the build-80 entry immediately above (both diverged from the same 3128
+# baseline; neither had seen the other's work yet).
 FLOOR="${BRIDGE_TEST_FLOOR:-3138}"
+# codex/remote-shell-parity merge (2026-07-11): merged post-PR-#87 main
+# (Routing Integrity Layer, floor 3138) into this branch (build-80 remote
+# control-plane default flip, floor 3131). Both sides had independently
+# diverged from the 3128 baseline, so this is a real union, not a simple
+# max() of the two floors. ToolRouter.swift merged clean (no textual
+# conflict): the branch's one-line change — the governed-remote-session gate
+# now reads BridgeDefaults.brokerRemoteGovernedSessionRequiredEnabled instead
+# of brokerRemoteControlPlaneBlockEnabled — landed on the post-RIL dispatch
+# method exactly where PR #87 documents it belongs (after the hard-blocklist
+# gate, before the manifest-fetch gate). The separate hard-blocklist gate
+# (RemoteControlPlanePolicy.isBlocked, keyed to
+# brokerRemoteControlPlaneBlockEnabled) was untouched. Wave1BrokerTests.swift
+# also merged clean: this branch's +3 tests (missing-key default OFF,
+# explicit opt-in, governed remote shell reaches dispatch,
+# governed-session-remains-fail-closed) sit alongside main's schemaVersion
+# 2->3 bump with no overlap. Only this file (test-floor-gate.sh) had a real
+# textual conflict, from both sides appending a FLOOR line after the same
+# 3128 baseline; resolved by keeping both provenance blocks in chronological
+# order and adding this reconciliation entry. Net: 3128 + 3 (build 80) + 10
+# (RIL) = 3141 expected; measured 3141 passed, 0 failed on the merged tree.
+# FLOOR raised 3138 -> 3141.
+FLOOR="${BRIDGE_TEST_FLOOR:-3141}"
 # codex/pkt-1116-observability-diagnosis merge (2026-07-11): merged origin/main
 # (which already carried the PR #87 Routing Integrity Layer reconciliation
 # above) into this branch. No textual conflicts outside this file — AuditLog.swift
@@ -2126,8 +2157,21 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3138}"
 # carries this branch's own +8 (audit_recent/ax_tree, 3128 -> 3136) together
 # with main's +10 (RoutingIntegrityLayerTests, 3128 -> 3138) on top of the
 # shared 3128 base. Measured 3146 passed, 0 failed on the merged tree
-# (3128 + 8 + 10, no other drift). FLOOR raised 3128 -> 3146.
+# (3128 + 8 + 10, no other drift). FLOOR raised 3128 -> 3146. This PR (#99)
+# merged to main before #101 (this branch), which is what makes the next
+# entry below necessary.
 FLOOR="${BRIDGE_TEST_FLOOR:-3146}"
+# Three-way reconciliation (2026-07-11): #99 (pkt-1116, +8) merged to main
+# first, landing floor 3146 there. This branch (#101, +3, already carrying
+# its own prior reconciliation with PR #87's RIL above at 3141) then merged
+# that updated main — a second real textual conflict in this same file,
+# since both #99 and #101 had independently appended a FLOOR line after the
+# shared 3138 (RIL) baseline. All three independent additions on top of the
+# original 3128 base are additive and non-overlapping (different test files
+# entirely: Wave1BrokerTests +3, audit_recent/ax_tree +8, RoutingIntegrityLayerTests
+# +10) -> 3128 + 3 + 8 + 10 = 3149 expected. Measured 3149 passed, 0 failed on
+# the fully-merged tree. FLOOR raised 3146 -> 3149.
+FLOOR="${BRIDGE_TEST_FLOOR:-3149}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

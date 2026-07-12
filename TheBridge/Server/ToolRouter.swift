@@ -371,7 +371,7 @@ public actor ToolRouter {
         }
 
         if context.origin == .remote,
-           BridgeDefaults.brokerRemoteControlPlaneBlockEnabled,
+           BridgeDefaults.brokerRemoteGovernedSessionRequiredEnabled,
            RemoteControlPlanePolicy.requiresGovernedSession(tool: tool, effectiveTier: effectiveTier) {
             let governed = try? await sessionRegistry.isGoverned(
                 transportSessionId: context.transportSessionId

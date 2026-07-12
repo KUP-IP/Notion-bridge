@@ -273,7 +273,16 @@ public enum AppVersion {
     ///   logic change), .local/no-ambient-context -> "local", unchanged. +2
     ///   tests. staticFeatureModuleToolCount unchanged (201). test-floor
     ///   3126 -> 3128.
-    public static let build = "79"
+    /// v3.9.9: 79 -> 80 -- build-only remote connector parity fix. The Wave 1
+    ///   origin-based control-plane block now defaults OFF so authenticated,
+    ///   governed ChatGPT and Claude sessions can reach shell/applescript/
+    ///   computer/credential and config-write tools through their normal
+    ///   SecurityGate tiers. The hard block remains an explicit operator opt-in.
+    ///   Remote governed-session enforcement is split onto its own default-ON
+    ///   preference so full tool parity does not weaken initialization policy.
+    ///   +3 regression tests. staticFeatureModuleToolCount unchanged (201).
+    ///   test-floor 3128 -> 3131.
+    public static let build = "80"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
