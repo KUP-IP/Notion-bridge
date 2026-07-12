@@ -54,7 +54,7 @@ Categories map to the live Bridge tool surface (`tools_list`). Each row is tagge
 | 15 | Vendor OAuth MCP (operator's own scope) | Notion `notion-*`, Stripe `stripe_*`, GitHub/Linear/Slack/etc. plugins | **Cloud-only** | (neither) | Reached via the operator's own OAuth token held cloud-side. |
 | 16 | Notion via operator's stored token | `notion_query/search/page_read/page_update`, etc. | **Cloud-only** | (neither) | Operator-scoped token + remote API; no Mac dependency. |
 | 17 | HTTP fetch / web | `http_fetch`, web fetch/search | **Cloud-only** | (neither) | Plain outbound network; cloud is the cheaper egress point. |
-| 18 | Snippets / jobs registry | `snippets_*`, `job_*`, `jobs_*` | **Cloud-only** | (neither) | CRUD against cloud-stored definitions and schedules. |
+| 18 | Snippets / jobs registry | `snippets_*`, `job_*`, `jobs_*` | **Mac-delegated** | A | Both stores are Mac-resident (see Edge 6) — no cloud copy exists. |
 | 19 | **Client-account access (ANY vendor)** | Any call operating on a CLIENT's Notion/Stripe/GitHub/Messages/files | **Mac-delegated** | **B** | D3: client credentials are permanently Mac-resident; scope overrides vendor reachability. |
 
 **Note on row 19 vs rows 15–16.** The same `notion_*` or `stripe_*` tool is **cloud-only** when bound to the operator's own scope and **Mac-delegated** when the resolved scope is a client's. Routing is decided per call at scope-resolution time, not per tool name. See Edge Case 2.
@@ -82,6 +82,10 @@ Categories map to the live Bridge tool surface (`tools_list`). Each row is tagge
 **Edge 5 — `gh_*` against a remote repo with no local checkout.**
 *Tension:* `gh_*` is listed under local dev (row 11, clause A) but a pure GitHub API call needs no working tree.
 **Resolution (NL-2·E5):** If the call touches the local checkout (status, diff, branch, worktree) → **Mac-delegated** (A). If it is a pure remote API action under the operator's own token (open PR, comment, check status) → **cloud-only**. Same per-call principle as rows 15–16: tool name does not decide; the resolved target does.
+
+**Edge 6 — Row 18 (`snippets_*`, `job_*`, `jobs_*`) was mislabeled cloud-only.**
+*Tension:* The row's original one-line reason ("CRUD against cloud-stored definitions and schedules") described an aspirational cloud-hosted registry that was never built. The concrete implementations are Mac-resident by construction.
+**Resolution (NL-2·E6, corrected 2026-07-11):** `job_*` reads `JobsManager.shared` → `JobStore`, a raw SQLite3 file at `~/Library/Application Support/The Bridge/jobs/jobs.sqlite`, with real scheduling backed by macOS LaunchAgents (`~/Library/LaunchAgents/`). `snippets_*` reads `SnippetStore`, a local JSON file (`store.json`, atomic-rename, no SQLite dependency) at `~/Library/Application Support/The Bridge/snippets/store.json`, plus an espanso-format export. Neither has ever had a cloud copy. Row 18 is now **Mac-delegated** (clause A), matching reality — not a wave-2 cloud-migration deferral, a fact correction. If a cloud-resident jobs/snippets registry is ever built, that is a new state-migration project, not a routing-classification fix.
 
 ---
 
