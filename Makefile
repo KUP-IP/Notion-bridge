@@ -69,7 +69,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps check-stale-build check-clean-tree inject-license-key inject-remote-access
+.PHONY: debug build test test-floor check-counter-collisions app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps check-stale-build check-clean-tree inject-license-key inject-remote-access
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -130,6 +130,10 @@ test:
 # scripts/test-floor-gate.sh.
 test-floor:
 	./scripts/test-floor-gate.sh
+
+# PKT-1115: detect duplicate monotonic counter/FLOOR claims across open PRs.
+check-counter-collisions:
+	./scripts/check-counter-collisions.sh
 
 # ── App Bundle (.app) ──────────────────────────────────────────
 app: build extension jobrunner

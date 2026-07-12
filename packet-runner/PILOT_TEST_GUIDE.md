@@ -18,6 +18,13 @@
 - [ ] **PACKETS registered as a registry entity** (so hydration works): `registry_add_entity` (bind DS `078e7c9e…` **by property id**) → `registry_introspect` → note the **entity name**. Smoke-test: `registry_hydrate(entity, <any packet id>)` returns the `packet-registry-v1` envelope (primary + body + one-hop relations + provenance + warnings).
 - [ ] **Get `main` locally to edit the config:** stash/commit any in-progress work on your current branch, then `git checkout main && git pull`.
 
+**Current pilot binding (verified 2026-07-07):** the live registry entity key for
+PACKETS is `session`; `registry_hydrate(entity: "session", id: "388cbb58-889e-81d8-bf76-d79e78361155")`
+returned `schemaVersion: packet-registry-v1` with `warnings: []`. The concrete config
+uses project `37fcbb58-889e-81f1-867e-d71b11dd9baf`, task id
+`packet-runner-ship-the-bridge-v4`, and repo-path latch
+`packet-runner/controller/latch_state.json`.
+
 ## Step 1 — Fill the config
 Edit `config/routine.config.ship-the-bridge-v4.json`; replace **every** `<<OPERATOR: …>>`:
 - `version` (semver, e.g. `1.0.0`); `provider.workspace_alias`

@@ -764,6 +764,7 @@ await runRemoteOAuthOriginGatingTests() // PKT-810 R5: origin split — loopback
 await runBridgeFeatureFlagsTests()  // PKT-798 (v2.3 · WS-C): fail-closed capability gates
 await runBridgeModuleRegistryTests() // PKT v3.0·0.4: single-source module registrar
 await runMCPToolFactoryTests()       // PKT v3.0·0.5: metadata contract + unified Tool factory
+await runRoutingIntegrityLayerTests() // PKT-1094: server-owned tool-skill registry + manifest gate
 await runToolConventionTests()       // PKT v3.0·0.5: P0 — aliases + key convention + dispatch contract
 await runToolMetadataAuthoringTests() // PKT v3.0·0.5: P1 — projection + authored-metadata render
 await runArtifactModuleTests()    // PKT-743 (v2.2 · 3.1)

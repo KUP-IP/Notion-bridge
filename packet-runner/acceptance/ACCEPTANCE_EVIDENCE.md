@@ -3,6 +3,13 @@
 Honest, non-fabricated evidence status for every acceptance test. Classification +
 how-to-verify in [`ACCEPTANCE_MATRIX.md`](./ACCEPTANCE_MATRIX.md).
 
+**Refresh 2026-07-07:** deterministic controller verification was rerun after the
+Ship The Bridge v4 concrete-config alignment. `python3 packet-runner/controller/test_decisions.py`
+reported **57 passed / 0 failed** and 64 distinct acceptance IDs exercised. The class
+breakdown below remains the governing 2026-06-23 qualification ledger: provider
+integration, governance, and pilot-only rows still require live evidence and must not be
+marked satisfied by deterministic tests alone.
+
 ## Summary
 
 | Class | Count | Evidence status |

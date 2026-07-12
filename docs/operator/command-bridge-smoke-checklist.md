@@ -47,8 +47,9 @@ placement, the macOS reduce-motion path, and focus-loss dismissal.
       a glass bubble with the icon; **unassigned slots are blank but
       hold their position** (the keycap labels 1, 2, 3 … 9, 0 stay
       aligned even with a sparse set of favorites)
-- [ ] Pressing a number key for an assigned slot (e.g. `1` if the
-      Execute command is bound) fires that command:
+- [ ] Pressing a number key for an assigned slot (e.g. `1` for
+      Initiate or `5` for Execute on the default engineering palette)
+      fires that command:
   - [ ] The popup closes
   - [ ] The system clipboard now holds the exact markdown body of the
         fired command (`pbpaste` to verify byte-for-byte)

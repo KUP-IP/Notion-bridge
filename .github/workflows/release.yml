@@ -8,14 +8,16 @@
 #     base64 string exported with `generate_keys -x key.txt` from the machine
 #     whose PUBLIC key is embedded in Info.plist (SUPublicEDKey). CI signs the
 #     appcast with this; ed25519 is deterministic, so the CI signature is
-#     byte-identical to a local `make dmg`. WITHOUT this secret the workflow
-#     still publishes the DMG but skips appcast regeneration (warns loudly).
+#     byte-identical to a local `make dmg`. Required for release dry-runs and tags.
 # - LICENSE_PUBLIC_KEY_BASE64URL: Ed25519 license PUBLIC key (base64url, raw
 #     32-byte) compiled into the build by `make inject-license-key` (Packet B,
 #     PRJCT-2754). Generate a keypair with `swift run license-cli keygen`; the
 #     operator holds the matching PRIVATE key in custody (mints customer tokens
 #     with `license-cli mint`, never committed). WITHOUT this secret the build
 #     is FAIL-CLOSED — no pasted license token activates (trial gate only).
+# - BRIDGE_OAUTH_ISSUER / BRIDGE_PUBLIC_RESOURCE / WORKOS_CLIENT_ID /
+#     WORKOS_BASE_URL / WORKOS_REDIRECT_URI: public WorkOS/OAuth identity baked
+#     into RemoteAccessIdentity.swift for the cloud connector.
 #
 # Branch-protection note: the "Commit appcast to main" step pushes appcast.xml
 # back to `main` (the Sparkle SUFeedURL is the raw main appcast.xml). The
@@ -94,6 +96,53 @@ jobs:
             echo "RELEASE_TAG=${{ github.ref_name }}" >> "$GITHUB_ENV"
           fi
 
+      - name: Verify required release secrets
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          LICENSE_PUBLIC_KEY_BASE64URL: ${{ secrets.LICENSE_PUBLIC_KEY_BASE64URL }}
+          BRIDGE_OAUTH_ISSUER: ${{ secrets.BRIDGE_OAUTH_ISSUER }}
+          BRIDGE_PUBLIC_RESOURCE: ${{ secrets.BRIDGE_PUBLIC_RESOURCE }}
+          WORKOS_CLIENT_ID: ${{ secrets.WORKOS_CLIENT_ID }}
+          WORKOS_BASE_URL: ${{ secrets.WORKOS_BASE_URL }}
+          WORKOS_REDIRECT_URI: ${{ secrets.WORKOS_REDIRECT_URI }}
+        run: |
+          missing=0
+          require_secret() {
+            local name="$1"
+            if [ -z "${!name:-}" ]; then
+              echo "::error::${name} repository secret is not set"
+              missing=1
+            fi
+          }
+
+          for name in \
+            APPLE_CERTIFICATE_BASE64 \
+            APPLE_CERTIFICATE_PASSWORD \
+            APPLE_ID \
+            APPLE_ID_PASSWORD \
+            APPLE_TEAM_ID \
+            SPARKLE_ED_PRIVATE_KEY \
+            LICENSE_PUBLIC_KEY_BASE64URL \
+            BRIDGE_OAUTH_ISSUER \
+            BRIDGE_PUBLIC_RESOURCE \
+            WORKOS_CLIENT_ID \
+            WORKOS_BASE_URL \
+            WORKOS_REDIRECT_URI; do
+            require_secret "$name"
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            echo "Release preflight failed: provision missing repository secrets before running release dry-run or tag release."
+            exit 1
+          fi
+
+          echo "✅ Required release secrets are configured"
+
       - name: Install DMG tooling
         run: brew install create-dmg
 
@@ -149,16 +198,11 @@ jobs:
         env:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
-          if [ -z "${SPARKLE_ED_PRIVATE_KEY:-}" ]; then
-            echo "::warning::SPARKLE_ED_PRIVATE_KEY secret is not set — CI will publish the DMG but will NOT regenerate or commit the Sparkle appcast (users won't be offered the update until appcast.xml is updated manually). Add the secret to enable the canonical release path. Export it locally with: .build/artifacts/sparkle/Sparkle/bin/generate_keys -x key.txt (the file holds the single-line base64 private key)."
-            echo "has_key=false" >> "$GITHUB_OUTPUT"
-          else
-            ED_KEY_FILE="$RUNNER_TEMP/sparkle_ed_private_key"
-            printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$ED_KEY_FILE"
-            chmod 600 "$ED_KEY_FILE"
-            echo "ED_KEY_FILE=$ED_KEY_FILE" >> "$GITHUB_ENV"
-            echo "has_key=true" >> "$GITHUB_OUTPUT"
-          fi
+          ED_KEY_FILE="$RUNNER_TEMP/sparkle_ed_private_key"
+          printf '%s' "$SPARKLE_ED_PRIVATE_KEY" > "$ED_KEY_FILE"
+          chmod 600 "$ED_KEY_FILE"
+          echo "ED_KEY_FILE=$ED_KEY_FILE" >> "$GITHUB_ENV"
+          echo "has_key=true" >> "$GITHUB_OUTPUT"
 
       - name: Build notarized DMG (+ signed appcast when key present)
         run: |

@@ -142,22 +142,70 @@ func runCommandStoreTests() async {
         }
     }
 
-    await test("seedIfEmpty installs 5 commands on first run, idempotent thereafter") {
+    await test("seedIfEmpty installs the 10-slot command palette on first run, idempotent thereafter") {
         try await withTempHome { _ in
             try CommandStore.shared.resetForTesting()
             try CommandStore.shared.seedIfEmpty()
             let first = try CommandStore.shared.list()
-            try expect(first.count == 5, "expected 5 seeded commands, got \(first.count)")
+            try expect(first.count == 10, "expected 10 seeded commands, got \(first.count)")
 
             // Re-run is no-op (count unchanged).
             try CommandStore.shared.seedIfEmpty()
-            try expect(try CommandStore.shared.list().count == 5)
+            try expect(try CommandStore.shared.list().count == 10)
 
-            // Slots 1–5 should be assigned.
+            // Slots 1-9 and 0 should be assigned.
             for slot in 1...5 {
                 try expect(try CommandStore.shared.command(forKeySlot: slot) != nil,
                            "expected a command at slot \(slot)")
             }
+            for slot in 6...9 {
+                try expect(try CommandStore.shared.command(forKeySlot: slot) != nil,
+                           "expected a command at slot \(slot)")
+            }
+            try expect(try CommandStore.shared.command(forKeySlot: 0) != nil,
+                       "expected a command at slot 0")
+            try expect(try CommandStore.shared.command(forKeySlot: 1)?.slug == "initiate",
+                       "slot 1 must hold Initiate")
+            try expect(try CommandStore.shared.command(forKeySlot: 5)?.slug == "execute",
+                       "slot 5 must hold Execute")
+            try expect(try CommandStore.shared.command(forKeySlot: 0)?.slug == "hand-off",
+                       "slot 0 must hold Hand Off")
+        }
+    }
+
+    await test("seeded Initiate command delegates to bridge_initialize") {
+        try await withTempHome { _ in
+            try CommandStore.shared.resetForTesting()
+            try CommandStore.shared.seedIfEmpty()
+            guard let initiate = try CommandStore.shared.get(slug: "initiate") else {
+                try expect(false, "expected Initiate seed to exist")
+                return
+            }
+            try expect(initiate.body.contains("bridge_initialize"),
+                       "Initiate seed must call the canonical initializer")
+            try expect(initiate.body.contains("structured receipt"),
+                       "Initiate seed must treat the receipt as source of truth")
+            try expect(initiate.body.contains("Do not maintain a parallel startup checklist"),
+                       "Initiate seed must avoid duplicating the initializer protocol")
+        }
+    }
+
+    await test("seeded Execute command routes through parent Keepr before executor") {
+        try await withTempHome { _ in
+            try CommandStore.shared.resetForTesting()
+            try CommandStore.shared.seedIfEmpty()
+            guard let execute = try CommandStore.shared.get(slug: "execute") else {
+                try expect(false, "expected Execute seed to exist")
+                return
+            }
+            try expect(execute.body.contains("skills_routing_list"),
+                       "Execute seed must load the live routing roster")
+            try expect(execute.body.contains("parent Keepr"),
+                       "Execute seed must route through a parent Keepr")
+            try expect(execute.body.contains("Do not route directly to `executor`"),
+                       "Execute seed must explicitly prevent direct executor routing")
+            try expect(!execute.body.contains("fetch_skill('executor')"),
+                       "Execute seed must not tell agents to fetch executor directly")
         }
     }
 

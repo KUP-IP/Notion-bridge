@@ -102,18 +102,19 @@ public final class CommandStore: @unchecked Sendable {
         }
     }
 
-    /// First-run seed: populate slots 1–5 with example commands if the
+    /// First-run seed: populate the 10-slot Command Bridge palette if the
     /// store is empty. Idempotent.
     public func seedIfEmpty() throws {
         try ensureDir()
         if FileManager.default.fileExists(atPath: indexURL.path) { return }
-        for (slot, seed) in Self.firstRunSeeds.enumerated() {
+        for (idx, seed) in Self.firstRunSeeds.enumerated() {
+            let slot = idx == 9 ? 0 : idx + 1
             _ = try create(
                 name: seed.name,
                 icon: seed.icon,
                 color: seed.color,
                 body: seed.body,
-                keySlot: slot + 1   // slots 1…5
+                keySlot: slot
             )
         }
     }
@@ -346,17 +347,119 @@ public final class CommandStore: @unchecked Sendable {
         let body: String
     }
 
+    private static let initiateSeedBody = """
+    # Initiate Bridge
+
+    Mode: arrival. Orient before work moves.
+
+    Set in stone:
+    Run `bridge_initialize` first and treat its structured receipt as the source of truth for Bridge state, doctrine integrity, routing roster quality, supplemental-order counts, capability notes, and final initialization state. Do not maintain a parallel startup checklist in this command body.
+
+    After the receipt, ground in the current handoff or live project state. If there is no concrete handoff, use the current workspace and ask one clarifying question only if the target is genuinely ambiguous.
+
+    Stay in orientation mode until the operator fires another command or explicitly asks to move.
+    """
+
+    private static let proposeSeedBody = """
+    # Propose
+
+    Mode: shaping. Do not implement yet.
+
+    Restate the objective, identify the smallest coherent scope, name meaningful forks, and surface the cost of being wrong. Use choice-to-contract only when there is a real decision the operator should make.
+    """
+
+    private static let scopeCutSeedBody = """
+    # Scope Cut
+
+    Mode: trim. Separate what is truly required from what is merely adjacent.
+
+    Return IN / OUT / LATER with the reason each boundary exists. Prefer a smaller contract that can be verified over a wider one that depends on hope.
+    """
+
+    private static let validateSeedBody = """
+    # Validate
+
+    Mode: hardening. Check whether the plan is execution-ready.
+
+    Verify source-of-truth context, dependencies, gates, tests, and likely failure modes. If the work spans more than one domain, route through the relevant parent Keepr before any material execution.
+    """
+
+    private static let executeSeedBody = """
+    ## Execute
+
+    Mode: delivery. A contract is approved and material work may begin.
+
+    Set in stone:
+    Resolve the parent Keepr first from the live routing roster (`skills_routing_list` / `list_routing_skills`), then load that parent contract with `fetch_skill('<parent-keepr>', intent: '<this sub-task>')`. Do not route directly to `executor` unless the active request is a packet dispatch or the parent Keepr explicitly selects executor as the specialist for this task.
+
+    For multi-domain work, build the route stack through the relevant parent Keeprs. The domain owner selects executor, orchestrator, or another specialist; the command does not bypass ownership.
+
+    Define done with tests, run them, and iterate until the evidence is green. Keep a working todo list and close loops at wave checkpoints.
+
+    Return a final summary: what shipped, test results, deltas vs the contract, and deferred items with reasons.
+    """
+
+    private static let reviewSeedBody = """
+    # Review
+
+    Mode: checkpoint. Verify before release, merge, deletion, or irreversible action.
+
+    Lead with findings and evidence. Confirm tests, runtime state, external gates, and any operator decision required before the work can move forward.
+    """
+
+    private static let refocusSeedBody = """
+    # Refocus
+
+    Mode: realignment. Re-anchor the session.
+
+    Restate the original objective, current evidence, what changed, and the next smallest move. Flag drift plainly.
+    """
+
+    private static let openLoopsSeedBody = """
+    # Open Loops
+
+    Mode: inventory. List every unresolved thread from the current session or project.
+
+    Separate loops that need action, loops that need a decision, and loops that can be closed with evidence already present.
+    """
+
+    private static let closeAgentSeedBody = """
+    # Close Agent
+
+    Mode: closeout. Preserve what should survive this session.
+
+    Summarize shipped work, evidence, unresolved decisions, friction, and reusable learning. Write durable telemetry only where the active protocol requires it.
+    """
+
+    private static let handOffSeedBody = """
+    # Hand Off
+
+    Mode: transfer. Prepare the next agent to continue without rediscovery.
+
+    Include objective, current state, files/pages/PRs touched, exact evidence, blockers, and the next best action. Do not run close-agent from this command.
+    """
+
     private static let firstRunSeeds: [Seed] = [
+        Seed(name: "Initiate",    icon: .emoji("🧭"),  color: .purple,
+             body: initiateSeedBody),
+        Seed(name: "Propose",     icon: .emoji("🧩"),  color: .blue,
+             body: proposeSeedBody),
+        Seed(name: "Scope Cut",   icon: .emoji("✂️"),  color: .gray,
+             body: scopeCutSeedBody),
+        Seed(name: "Validate",    icon: .emoji("🔎"),  color: .yellow,
+             body: validateSeedBody),
         Seed(name: "Execute",     icon: .emoji("⚡"),  color: .orange,
-             body: "## Execute\n\nProceed with the plan we just landed. Use minimum tool calls; no narration."),
-        Seed(name: "Reflow",      icon: .emoji("🔁"),  color: .blue,
-             body: "## Reflow\n\nRe-examine the plan from first principles. What changed? What's new evidence? What would you do differently if starting from scratch?"),
-        Seed(name: "Discussion",  icon: .emoji("💬"),  color: .blue,
-             body: "## Discussion\n\nWalk me through the tradeoffs before we commit.\n\n- What are we optimizing for?\n- What's the cost of being wrong?\n- What would change your mind?"),
-        Seed(name: "Open-loops",  icon: .emoji("📋"),  color: .green,
-             body: "## Open-loops\n\nList every open thread from this conversation. Order by importance. Mark which need user input."),
-        Seed(name: "Close-loop",  icon: .emoji("✅"),  color: .green,
-             body: "## Close-loop\n\nSummarize what shipped, what changed, what's still open. Surface anything I should know that you haven't said yet."),
+             body: executeSeedBody),
+        Seed(name: "Review",      icon: .emoji("🧪"),  color: .red,
+             body: reviewSeedBody),
+        Seed(name: "Refocus",     icon: .emoji("🎯"),  color: .blue,
+             body: refocusSeedBody),
+        Seed(name: "Open Loops",  icon: .emoji("📋"),  color: .green,
+             body: openLoopsSeedBody),
+        Seed(name: "Close Agent", icon: .emoji("✅"),  color: .green,
+             body: closeAgentSeedBody),
+        Seed(name: "Hand Off",    icon: .emoji("📨"),  color: .brown,
+             body: handOffSeedBody),
     ]
 }
 
