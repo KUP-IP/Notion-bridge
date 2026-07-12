@@ -45,9 +45,12 @@ A macOS menu-bar app that exposes the Mac + a Notion workspace to AI agents over
 - **Loopback contract (PKT-810 R5):** `/mcp` from direct loopback (no `Cf-*` header) is
   token-free; only tunnel (Cloudflare `Cf-Connecting-Ip`/`Cf-Ray`) requests are auth-gated.
   The legacy `/sse` + `/messages` routes are dispatched *before* that gate, so they enforce
-  their own check: tunnel-origin legacy requests are **403'd (loopback-only)**; only `/health`
-  + the PRM doc are intentionally tunnel-reachable without auth. cloudflared forwards ALL paths
-  to `:9700` (no path scoping), so the server is the trust boundary.
+  their own check: tunnel-origin legacy requests are **403'd (loopback-only)**, belt-and-
+  braces. Since v3.8.2, `cloudflared` itself (`~/.cloudflared/config.yml`) is path-scoped
+  to only `^/(mcp|\.well-known/)` — everything else, including `/health` and `/sse`, 404s
+  at the edge and never reaches the server. The PRM doc lives under `/.well-known/` so it
+  stays tunnel-reachable without auth; `/health` is loopback-only in practice (not just by
+  server-side gate) — hit it directly on `:9700` for local monitoring, not through the tunnel.
 - **Version:** `Config/Version.swift` (marketing 3.8.1, build 60) + root `Info.plist`
   (CFBundleShortVersionString/CFBundleVersion — the build reads the plist, keep both in sync).
   +1 patch per published install.
