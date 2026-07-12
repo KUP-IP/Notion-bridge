@@ -4,6 +4,10 @@
 <dict>
 	<key>AppIdentifierPrefix</key>
 	<string>VP24Z9CS22.</string>
+	<key>BridgeGitDirty</key>
+	<false/>
+	<key>BridgeGitSHA</key>
+	<string>unknown</string>
 	<key>CFBundleDisplayName</key>
 	<string>The Bridge</string>
 	<key>CFBundleExecutable</key>

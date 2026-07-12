@@ -57,6 +57,11 @@ SPARKLE_ED_KEY_FILE ?=
 LICENSE_PUBLIC_KEY_BASE64URL ?=
 LICENSE_KEY_INJECT_FILE = TheBridge/Core/Licensing/LicensePublicKeyInjected.swift
 
+# PKT-1116: snapshot source provenance when make starts, before the existing
+# license/OAuth injection prerequisites rewrite generated Swift inputs.
+BUILD_GIT_SHA   := $(shell git rev-parse --verify HEAD 2>/dev/null || echo unknown)
+BUILD_GIT_DIRTY := $(if $(shell git status --porcelain --untracked-files=normal 2>/dev/null),true,false)
+
 INFO_PLIST      = Info.plist
 RESOURCES_DIR   = TheBridge/App/Resources
 DMG_ICON        = $(RESOURCES_DIR)/Assets.xcassets/AppIcon.appiconset/icon_512x512.png
@@ -140,6 +145,10 @@ app: build extension jobrunner
 	@cp $(RELEASE_DIR)/$(BINARY_NAME) "$(APP_BUNDLE)/Contents/MacOS/$(BINARY_NAME)"
 	@install_name_tool -add_rpath "@loader_path/../Frameworks" "$(APP_BUNDLE)/Contents/MacOS/$(BINARY_NAME)"
 	@cp $(INFO_PLIST) $(APP_BUNDLE)/Contents/Info.plist
+	@# PKT-1116: stamp the packaged plist after the copy so the committed
+	@# Info.plist remains a stable placeholder and build provenance reflects
+	@# the exact source tree used for this bundle.
+	@bash scripts/stamp-build-provenance.sh "$(APP_BUNDLE)/Contents/Info.plist" "$(CURDIR)" "$(BUILD_GIT_SHA)" "$(BUILD_GIT_DIRTY)"
 	@test -f $(RESOURCES_DIR)/TheBridge.icns && \
 		cp $(RESOURCES_DIR)/TheBridge.icns $(APP_BUNDLE)/Contents/Resources/ || true
 	@for f in $(RESOURCES_DIR)/*.png; do \

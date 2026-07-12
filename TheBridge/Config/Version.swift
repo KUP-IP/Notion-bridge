@@ -409,7 +409,9 @@ public enum BridgeConstants {
     ///   family, no new family). 199 + 1 = 200.
     /// Bridge Evolution W1 broker: + doctrine_sync (request-tier single writer
     ///   for doctrine-core.md, joins existing standing_orders family). 200 + 1 = 201.
-    public static let staticFeatureModuleToolCount = 201
+    /// PKT-1116 Observability: + audit_recent (read-only session-family audit
+    ///   projection; no new family). 201 + 1 = 202.
+    public static let staticFeatureModuleToolCount = 202
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.

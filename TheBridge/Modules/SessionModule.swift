@@ -6,8 +6,11 @@ import MCP
 
 // MARK: - SessionModule
 
-/// Provides session tools: tools_list (V1-03), session_info (V1-04), session_clear (V1-04).
+/// Provides session tools: tools_list, session_info, audit_recent, session_clear.
 public enum SessionModule {
+
+    public static let auditRecentDefaultLimit = 20
+    public static let auditRecentMaximumLimit = 100
 
     public struct RuntimeDiagnostics: Sendable {
         public let connections: Int
@@ -184,6 +187,109 @@ public enum SessionModule {
             }
         ))
 
+        // audit_recent — open (PKT-1116). Read-only projection of the
+        // already-retained in-memory audit trail. Deliberately omits
+        // `inputSummary`: agents need the refusal/result trail, not a replay of
+        // caller-supplied material. Credential-tool output summaries are also
+        // redacted defensively even though ToolRouter normally stores only an
+        // object-key summary.
+        await router.register(ToolRegistration(
+            name: "audit_recent",
+            module: moduleName,
+            tier: .open,
+            description: "Return the most-recent in-memory audit entries so an agent can diagnose why a tool call was approved, rejected, escalated, or failed. Filter by exact tool name, approval status, or security tier. Input summaries are never returned; credential-tool output summaries are redacted.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "limit": .object([
+                        "type": .string("integer"),
+                        "description": .string("Maximum entries to return (default 20, range 1...100).")
+                    ]),
+                    "tool": .object([
+                        "type": .string("string"),
+                        "description": .string("Optional exact tool-name filter.")
+                    ]),
+                    "status": .object([
+                        "type": .string("string"),
+                        "enum": .array(ApprovalStatus.allCases.map { .string($0.rawValue) }),
+                        "description": .string("Optional approval status: approved | rejected | escalated | error.")
+                    ]),
+                    "tier": .object([
+                        "type": .string("string"),
+                        "enum": .array(SecurityTier.allCases.map { .string($0.rawValue) }),
+                        "description": .string("Optional security tier: open | notify | request.")
+                    ])
+                ]),
+                "required": .array([])
+            ]),
+            metadata: ToolMetadata(
+                title: "Recent Audit Trail",
+                whenToUse: ["Diagnose why a recent Bridge tool call was blocked, escalated, or failed."],
+                whenNotToUse: ["Clearing audit history (use session_clear with explicit confirmation)."],
+                relatedTools: ["session_info", "session_clear"]
+            ),
+            handler: { arguments in
+                let args: [String: Value]
+                if case .object(let object) = arguments { args = object } else { args = [:] }
+
+                let limit: Int = {
+                    guard case .int(let requested) = args["limit"] else {
+                        return auditRecentDefaultLimit
+                    }
+                    return max(1, min(requested, auditRecentMaximumLimit))
+                }()
+                let toolFilter: String? = {
+                    guard case .string(let value) = args["tool"], !value.isEmpty else { return nil }
+                    return value
+                }()
+                let statusFilter: ApprovalStatus?
+                if case .string(let raw) = args["status"] {
+                    guard let parsed = ApprovalStatus(rawValue: raw) else {
+                        return .object(["error": .string("Invalid status '\(raw)'. Expected approved, rejected, escalated, or error.")])
+                    }
+                    statusFilter = parsed
+                } else {
+                    statusFilter = nil
+                }
+                let tierFilter: SecurityTier?
+                if case .string(let raw) = args["tier"] {
+                    guard let parsed = SecurityTier(rawValue: raw) else {
+                        return .object(["error": .string("Invalid tier '\(raw)'. Expected open, notify, or request.")])
+                    }
+                    tierFilter = parsed
+                } else {
+                    tierFilter = nil
+                }
+
+                // Use AuditLog's indexed read seams for the first available
+                // filter, then compose any remaining predicates locally.
+                var entries: [AuditEntry]
+                if let toolFilter {
+                    entries = await auditLog.entries(forTool: toolFilter)
+                } else if let statusFilter {
+                    entries = await auditLog.entries(withStatus: statusFilter)
+                } else if let tierFilter {
+                    entries = await auditLog.entries(forTier: tierFilter)
+                } else {
+                    entries = await auditLog.allEntries()
+                }
+                if let toolFilter { entries.removeAll { $0.toolName != toolFilter } }
+                if let statusFilter { entries.removeAll { $0.approvalStatus != statusFilter } }
+                if let tierFilter { entries.removeAll { $0.tier != tierFilter } }
+
+                let recent = entries
+                    .sorted { $0.timestamp > $1.timestamp }
+                    .prefix(limit)
+                    .map(auditEntryValue)
+                return .object([
+                    "entries": .array(Array(recent)),
+                    "count": .int(recent.count),
+                    "limit": .int(limit),
+                    "inputSummaryIncluded": .bool(false)
+                ])
+            }
+        ))
+
         // session_clear – notify (V1-04)
         await router.register(ToolRegistration(
             name: "session_clear",
@@ -221,5 +327,23 @@ public enum SessionModule {
                 ])
             }
         ))
+    }
+
+    /// Public pure projection for secrecy/shape tests. `inputSummary` and
+    /// `governanceNote` are intentionally absent from the wire response.
+    public static func auditEntryValue(_ entry: AuditEntry) -> Value {
+        let outputSummary = entry.toolName.hasPrefix("credential_")
+            ? "<redacted: credential tool>"
+            : entry.outputSummary
+        return .object([
+            "timestamp": .string(ISO8601DateFormatter().string(from: entry.timestamp)),
+            "toolName": .string(entry.toolName),
+            "tier": .string(entry.tier.rawValue),
+            "approvalStatus": .string(entry.approvalStatus.rawValue),
+            "outputSummary": .string(outputSummary),
+            "durationMs": .double(entry.durationMs),
+            "origin": entry.origin.map { .string($0.rawValue) } ?? .null,
+            "transportSessionId": entry.transportSessionId.map(Value.string) ?? .null
+        ])
     }
 }
