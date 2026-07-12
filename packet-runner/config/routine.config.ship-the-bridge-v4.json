@@ -1,14 +1,14 @@
 {
-  "_about": "Packet Runner CONCRETE PILOT configuration for the 'Ship The Bridge v4' routine (PRD §8.5A; MASTER_IMPLEMENTATION_SPEC.md v1.1 §3 WU-4). Authored from routine.config.template.json with the WU-4 DECIDED values filled. Every value that must come from the operator remains an explicit '<<OPERATOR: ...>>' placeholder — no IDs, tokens, or secret values are fabricated. Secret VALUES never live here — only safe aliases (PRD §8.9). Preflight fails closed before any packet mutation when this config is missing, inconsistent, points at an inaccessible project/repo/brief/qualification/evidence destination, allows overlapping runs, or uses contract/schema versions outside the supported range (PRD §8.5A configuration validation; CONTROLLER_SPEC.md §2 P1-P14).",
+  "_about": "Packet Runner CONCRETE PILOT configuration for the 'Ship The Bridge v4' routine (PRD §8.5A; MASTER_IMPLEMENTATION_SPEC.md v1.1 §3 WU-4). Authored from routine.config.template.json with the WU-4 DECIDED values filled. Operator-supplied pilot values are concrete here; secret VALUES never live here — only safe aliases (PRD §8.9). Preflight fails closed before any packet mutation when this config is missing, inconsistent, points at an inaccessible project/repo/brief/qualification/evidence destination, allows overlapping runs, or uses contract/schema versions outside the supported range (PRD §8.5A configuration validation; CONTROLLER_SPEC.md §2 P1-P14).",
   "_source_of_truth": "_refs/PRD-v1.0.md §8.5A; MASTER_IMPLEMENTATION_SPEC.md v1.1 §3 WU-4 (decided values) + Decision Ledger D1/D1'/D2/D3/D4/D-assume; companion logic in controller/CONTROLLER_SPEC.md + controller/decisions.py",
   "_status": "NOT production-qualified. Unattended scheduling stays OFF until Pilot Phase 1 + the live capability tests pass and the §8.20 20-cycle gate + operator sign-off complete (MASTER_IMPLEMENTATION_SPEC.md §0/§5).",
 
-  "version": "<<OPERATOR: routine config semver, e.g. 1.0.0 — set on first commit of this concrete config; dispatch carries it as routineConfigVersion (PRD §8.4)>>",
+  "version": "1.0.0",
 
   "provider": {
     "_note": "PRD §8.5A + FR-9. Decided per MASTER_IMPLEMENTATION_SPEC.md §3 WU-4 + Decision Ledger D1/D1'. Fully-local app-local Claude Code scheduled agent: ONE synchronous autonomous run = the whole cycle (the keep-os-daily-people-report pattern), failing closed if the Bridge is unreachable. The provider must satisfy all nine capabilities; selection evidence is recorded under provider_capability_results below. Do NOT build a generalized adapter framework for v1.",
     "name": "Claude Code app-local scheduled agent + Bridge MCP (loopback/connector)",
-    "workspace_alias": "<<OPERATOR: safe alias for the Claude Code account/workspace that owns the scheduled task — never a secret>>",
+    "workspace_alias": "isaiah-claude-code-local",
     "self_pause_action": {
       "_note": "Decided per Decision Ledger D1' #7 + decisions.py pause_gate/request_pause/may_reenable. Machine-callable self-pause = 'update_scheduled_task enabled:false' (scheduled-tasks MCP) backed by the controller fail-closed latch 'disabled' flag in durable_evidence_destination (PRD §8.5A, §8.13). Packet Runner may SET disabled within an incident boundary but may NEVER re-enable itself; re-enable is operator-only (may_reenable). Optional belt-and-suspenders: Bridge job_pause.",
       "kind": "machine_callable_pause",
@@ -26,11 +26,11 @@
   "_schedule_note": "INTENTIONALLY null (MASTER_IMPLEMENTATION_SPEC.md §3 WU-4 + WU-2 + Decision Ledger D-assume: cron = null, one-shot fire through Phase 1). PRD §8.5A + FR-8: schedule is an operator-supplied provider-native schedule, and NO unattended run is enabled until this value is reviewed. UNATTENDED RUNS STAY DISABLED until reviewed AND until the §8.20 20-cycle production-qualification gate passes with explicit operator sign-off. Until then, execution is manual Run-Now / one-shot 'fireAt' only (WU-5 Phase 1), under the same controller non-overlap latch. Replace null with the reviewed provider-native recurrence (WU-5 Phase 2) ONLY after qualification + authorization.",
   "schedule_fields_when_enabled": {
     "_note": "Reference shape only — NOT active while \"schedule\": null. Populate the live \"schedule\" field above (provider-native cron/recurrence in America/Chicago) after Phase-1 live tests pass and operator authorizes Phase 2. Missed runs are NOT backfilled (FR-8). Time zone / daylight-saving / manual-run behavior remain provider-native. App-local caveat (MASTER_IMPLEMENTATION_SPEC.md open-pt #5): the scheduled task fires only while the Claude Code app is open, else on next launch — confirm app-open-overnight or adopt the launchd->headless-claude enhancement before Phase 2.",
-    "cron_or_recurrence": "<<OPERATOR: reviewed provider-native schedule expression (America/Chicago); leave \"schedule\" null until Phase 2 authorized>>",
+    "cron_or_recurrence": "populate only after Phase 1 passes and Phase 2 is authorized; live schedule remains null until then",
     "missed_run_behavior": "no-backfill"
   },
 
-  "project_id": "<<OPERATOR: Ship The Bridge v4 PROJECT page id — the PROJECT relation target scoping the QUEUE query (PRD §6.2, FR-2; CONTROLLER_SPEC.md P2). NOT the PACKETS data source id (that is canonical: 078e7c9e-e53e-4c83-a893-af64f82b5123)>>",
+  "project_id": "37fcbb58-889e-81f1-867e-d71b11dd9baf",
   "_project_id_note": "MASTER_IMPLEMENTATION_SPEC.md Decision Ledger D2: pilot on 'Ship The Bridge v4' in the the-bridge repo. registry.queryQueue(project_id) selects Status==QUEUE AND PROJECT==project_id (CONTROLLER_SPEC.md §1 step 2). Preflight P2 fails closed if unresolvable/inaccessible.",
 
   "repository": {
@@ -49,16 +49,16 @@
 
   "durable_evidence_destination": {
     "_note": "PRD §8.5A + §8.18 + MASTER_IMPLEMENTATION_SPEC.md §3 WU-4 'Operator inputs still required'. Stable Notion page/file area OR repository evidence path for redacted incident exports and portable review artifacts. MUST NOT be an ephemeral local directory (preflight P6 fails closed otherwise). This SAME store ALSO hosts the controller single-writer latch {holder, acquired_at, expires_at, disabled} that enforces #1 non-overlap and #7 pause (WU-3; decisions.py OverlapLatch/overlap_gate/pause_gate). Set 'latch_location' to the exact Notion property/row/file within this destination that holds the latch.",
-    "kind": "<<OPERATOR: one of notion_page | notion_file_area | repo_path>>",
-    "locator": "<<OPERATOR: stable Notion page id OR repo evidence path for the durable evidence destination — never an ephemeral local dir>>",
-    "latch_location": "<<OPERATOR: exact location of the single-writer control latch within durable_evidence_destination (e.g. a Notion page/row/property or a repo file path) holding {holder, acquired_at, expires_at, disabled} — WU-3 latch store>>"
+    "kind": "repo_path",
+    "locator": "packet-runner/controller/latch_state.json",
+    "latch_location": "packet-runner/controller/latch_state.json — whole-file JSON record {holder, acquired_at, expires_at, disabled}; created by Step 2, git-ignored (churns every cycle, not meant to carry commit history)"
   },
 
   "max_packets_per_cycle": 1,
   "_max_packets_note": "PRD §8.5A + §6.6 + MASTER_IMPLEMENTATION_SPEC.md §3 WU-4 + Decision Ledger D-assume: pilot is exactly 1 packet per cycle. Increasing this is a persistent change requiring review (§8.13) and may expand only one dimension at a time after qualification (§8.20).",
 
-  "cycle_timeout_seconds": "<<OPERATOR: integer cycle timeout in seconds — MUST be shorter than the schedule interval once a schedule is set (PRD §8.5A; CONTROLLER_SPEC.md P14). Also bounds the latch expires_at = acquired_at + cycle_timeout (decisions.py OverlapLatch). While schedule is null/one-shot, set a sane upper bound for one synchronous run>>",
-  "packet_timeout_seconds": "<<OPERATOR: integer packet timeout in seconds — MUST be shorter than the 14400s (4h) stale-FOCUS threshold (PRD §8.5A, §8.14; CONTROLLER_SPEC.md P14)>>",
+  "cycle_timeout_seconds": 1800,
+  "packet_timeout_seconds": 1200,
 
   "maintenance_max_items": 10,
   "maintenance_time_budget_seconds": 120,
@@ -66,8 +66,8 @@
 
   "model": {
     "_note": "PRD §8.5A, FR-18, §8.13. Session-local model choice is allowed only within this allowlist; changing the default or allowlist is a persistent change requiring review (decisions.py select_model — never mutates the persisted default). Preflight P8 fails closed if the default is unavailable or outside the allowlist. Provide model ID strings only — no credentials.",
-    "default": "<<OPERATOR: default model id (e.g. an approved claude-* id) for the scheduled agent run>>",
-    "allowlist": ["<<OPERATOR: approved model id #1>>", "<<OPERATOR: approved model id #2 (optional; repeat as needed)>>"]
+    "default": "claude-sonnet-5",
+    "allowlist": ["claude-sonnet-5", "claude-opus-4-8"]
   },
 
   "allowed_execution_modes": ["inline"],
@@ -81,16 +81,16 @@
       "local git + build/test tooling for the the-bridge worktree (non-consequential verification)"
     ],
     "credential_aliases": [
-      "<<OPERATOR: safe credential alias for Notion/Bridge access, e.g. notion:primary — name only, never the secret>>",
-      "<<OPERATOR: safe credential alias for the the-bridge git repo, e.g. github:primary — name only, never the secret>>"
+      "notion:primary",
+      "github:primary"
     ]
   },
 
   "authorized_identities": {
     "_note": "PRD §8.5A + §8.10 + §8.13 + MASTER_IMPLEMENTATION_SPEC.md §3 WU-4 'Operator inputs still required'. Reviewer/operator identities and who holds provider pause/re-enable authority. Re-enablement of a paused routine is an explicit operator decision; the routine may NEVER re-enable itself (decisions.py may_reenable).",
-    "reviewers": ["<<OPERATOR: reviewer identity #1 (Notion person / handle authorized to issue PACKET DECISION approvals)>>"],
-    "operators": ["<<OPERATOR: operator identity (e.g. Isaiah) — packet author, final authority, scheduling controller>>"],
-    "provider_pause_authority": ["<<OPERATOR: identity holding pause/re-enable authority for taskId packet-runner-ship-the-bridge-v4 (e.g. Isaiah)>>"]
+    "reviewers": ["Isaiah Peters"],
+    "operators": ["Isaiah Peters"],
+    "provider_pause_authority": ["Isaiah Peters"]
   },
 
   "provider_capability_results": {

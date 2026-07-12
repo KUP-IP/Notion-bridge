@@ -153,7 +153,7 @@ func runWave1BrokerTests() async {
                 )
             }
 
-            try expect(receipt.schemaVersion == 2)
+            try expect(receipt.schemaVersion == 3)
             try expect(receipt.session?.transportSessionId == "http-session-2")
             try expect(receipt.session?.mode == .execute)
             try expect(receipt.session?.governed == true)

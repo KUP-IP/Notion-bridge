@@ -4,6 +4,14 @@
 
 > Production qualification requires the separate 20-cycle scheduled-pilot gate + authorized operator sign-off (§8.20). This report does **not** declare production readiness. Unattended scheduling is **disabled** (`config schedule: null`).
 
+## 2026-07-07 refresh evidence
+
+- `config/routine.config.ship-the-bridge-v4.json` now carries concrete pilot values for Ship The Bridge v4: project `37fcbb58-889e-81f1-867e-d71b11dd9baf`, task id `packet-runner-ship-the-bridge-v4`, repo-path evidence/latch `packet-runner/controller/latch_state.json`, model default `claude-sonnet-5`, and operator/reviewer/pause authority `Isaiah Peters`. `schedule` remains `null`.
+- The cycle prompt `agent/packet-runner-cycle.md` was aligned to those values; the stale operator placeholders for task id, project id, PACKETS registry entity, evidence/latch, model, identities, and timeouts were removed.
+- Live registry smoke test: `registry_hydrate(entity: "session", id: "388cbb58-889e-81d8-bf76-d79e78361155")` returned `schemaVersion: packet-registry-v1` with `warnings: []`; the `session` entity maps the PACKETS data source.
+- Deterministic controller suite refreshed: `python3 packet-runner/controller/test_decisions.py` -> **57 passed / 0 failed** across 64 distinct acceptance IDs.
+- Bridge full harness refreshed after command-routing edits: `make test` -> **3098 passed / 0 failed**.
+
 ---
 
 ## 1. All implementation changes & updated Notion assets

@@ -99,6 +99,11 @@ public actor AuditLog {
         entries.filter { $0.approvalStatus == status }
     }
 
+    /// Entries filtered by transport/session id.
+    public func entries(forSessionID sessionID: String) -> [AuditEntry] {
+        entries.filter { $0.transportSessionId == sessionID }
+    }
+
     /// Count of all entries.
     public func count() -> Int {
         entries.count
