@@ -86,7 +86,7 @@ func runRoutingIntegrityLayerTests() async {
                             "body": .string("dry-run probe"),
                             "confirm": .string("DRY_RUN")
                         ]),
-                        sessionID: "ril-session-a"
+                        context: ToolDispatchContext(transportSessionId: "ril-session-a", origin: .local)
                     )
                     throw TestError.assertion("messages_send reached handler without manifest marker")
                 } catch let error as ToolRouterError {
@@ -139,7 +139,7 @@ func runRoutingIntegrityLayerTests() async {
                 _ = try await router.dispatch(
                     toolName: BridgeInitializeModule.toolName,
                     arguments: .object(["client": .string("ril-session-b")]),
-                    sessionID: "ril-session-b"
+                    context: ToolDispatchContext(transportSessionId: "ril-session-b", origin: .local)
                 )
                 let marked = await router.hasRoutingManifestMarker(sessionID: "ril-session-b")
                 try expect(marked, "bridge_initialize must mark the session")
@@ -151,7 +151,7 @@ func runRoutingIntegrityLayerTests() async {
                         "body": .string("dry-run probe"),
                         "confirm": .string("DRY_RUN")
                     ]),
-                    sessionID: "ril-session-b"
+                    context: ToolDispatchContext(transportSessionId: "ril-session-b", origin: .local)
                 )
                 guard case .object(let dict) = allowed,
                       case .bool(false)? = dict["sent"],
@@ -168,7 +168,7 @@ func runRoutingIntegrityLayerTests() async {
                             "body": .string("dry-run probe"),
                             "confirm": .string("DRY_RUN")
                         ]),
-                        sessionID: "ril-session-c"
+                        context: ToolDispatchContext(transportSessionId: "ril-session-c", origin: .local)
                     )
                     throw TestError.assertion("marker leaked across sessions")
                 } catch let error as ToolRouterError {

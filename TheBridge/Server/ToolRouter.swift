@@ -327,30 +327,6 @@ public actor ToolRouter {
             )
         }
 
-        if let sessionID = context.transportSessionId,
-           ToolSkillBindingRegistry.requiresManifestFetch(toolName),
-           !routingManifestSessionIDs.contains(sessionID) {
-            let binding = ToolSkillBindingRegistry.binding(for: toolName)
-            let governance = binding?.governanceSummary ?? "unregistered"
-            let duration = ContinuousClock.now - start
-            let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
-                + Double(duration.components.seconds) * 1000.0
-            await auditLog.append(AuditEntry(
-                timestamp: Date(),
-                toolName: toolName,
-                tier: tool.tier,
-                inputSummary: stringifySummary(arguments),
-                outputSummary: "REJECTED: routing manifest required (\(governance))",
-                durationMs: ms,
-                approvalStatus: .rejected,
-                transportSessionId: sessionID
-            ))
-            throw ToolRouterError.routingManifestRequired(
-                toolName: toolName,
-                governingSkills: governance
-            )
-        }
-
         // F1: Resolve effective tier — user override takes precedence over registered default.
         // Overrides are stored as [String: String] in UserDefaults by ToolRegistryView.
         //
@@ -422,6 +398,37 @@ public actor ToolRouter {
                     "message": .string("Remote callers must call bridge_initialize before invoking notify/request-tier tools.")
                 ])
             }
+        }
+
+        // PKT-1094: per-tool routing manifest gate. Runs AFTER the broker's
+        // origin-level gates above (control-plane block, governed-remote-session)
+        // so a foundational "you're not initialized" rejection always takes
+        // precedence over this finer-grained "you haven't fetched THIS tool's
+        // governing skill route" one — calling bridge_initialize satisfies both
+        // at once (it is itself a manifest-marker tool), so there is no case
+        // where reordering costs a legitimate caller an extra round trip.
+        if let sessionID = context.transportSessionId,
+           ToolSkillBindingRegistry.requiresManifestFetch(toolName),
+           !routingManifestSessionIDs.contains(sessionID) {
+            let binding = ToolSkillBindingRegistry.binding(for: toolName)
+            let governance = binding?.governanceSummary ?? "unregistered"
+            let duration = ContinuousClock.now - start
+            let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
+                + Double(duration.components.seconds) * 1000.0
+            await auditLog.append(AuditEntry(
+                timestamp: Date(),
+                toolName: toolName,
+                tier: tool.tier,
+                inputSummary: stringifySummary(arguments),
+                outputSummary: "REJECTED: routing manifest required (\(governance))",
+                durationMs: ms,
+                approvalStatus: .rejected,
+                transportSessionId: sessionID
+            ))
+            throw ToolRouterError.routingManifestRequired(
+                toolName: toolName,
+                governingSkills: governance
+            )
         }
 
         // SecurityGate enforcement (async for request-tier approvals)

@@ -2090,6 +2090,22 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3126}"
 # (BridgeInitializeTests.swift: remote origin -> "online"/FULL, local/no-
 # context -> "local"). Measured 3128 passed, 0 failed. FLOOR raised 3126 -> 3128.
 FLOOR="${BRIDGE_TEST_FLOOR:-3128}"
+# PR #87 reconciliation (2026-07-11): merged codex/ship-v4-packet-closeout's
+# Routing Integrity Layer (PKT-1094 — ToolSkillBindingRegistry, per-tool
+# manifest-fetch gate, HandshakeReceipt.routingIntegrity, schemaVersion 2->3)
+# onto post-w1-broker main. Real conflicts in ToolRouter.swift/AuditLog.swift/
+# SSETransport.swift/ServerManager.swift over the same dispatch signature both
+# sides touched (flat sessionID: String? vs w1-broker's ToolDispatchContext) —
+# resolved by keeping context-based dispatch everywhere and threading RIL's
+# manifest gate through it. One real (non-mechanical) test failure surfaced
+# after conflicts compiled clean: the manifest gate fired before w1-broker's
+# governed-session gate for messages_send, producing the wrong rejection
+# reason for an ungoverned remote session. Fixed by moving the manifest-gate
+# check to run after the broker's origin-level gates, not by changing the
+# test. +10 tests (RoutingIntegrityLayerTests.swift). Measured 3138 passed,
+# 0 failed on the merged tree (3128 + 10, no other drift). FLOOR raised
+# 3128 -> 3138.
+FLOOR="${BRIDGE_TEST_FLOOR:-3138}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the
