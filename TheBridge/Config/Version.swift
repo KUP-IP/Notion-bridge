@@ -282,7 +282,23 @@ public enum AppVersion {
     ///   preference so full tool parity does not weaken initialization policy.
     ///   +3 regression tests. staticFeatureModuleToolCount unchanged (201).
     ///   test-floor 3128 -> 3131.
-    public static let build = "80"
+    /// v3.9.9: 80 -> 81 -- build-only merge batch, no marketing bump (same
+    ///   reserve-4.0.0-for-sale-ready operator decision as 78->79 applies).
+    ///   Landed: PR #87 (Routing Integrity Layer / PKT-1094 -- per-tool
+    ///   skill-governance bindings + manifest-fetch dispatch gate, reconciled
+    ///   with the Wave 1 broker's origin gates); PR #99 (PKT-1116 --
+    ///   build-provenance stamping + Accessibility/CloudStatus/Session
+    ///   diagnostics); PR #101 (this branch's own build-80 remote
+    ///   control-plane default flip, re-reconciled onto post-PR-#87
+    ///   ToolRouter after #99 landed first -- a real three-way test-floor
+    ///   union, not a simple rebase); plus 4 doc-only corrections (#97 cloud-
+    ///   oauth-readiness record, #98 counter-collision CI guard, #100 /health
+    ///   tunnel-scoping, #102 NL-2 row 18 job/snippets locality).
+    ///   staticFeatureModuleToolCount 201 -> 202 (PR #99's audit_recent).
+    ///   test-floor 3131 -> 3149 (final reconciled count across all three
+    ///   independent test additions on the shared 3128 base: +3 Wave1Broker,
+    ///   +8 PKT-1116, +10 RoutingIntegrityLayer).
+    public static let build = "81"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
