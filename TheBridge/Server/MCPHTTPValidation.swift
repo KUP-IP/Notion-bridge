@@ -48,15 +48,19 @@ public enum MCPHTTPValidation {
     ///   against the static token would 403 every valid connector token (the
     ///   local↔cloud coexistence collision). Origin/Accept/Content-Type/
     ///   protocol/session checks still apply.
-    static func streamableHTTPPipeline(ssePort: Int, connectorAuthed: Bool = false) -> StandardValidationPipeline {
+    static func streamableHTTPPipeline(
+        ssePort: Int,
+        connectorAuthed: Bool = false,
+        authFailureAudit: TunnelAuthFailureAudit = .shared
+    ) -> StandardValidationPipeline {
         var validators: [any HTTPRequestValidator] = []
 
         if !connectorAuthed {
             switch streamableHTTPBearerPhase() {
             case .remoteTunnelMissingToken:
-                validators.append(MCPRemoteTunnelMissingBearerValidator())
+                validators.append(MCPRemoteTunnelMissingBearerValidator(audit: authFailureAudit))
             case .bearerRequired(let secret):
-                validators.append(MCPBearerTokenValidator(expectedToken: secret))
+                validators.append(MCPBearerTokenValidator(expectedToken: secret, audit: authFailureAudit))
             case .none:
                 break
             }
@@ -166,18 +170,39 @@ public enum MCPHTTPValidation {
         }
         return lengthMatch && mismatch == 0
     }
+
+    /// Uniform public auth-failure response. Only the correlation id crosses
+    /// the tunnel boundary; callers resolve the detailed reason locally.
+    public static func coarseAuthFailureResponse(
+        statusCode: Int,
+        correlationID: String,
+        extraHeaders: [String: String] = [:],
+        sessionID: String? = nil
+    ) -> HTTPResponse {
+        .error(
+            statusCode: statusCode,
+            .invalidRequest("auth_failed correlation_id=\(correlationID)"),
+            sessionID: sessionID,
+            extraHeaders: extraHeaders
+        )
+    }
 }
 
     // MARK: - Remote tunnel requires bearer (fail closed)
 
 private struct MCPRemoteTunnelMissingBearerValidator: HTTPRequestValidator {
+    let audit: TunnelAuthFailureAudit
+
     func validate(_ request: HTTPRequest, context: HTTPValidationContext) -> HTTPResponse? {
         guard context.httpMethod == "POST" else { return nil }
-        return .error(
+        let correlationID = audit.record(.staticBearerMismatch)
+        return MCPHTTPValidation.coarseAuthFailureResponse(
             statusCode: 401,
-            .invalidRequest(
-                "Unauthorized: remote tunnel is configured but no MCP bearer token is set. Add a token in Settings → Connections → Remote Access and set Authorization: Bearer in your MCP client."
-            ),
+            correlationID: correlationID,
+            extraHeaders: [
+                HTTPHeaderName.wwwAuthenticate:
+                    "Bearer error=\"invalid_token\", error_description=\"auth_failed\", correlation_id=\"\(correlationID)\""
+            ],
             sessionID: context.sessionID
         )
     }
@@ -187,6 +212,7 @@ private struct MCPRemoteTunnelMissingBearerValidator: HTTPRequestValidator {
 
 private struct MCPBearerTokenValidator: HTTPRequestValidator {
     let expectedToken: String
+    let audit: TunnelAuthFailureAudit
 
     func validate(_ request: HTTPRequest, context: HTTPValidationContext) -> HTTPResponse? {
         guard context.httpMethod == "POST" else { return nil }
@@ -194,9 +220,14 @@ private struct MCPBearerTokenValidator: HTTPRequestValidator {
         guard let auth = request.header("Authorization"),
               auth.hasPrefix("Bearer ")
         else {
-            return .error(
+            let correlationID = audit.record(.staticBearerMismatch)
+            return MCPHTTPValidation.coarseAuthFailureResponse(
                 statusCode: 401,
-                .invalidRequest("Unauthorized: missing Bearer token for MCP HTTP"),
+                correlationID: correlationID,
+                extraHeaders: [
+                    HTTPHeaderName.wwwAuthenticate:
+                        "Bearer error=\"invalid_token\", error_description=\"auth_failed\", correlation_id=\"\(correlationID)\""
+                ],
                 sessionID: context.sessionID
             )
         }
@@ -206,9 +237,14 @@ private struct MCPBearerTokenValidator: HTTPRequestValidator {
 
         // SEC-01: Constant-time comparison to prevent timing attacks on bearer token
         guard MCPHTTPValidation.constantTimeEqual(String(token), expectedToken) else {
-            return .error(
+            let correlationID = audit.record(.staticBearerMismatch)
+            return MCPHTTPValidation.coarseAuthFailureResponse(
                 statusCode: 403,
-                .invalidRequest("Forbidden: invalid MCP bearer token"),
+                correlationID: correlationID,
+                extraHeaders: [
+                    HTTPHeaderName.wwwAuthenticate:
+                        "Bearer error=\"invalid_token\", error_description=\"auth_failed\", correlation_id=\"\(correlationID)\""
+                ],
                 sessionID: context.sessionID
             )
         }

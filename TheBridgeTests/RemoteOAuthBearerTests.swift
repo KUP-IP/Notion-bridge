@@ -505,36 +505,38 @@ func runRemoteOAuthBearerTests() async {
         strictScopes: true
     )
 
-    await test("AuthContext: WWW-Authenticate references the RFC 9728 PRM doc") {
-        let h = authCtx.wwwAuthenticateValue(for: .missingBearer)
+    let challengeCorrelationID = "corr-w2a-test"
+
+    await test("AuthContext: coarse WWW-Authenticate references the RFC 9728 PRM doc") {
+        let h = authCtx.wwwAuthenticateValue(correlationID: challengeCorrelationID)
         try expect(h.hasPrefix("Bearer "), "must be a Bearer challenge: \(h)")
         try expect(h.contains("resource_metadata=\"\(prmURL)\""), "must point at PRM: \(h)")
     }
 
-    await test("AuthContext: missing-bearer → error=\"invalid_request\", no error_description") {
-        let h = authCtx.wwwAuthenticateValue(for: .missingBearer)
-        try expect(h.contains("error=\"invalid_request\""), "got \(h)")
-        try expect(!h.contains("error_description"), "plain challenge omits description: \(h)")
-    }
-
-    await test("AuthContext: invalid-token → error=\"invalid_token\" + error_description") {
-        let h = authCtx.wwwAuthenticateValue(for: .signatureInvalid)
+    await test("AuthContext: challenge is coarse and carries correlation id") {
+        let h = authCtx.wwwAuthenticateValue(correlationID: challengeCorrelationID)
         try expect(h.contains("error=\"invalid_token\""), "got \(h)")
-        try expect(h.contains("error_description="), "invalid token carries a description: \(h)")
+        try expect(h.contains("error_description=\"auth_failed\""), "got \(h)")
+        try expect(h.contains("correlation_id=\"\(challengeCorrelationID)\""), "got \(h)")
     }
 
-    await test("AuthContext: challenge value has no CR/LF/quote injection") {
-        let h = authCtx.wwwAuthenticateValue(for: .malformedToken("a\r\nb\"c"))
+    await test("AuthContext: challenge value has no CR/LF") {
+        let h = authCtx.wwwAuthenticateValue(correlationID: challengeCorrelationID)
         try expect(!h.contains("\r") && !h.contains("\n"), "header must be single-line: \(h)")
     }
 
-    await test("SSEServer.unauthorizedResponse: 401 + WWW-Authenticate header set") {
-        let resp = SSEServer.unauthorizedResponse(for: .missingBearer, auth: authCtx)
+    await test("SSEServer.unauthorizedResponse: coarse 401 + WWW-Authenticate header set") {
+        let resp = SSEServer.unauthorizedResponse(correlationID: challengeCorrelationID, auth: authCtx)
         try expect(resp.statusCode == 401, "expected 401, got \(resp.statusCode)")
         let wa = resp.headers.first { $0.key.lowercased() == "www-authenticate" }?.value
         try expect(wa != nil, "WWW-Authenticate header missing")
         try expect(wa?.contains("Bearer") == true, "challenge must be Bearer: \(wa ?? "nil")")
         try expect(wa?.contains(prmURL) == true, "challenge must reference PRM")
+        let body = String(data: resp.bodyData ?? Data(), encoding: .utf8) ?? ""
+        try expect(body.contains("auth_failed") && body.contains(challengeCorrelationID), "coarse body missing: \(body)")
+        for forbidden in ["expired", "issuer", "audience", "revoked", "static_bearer"] {
+            try expect(!body.contains(forbidden), "detailed reason leaked in tunnel body: \(body)")
+        }
     }
 
     await test("SSEServer.remoteOAuthReadiness distinguishes inactive, misconfigured, missing keys, ready") {
@@ -557,6 +559,257 @@ func runRemoteOAuthBearerTests() async {
         let ready = SSEServer.remoteOAuthReadiness(connectorAuth: authCtx, isMisconfigured: false)
         try expect(ready.ready && ready.status == "ready",
                    "configured auth context must report ready, got \(ready)")
+    }
+
+    // MARK: - W2A: coarse tunnel disclosure + local reason correlation
+
+    await test("W2A taxonomy maps typed OAuth failures onto the stable local vocabulary") {
+        try expect(TunnelAuthFailureReason(.expired) == .oauthExpired)
+        try expect(TunnelAuthFailureReason(.issuerMismatch(expected: "a", got: "b")) == .issuerMismatch)
+        try expect(TunnelAuthFailureReason(.audienceMismatch(expected: "a", got: ["b"])) == .issuerMismatch)
+        try expect(TunnelAuthFailureReason(.misconfigured) == .oauthInactive)
+        try expect(TunnelAuthFailureReason(.signatureInvalid) == .oauthRevoked)
+        try expect(Set(TunnelAuthFailureReason.allCases.map(\.rawValue)) == Set([
+            "oauth_expired", "issuer_mismatch", "oauth_inactive", "oauth_revoked", "static_bearer_mismatch"
+        ]))
+    }
+
+    await test("W2A tunnel failures are indistinguishable publicly and resolve locally by correlation id") {
+        let audit = TunnelAuthFailureAudit()
+        let diag = ConnectorAuthDiagnostics()
+        let auth = ConnectorAuthContext(
+            validator: validator(keys: keys.verifyKeys),
+            diagnostics: diag,
+            resourceMetadataURL: prmURL
+        )
+        let server = SSEServer(
+            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            onToolCall: {},
+            connectorAuth: auth,
+            authFailureAudit: audit
+        )
+        let expired = try await keys.sign(
+            iss: kIssuer, aud: kResource, scope: "openid",
+            exp: Date().addingTimeInterval(-3600)
+        )
+        let wrongIssuer = try await keys.sign(
+            iss: "https://wrong.example", aud: kResource, scope: "openid"
+        )
+        let cases: [(String, TunnelAuthFailureReason)] = [
+            (expired, .oauthExpired),
+            (wrongIssuer, .issuerMismatch),
+            ("not-a-jwt", .oauthRevoked),
+        ]
+        var correlations = Set<String>()
+        for (token, expectedReason) in cases {
+            let response = await server.handleHTTPRequest(HTTPRequest(
+                method: "POST",
+                headers: ["Cf-Ray": "w2a", "Authorization": "Bearer \(token)"],
+                body: nil
+            ))
+            try expect(response.statusCode == 401, "auth rejection must be 401, got \(response.statusCode)")
+            let body = String(data: response.bodyData ?? Data(), encoding: .utf8) ?? ""
+            try expect(body.contains("auth_failed") && body.contains("correlation_id="), "coarse body: \(body)")
+            for forbidden in TunnelAuthFailureReason.allCases.map(\.rawValue) {
+                try expect(!body.contains(forbidden), "detailed reason leaked publicly: \(body)")
+            }
+            guard let correlationID = body.components(separatedBy: "correlation_id=").last?
+                .split(whereSeparator: { $0 == "\"" || $0 == " " || $0 == "}" }).first.map(String.init),
+                  let record = audit.record(correlationID: correlationID)
+            else { throw TestError.assertion("correlation id did not resolve locally: \(body)") }
+            try expect(record.reason == expectedReason,
+                       "correlation \(correlationID) mapped to \(record.reason), expected \(expectedReason)")
+            correlations.insert(correlationID)
+        }
+        try expect(correlations.count == cases.count, "each rejection needs a unique correlation id")
+        let localTranscript = await diag.capturedText()
+        for reason in ["oauth_expired", "issuer_mismatch", "oauth_revoked"] {
+            try expect(localTranscript.contains("reason=\(reason)"), "local audit missing \(reason): \(localTranscript)")
+        }
+        try expect(!localTranscript.contains(expired) && !localTranscript.contains(wrongIssuer),
+                   "local audit must never store JWT material")
+    }
+
+    await test("W2A OAuth-authenticated tunnel request skips a configured legacy static bearer") {
+        let defaults = UserDefaults.standard
+        let previousTunnel = defaults.string(forKey: "tunnelURL")
+        let previousBearer = defaults.string(forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey)
+        defaults.set("https://mcp.example.com", forKey: "tunnelURL")
+        defaults.set("legacy-static-secret", forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey)
+        defer {
+            if let previousTunnel { defaults.set(previousTunnel, forKey: "tunnelURL") }
+            else { defaults.removeObject(forKey: "tunnelURL") }
+            if let previousBearer { defaults.set(previousBearer, forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey) }
+            else { defaults.removeObject(forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey) }
+        }
+        let server = SSEServer(
+            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            onToolCall: {}, connectorAuth: authCtx
+        )
+        let oauthJWT = try await keys.sign(iss: kIssuer, aud: kResource, scope: "openid")
+        let response = await server.handleHTTPRequest(HTTPRequest(
+            method: "POST",
+            headers: ["Cf-Ray": "w2a", "Authorization": "Bearer \(oauthJWT)"],
+            body: Data(#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#.utf8)
+        ))
+        try expect(response.statusCode == 200,
+                   "valid OAuth JWT must dispatch even when a different static bearer exists; got \(response.statusCode)")
+    }
+
+    await test("W2A live curl captures stay coarse and correlate to local reasons") {
+        let defaults = UserDefaults.standard
+        let previousTunnel = defaults.string(forKey: "tunnelURL")
+        let previousBearer = defaults.string(forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey)
+        defaults.set("https://mcp.example.com", forKey: "tunnelURL")
+        defaults.set("legacy-static-secret", forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey)
+        defer {
+            if let previousTunnel { defaults.set(previousTunnel, forKey: "tunnelURL") }
+            else { defaults.removeObject(forKey: "tunnelURL") }
+            if let previousBearer { defaults.set(previousBearer, forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey) }
+            else { defaults.removeObject(forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey) }
+        }
+
+        let audit = TunnelAuthFailureAudit()
+        let diagnostics = ConnectorAuthDiagnostics()
+        let liveAuth = ConnectorAuthContext(
+            validator: validator(keys: keys.verifyKeys),
+            diagnostics: diagnostics,
+            resourceMetadataURL: prmURL
+        )
+        let liveRouter = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let port = 19_000 + Int(ProcessInfo.processInfo.processIdentifier % 500)
+        let liveServer = SSEServer(
+            port: port,
+            router: liveRouter,
+            onToolCall: {},
+            connectorAuth: liveAuth,
+            authFailureAudit: audit,
+            sessionStore: SessionPersistenceStore(
+                storeURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("pkt-1122-curl-sessions-\(UUID().uuidString).json")
+            )
+        )
+        let serverTask = Task { try await liveServer.start() }
+        try await Task.sleep(for: .milliseconds(250))
+
+        func curl(_ bearer: String, body: String) throws -> String {
+            let process = Process()
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+            process.arguments = [
+                "--silent", "--show-error", "--include",
+                "--request", "POST", "http://127.0.0.1:\(port)/mcp",
+                "--header", "Cf-Ray: pkt-1122-evidence",
+                "--header", "Content-Type: application/json",
+                "--header", "Authorization: Bearer \(bearer)",
+                "--data-binary", body,
+            ]
+            process.standardOutput = stdout
+            process.standardError = stderr
+            try process.run()
+            process.waitUntilExit()
+            let out = stdout.fileHandleForReading.readDataToEndOfFile()
+            let err = stderr.fileHandleForReading.readDataToEndOfFile()
+            guard process.terminationStatus == 0 else {
+                throw TestError.assertion(
+                    "curl failed: \(String(data: err, encoding: .utf8) ?? "unknown")"
+                )
+            }
+            return String(data: out, encoding: .utf8) ?? ""
+        }
+
+        func correlationID(in raw: String) -> String? {
+            raw.components(separatedBy: "correlation_id=").last?
+                .split(whereSeparator: { $0 == "\"" || $0 == " " || $0 == "}" || $0 == "\r" || $0 == "\n" })
+                .first.map(String.init)
+        }
+
+        let expiredJWT = try await keys.sign(
+            iss: kIssuer,
+            aud: kResource,
+            scope: "openid",
+            exp: Date().addingTimeInterval(-3600)
+        )
+        let validJWT = try await keys.sign(iss: kIssuer, aud: kResource, scope: "openid")
+        let requestBody = #"{"jsonrpc":"2.0","id":1122,"method":"tools/list"}"#
+        let expiredRaw = try curl(expiredJWT, body: requestBody)
+        let staticRaw = try curl("wrong-static-bearer", body: requestBody)
+        let validRaw = try curl(validJWT, body: requestBody)
+
+        await liveServer.stop()
+        _ = await serverTask.result
+
+        guard let expiredCorrelation = correlationID(in: expiredRaw),
+              let staticCorrelation = correlationID(in: staticRaw)
+        else {
+            throw TestError.assertion("curl responses did not carry correlation ids")
+        }
+        try expect(expiredRaw.contains("HTTP/1.1 401"))
+        try expect(staticRaw.contains("HTTP/1.1 401"))
+        try expect(expiredRaw.contains("auth_failed") && staticRaw.contains("auth_failed"))
+        try expect(validRaw.contains("HTTP/1.1 200"), "valid OAuth curl did not dispatch: \(validRaw)")
+        for publicResponse in [expiredRaw, staticRaw] {
+            for forbidden in TunnelAuthFailureReason.allCases.map(\.rawValue) {
+                try expect(!publicResponse.contains(forbidden), "detail leaked in curl response: \(publicResponse)")
+            }
+        }
+        try expect(audit.record(correlationID: expiredCorrelation)?.reason == .oauthExpired)
+        try expect(audit.record(correlationID: staticCorrelation)?.reason == .staticBearerMismatch)
+
+        let evidence = """
+        # PKT-1122 W2A raw tunnel-facing curl captures
+
+        ## Expired OAuth JWT (secret omitted)
+        \(expiredRaw.trimmingCharacters(in: .whitespacesAndNewlines))
+        local_audit correlation_id=\(expiredCorrelation) reason=oauth_expired
+
+        ## Bad legacy static bearer (secret omitted)
+        \(staticRaw.trimmingCharacters(in: .whitespacesAndNewlines))
+        local_audit correlation_id=\(staticCorrelation) reason=static_bearer_mismatch
+
+        ## Valid OAuth JWT while legacy static bearer is configured (secret omitted)
+        \(validRaw.trimmingCharacters(in: .whitespacesAndNewlines))
+        local_audit no auth failure; OAuth request dispatched
+        """
+        let evidenceURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pkt-1122-w2a-curl-evidence.md")
+        try evidence.data(using: .utf8)?.write(to: evidenceURL, options: .atomic)
+        print("    raw-curl evidence: \(evidenceURL.path)")
+    }
+
+    await test("W2A refreshed OAuth token for the same principal keeps a long-lived connector session usable") {
+        let binding = ConnectorSessionBinding()
+        let auth = ConnectorAuthContext(
+            validator: validator(keys: keys.verifyKeys),
+            sessionBinding: binding,
+            resourceMetadataURL: prmURL
+        )
+        let server = SSEServer(
+            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            onToolCall: {}, connectorAuth: auth
+        )
+        let beforeRefresh = try await keys.sign(
+            iss: kIssuer, aud: kResource, sub: "stable-user", scope: "openid"
+        )
+        let afterRefresh = try await keys.sign(
+            iss: kIssuer, aud: kResource, sub: "stable-user", scope: "openid",
+            exp: Date().addingTimeInterval(600)
+        )
+        let sessionID = "w2a-refresh-session"
+        _ = await server.handleHTTPRequest(HTTPRequest(
+            method: "POST",
+            headers: ["Cf-Ray": "w2a", "Authorization": "Bearer \(beforeRefresh)", "Mcp-Session-Id": sessionID],
+            body: Data(#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#.utf8)
+        ))
+        let response = await server.handleHTTPRequest(HTTPRequest(
+            method: "POST",
+            headers: ["Cf-Ray": "w2a", "Authorization": "Bearer \(afterRefresh)", "Mcp-Session-Id": sessionID],
+            body: Data(#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#.utf8)
+        ))
+        try expect(response.statusCode == 200,
+                   "same-principal refreshed token must keep session usable; got \(response.statusCode)")
+        try expect(await binding.boundPrincipal(for: sessionID)?.subject == "stable-user")
     }
 
     await test("SSEServer.toolCallTarget: extracts tools/call tool name") {

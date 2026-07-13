@@ -170,6 +170,9 @@ public actor SSEServer {
     /// scope are enforced ONLY when this is non-nil AND only on the
     /// Streamable-HTTP connector funnel (`handleHTTPRequest`).
     private let connectorAuth: ConnectorAuthContext?
+    /// Local-only correlation ledger for every tunnel authentication failure.
+    /// Detailed reasons never cross the tunnel response boundary.
+    private let authFailureAudit: TunnelAuthFailureAudit
 
     /// ITEM [session]: durable snapshot of active session ids + minimal
     /// context, persisted across app restart / `make install`. Lets a returning
@@ -251,6 +254,7 @@ public actor SSEServer {
         maxHTTPSessions: Int = 48,
         toolAllowlist: Set<String>? = nil,
         connectorAuth: ConnectorAuthContext? = nil,
+        authFailureAudit: TunnelAuthFailureAudit = .shared,
         sessionStore: SessionPersistenceStore = .shared
     ) {
         let normalizedSessionTimeout = sessionTimeout.isInfinite ? .infinity : max(30, sessionTimeout)
@@ -267,6 +271,7 @@ public actor SSEServer {
         self.maxHTTPSessions = max(8, maxHTTPSessions)
         self.toolAllowlist = toolAllowlist
         self.connectorAuth = connectorAuth
+        self.authFailureAudit = authFailureAudit
         self.sessionStore = sessionStore
     }
 
@@ -508,6 +513,17 @@ public actor SSEServer {
         return RemoteOAuthReadiness(ready: true, status: "ready")
     }
 
+    /// Operator-facing auth-mode diagnosis. This is served only on the local
+    /// health/settings surface; tunnel rejection bodies stay coarse.
+    public static func remoteAuthMode(connectorAuth: ConnectorAuthContext?) -> String {
+        if connectorAuth != nil { return "oauth" }
+        if MCPHTTPValidation.isRemoteTunnelActive(),
+           !MCPHTTPValidation.resolveMCPBearerToken().isEmpty {
+            return "static_bearer"
+        }
+        return "inactive"
+    }
+
     /// Build the JSON health response.
     /// Returns server-local health plus remote OAuth readiness. `status=running`
     /// only means the local HTTP process is alive; `remoteOAuthReady` states
@@ -544,6 +560,7 @@ public actor SSEServer {
             "sessionsPersisted": persistedCount,
             "sessionsResumeSignaled": totalSessionsResumeSignaled,
             "priorRunEndedCleanly": priorRunClean,
+            "remoteAuthMode": Self.remoteAuthMode(connectorAuth: connectorAuth),
             "remoteOAuthReady": oauthReadiness.ready,
             "remoteOAuthStatus": oauthReadiness.status
         ]
@@ -638,25 +655,52 @@ public actor SSEServer {
                     origin: .remote
                 )
             } catch let err as BearerValidationError {
-                await auth.diagnostics.record(
-                    outcome: "bearer.rejected",
-                    detail: "reason=\(err.wwwAuthenticateError)"
+                let reason = Self.tunnelAuthFailureReason(
+                    for: err,
+                    authorizationHeader: authHeader
                 )
-                return Self.unauthorizedResponse(for: err, auth: auth)
-            } catch {
+                let correlationID = authFailureAudit.record(reason)
                 await auth.diagnostics.record(
-                    outcome: "bearer.rejected",
-                    detail: "reason=opaque"
+                    outcome: "auth.failed",
+                    detail: "correlation_id=\(correlationID) reason=\(reason.rawValue)"
+                )
+                return Self.unauthorizedResponse(correlationID: correlationID, auth: auth)
+            } catch {
+                let correlationID = authFailureAudit.record(.oauthRevoked)
+                await auth.diagnostics.record(
+                    outcome: "auth.failed",
+                    detail: "correlation_id=\(correlationID) reason=oauth_revoked"
                 )
                 return Self.unauthorizedResponse(
-                    for: .malformedToken("\(error)"), auth: auth
+                    correlationID: correlationID, auth: auth
                 )
             }
         } else if Self.isRemoteTunnelRequest(request) {
-            return Self.remoteOAuthInactiveResponse()
+            let correlationID = authFailureAudit.record(.oauthInactive)
+            return Self.remoteOAuthInactiveResponse(correlationID: correlationID)
         }
 
         return await processStreamableHTTP(request, origin: requestOrigin)
+    }
+
+    /// Keep opaque legacy bearer failures distinct in the local audit while
+    /// preserving OAuth precedence. Once connector auth is active, an opaque
+    /// bearer is never accepted as the legacy static token; it is diagnosed
+    /// locally as a static-bearer mismatch and receives the same coarse tunnel
+    /// response as every OAuth failure.
+    public nonisolated static func tunnelAuthFailureReason(
+        for error: BearerValidationError,
+        authorizationHeader: String?
+    ) -> TunnelAuthFailureReason {
+        if case .malformedToken = error,
+           !MCPHTTPValidation.resolveMCPBearerToken().isEmpty,
+           let token = ConnectorBearerValidator.bearerToken(
+               fromAuthorizationHeader: authorizationHeader
+           ),
+           token.split(separator: ".", omittingEmptySubsequences: false).count != 3 {
+            return .staticBearerMismatch
+        }
+        return TunnelAuthFailureReason(error)
     }
 
     /// The original (pre-S2) Streamable-HTTP session handling, unchanged.
@@ -727,14 +771,14 @@ public actor SSEServer {
     /// challenge for a failed/missing connector bearer. Pure given its
     /// inputs (static) so it is unit-testable without a live server.
     public static func unauthorizedResponse(
-        for error: BearerValidationError,
+        correlationID: String,
         auth: ConnectorAuthContext
     ) -> HTTPResponse {
-        .error(
+        MCPHTTPValidation.coarseAuthFailureResponse(
             statusCode: 401,
-            .invalidRequest("Unauthorized: \(error.challengeDescription)"),
+            correlationID: correlationID,
             extraHeaders: [
-                HTTPHeaderName.wwwAuthenticate: auth.wwwAuthenticateValue(for: error)
+                HTTPHeaderName.wwwAuthenticate: auth.wwwAuthenticateValue(correlationID: correlationID)
             ]
         )
     }
@@ -771,13 +815,10 @@ public actor SSEServer {
     /// the cloud/OAuth startup invariant failed (for example missing
     /// BRIDGE_ENABLE_HTTP / config at process launch). Fail loudly so remote
     /// clients never see a green local session backed by the wrong auth model.
-    public static func remoteOAuthInactiveResponse() -> HTTPResponse {
-        .error(
+    public static func remoteOAuthInactiveResponse(correlationID: String) -> HTTPResponse {
+        MCPHTTPValidation.coarseAuthFailureResponse(
             statusCode: 503,
-            .invalidRequest(
-                "Remote OAuth is not ready: connector auth is inactive for this Bridge process. "
-                + "Verify BRIDGE_ENABLE_HTTP/config, OAuth issuer/resource/JWKS, and relaunch The Bridge."
-            )
+            correlationID: correlationID
         )
     }
 
@@ -1122,7 +1163,11 @@ public actor SSEServer {
         // tunnel still requires its bearer. (`connectorAuthed` already implies a
         // verified caller, so it is exempt regardless.)
         let bearerExempt = connectorAuthed || !Self.isRemoteTunnelRequest(request)
-        let validationPipeline = MCPHTTPValidation.streamableHTTPPipeline(ssePort: port, connectorAuthed: bearerExempt)
+        let validationPipeline = MCPHTTPValidation.streamableHTTPPipeline(
+            ssePort: port,
+            connectorAuthed: bearerExempt,
+            authFailureAudit: authFailureAudit
+        )
 
         let transport = StatefulHTTPServerTransport(
             sessionIDGenerator: FixedIDGenerator(id: sessionID),

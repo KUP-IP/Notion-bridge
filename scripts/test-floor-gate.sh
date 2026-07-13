@@ -2172,6 +2172,13 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3146}"
 # +10) -> 3128 + 3 + 8 + 10 = 3149 expected. Measured 3149 passed, 0 failed on
 # the fully-merged tree. FLOOR raised 3146 -> 3149.
 FLOOR="${BRIDGE_TEST_FLOOR:-3149}"
+# PKT-1122 W2A auth-error clarity (2026-07-13): +7 tests cover the
+# stable local failure taxonomy, publicly indistinguishable correlated tunnel
+# responses, actual tunnel-simulated curl captures with local audit mappings,
+# OAuth precedence over a configured legacy static bearer, and refreshed-token
+# continuity for an established connector session. Measured 3156 passed, 0
+# failed on the current origin/main-based worktree. FLOOR raised 3149 -> 3156.
+FLOOR="${BRIDGE_TEST_FLOOR:-3156}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

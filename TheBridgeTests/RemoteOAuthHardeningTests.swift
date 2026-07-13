@@ -420,7 +420,7 @@ func runRemoteOAuthHardeningTests() async {
         // Sanity: the sweep really exercised ≥5 outcomes.
         let outcomes = Set((await diag.captured()).map(\.outcome))
         try expect(outcomes.contains("bearer.accepted"), "missing bearer.accepted outcome")
-        try expect(outcomes.contains("bearer.rejected"), "missing bearer.rejected outcome")
+        try expect(outcomes.contains("auth.failed"), "missing auth.failed outcome")
         try expect(outcomes.contains("scope.denied"), "missing scope.denied outcome")
         try expect(outcomes.contains("step-up.required"), "missing step-up.required outcome")
     }

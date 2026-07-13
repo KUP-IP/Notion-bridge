@@ -196,11 +196,13 @@ func runRemoteOAuthOriginGatingTests() async {
         try expect(resp.statusCode == 401, "tunnel with no token must 401, got \(resp.statusCode)")
     }
 
-    await test("OriginGate: REMOTE + connectorAuth nil ⇒ 503 remote OAuth inactive") {
+    await test("OriginGate: REMOTE + connectorAuth nil ⇒ coarse 503 + local oauth_inactive mapping") {
+        let audit = TunnelAuthFailureAudit()
         let s = SSEServer(
             router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
             onToolCall: {},
-            connectorAuth: nil
+            connectorAuth: nil,
+            authFailureAudit: audit
         )
         let resp = await s.handleHTTPRequest(HTTPRequest(
             method: "POST",
@@ -210,8 +212,15 @@ func runRemoteOAuthOriginGatingTests() async {
         try expect(resp.statusCode == 503,
                    "remote tunnel traffic must fail closed when connector auth is inactive, got \(resp.statusCode)")
         let body = String(data: resp.bodyData ?? Data(), encoding: .utf8) ?? ""
-        try expect(body.contains("Remote OAuth is not ready"),
-                   "503 body must name remote OAuth readiness, got: \(body)")
+        try expect(body.contains("auth_failed") && body.contains("correlation_id="),
+                   "503 body must stay coarse, got: \(body)")
+        try expect(!body.contains("oauth_inactive") && !body.contains("Remote OAuth"),
+                   "503 body leaked the local detailed reason: \(body)")
+        guard let correlationID = body.components(separatedBy: "correlation_id=").last?
+            .split(whereSeparator: { $0 == "\"" || $0 == " " || $0 == "}" }).first.map(String.init),
+              let record = audit.record(correlationID: correlationID)
+        else { throw TestError.assertion("coarse response did not resolve in local audit: \(body)") }
+        try expect(record.reason == .oauthInactive, "local reason mismatch: \(record.reason)")
     }
 
     await test("OriginGate: REMOTE + arbitrary non-JWT bearer ⇒ 401 (no static-bearer bypass)") {

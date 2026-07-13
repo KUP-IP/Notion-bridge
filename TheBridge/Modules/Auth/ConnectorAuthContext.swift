@@ -66,20 +66,14 @@ public struct ConnectorAuthContext: Sendable {
         self.strictScopes = strictScopes
     }
 
-    /// RFC 6750 §3 `WWW-Authenticate` header value for a rejected /
-    /// missing bearer on a connector request. Always references the PRM
-    /// document (RFC 9728 §5.1) so the client can bootstrap discovery.
-    public func wwwAuthenticateValue(for error: BearerValidationError) -> String {
-        var params = [
-            "error=\"\(error.wwwAuthenticateError)\"",
-            "resource_metadata=\"\(resourceMetadataURL)\"",
-        ]
-        if case .missingBearer = error {
-            // No description for a plain missing-credentials challenge.
-        } else {
-            params.insert("error_description=\"\(error.challengeDescription)\"", at: 1)
-        }
-        return "Bearer " + params.joined(separator: ", ")
+    /// Coarse RFC 6750 challenge for tunnel callers. Detailed failure reasons
+    /// stay in `TunnelAuthFailureAudit`; the public challenge intentionally
+    /// does not distinguish expiration, issuer/audience, inactive OAuth, or
+    /// revoked/absent credentials.
+    public func wwwAuthenticateValue(correlationID: String) -> String {
+        "Bearer error=\"invalid_token\", error_description=\"auth_failed\", "
+            + "resource_metadata=\"\(resourceMetadataURL)\", "
+            + "correlation_id=\"\(correlationID)\""
     }
 }
 

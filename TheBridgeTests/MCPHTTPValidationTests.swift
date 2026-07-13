@@ -214,7 +214,9 @@ func runMCPHTTPValidationTests() async {
         try expect(tunnelResp.statusCode == 503,
                    "tunnel must fail remote OAuth readiness without connector auth, got \(tunnelResp.statusCode)")
         let body = String(data: tunnelResp.bodyData ?? Data(), encoding: .utf8) ?? ""
-        try expect(body.contains("Remote OAuth is not ready"),
-                   "503 body must explain OAuth readiness, got: \(body)")
+        try expect(body.contains("auth_failed") && body.contains("correlation_id="),
+                   "503 body must stay coarse and correlated, got: \(body)")
+        try expect(!body.contains("Remote OAuth") && !body.contains("oauth_inactive"),
+                   "tunnel body must not disclose the detailed readiness reason, got: \(body)")
     }
 }
