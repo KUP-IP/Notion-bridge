@@ -389,7 +389,7 @@ func runEndToEndTests() async {
         try expect(payment.isEmpty, "PaymentModule removed in v3.7.11 — expected 0 payment tools")
 
         let connections = await router.registrations(forModule: "connections")
-        try expect(connections.count == 5, "ConnectionsModule: expected 5")
+        try expect(connections.count == 6, "ConnectionsModule: expected 6")
 
         let scheduler = await router.registrations(forModule: "scheduler")
         // v3.7.11 resurface: jobs_pause_all / jobs_resume_all deprecation aliases

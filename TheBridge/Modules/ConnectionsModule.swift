@@ -4,7 +4,11 @@ import MCP
 public enum ConnectionsModule {
     public static let moduleName = "connections"
 
-    public static func register(on router: ToolRouter) async {
+    public static func register(
+        on router: ToolRouter,
+        observability: ConnectionRuntimeObservability = .shared,
+        resetService: ConnectionSessionResetService = .shared
+    ) async {
         await router.register(ToolRegistration(
             name: "connections_list",
             module: moduleName,
@@ -30,9 +34,11 @@ public enum ConnectionsModule {
                     kind: kind,
                     validateLive: true
                 )
+                let runtime = await observability.snapshot()
                 return .object([
                     "count": .int(connections.count),
-                    "connections": .array(connections.map(connectionValue))
+                    "connections": .array(connections.map(connectionValue)),
+                    "runtime": runtimeValue(runtime)
                 ])
             }
         ))
@@ -160,6 +166,79 @@ public enum ConnectionsModule {
                 ])
             }
         ))
+
+        await router.register(ToolRegistration(
+            name: "connections_reset",
+            module: moduleName,
+            tier: .request,
+            neverAutoApprove: true,
+            description: "Reset and re-run canonical Bridge initialization for the current LOCAL broker session. Rotates the governance record while keeping the response-capable transport alive; safe to repeat. Remote tunnel callers are always refused by the control-plane policy.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([:]),
+                "required": .array([])
+            ]),
+            metadata: ToolMetadata(
+                title: "Reset Local Connection Session",
+                whenToUse: ["Recover a local MCP session whose governance state is stale without restarting The Bridge."],
+                whenNotToUse: ["Changing a third-party client's reconnect URL or resetting a remote tunnel session."],
+                relatedTools: ["connections_list", "bridge_initialize", "session_info"]
+            ),
+            handler: { _ in
+                let context = ToolDispatchContext.current ?? .localDefault
+                let receipt = try await resetService.reset(context: context)
+                var value: [String: Value] = [
+                    "ok": .bool(true),
+                    "transportSessionId": .string(receipt.transportSessionId),
+                    "brokerSessionId": .string(receipt.brokerSessionId),
+                    "governed": .bool(receipt.governed),
+                    "idempotent": .bool(receipt.idempotent),
+                    "transportKeptAlive": .bool(true),
+                    "clientRedialRequired": .bool(false)
+                ]
+                value["previousBrokerSessionId"] = receipt.previousBrokerSessionId.map(Value.string) ?? .null
+                return .object(value)
+            }
+        ))
+    }
+
+    /// Stable redacted projection shared by the MCP response and focused tests.
+    /// The snapshot type has no raw credential field; this serializer likewise
+    /// emits only derived auth/session diagnostics.
+    public static func runtimeValue(_ snapshot: ConnectionRuntimeSnapshot) -> Value {
+        let now = Date()
+        let sessions: [Value] = snapshot.sessions.map { session in
+            .object([
+                "transportSessionId": .string(session.transportSessionId),
+                "origin": .string(session.origin.rawValue),
+                "dialedTransport": .string(session.dialedTransport.rawValue),
+                "clientName": session.clientName.map(Value.string) ?? .null,
+                "acceptedAt": .string(ISO8601DateFormatter().string(from: session.acceptedAt)),
+                "authMode": .string(session.authMode),
+                "tokenAgeSeconds": session.tokenAgeSeconds(now: now).map(Value.int) ?? .null,
+                "tokenAgeBasis": .string(session.authMode == "oauth" ? "accepted_at" : "not_applicable"),
+                "tokenExpiresAt": session.tokenExpiresAt.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null,
+                "lastRefreshOutcome": .string(session.lastRefreshOutcome),
+                "governed": .bool(session.governed)
+            ])
+        }
+        let events: [Value] = snapshot.recentEvents.map { event in
+            .object([
+                "kind": .string(event.kind.rawValue),
+                "origin": .string(event.origin.rawValue),
+                "transportSessionId": .string(event.transportSessionId),
+                "dialedTransport": .string(event.dialedTransport.rawValue),
+                "clientName": event.clientName.map(Value.string) ?? .null,
+                "timestamp": .string(ISO8601DateFormatter().string(from: event.timestamp))
+            ])
+        }
+        return .object([
+            "authMode": .string(snapshot.authMode),
+            "tokenMaterialIncluded": .bool(false),
+            "refreshObservation": .string("OAuth refresh is client-managed; Bridge reports only outcomes it directly observes."),
+            "sessions": .array(sessions),
+            "recentSessionEvents": .array(events)
+        ])
     }
 }
 

@@ -2179,6 +2179,13 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3149}"
 # continuity for an established connector session. Measured 3156 passed, 0
 # failed on the current origin/main-based worktree. FLOOR raised 3149 -> 3156.
 FLOOR="${BRIDGE_TEST_FLOOR:-3156}"
+# PKT-1123 W2B reconnect observability/recovery (2026-07-13): +7 tests
+# cover request-tier local reset registration, local-vs-tunnel redacted
+# runtime projection, repeatable governed broker-session rotation, direct and
+# router-level remote reset denial (including with the broad hardening switch
+# off), and Settings runtime/reset clarity. Measured 3163 passed, 0 failed on
+# the current origin/main-based worktree. FLOOR raised 3156 -> 3163.
+FLOOR="${BRIDGE_TEST_FLOOR:-3163}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

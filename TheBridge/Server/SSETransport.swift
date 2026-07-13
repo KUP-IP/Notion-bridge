@@ -181,6 +181,10 @@ public actor SSEServer {
     /// `.shared`) so tests drive it over a temp path. The actor mutates it only
     /// through `await`, so its own actor isolation serializes the disk writes.
     private let sessionStore: SessionPersistenceStore
+    /// Redacted accept/reconnect telemetry shared with connections_list and Settings.
+    private let connectionObservability: ConnectionRuntimeObservability
+    /// Canonical governed-session rebind used by the local tool and Settings.
+    private let connectionResetService: ConnectionSessionResetService
     private var totalSessionsCreated = 0
     private var totalSessionsExpired = 0
     private var totalSessionsEvicted = 0
@@ -255,7 +259,9 @@ public actor SSEServer {
         toolAllowlist: Set<String>? = nil,
         connectorAuth: ConnectorAuthContext? = nil,
         authFailureAudit: TunnelAuthFailureAudit = .shared,
-        sessionStore: SessionPersistenceStore = .shared
+        sessionStore: SessionPersistenceStore = .shared,
+        connectionObservability: ConnectionRuntimeObservability = .shared,
+        connectionResetService: ConnectionSessionResetService = .shared
     ) {
         let normalizedSessionTimeout = sessionTimeout.isInfinite ? .infinity : max(30, sessionTimeout)
         self.host = host
@@ -273,6 +279,8 @@ public actor SSEServer {
         self.connectorAuth = connectorAuth
         self.authFailureAudit = authFailureAudit
         self.sessionStore = sessionStore
+        self.connectionObservability = connectionObservability
+        self.connectionResetService = connectionResetService
     }
 
     // MARK: - Session Durability (ITEM [session])
@@ -470,6 +478,26 @@ public actor SSEServer {
             await removeSession(id, reason: reason)
         }
         print("[SSE] Invalidated \(count) session(s): \(reason)")
+    }
+
+    /// Rotate canonical governance receipts for every live local HTTP session.
+    /// The response-capable transport remains active; remote sessions are never
+    /// touched. This is the Settings counterpart to `connections_reset`.
+    @discardableResult
+    public func resetLocalSessions() async -> Int {
+        let localSessions = sessions.filter { $0.value.origin == .local }
+        var resetCount = 0
+        for (id, session) in localSessions {
+            let context = ToolDispatchContext(
+                transportSessionId: id,
+                origin: .local,
+                client: session.clientName
+            )
+            if (try? await connectionResetService.reset(context: context)) != nil {
+                resetCount += 1
+            }
+        }
+        return resetCount
     }
 
     /// Number of active sessions (Streamable HTTP + legacy SSE).
@@ -750,8 +778,13 @@ public actor SSEServer {
             // with the resumable re-initialize signal so the client recovers
             // instead of surfacing "Session not found or expired".
             switch await sessionStore.resumeLookup(sessionID: sessionID) {
-            case .resumable(_, let cleanShutdown):
+            case .resumable(let persisted, let cleanShutdown):
                 totalSessionsResumeSignaled += 1
+                await connectionObservability.recordReconnect(
+                    transportSessionId: sessionID,
+                    origin: origin,
+                    clientName: persisted.clientName
+                )
                 print("[SSE] Resume signal: \(sessionID.prefix(8))… reconnected after restart "
                     + "(clean=\(cleanShutdown)) — instructing re-initialize")
                 return Self.resumableReconnectResponse(
@@ -969,6 +1002,13 @@ public actor SSEServer {
                 clientName: clientName,
                 tokenCount: composition.tokenCount,
                 contentHash: composition.contentHash
+            )
+            await connectionObservability.recordAccept(
+                transportSessionId: sessionID,
+                origin: origin,
+                clientName: clientName,
+                authMode: origin == .remote ? "oauth" : "loopback_exempt",
+                tokenExpiresAt: origin == .remote ? token.exp.value : nil
             )
             let data = buildRPCResponse(id: requestId, result: [
                 "protocolVersion": BridgeConstants.mcpProtocolVersion,
@@ -1327,6 +1367,17 @@ public actor SSEServer {
                 createdAt: createdAt,
                 lastAccessedAt: createdAt
             ))
+
+            await connectionObservability.recordAccept(
+                transportSessionId: sessionID,
+                origin: origin,
+                clientName: clientName,
+                authMode: origin == .remote
+                    ? (connectorAuth == nil ? "static_bearer" : "oauth")
+                    : "loopback_exempt",
+                tokenExpiresAt: nil,
+                at: createdAt
+            )
 
             print("[SSE] Session created: \(sessionID.prefix(8))… (active HTTP: \(sessions.count)/\(maxHTTPSessions))")
 
@@ -1708,6 +1759,8 @@ public actor SSEServer {
         preservePersistence: Bool = false
     ) async {
         guard let session = sessions.removeValue(forKey: id) else { return }
+
+        await connectionObservability.recordDisconnect(transportSessionId: id)
 
         // Drop any resource subscription this session held so a torn-down
         // session never lingers in the broadcast set.

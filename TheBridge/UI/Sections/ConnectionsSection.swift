@@ -213,6 +213,9 @@ public struct ConnectionsSection: View {
     @State private var docTab: DocTab = .preview
     /// Per-client connect-snippet copy confirmations, keyed by client name.
     @State private var copiedSnippet: String? = nil
+    /// Redacted runtime state shared with the MCP connections_list projection.
+    @State private var runtimeSnapshot: ConnectionRuntimeSnapshot? = nil
+    @State private var resetStatus: String? = nil
 
     private enum DocTab: Hashable { case preview, edit }
 
@@ -240,6 +243,7 @@ public struct ConnectionsSection: View {
         // ScrollView (it would nest scrolls). The composite supplies pane padding.
         VStack(spacing: BridgeTokens.Space.cardGap) {
             handshakeCard
+            runtimeCard
             clientsCard
             loopbackCard
         }
@@ -248,9 +252,83 @@ public struct ConnectionsSection: View {
         .frame(maxWidth: .infinity)
         .background(Color.clear)
         // Load the store-backed global doctrine once on appear.
-        .task { await loadDoctrine() }
+        .task {
+            await loadDoctrine()
+            await refreshRuntimeSnapshot()
+        }
         // The doctrine overlay (`.scrim` + `.float`) floats over the whole page.
         .overlay { doctrineOverlay }
+    }
+
+    // MARK: - Connection runtime observability
+
+    private var runtimeCard: some View {
+        BridgeGlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    BridgeCardLabel("Connection runtime")
+                    Spacer()
+                    BridgeButton("Refresh", systemImage: "arrow.clockwise", variant: .default) {
+                        Task { await refreshRuntimeSnapshot() }
+                    }
+                    BridgeButton("Reset local sessions", systemImage: "arrow.triangle.2.circlepath", variant: .default) {
+                        requestLocalReset()
+                    }
+                }
+
+                if let snapshot = runtimeSnapshot {
+                    HStack(spacing: 12) {
+                        runtimeMetric("Auth mode", snapshot.authMode)
+                        runtimeMetric("Sessions", "\(snapshot.sessions.count)")
+                        runtimeMetric("Last event", snapshot.recentEvents.first?.kind.rawValue ?? "none")
+                    }
+                    if let session = snapshot.sessions.first {
+                        let tokenAge = session.tokenAgeSeconds().map { "\($0)s" } ?? "n/a"
+                        let expiry = session.tokenExpiresAt.map { ISO8601DateFormatter().string(from: $0) } ?? "n/a"
+                        let clientLabel = session.clientName ?? "unknown client"
+                        let governanceLabel = session.governed ? "yes" : "no"
+                        Text("\(clientLabel) · \(session.dialedTransport.rawValue) · governed \(governanceLabel) · token age \(tokenAge) · expires \(expiry) · refresh \(session.lastRefreshOutcome)")
+                            .font(BridgeTokens.Typeface.meta)
+                            .foregroundStyle(BridgeTokens.fg4)
+                            .lineLimit(2)
+                    } else {
+                        Text("No active HTTP sessions. Token material is never shown; OAuth refresh is client-managed and reported only when Bridge observes an outcome.")
+                            .font(BridgeTokens.Typeface.meta)
+                            .foregroundStyle(BridgeTokens.fg4)
+                    }
+                } else {
+                    Text("Loading redacted auth and session state…")
+                        .font(BridgeTokens.Typeface.meta)
+                        .foregroundStyle(BridgeTokens.fg4)
+                }
+                if let resetStatus {
+                    Text(resetStatus)
+                        .font(BridgeTokens.Typeface.meta)
+                        .foregroundStyle(BridgeTokens.okText)
+                }
+            }
+        }
+    }
+
+    private func runtimeMetric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).bridgeCap().foregroundStyle(BridgeTokens.fg4)
+            Text(value).font(BridgeTokens.Typeface.mono).foregroundStyle(BridgeTokens.fg1)
+        }
+    }
+
+    private func refreshRuntimeSnapshot() async {
+        let snapshot = await ConnectionRuntimeObservability.shared.snapshot()
+        await MainActor.run { runtimeSnapshot = snapshot }
+    }
+
+    private func requestLocalReset() {
+        NotificationCenter.default.post(name: .bridgeConnectionResetRequested, object: nil)
+        resetStatus = "Local governed-session reset requested."
+        Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            await refreshRuntimeSnapshot()
+        }
     }
 
     // MARK: - Agent handshake (the design's headline section)

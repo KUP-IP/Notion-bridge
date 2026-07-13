@@ -76,6 +76,12 @@ public struct ToolRegistration: Sendable {
 // MARK: - Remote Control-Plane Predicate
 
 public enum RemoteControlPlanePolicy {
+    /// Tools whose local-only contract is unconditional. Unlike the broader
+    /// broker hardening switch, these can never be invoked through a tunnel.
+    public static let alwaysBlockedTools: Set<String> = [
+        "connections_reset",
+    ]
+
     public static let blockedModules: Set<String> = [
         "shell",
         "applescript",
@@ -90,10 +96,15 @@ public enum RemoteControlPlanePolicy {
         "commands_create",
         "commands_update",
         "commands_delete",
+        "connections_reset",
     ]
 
     public static func isBlocked(tool: ToolRegistration) -> Bool {
         blockedModules.contains(tool.module) || controlWriteTools.contains(tool.name)
+    }
+
+    public static func isAlwaysBlocked(tool: ToolRegistration) -> Bool {
+        alwaysBlockedTools.contains(tool.name)
     }
 
     public static func requiresGovernedSession(tool: ToolRegistration, effectiveTier: SecurityTier) -> Bool {
@@ -343,8 +354,9 @@ public actor ToolRouter {
         )
 
         if context.origin == .remote,
-           BridgeDefaults.brokerRemoteControlPlaneBlockEnabled,
-           RemoteControlPlanePolicy.isBlocked(tool: tool) {
+           RemoteControlPlanePolicy.isAlwaysBlocked(tool: tool)
+            || (BridgeDefaults.brokerRemoteControlPlaneBlockEnabled
+                && RemoteControlPlanePolicy.isBlocked(tool: tool)) {
             let governed = try? await sessionRegistry.isGoverned(
                 transportSessionId: context.transportSessionId
             )

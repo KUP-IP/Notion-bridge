@@ -190,6 +190,9 @@ public actor ServerManager {
             connectorAuth: connectorAuth
         )
         self.sseServer = sseServer
+        await ConnectionRuntimeObservability.shared.configure(
+            authMode: SSEServer.remoteAuthMode(connectorAuth: connectorAuth)
+        )
 
         // 2. Register modules — single source of truth in BridgeModuleRegistry
         // (consumed identically by EndToEndTests + ToolAnnotationAuditTests).
@@ -569,6 +572,13 @@ public actor ServerManager {
     /// Invalidate all active MCP sessions (e.g. after remote access config change).
     public func invalidateAllSessions(reason: String) async {
         await sseServer?.invalidateAllSessions(reason: reason)
+    }
+
+    /// One-click local governance recovery used by Settings. Remote sessions
+    /// are excluded inside SSEServer; no app/client restart is required.
+    @discardableResult
+    public func resetLocalSessions() async -> Int {
+        await sseServer?.resetLocalSessions() ?? 0
     }
 }
 

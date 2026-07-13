@@ -435,6 +435,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        NotificationCenter.default.addObserver(forName: .bridgeConnectionResetRequested, object: nil, queue: .main) { [weak self] _ in
+            Task {
+                let count = await self?.serverManager?.resetLocalSessions() ?? 0
+                print("[Connection] Settings reset completed for \(count) local session(s)")
+            }
+        }
+
         // WS-D (PKT-921): Bridge Cloud Access master toggle flipped — start/stop
         // the health heartbeat and register/deregister the `bridge_status` MCP
         // tool on the running server WITHOUT a relaunch. (Launch-time wiring is
