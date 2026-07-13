@@ -164,6 +164,11 @@ public enum SkillsModule {
             description: """
             Fetch one skill page's full body, OR route into a domain's specialist.
 
+            IDENTITY: prefer `id` (the stable Notion UUID) when an agent already
+            knows the exact skill. Use `name` for human/routing labels and for
+            parent/child or intent-based specialist routing. Exactly one is
+            required; when both are supplied, `id` is authoritative.
+
             RECOMMENDED DEFAULT — call with the parent name + the current intent for \
             EACH new sub-task: name="project-keepr", intent="triage stale projects". \
             The server ranks the parent's curated specialists and returns the best \
@@ -195,6 +200,10 @@ public enum SkillsModule {
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
+                    "id": .object([
+                        "type": .string("string"),
+                        "description": .string("Preferred exact identity for agent calls: the skill's Notion UUID. Resolves configured Notion skills without fuzzy name matching.")
+                    ]),
                     "name": .object([
                         "type": .string("string"),
                         "description": .string("Skill name (case-insensitive). Accepts slash-delimited paths like 'project-keepr/update' to address a specialist; depth > 1 is rejected with an annotation.")
@@ -221,20 +230,64 @@ public enum SkillsModule {
                     ]),
                     "fields": .object([
                         "type": .string("array"),
-                        "description": .string("Optional. Array of top-level envelope keys to project the response down to — e.g. [\"content\"] or [\"title\",\"properties.status\"]. Valid keys: name, title, url, content, summary, triggerPhrases, antiTriggerPhrases, properties (no id/lastEditedTime/stale — those are registry-row-specific). Bare \"properties\" keeps the whole properties map; a dotted \"properties.X\" sub-selects one property (case-insensitive). Omitted or [] → full response, byte-identical to today. Unknown keys/paths silently absent, never an error. Composes freely with `section` — section picks WHICH slice `content` holds; fields picks WHICH top-level keys appear at all."),
+                        "description": .string("Optional. Array of top-level envelope keys to project the response down to — e.g. [\"content\",\"uuid\",\"version\"] or [\"title\",\"properties.status\"]. Valid identity keys include uuid, slug, version, status, maturity. Bare \"properties\" keeps the whole properties map; a dotted \"properties.X\" sub-selects one property (case-insensitive). Omitted or [] → the full response. Unknown keys/paths silently absent, never an error."),
                         "items": .object(["type": .string("string")])
                     ])
                 ]),
-                "required": .array([.string("name")])
+                "required": .array([])
             ]),
             handler: { arguments in
-                guard case .object(let args) = arguments,
-                      case .string(let rawName) = args["name"] else {
+                guard case .object(let args) = arguments else {
                     throw ToolRouterError.invalidArguments(
                         toolName: "fetch_skill",
-                        reason: "missing required 'name' parameter"
+                        reason: "expected an object with 'id' or 'name'"
                     )
                 }
+
+                let rawIDArg: String? = {
+                    guard case .string(let raw) = args["id"] else { return nil }
+                    return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                }()
+                let idArg: String? = {
+                    guard let raw = rawIDArg, !raw.isEmpty else { return nil }
+                    let normalized = CachedSkillBody.normalize(raw)
+                    return CachedSkillBody.isNotionUUID(normalized) ? normalized : nil
+                }()
+                let nameArg: String? = {
+                    guard case .string(let raw) = args["name"] else { return nil }
+                    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return trimmed.isEmpty ? nil : trimmed
+                }()
+                guard idArg != nil || nameArg != nil else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "fetch_skill",
+                        reason: "one of 'id' (preferred UUID) or 'name' is required"
+                    )
+                }
+                if let rawIDArg, !rawIDArg.isEmpty, idArg == nil {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "fetch_skill",
+                        reason: "'id' must be a 32-hex Notion UUID (dashed or compact)"
+                    )
+                }
+
+                let uuidSkill: SkillConfig? = if let idArg {
+                    if let configured = lookupSkill(pageId: idArg) {
+                        configured
+                    } else {
+                        await lookupCachedSpecialist(pageId: idArg)
+                    }
+                } else {
+                    nil
+                }
+                if let idArg, uuidSkill == nil {
+                    return .object([
+                        "error": .string("Skill UUID is not configured in Bridge."),
+                        "id": .string(CachedSkillBody.canonicalUUID(idArg)),
+                        "hint": .string("Refresh or register the Notion skill in Settings → Skills; arbitrary Notion pages are not treated as doctrine.")
+                    ])
+                }
+                let rawName = uuidSkill?.name ?? nameArg ?? ""
 
                 // PKT-907 W1: parse slash-delimited path. Pre-PKT-907
                 // single-name calls flow through unchanged (the parser
@@ -248,6 +301,10 @@ public enum SkillsModule {
                 // PKT-907 W2: optional intent string. Only triggers
                 // specialist ranking when both are present.
                 let intentArg: String? = {
+                    // UUID addressing is exact: never route away from the
+                    // requested doctrine record because an intent was also
+                    // supplied by a generic client wrapper.
+                    guard idArg == nil else { return nil }
                     if case .string(let s) = args["intent"], !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         return s.trimmingCharacters(in: .whitespacesAndNewlines)
                     }
@@ -285,7 +342,7 @@ public enum SkillsModule {
                 let fieldsArg = try FieldsFilter.parseFieldsArgument(args, toolName: "fetch_skill")
 
                 // Look up skill in UserDefaults config (cache key includes metadata fingerprint)
-                guard let skillConfig = lookupSkill(named: name) else {
+                guard let skillConfig = uuidSkill ?? lookupSkill(named: name) else {
                     // W2 D4: fall back to the filesystem index. A file-
                     // source skill with this name (bundled or user dir)
                     // takes effect when Notion-skills don't shadow it.
@@ -407,7 +464,7 @@ public enum SkillsModule {
                     // touch the network, and it runs detached AFTER we return.
                     let store = SkillBodyCacheStore.shared
                     let n = await store.incrementCallCount(pageId: pageIdRaw)
-                    if n > 0, n % 5 == 0 {
+                    if n > 0, cachedBody.isExpired() || n % 5 == 0 {
                         let revalPageId = pageIdRaw
                         let knownEdited = cachedBody.lastEditedTime
                         let memCache = cache
@@ -516,6 +573,11 @@ public enum SkillsModule {
                         titleLookup: Self.makeSkillMentionTitleLookup(),
                         pageProperties: envelopeProperties
                     )
+                    result = Self.annotateDoctrineIdentity(
+                        result,
+                        pageId: envelopePageId,
+                        flattenedProperties: .object(Self.flattenProperties(envelopeProperties))
+                    )
                     // fb-resultsize: surface the section-selector outcome.
                     result = Self.annotateSection(
                         result,
@@ -537,7 +599,7 @@ public enum SkillsModule {
                         // HIT: bump callCount; on every 5th call kick a
                         // DETACHED freshness check (stale-while-revalidate).
                         let n = await bodyStore.incrementCallCount(pageId: envelopePageId)
-                        if n > 0, n % 5 == 0 {
+                        if n > 0, cachedBody?.isExpired() == true || n % 5 == 0 {
                             let revalPageId = envelopePageId
                             let knownEdited = cachedBody?.lastEditedTime ?? ""
                             let memCache = cache
@@ -555,7 +617,8 @@ public enum SkillsModule {
                         // resolved page id (callCount=1, lastEditedTime from
                         // the getPage JSON). flattenProperties matches the
                         // envelope's `properties` builder exactly.
-                        let lastEdited = pageJSON["last_edited_time"] as? String ?? ""
+                        let lastEdited = specialistDispatch.resolvedSpecialist?.lastEditedTime
+                            ?? (pageJSON["last_edited_time"] as? String ?? "")
                         let entry = CachedSkillBody(
                             pageId: envelopePageId,
                             markdown: rawMarkdown,
@@ -567,7 +630,11 @@ public enum SkillsModule {
                             ttlHours: BridgeDefaults.skillsCacheTTLHoursEffective,
                             callCount: 1
                         )
-                        try? await bodyStore.write(entry)
+                        if entry.hasMinimumDoctrinePayload {
+                            try? await bodyStore.write(entry)
+                        } else {
+                            NSLog("[fetch_skill] page=%@ not cached — minimum doctrine identity incomplete", envelopePageId)
+                        }
                     }
 
                     let liveResult = await MemoryRoutingAppendix.attach(
@@ -1786,6 +1853,7 @@ public enum SkillsModule {
         guard let client = try? NotionClient() else { return }
         do {
             let refreshed = try await SkillBodyCacheStore.fetchBody(pageId: pageId, client: client)
+            guard refreshed.hasMinimumDoctrinePayload else { return }
             // Same edit timestamp → body unchanged; leave the cache as-is
             // (do NOT rewrite — a rewrite would needlessly bump writtenAt
             // and reset the callCount cadence).
@@ -1953,6 +2021,12 @@ public enum SkillsModule {
             titleLookup: titleLookup,
             flattenedProperties: cachedBody.properties
         )
+        let identified = annotateDoctrineIdentity(
+            envelope,
+            pageId: cachedBody.pageId,
+            flattenedProperties: cachedBody.properties,
+            cachedIdentity: cachedBody
+        )
         // Plain request → empty dispatch (bare-parent fast path shape):
         // no resolvedSpecialist, no annotation, no siblings → adds nothing.
         let emptyDispatch = SpecialistDispatch(
@@ -1962,7 +2036,25 @@ public enum SkillsModule {
             matchScore: nil,
             matchReason: nil
         )
-        return annotateEnvelope(envelope, parentName: skill.name, dispatch: emptyDispatch)
+        return annotateEnvelope(identified, parentName: skill.name, dispatch: emptyDispatch)
+    }
+
+    /// Add the stable Notion-primary identity contract to a fetched doctrine
+    /// envelope. `content` remains the full body; duplicating it under a
+    /// second key would double large MCP payloads.
+    private static func annotateDoctrineIdentity(
+        _ value: Value,
+        pageId: String,
+        flattenedProperties: Value,
+        cachedIdentity: CachedSkillBody? = nil
+    ) -> Value {
+        guard case .object(var dict) = value else { return value }
+        dict["uuid"] = .string(CachedSkillBody.canonicalUUID(pageId))
+        dict["slug"] = .string(cachedIdentity?.slug ?? CachedSkillBody.propertyString("Slug", in: flattenedProperties))
+        dict["version"] = .string(cachedIdentity?.version ?? CachedSkillBody.propertyString("Version", in: flattenedProperties))
+        dict["status"] = .string(cachedIdentity?.status ?? CachedSkillBody.propertyString("Status", in: flattenedProperties))
+        dict["maturity"] = .string(cachedIdentity?.maturity ?? CachedSkillBody.propertyString("Maturity", in: flattenedProperties))
+        return .object(dict)
     }
 
     /// Public, network-free entry point mirroring `buildSkillResult` but
@@ -1985,25 +2077,32 @@ public enum SkillsModule {
         summary: String = "",
         triggerPhrases: [String] = [],
         antiTriggerPhrases: [String] = [],
+        pageId: String = "00000000000000000000000000000000",
         pageProperties: [String: Any] = [:],
         titleLookup: @escaping MentionResolver.TitleLookup
     ) async -> Value {
         let cfg = SkillConfig(
             name: name,
-            notionPageId: "00000000000000000000000000000000",
+            notionPageId: pageId,
             enabled: true,
             visibility: .standard,
             summary: summary,
             triggerPhrases: triggerPhrases,
             antiTriggerPhrases: antiTriggerPhrases
         )
-        return await buildSkillResult(
+        let flattened: Value = .object(flattenProperties(pageProperties))
+        let result = await buildSkillResult(
             skill: cfg,
             title: title,
             url: url,
             markdownJSONOrText: markdownJSONOrText,
             titleLookup: titleLookup,
             pageProperties: pageProperties
+        )
+        return annotateDoctrineIdentity(
+            result,
+            pageId: pageId,
+            flattenedProperties: flattened
         )
     }
 
@@ -2147,6 +2246,38 @@ public enum SkillsModule {
             $0.name.lowercased().contains(stripped) || stripped.contains($0.name.lowercased())
         }
         if subs.count == 1 { return subs[0] }
+        return nil
+    }
+
+    /// Exact UUID resolver for PKT-1131. Unlike the human-facing name path,
+    /// this never fuzzy-matches: one configured Notion page id maps to one
+    /// doctrine record. File-source skills have no Notion UUID and are
+    /// intentionally excluded.
+    private static func lookupSkill(pageId: String) -> SkillConfig? {
+        let wanted = CachedSkillBody.normalize(pageId)
+        guard CachedSkillBody.isNotionUUID(wanted) else { return nil }
+        return readAllSkills().first { skill in
+            CachedSkillBody.normalize(skill.notionPageId) == wanted
+        }
+    }
+
+    /// Resolve a curated specialist UUID from the existing routing cache.
+    /// The cache is derived from configured parents and cannot widen this
+    /// tool into an arbitrary Notion page reader.
+    private static func lookupCachedSpecialist(pageId: String) async -> SkillConfig? {
+        let wanted = CachedSkillBody.normalize(pageId)
+        guard CachedSkillBody.isNotionUUID(wanted) else { return nil }
+        for parent in await SkillsCacheReader.shared.readAll() {
+            if let child = parent.children.first(where: { CachedSkillBody.normalize($0.id) == wanted }) {
+                return SkillConfig(
+                    name: child.title,
+                    notionPageId: child.id,
+                    enabled: true,
+                    visibility: .standard,
+                    summary: child.summary
+                )
+            }
+        }
         return nil
     }
 
@@ -2422,6 +2553,7 @@ public enum SkillsModule {
             let url: String
             let pageId: String
             let properties: [String: Any]
+            let lastEditedTime: String
         }
         let resolvedSpecialist: ResolvedNotion?
         let resolvedPath: String?
@@ -2657,7 +2789,8 @@ public enum SkillsModule {
                         title: exact.title,
                         url: exact.url,
                         pageId: exact.pageId,
-                        properties: exact.properties
+                        properties: exact.properties,
+                        lastEditedTime: exact.lastEditedTime
                     ),
                     resolvedPath: "\(parentName)/\(exact.title)",
                     annotation: nil,
@@ -2672,7 +2805,8 @@ public enum SkillsModule {
                         title: partial.title,
                         url: partial.url,
                         pageId: partial.pageId,
-                        properties: partial.properties
+                        properties: partial.properties,
+                        lastEditedTime: partial.lastEditedTime
                     ),
                     resolvedPath: "\(parentName)/\(partial.title)",
                     annotation: nil,
@@ -2708,7 +2842,8 @@ public enum SkillsModule {
                             title: resolved.title,
                             url: resolved.url,
                             pageId: resolved.pageId,
-                            properties: resolved.properties
+                            properties: resolved.properties,
+                            lastEditedTime: resolved.lastEditedTime
                         ),
                         resolvedPath: "\(parentName)/\(resolved.title)",
                         annotation: nil,
@@ -2773,6 +2908,7 @@ public enum SkillsModule {
         let title: String
         let url: String
         let properties: [String: Any]
+        let lastEditedTime: String
     }
 
     /// Enumerate a parent skill's CURATED specialists and hydrate each to a
@@ -2824,9 +2960,11 @@ public enum SkillsModule {
             var props: [String: Any] = [:]
             var url = ""
             var resolvedTitle = ""
+            var lastEditedTime = ""
             if let pageData = try? await client.getPage(pageId: cid),
                let json = try? JSONSerialization.jsonObject(with: pageData) as? [String: Any] {
                 url = json["url"] as? String ?? ""
+                lastEditedTime = json["last_edited_time"] as? String ?? ""
                 props = json["properties"] as? [String: Any] ?? [:]
                 if !props.isEmpty {
                     let t = NotionJSON.extractTitle(from: props)
@@ -2851,7 +2989,8 @@ public enum SkillsModule {
                 pageId: cid,
                 title: resolvedTitle,
                 url: url,
-                properties: props
+                properties: props,
+                lastEditedTime: lastEditedTime
             ))
         }
         return out

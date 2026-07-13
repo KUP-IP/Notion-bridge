@@ -41,7 +41,12 @@ private func sampleBody(
     markdown: String = "# Title\n\nbody line one\n\n## Sub\n\nsub body\n",
     title: String = "Demo Skill",
     url: String = "https://www.notion.so/demo",
-    properties: Value = .object(["Status": .string("Active")]),
+    properties: Value = .object([
+        "Slug": .string("demo-skill"),
+        "Version": .string("1.2.3"),
+        "Status": .string("Active"),
+        "Maturity": .string("Stable")
+    ]),
     lastEditedTime: String = "2026-06-11T10:00:00.000Z",
     writtenAt: Date = Date(timeIntervalSince1970: 1_700_000_000),
     ttlHours: Int = 24,
@@ -71,6 +76,13 @@ func runSkillBodyCacheTests() async {
                 throw TestError.assertion("expected a cached body")
             }
             try expect(got.pageId == entry.pageId, "pageId mismatch")
+            try expect(got.schemaVersion == 1, "schemaVersion mismatch")
+            try expect(got.slug == "demo-skill", "slug mismatch")
+            try expect(got.version == "1.2.3", "version mismatch")
+            try expect(got.status == "Active", "status mismatch")
+            try expect(got.maturity == "Stable", "maturity mismatch")
+            try expect(got.hasMinimumDoctrinePayload, "minimum doctrine payload should be complete")
+            try expect(got.uuid == "11111111-1111-1111-1111-11111111aaaa", "canonical UUID mismatch")
             try expect(got.markdown == entry.markdown, "markdown mismatch")
             try expect(got.title == entry.title, "title mismatch")
             try expect(got.url == entry.url, "url mismatch")
@@ -389,7 +401,10 @@ func runSkillBodyCacheTests() async {
         )
         // Raw getPage properties blob → the network path flattens these.
         let rawProps: [String: Any] = [
-            "Status": ["type": "status", "status": ["name": "Active", "id": "s1"]]
+            "Slug": ["type": "rich_text", "rich_text": [["plain_text": "demo-skill"]]],
+            "Version": ["type": "rich_text", "rich_text": [["plain_text": "1.2.3"]]],
+            "Status": ["type": "status", "status": ["name": "Active", "id": "s1"]],
+            "Maturity": ["type": "select", "select": ["name": "Stable", "id": "m1"]]
         ]
 
         // NETWORK plain envelope: buildSkillResult with flattened props and
@@ -399,6 +414,7 @@ func runSkillBodyCacheTests() async {
             name: "demo", title: "Demo", url: "https://www.notion.so/p1",
             markdownJSONOrText: rawMarkdown,
             summary: "s", triggerPhrases: ["t"], antiTriggerPhrases: ["a"],
+            pageId: "1111111111111111111111111111aaaa",
             pageProperties: rawProps
         ) { _ in nil }
 

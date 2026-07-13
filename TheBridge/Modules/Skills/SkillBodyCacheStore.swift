@@ -30,6 +30,17 @@ public actor SkillBodyCacheStore {
         self.clock = clock
     }
 
+    /// Aggregate result for a TTL sweep. Partial failures are explicit and
+    /// never evict a last-known-good entry.
+    public struct RefreshReport: Sendable, Equatable {
+        public let discovered: Int
+        public let refreshed: Int
+        public let skippedFresh: Int
+        public let failedPageIds: [String]
+
+        public var partialFailure: Bool { !failedPageIds.isEmpty }
+    }
+
     // MARK: - Read
 
     /// Returns the cached body for `pageId`, or nil when no file exists or
@@ -128,6 +139,10 @@ public actor SkillBodyCacheStore {
     public func refresh(pageId: String, client: NotionClient) async -> CachedSkillBody? {
         do {
             let entry = try await Self.fetchBody(pageId: pageId, client: client)
+            guard entry.hasMinimumDoctrinePayload else {
+                NSLog("[SkillBodyCacheStore] page=%@ missing minimum doctrine identity; retaining prior cache", pageId)
+                return nil
+            }
             try? write(entry)
             return entry
         } catch let error as NotionClientError {
@@ -170,6 +185,37 @@ public actor SkillBodyCacheStore {
         return warmed
     }
 
+    /// TTL poll over the configured Notion skill set. Fresh entries are not
+    /// touched; missing or expired entries are refreshed serially to respect
+    /// Notion API pressure. A failed refresh retains the previous file.
+    public func refreshExpired(source: BodySource, client: NotionClient) async -> RefreshReport {
+        let entries = await source.load()
+        var refreshed = 0
+        var skippedFresh = 0
+        var failed: [String] = []
+
+        for entry in entries {
+            let pid = entry.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !pid.isEmpty else { continue }
+            if let cached = read(pageId: pid), !cached.isExpired(now: clock()) {
+                skippedFresh += 1
+                continue
+            }
+            if (await refresh(pageId: pid, client: client)) != nil {
+                refreshed += 1
+            } else {
+                failed.append(CachedSkillBody.normalize(pid))
+            }
+        }
+
+        return RefreshReport(
+            discovered: entries.count,
+            refreshed: refreshed,
+            skippedFresh: skippedFresh,
+            failedPageIds: failed
+        )
+    }
+
     // MARK: - Body fetch (network)
 
     /// Fetch a skill body from Notion and build a `CachedSkillBody`:
@@ -189,13 +235,14 @@ public actor SkillBodyCacheStore {
 
         let markdownData = try await client.getPageMarkdown(pageId: pageId)
         let rawMarkdown = SkillsModule.skillMarkdownString(fromMarkdownJSON: markdownData)
+        let flattened = Value.object(SkillsModule.flattenProperties(props))
 
         return CachedSkillBody(
             pageId: pageId,
             markdown: rawMarkdown,
             title: title,
             url: url,
-            properties: .object(SkillsModule.flattenProperties(props)),
+            properties: flattened,
             lastEditedTime: lastEdited,
             writtenAt: Date(),
             ttlHours: BridgeDefaults.skillsCacheTTLHoursEffective,
@@ -211,5 +258,36 @@ public actor SkillBodyCacheStore {
         let normalized = CachedSkillBody.normalize(pageId)
         return BridgePaths.applicationSupport(.skillsBodyCache)
             .appendingPathComponent("\(normalized).json", isDirectory: false)
+    }
+}
+
+extension SkillBodyCacheStore.BodySource {
+    /// Snapshot every configured Notion-source skill. This is intentionally
+    /// broader than the routing roster: PKT-1131 caches doctrine, not only
+    /// the thin set of routing parents.
+    @MainActor
+    public static func fromSkillsManager(_ manager: SkillsManager) -> SkillBodyCacheStore.BodySource {
+        let configured: [(id: String, title: String)] = manager.skills.compactMap { skill in
+            guard !skill.source.isFile else { return nil }
+            let pid = skill.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !pid.isEmpty else { return nil }
+            return (id: pid, title: skill.name)
+        }
+        return SkillBodyCacheStore.BodySource(load: {
+            // The routing refresh runs immediately before the body sweep, so
+            // this view includes curated specialist rows as well as configured
+            // parents. Deduplicate by UUID because a specialist may also be
+            // configured directly.
+            let parents = await SkillsCacheReader.shared.readAll()
+            let routed = parents.flatMap { parent in
+                [(id: parent.parentId, title: parent.parentTitle)]
+                    + parent.children.map { (id: $0.id, title: $0.title) }
+            }
+            var seen: Set<String> = []
+            return (configured + routed).filter { entry in
+                let id = CachedSkillBody.normalize(entry.id)
+                return !id.isEmpty && seen.insert(id).inserted
+            }
+        })
     }
 }

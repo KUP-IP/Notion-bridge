@@ -532,7 +532,8 @@ public final class SkillsManager {
     /// triggers the same code path on demand.
     public func kickoffBackgroundCacheRefresh() {
         // Snapshot on the main actor (this method IS main-actor).
-        let source = SkillsCacheWriter.ParentSource.fromSkillsManager(self)
+        let routingSource = SkillsCacheWriter.ParentSource.fromSkillsManager(self)
+        let bodySource = SkillBodyCacheStore.BodySource.fromSkillsManager(self)
         Task.detached(priority: .utility) {
             guard let client = try? NotionClient() else {
                 NSLog("[SkillsManager] cache refresh skipped — no Notion token")
@@ -540,9 +541,20 @@ public final class SkillsManager {
             }
             let enumerator = SkillsCacheWriter.ChildEnumerator.live(client: client)
             _ = await SkillsCacheWriter.shared.refreshAll(
-                source: source,
+                source: routingSource,
                 enumerator: enumerator
             )
+            let report = await SkillBodyCacheStore.shared.refreshExpired(
+                source: bodySource,
+                client: client
+            )
+            if report.partialFailure {
+                NSLog(
+                    "[SkillsManager] doctrine TTL refresh partial failure refreshed=%d failed=%d",
+                    report.refreshed,
+                    report.failedPageIds.count
+                )
+            }
         }
     }
 
