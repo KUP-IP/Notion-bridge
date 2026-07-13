@@ -97,14 +97,19 @@ func runSkillsModuleTests() async {
     // MARK: - Required Parameters
     // ============================================================
 
-    await test("fetch_skill requires 'name' parameter") {
+    await test("fetch_skill accepts UUID-first or name addressing") {
         let tools = await router.registrations(forModule: "skills")
         let tool = tools.first(where: { $0.name == "fetch_skill" })
         try expect(tool != nil, "fetch_skill not found")
         if case .object(let schema) = tool!.inputSchema,
            case .array(let required) = schema["required"] {
             let requiredNames = required.compactMap { if case .string(let s) = $0 { return s } else { return nil } }
-            try expect(requiredNames.contains("name"), "fetch_skill should require 'name'")
+            try expect(requiredNames.isEmpty, "schema-level required list should allow id or name")
+            guard case .object(let props)? = schema["properties"] else {
+                throw TestError.assertion("fetch_skill schema missing properties")
+            }
+            try expect(props["id"] != nil, "fetch_skill should expose stable UUID 'id'")
+            try expect(props["name"] != nil, "fetch_skill should preserve human/routing 'name'")
         }
     }
 
@@ -251,34 +256,77 @@ func runSkillsModuleTests() async {
         }
     }
 
-    await test("fetch_skill rejects missing name parameter") {
+    await test("fetch_skill rejects requests missing both id and name") {
         do {
             _ = try await router.dispatch(
                 toolName: "fetch_skill",
                 arguments: .object([:])
             )
-            throw TestError.assertion("Expected error for missing name parameter")
+            throw TestError.assertion("Expected error when id and name are both missing")
         } catch is ToolRouterError {
             // Expected — missing required parameter
         }
     }
 
-    await test("fetch_skill handles empty string name gracefully") {
-        let result = try await router.dispatch(
-            toolName: "fetch_skill",
-            arguments: .object(["name": .string("")])
-        )
-        // Should return error or empty result, not crash
-        if case .object(let dict) = result {
-            if case .string(let error) = dict["error"] {
-                try expect(!error.isEmpty, "Error message should be non-empty for empty name")
-            }
-            // Empty result object is also acceptable
-        } else if case .string = result {
-            // String response is acceptable
-        } else {
-            throw TestError.assertion("Expected structured result for empty skill name")
+    await test("fetch_skill rejects an empty name when no id is present") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("")])
+            )
+            throw TestError.assertion("Expected invalidArguments for an empty identity")
+        } catch is ToolRouterError {
+            // expected
         }
+    }
+
+    await test("fetch_skill rejects malformed UUID before name fallback") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["id": .string("not-a-uuid"), "name": .string("anything")])
+            )
+            throw TestError.assertion("Expected invalidArguments for malformed id")
+        } catch is ToolRouterError {
+            // expected
+        }
+    }
+
+    await test("fetch_skill rejects a 32-character non-hex id") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["id": .string(String(repeating: "g", count: 32))])
+            )
+            throw TestError.assertion("Expected invalidArguments for non-hex id")
+        } catch is ToolRouterError {
+            // expected
+        }
+    }
+
+    await test("fetch_skill doctrine envelope exposes UUID plus Notion identity") {
+        let data = try! JSONSerialization.data(withJSONObject: ["markdown": "# Body"])
+        let md = String(data: data, encoding: .utf8)!
+        let pageProps: [String: Any] = [
+            "Slug": ["type": "rich_text", "rich_text": [["plain_text": "demo-skill"]]],
+            "Version": ["type": "rich_text", "rich_text": [["plain_text": "2.0.0"]]],
+            "Status": ["type": "status", "status": ["name": "Testing"]],
+            "Maturity": ["type": "select", "select": ["name": "Stable"]]
+        ]
+        let envelope = await SkillsModule.buildSkillResultForTesting(
+            name: "demo-skill", title: "Demo", url: "https://n/demo",
+            markdownJSONOrText: md,
+            pageId: "11111111222233334444555555555555",
+            pageProperties: pageProps
+        ) { _ in nil }
+        guard case .object(let dict) = envelope else {
+            throw TestError.assertion("expected doctrine envelope")
+        }
+        try expect(dict["uuid"] == .string("11111111-2222-3333-4444-555555555555"), "uuid missing")
+        try expect(dict["slug"] == .string("demo-skill"), "slug missing")
+        try expect(dict["version"] == .string("2.0.0"), "version missing")
+        try expect(dict["status"] == .string("Testing"), "status missing")
+        try expect(dict["maturity"] == .string("Stable"), "maturity missing")
     }
 
     // ============================================================

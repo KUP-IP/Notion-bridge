@@ -16,7 +16,12 @@
 // `BridgePaths.applicationSupport(.skillsBodyCache)`):
 //
 //   {
+//     "schemaVersion":  1,
 //     "pageId":         "<32-hex Notion uuid>",
+//     "slug":           "<human/routing identity>",
+//     "version":        "<Notion doctrine version>",
+//     "status":         "<Notion lifecycle status>",
+//     "maturity":       "<Notion maturity>",
 //     "markdown":       "<raw body from skillMarkdownString>",
 //     "title":          "<page title>",
 //     "url":            "<page url>",
@@ -42,8 +47,17 @@ import MCP
 /// `properties` key without re-flattening — and without persisting the
 /// (large) verbatim getPage properties blob. `Value` is `Codable`.
 public struct CachedSkillBody: Codable, Sendable, Equatable {
+    /// Cache wire version. The cache is derived and may be rebuilt at any time.
+    public let schemaVersion: Int
     /// Normalized 32-hex Notion id (no dashes, lowercased).
     public let pageId: String
+    /// Notion-authored human/routing identity fields. These are duplicated
+    /// from `properties` deliberately so UUID-addressed readers do not need
+    /// to know the current SKILLS database property names.
+    public let slug: String
+    public let version: String
+    public let status: String
+    public let maturity: String
     /// Raw body markdown as returned by `SkillsModule.skillMarkdownString`
     /// (pre-section-slice, pre-mention-resolution — the exact input the
     /// network path feeds `buildSkillResult`).
@@ -69,7 +83,12 @@ public struct CachedSkillBody: Codable, Sendable, Equatable {
     public let callCount: Int
 
     public init(
+        schemaVersion: Int = 1,
         pageId: String,
+        slug: String? = nil,
+        version: String? = nil,
+        status: String? = nil,
+        maturity: String? = nil,
         markdown: String,
         title: String,
         url: String,
@@ -79,7 +98,12 @@ public struct CachedSkillBody: Codable, Sendable, Equatable {
         ttlHours: Int = 24,
         callCount: Int = 1
     ) {
+        self.schemaVersion = schemaVersion
         self.pageId = Self.normalize(pageId)
+        self.slug = slug ?? Self.propertyString("Slug", in: properties)
+        self.version = version ?? Self.propertyString("Version", in: properties)
+        self.status = status ?? Self.propertyString("Status", in: properties)
+        self.maturity = maturity ?? Self.propertyString("Maturity", in: properties)
         self.markdown = markdown
         self.title = title
         self.url = url
@@ -91,17 +115,27 @@ public struct CachedSkillBody: Codable, Sendable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case pageId, markdown, title, url, properties, lastEditedTime
+        case schemaVersion, pageId, slug, version, status, maturity
+        case markdown, title, url, properties, lastEditedTime
         case writtenAt, ttlHours, callCount
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.pageId = try c.decodeIfPresent(String.self, forKey: .pageId) ?? ""
+        self.schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        self.pageId = Self.normalize(try c.decodeIfPresent(String.self, forKey: .pageId) ?? "")
         self.markdown = try c.decodeIfPresent(String.self, forKey: .markdown) ?? ""
         self.title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
         self.url = try c.decodeIfPresent(String.self, forKey: .url) ?? ""
         self.properties = try c.decodeIfPresent(Value.self, forKey: .properties) ?? .object([:])
+        self.slug = try c.decodeIfPresent(String.self, forKey: .slug)
+            ?? Self.propertyString("Slug", in: properties)
+        self.version = try c.decodeIfPresent(String.self, forKey: .version)
+            ?? Self.propertyString("Version", in: properties)
+        self.status = try c.decodeIfPresent(String.self, forKey: .status)
+            ?? Self.propertyString("Status", in: properties)
+        self.maturity = try c.decodeIfPresent(String.self, forKey: .maturity)
+            ?? Self.propertyString("Maturity", in: properties)
         self.lastEditedTime = try c.decodeIfPresent(String.self, forKey: .lastEditedTime) ?? ""
         let raw = try c.decodeIfPresent(String.self, forKey: .writtenAt) ?? ""
         self.writtenAt = Self.iso8601.date(from: raw) ?? .distantPast
@@ -111,7 +145,12 @@ public struct CachedSkillBody: Codable, Sendable, Equatable {
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(schemaVersion, forKey: .schemaVersion)
         try c.encode(pageId, forKey: .pageId)
+        try c.encode(slug, forKey: .slug)
+        try c.encode(version, forKey: .version)
+        try c.encode(status, forKey: .status)
+        try c.encode(maturity, forKey: .maturity)
         try c.encode(markdown, forKey: .markdown)
         try c.encode(title, forKey: .title)
         try c.encode(url, forKey: .url)
@@ -125,7 +164,9 @@ public struct CachedSkillBody: Codable, Sendable, Equatable {
     /// Return a copy with `callCount` set to `n` (writtenAt/markdown kept).
     public func withCallCount(_ n: Int) -> CachedSkillBody {
         CachedSkillBody(
-            pageId: pageId, markdown: markdown, title: title, url: url,
+            schemaVersion: schemaVersion, pageId: pageId, slug: slug,
+            version: version, status: status, maturity: maturity,
+            markdown: markdown, title: title, url: url,
             properties: properties, lastEditedTime: lastEditedTime,
             writtenAt: writtenAt, ttlHours: ttlHours, callCount: n
         )
@@ -140,6 +181,47 @@ public struct CachedSkillBody: Codable, Sendable, Equatable {
         return now.timeIntervalSince(writtenAt) > ttl
     }
 
+    /// The minimum Notion-primary doctrine contract from PKT-1131. An
+    /// incomplete live fetch may still be returned to its caller, but it must
+    /// not replace a complete last-known-good cache entry.
+    public var hasMinimumDoctrinePayload: Bool {
+        !pageId.isEmpty
+            && !slug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !status.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !maturity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Canonical dashed UUID for agent-facing envelopes.
+    public var uuid: String {
+        Self.canonicalUUID(pageId)
+    }
+
+    public static func canonicalUUID(_ pageId: String) -> String {
+        let id = Self.normalize(pageId)
+        guard isNotionUUID(id) else { return id }
+        let parts = [8, 4, 4, 4, 12]
+        var index = id.startIndex
+        var out: [String] = []
+        for size in parts {
+            let end = id.index(index, offsetBy: size)
+            out.append(String(id[index..<end]))
+            index = end
+        }
+        return out.joined(separator: "-")
+    }
+
+    public static func isNotionUUID(_ pageId: String) -> Bool {
+        let id = normalize(pageId)
+        return id.count == 32 && id.unicodeScalars.allSatisfy { scalar in
+            switch scalar.value {
+            case 48...57, 97...102: return true
+            default: return false
+            }
+        }
+    }
+
     /// Canonical id normalization shared by the store + reader: strip
     /// dashes/whitespace, lowercase. Callers may pass either id shape.
     public static func normalize(_ pageId: String) -> String {
@@ -147,6 +229,18 @@ public struct CachedSkillBody: Codable, Sendable, Equatable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: "-", with: "")
             .lowercased()
+    }
+
+    /// Case-insensitive scalar lookup over the already-flattened Notion
+    /// properties map. Legacy cache files gain the explicit v1 identity on
+    /// decode without requiring an eager migration.
+    public static func propertyString(_ key: String, in properties: Value) -> String {
+        guard case .object(let dict) = properties,
+              let value = dict.first(where: { $0.key.caseInsensitiveCompare(key) == .orderedSame })?.value,
+              case .string(let string) = value else {
+            return ""
+        }
+        return string
     }
 
     /// ISO-8601 with fractional seconds + UTC — strings round-trip

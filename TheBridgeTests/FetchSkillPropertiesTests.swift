@@ -422,7 +422,7 @@ func runFetchSkillPropertiesTests() async {
     }
 
     // ============================================================
-    // MARK: (d) ENVELOPE STABILITY — only `properties` is added
+    // MARK: (d) ENVELOPE STABILITY — additive doctrine identity
     // ============================================================
 
     // The literal pre-cu-sa envelope key set (cmd-w4 era): name, title,
@@ -430,10 +430,11 @@ func runFetchSkillPropertiesTests() async {
     // (summary / triggerPhrases / antiTriggerPhrases). cu-sa adds EXACTLY
     // one key — `properties` — and it is additive on EVERY path (the
     // default no-properties path now also emits `"properties": {}`), so
-    // the true stability contract is: (i) the legacy 9 keys + their
+    // PKT-1131 subsequently adds the explicit doctrine identity tuple.
+    // The stability contract is: (i) the legacy 9 keys + their
     // value types are byte-identical whether properties are empty or
     // populated, and (ii) the only key beyond the legacy set is
-    // `properties`. (The earlier draft of this test wrongly assumed a
+    // known additive keys. (The earlier draft of this test wrongly assumed a
     // runtime "baseline" that does NOT carry `properties`; since the key
     // is unconditionally additive, no such baseline exists — corrected
     // here to assert the real, stronger invariant rather than weaken it.)
@@ -441,8 +442,11 @@ func runFetchSkillPropertiesTests() async {
         "name", "title", "url", "blockCount", "truncated", "content",
         "summary", "triggerPhrases", "antiTriggerPhrases"
     ]
+    let additiveEnvelopeKeys: Set<String> = [
+        "properties", "uuid", "slug", "version", "status", "maturity"
+    ]
 
-    await test("cu-sa (d): legacy keys byte-identical empty↔populated; only `properties` added") {
+    await test("cu-sa (d): legacy keys byte-identical empty↔populated; doctrine identity is additive") {
         // Same inputs, differing ONLY in the new properties blob.
         let empty = await build(
             props: [:],
@@ -461,13 +465,13 @@ func runFetchSkillPropertiesTests() async {
             throw TestError.assertion("both results must be objects")
         }
 
-        // 1. The full key set is EXACTLY the legacy keys ∪ {properties}
-        //    — no key removed, no key added beyond `properties`, on both.
-        let expectedKeys = legacyEnvelopeKeys.union(["properties"])
+        // 1. The full key set is exactly the legacy keys plus the known
+        //    additive properties and doctrine-identity keys.
+        let expectedKeys = legacyEnvelopeKeys.union(additiveEnvelopeKeys)
         try expect(Set(e.keys) == expectedKeys,
-                   "empty-props envelope keys must be legacy ∪ {properties}; got \(Set(e.keys))")
+                   "empty-props envelope keys must be legacy plus additive identity; got \(Set(e.keys))")
         try expect(Set(p.keys) == expectedKeys,
-                   "populated-props envelope keys must be legacy ∪ {properties}; got \(Set(p.keys))")
+                   "populated-props envelope keys must be legacy plus additive identity; got \(Set(p.keys))")
 
         // 2. EVERY legacy key's value is byte-for-byte identical between
         //    the empty and populated envelopes (Value is Equatable —
@@ -498,7 +502,7 @@ func runFetchSkillPropertiesTests() async {
         }
     }
 
-    await test("cu-sa (d): default (no-arg) path emits exactly `properties:{}` and nothing else new") {
+    await test("cu-sa (d): default path emits empty properties plus explicit empty doctrine identity") {
         // The pre-cu-sa wrapper call shape (no pageProperties arg) and
         // the explicit empty-properties call must produce byte-identical
         // envelopes, and that envelope's ONLY non-legacy key is an empty
@@ -516,9 +520,8 @@ func runFetchSkillPropertiesTests() async {
         // Identical envelopes (the default arg IS `[:]`).
         try expect(Value.object(d) == Value.object(x),
                    "default no-arg path must equal explicit empty-props path")
-        // The only key beyond the legacy set is `properties`, == {}.
-        try expect(Set(d.keys).subtracting(legacyEnvelopeKeys) == ["properties"],
-                   "only `properties` may extend the legacy set; got \(Set(d.keys).subtracting(legacyEnvelopeKeys))")
+        try expect(Set(d.keys).subtracting(legacyEnvelopeKeys) == additiveEnvelopeKeys,
+                   "unexpected additive keys; got \(Set(d.keys).subtracting(legacyEnvelopeKeys))")
         guard case .object(let pm)? = d["properties"] else {
             throw TestError.assertion("`properties` must be an object")
         }
