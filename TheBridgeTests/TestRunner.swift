@@ -705,6 +705,7 @@ await runPasteboardHistoryModuleTests() // PKT-765 (v2.2 · 3.3.1)
 await runJobsModuleTests()
 await runSchedulerResilienceTests()  // PKT-381: durable backlog + reconciler + serial drain + first job
 await runVoiceMemoModuleTests()        // Voice Memos curator: registry-centric router + 9am job
+await runVoiceMemoSettingsToolsTests() // PKT-1120: voice_memo_settings get/set + UI mode clarity
 await runVoiceMemoLiveRegressionTests() // PKT-MEM-105/106 live fixture regression
 await runVoiceMemoParseChainTests()    // Voice Curator FRONTIER-FIRST (Phase 1 W1): parse provider chain + plan provenance/degraded
 await runVoiceMemoCloudParseTests()    // Voice Curator FRONTIER-FIRST (Phase 1 W2): real cloud frontier parse (whole-transcript strict-JSON extraction)

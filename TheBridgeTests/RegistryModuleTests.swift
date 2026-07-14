@@ -1008,11 +1008,11 @@ func runRegistryModuleTests() async {
             // the write) — instead verify the wrapper keys are present
             // alongside a row that WOULD be filterable via resultFields-style
             // tools. Since registry_create's `fields` is claimed by the write
-            // payload, assert the always-present wrapper keys are untouched
-            // and unaffected by any hypothetical filtering — i.e. always present.
+            // payload, assert operation-status keys remain intact. `bodyWrite`
+            // is intentionally absent when no body was requested.
             try expect(obj(out)["created"] == .bool(true), "created wrapper key present")
             try expect(obj(out)["partialFailure"] == .bool(false), "partialFailure wrapper key present")
-            try expect(obj(out)["bodyWrite"] != nil, "bodyWrite wrapper key present")
+            try expect(obj(out)["bodyWrite"] == nil, "bodyWrite omitted when no body requested")
             try expect(obj(out)["row"] != nil, "row payload present")
         }
     }

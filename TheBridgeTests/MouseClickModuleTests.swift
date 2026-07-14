@@ -94,8 +94,24 @@ func runMouseClickModuleTests() async {
             }
         } else if case .bool(let success) = dict["success"] {
             try expect(success == true, "success path should be true")
+            try expect(dict["elementRect"] == nil,
+                       "x/y mode must not emit axPath-only elementRect")
         } else {
             throw TestError.assertion("Response missing both code and success: \(dict.keys)")
         }
+    }
+
+    await test("mouse_click elementRect serializer matches ax_inspect geometry shape") {
+        let value = MouseClickModule.elementRectValue(
+            CGRect(x: 10.5, y: 20.25, width: 300, height: 44))
+        guard case .object(let rect) = value else {
+            throw TestError.assertion("elementRect must be an object")
+        }
+        try expect(rect["x"] == .double(10.5), "x")
+        try expect(rect["y"] == .double(20.25), "y")
+        try expect(rect["width"] == .double(300), "width")
+        try expect(rect["height"] == .double(44), "height")
+        try expect(Set(rect.keys) == Set(["x", "y", "width", "height"]),
+                   "elementRect must match AccessibilityModule shape")
     }
 }

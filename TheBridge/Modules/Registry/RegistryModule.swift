@@ -574,7 +574,6 @@ public enum RegistryModule {
                         "created": .bool(true),
                         "partialFailure": .bool(false),
                         "row": FieldsFilter.project(rowValue(row, stale: false), fields: requestedFields),
-                        "bodyWrite": bodyWriteValue(requested: false, succeeded: false, characters: 0, markdownHash: nil),
                     ])
                 }
                 do {

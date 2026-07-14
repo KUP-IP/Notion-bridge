@@ -2193,7 +2193,11 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3156}"
 # (canonical/override resolution, fresh install, full archive + sidecars,
 # MemoryStore parity, idempotence, collision safety, override skip, and both
 # post-rename and pre-rename journal recovery paths).
-FLOOR="${BRIDGE_TEST_FLOOR:-3177}"
+# PKT-1120 W3 tool ergonomics (2026-07-14): +17 net-new hermetic tests cover
+# dead-PID AX lookup, deterministic screen-window identity selection,
+# AX-path click geometry, the voice-memo settings tool pair, and mode-aware
+# Memory Settings clarity. Measured 3194 passed, 0 failed. FLOOR 3177 -> 3194.
+FLOOR="${BRIDGE_TEST_FLOOR:-3194}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

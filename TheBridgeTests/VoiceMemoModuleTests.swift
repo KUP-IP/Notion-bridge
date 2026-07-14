@@ -8,11 +8,11 @@ import TheBridgeLib
 func runVoiceMemoModuleTests() async {
     print("\n🎙️ Voice Memos curator — module + parser + job")
 
-    await test("VoiceMemoModule registers 10 tools with expected tiers") {
+    await test("VoiceMemoModule registers 12 tools with expected tiers") {
         let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
         await VoiceMemoModule.register(on: router)
         let tools = await router.registrations(forModule: "voice")
-        try expect(tools.count == 10, "expected 10 voice tools, got \(tools.count)")
+        try expect(tools.count == 12, "expected 12 voice tools, got \(tools.count)")
         let byName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })
         try expect(byName["voice_memo_list"]?.tier == .open, "list must be open")
         try expect(byName["voice_memo_process"]?.tier == .notify, "process must be notify")
@@ -24,6 +24,8 @@ func runVoiceMemoModuleTests() async {
         try expect(byName["voice_memo_transcript_refresh"]?.tier == .notify, "transcript refresh must be notify")
         try expect(byName["voice_memo_triage_open"]?.tier == .open, "triage open must be open")
         try expect(byName["voice_memo_triage_await"]?.tier == .open, "triage await must be open")
+        try expect(byName["voice_memo_settings_get"]?.tier == .open, "settings get must be open")
+        try expect(byName["voice_memo_settings_set"]?.tier == .notify, "settings set must be notify")
     }
 
     await test("VoiceMemoParser: reminder lane skips memory_keep on explicit negation") {

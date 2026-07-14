@@ -10,7 +10,7 @@ private let suiteAuditToolSets: [Set<String>] = [
     // DevSuiteAuditTests.swift expectedDevTools (representative superset check via module tests)
     // VoiceMemoSuiteAuditTests explicit set:
     [
-        "voice_memo_list", "voice_memo_process", "voice_memo_review_list",
+        "voice_memo_list", "voice_memo_process", "voice_memo_settings_get", "voice_memo_settings_set", "voice_memo_review_list",
         "voice_memo_review_dismiss", "voice_memo_review_resolve", "voice_memo_transcript_refresh",
         "voice_memo_get", "voice_memo_commit", "voice_memo_triage_open", "voice_memo_triage_await",
     ],

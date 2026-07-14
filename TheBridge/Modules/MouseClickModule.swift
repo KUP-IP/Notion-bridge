@@ -202,10 +202,13 @@ public enum MouseClickModule {
         return current
     }
 
-    /// Resolve the screen-point (top-left origin, logical points) centre of the
-    /// AX element at `axPath` for the given pid (or the focused app when nil).
+    /// Resolve the screen-point (top-left origin, logical points) geometry of
+    /// the AX element at `axPath` for the given pid (or focused app when nil).
     @MainActor
-    private static func axElementCenter(axPath: String, pid: pid_t?) throws -> CGPoint {
+    private static func axElementGeometry(
+        axPath: String,
+        pid: pid_t?
+    ) throws -> (center: CGPoint, rect: CGRect) {
         let appEl: AXUIElement
         if let pid { appEl = AXUIElementCreateApplication(pid) }
         else {
@@ -231,7 +234,22 @@ public enum MouseClickModule {
         var size = CGSize.zero
         AXValueGetValue(posVal as! AXValue, .cgPoint, &origin)
         AXValueGetValue(sizeVal as! AXValue, .cgSize, &size)
-        return CGPoint(x: origin.x + size.width / 2, y: origin.y + size.height / 2)
+        let rect = CGRect(origin: origin, size: size)
+        return (
+            center: CGPoint(x: rect.midX, y: rect.midY),
+            rect: rect
+        )
+    }
+
+    /// Serialize AX geometry in the same logical-point shape as
+    /// `ax_inspect mode=element_info`.
+    public static func elementRectValue(_ rect: CGRect) -> Value {
+        .object([
+            "x": .double(rect.origin.x),
+            "y": .double(rect.origin.y),
+            "width": .double(rect.width),
+            "height": .double(rect.height),
+        ])
     }
 
     private static func cgButton(from name: String) -> CGMouseButton? {
@@ -333,8 +351,11 @@ public enum MouseClickModule {
                     try ensureTrusted()
 
                     let target: CGPoint
+                    var elementRect: CGRect?
                     if let axPath {
-                        target = try await axElementCenter(axPath: axPath, pid: pidParam)
+                        let geometry = try await axElementGeometry(axPath: axPath, pid: pidParam)
+                        target = geometry.center
+                        elementRect = geometry.rect
                     } else if windowRel {
                         let frame = try await focusedWindowFrame()
                         target = CGPoint(x: frame.origin.x + xv, y: frame.origin.y + yv)
@@ -352,7 +373,12 @@ public enum MouseClickModule {
                         "clickCount":     .int(clickCount),
                         "windowRelative": .bool(windowRel)
                     ]
-                    if let axPath { result["axPath"] = .string(axPath) }
+                    if let axPath {
+                        result["axPath"] = .string(axPath)
+                        if let elementRect {
+                            result["elementRect"] = elementRectValue(elementRect)
+                        }
+                    }
                     return .object(result)
                 } catch let e as MouseError {
                     return e.toResponse()

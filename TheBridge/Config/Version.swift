@@ -439,7 +439,10 @@ public enum BridgeConstants {
     /// PKT-1123 Reconnect Observability: + connections_reset (request-tier,
     ///   local-only governed broker-session rebind; joins connections family).
     ///   connections_list also gains redacted runtime/session telemetry. 202 + 1 = 203.
-    public static let staticFeatureModuleToolCount = 203
+    /// PKT-1120 Tool Ergonomics (2026-07-14): +2
+    ///   (voice_memo_settings_get + voice_memo_settings_set; voice family).
+    ///   203 + 2 = 205.
+    public static let staticFeatureModuleToolCount = 205
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.

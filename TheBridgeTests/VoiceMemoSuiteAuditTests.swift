@@ -26,6 +26,8 @@ func runVoiceMemoSuiteAuditTests() async {
     let expectedVoiceTools: Set<String> = [
         "voice_memo_list",
         "voice_memo_process",
+        "voice_memo_settings_get",
+        "voice_memo_settings_set",
         "voice_memo_review_list",
         "voice_memo_review_dismiss",
         "voice_memo_review_resolve",
@@ -40,8 +42,8 @@ func runVoiceMemoSuiteAuditTests() async {
     let voiceTools = await router.registrations(forModule: "voice")
     let liveNames = Set(voiceTools.map(\.name))
 
-    await test("Voice suite: live tool count is exactly 10") {
-        try expect(voiceTools.count == 10, "expected 10 voice tools, got \(voiceTools.count)")
+    await test("Voice suite: live tool count is exactly 12") {
+        try expect(voiceTools.count == 12, "expected 12 voice tools, got \(voiceTools.count)")
         try expect(liveNames == expectedVoiceTools, "unexpected voice surface: \(liveNames.symmetricDifference(expectedVoiceTools))")
     }
 
@@ -73,7 +75,7 @@ func runVoiceMemoSuiteAuditTests() async {
     }
 
     await test("Voice suite: read-only tools annotated read-only") {
-        let readOnly = ["voice_memo_list", "voice_memo_review_list", "voice_memo_get", "voice_memo_triage_await"]
+        let readOnly = ["voice_memo_list", "voice_memo_settings_get", "voice_memo_review_list", "voice_memo_get", "voice_memo_triage_await"]
         for name in readOnly {
             guard let a = ToolAnnotationCatalog.annotations(for: name) else {
                 throw TestError.assertion("\(name) missing annotation")

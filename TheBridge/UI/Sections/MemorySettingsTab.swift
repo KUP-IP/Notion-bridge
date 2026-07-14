@@ -109,7 +109,7 @@ public struct MemorySettingsTab: View {
                     .pickerStyle(.menu)
                     .accessibilityIdentifier(BridgeAXID.Memory.Settings.curatorMode)
                     if let mode = VoiceMemoCuratorMode(rawValue: curatorModeRaw) {
-                        Text(curatorModeHelp(mode))
+                        Text(Self.curatorModeHelp(mode))
                             .font(BridgeTokens.Typeface.sub)
                             .foregroundStyle(BridgeTokens.fg3)
                             .fixedSize(horizontal: false, vertical: true)
@@ -121,18 +121,31 @@ public struct MemorySettingsTab: View {
     }
 
     /// Mirrors the mockup's `MEM_MODE_HELP` copy (page-memory.jsx) keyed by mode.
-    private func curatorModeHelp(_ mode: VoiceMemoCuratorMode) -> String {
+    public nonisolated static func curatorModeHelp(_ mode: VoiceMemoCuratorMode) -> String {
         switch mode {
         case .auto:
-            return "Tries cloud, then local Ollama, then heuristics — whichever is available first. Defers Execute to a connected agent when one is present."
+            return "Tries cloud, then local Ollama, then heuristics — whichever is available first. Configure and enable Cloud enhancement below to allow cloud routing. Defers Execute to a connected agent when one is present."
         case .local:
             return "Uses the local Ollama model only. No network calls, no cloud spend."
         case .cloud:
-            return "Sends the transcript to the configured cloud provider for every Understand step."
+            return "Sends the transcript to the configured cloud provider for every Understand step. Configure and enable Cloud enhancement below."
         case .heuristics:
             return "Deterministic phrase-matching only — no model calls at all, fastest and fully offline."
         case .agent:
             return "No local model, no cloud calls — Understand and Execute both wait for an explicit call from the connected agent."
+        }
+    }
+
+    /// Explain when the Ollama switch is inert because the selected curator
+    /// mode forces local routing on or off. Auto is the only mode that reads it.
+    public nonisolated static func ollamaRoutingAnnotation(_ mode: VoiceMemoCuratorMode) -> String? {
+        switch mode {
+        case .auto:
+            return nil
+        case .local:
+            return "Local Ollama mode forces this on; the toggle is only applied in Auto mode."
+        case .heuristics, .agent, .cloud:
+            return "\(mode.label) forces Ollama routing off; the toggle is only applied in Auto mode."
         }
     }
 
@@ -149,6 +162,13 @@ public struct MemorySettingsTab: View {
                 ladderRow("Apple embedded transcript (tsrp)", isOn: $appleTranscript, axid: BridgeAXID.Memory.Settings.ladderApple)
                 ladderRow("Parakeet fallback", isOn: $parakeetTranscription, axid: BridgeAXID.Memory.Settings.ladderParakeet)
                 ladderRow("Ollama routing + summarization", isOn: $ollamaRouting, axid: BridgeAXID.Memory.Settings.ladderOllama)
+                if let mode = VoiceMemoCuratorMode(rawValue: curatorModeRaw),
+                   let annotation = Self.ollamaRoutingAnnotation(mode) {
+                    Text(annotation)
+                        .font(BridgeTokens.Typeface.meta)
+                        .foregroundStyle(BridgeTokens.fg4)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

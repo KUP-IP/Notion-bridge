@@ -7,9 +7,15 @@ import MCP
 public enum VoiceMemoModule {
     public static let moduleName = "voice"
 
+    /// Hermetic seam for MCP settings-tool tests. Production always uses
+    /// `UserDefaults.standard`; tests supply a unique suite and restore nil.
+    nonisolated(unsafe) public static var settingsDefaultsOverrideForTesting: UserDefaults?
+
     public static func register(on router: ToolRouter) async {
         await router.register(makeList(on: router))
         await router.register(makeProcess(on: router))
+        await router.register(makeSettingsGet())
+        await router.register(makeSettingsSet())
         await router.register(makeReviewList())
         await router.register(makeReviewDismiss())
         await router.register(makeReviewResolve(on: router))
@@ -117,6 +123,162 @@ public enum VoiceMemoModule {
                 relatedTools: ["voice_memo_list", "voice_memo_review_list", "reminders_create", "registry_create", "registry_update", "memory_remember"]
             ),
             handler: { args in try await VoiceMemoProcessor.process(args: args, router: router) }
+        )
+    }
+
+    private static func settingsSnapshot(
+        defaults: UserDefaults,
+        useProductionEffectiveAccessors: Bool
+    ) -> Value {
+        let rawMode = defaults.string(forKey: BridgeDefaults.voiceMemoCuratorMode)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let curatorMode = rawMode.flatMap(VoiceMemoCuratorMode.init(rawValue:)) ?? .auto
+
+        let ollamaRouting = useProductionEffectiveAccessors
+            ? BridgeDefaults.voiceMemoOllamaRoutingEffective
+            : defaults.bool(forKey: BridgeDefaults.voiceMemoOllamaRouting)
+        let appleTranscript = useProductionEffectiveAccessors
+            ? BridgeDefaults.voiceMemoAppleTranscriptEffective
+            : (defaults.object(forKey: BridgeDefaults.voiceMemoAppleTranscript) == nil
+                ? true
+                : defaults.bool(forKey: BridgeDefaults.voiceMemoAppleTranscript))
+        let parakeetTranscription = useProductionEffectiveAccessors
+            ? BridgeDefaults.voiceMemoParakeetTranscriptionEffective
+            : (defaults.object(forKey: BridgeDefaults.voiceMemoParakeetTranscription) == nil
+                ? true
+                : defaults.bool(forKey: BridgeDefaults.voiceMemoParakeetTranscription))
+
+        return .object([
+            "curatorMode": .string(curatorMode.rawValue),
+            "ollamaRouting": .bool(ollamaRouting),
+            "appleTranscript": .bool(appleTranscript),
+            "parakeetTranscription": .bool(parakeetTranscription),
+        ])
+    }
+
+    private static func settingsContext() -> (defaults: UserDefaults, production: Bool) {
+        if let override = settingsDefaultsOverrideForTesting {
+            return (override, false)
+        }
+        return (.standard, true)
+    }
+
+    private static func makeSettingsGet() -> ToolRegistration {
+        ToolRegistration(
+            name: "voice_memo_settings_get",
+            module: moduleName,
+            tier: .open,
+            description: "Read the effective Voice Memo curator mode and transcription/routing toggles. Returns curatorMode, ollamaRouting, appleTranscript, and parakeetTranscription.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([:]),
+            ]),
+            metadata: ToolMetadata(
+                title: "Voice Memo Settings Get",
+                whenToUse: ["inspect the effective curator routing and transcription ladder settings"],
+                whenNotToUse: ["change settings — use voice_memo_settings_set"],
+                relatedTools: ["voice_memo_settings_set", "voice_memo_process"]
+            ),
+            handler: { _ in
+                let context = settingsContext()
+                return settingsSnapshot(
+                    defaults: context.defaults,
+                    useProductionEffectiveAccessors: context.production)
+            }
+        )
+    }
+
+    private static func makeSettingsSet() -> ToolRegistration {
+        ToolRegistration(
+            name: "voice_memo_settings_set",
+            module: moduleName,
+            tier: .notify,
+            description: "Partially update Voice Memo curator settings. Valid curatorMode values come from VoiceMemoCuratorMode.allCases; omitted keys are unchanged. Returns the complete post-write effective snapshot.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "curatorMode": .object([
+                        "type": .string("string"),
+                        "description": .string("Curator mode: auto | heuristics | local | agent | cloud."),
+                    ]),
+                    "ollamaRouting": .object([
+                        "type": .string("boolean"),
+                        "description": .string("Allow Ollama routing in Auto mode. Local forces Ollama on; other explicit modes force it off."),
+                    ]),
+                    "appleTranscript": .object([
+                        "type": .string("boolean"),
+                        "description": .string("Use Apple embedded transcript before fallback transcription."),
+                    ]),
+                    "parakeetTranscription": .object([
+                        "type": .string("boolean"),
+                        "description": .string("Use Parakeet as the transcription fallback."),
+                    ]),
+                ]),
+            ]),
+            metadata: ToolMetadata(
+                title: "Voice Memo Settings Set",
+                whenToUse: ["change one or more curator routing or transcription ladder settings"],
+                whenNotToUse: ["read settings without changing them — use voice_memo_settings_get"],
+                relatedTools: ["voice_memo_settings_get", "voice_memo_process"]
+            ),
+            handler: { arguments in
+                guard case .object(let args) = arguments else {
+                    return .object([
+                        "error": .string("Expected an object of optional Voice Memo settings."),
+                        "code": .string("invalid_input"),
+                    ])
+                }
+
+                let validModes = VoiceMemoCuratorMode.allCases.map(\.rawValue)
+                var requestedMode: VoiceMemoCuratorMode?
+                if let value = args["curatorMode"] {
+                    guard case .string(let raw) = value else {
+                        return .object([
+                            "error": .string("curatorMode must be a string. Valid values: \(validModes.joined(separator: ", "))."),
+                            "code": .string("invalid_input"),
+                            "validValues": .array(validModes.map(Value.string)),
+                        ])
+                    }
+                    let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                    guard let mode = VoiceMemoCuratorMode(rawValue: normalized) else {
+                        return .object([
+                            "error": .string("Unknown curatorMode '\(raw)'. Valid values: \(validModes.joined(separator: ", "))."),
+                            "code": .string("invalid_input"),
+                            "validValues": .array(validModes.map(Value.string)),
+                        ])
+                    }
+                    requestedMode = mode
+                }
+
+                var requestedBooleans: [(key: String, defaultsKey: String, value: Bool)] = []
+                for (key, defaultsKey) in [
+                    ("ollamaRouting", BridgeDefaults.voiceMemoOllamaRouting),
+                    ("appleTranscript", BridgeDefaults.voiceMemoAppleTranscript),
+                    ("parakeetTranscription", BridgeDefaults.voiceMemoParakeetTranscription),
+                ] {
+                    guard let value = args[key] else { continue }
+                    guard case .bool(let boolValue) = value else {
+                        return .object([
+                            "error": .string("\(key) must be a boolean."),
+                            "code": .string("invalid_input"),
+                        ])
+                    }
+                    requestedBooleans.append((key, defaultsKey, boolValue))
+                }
+
+                // Validate the complete request before writing any key.
+                let context = settingsContext()
+                if let requestedMode {
+                    context.defaults.set(requestedMode.rawValue, forKey: BridgeDefaults.voiceMemoCuratorMode)
+                }
+                for request in requestedBooleans {
+                    context.defaults.set(request.value, forKey: request.defaultsKey)
+                }
+                return settingsSnapshot(
+                    defaults: context.defaults,
+                    useProductionEffectiveAccessors: context.production)
+            }
         )
     }
 

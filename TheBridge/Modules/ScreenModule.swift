@@ -29,6 +29,66 @@ public enum ScreenModule {
 
     public static let moduleName = "screen"
 
+    /// Sendable projection of the ScreenCaptureKit window identity used by
+    /// the app-target resolver. Keeping selection logic independent of
+    /// `SCWindow` makes the ambiguity/failure contract hermetically testable.
+    public struct WindowCandidate: Sendable, Equatable {
+        public let windowId: Int
+        public let bundleId: String?
+        public let appName: String?
+
+        public init(windowId: Int, bundleId: String?, appName: String?) {
+            self.windowId = windowId
+            self.bundleId = bundleId
+            self.appName = appName
+        }
+    }
+
+    public enum WindowSelection: Sendable, Equatable {
+        case selected(Int)
+        case missingIdentity
+        case windowIdNotFound(Int)
+        case appNotFound(query: String, available: [WindowCandidate])
+        case ambiguous(query: String, matches: [WindowCandidate])
+    }
+
+    /// Resolve one capturable window without guessing. An explicit window id
+    /// always wins; otherwise bundle id is preferred over application name.
+    public static func resolveWindowTarget(
+        windowId: Int?,
+        bundleId: String?,
+        appName: String?,
+        candidates: [WindowCandidate]
+    ) -> WindowSelection {
+        if let windowId {
+            return candidates.contains(where: { $0.windowId == windowId })
+                ? .selected(windowId)
+                : .windowIdNotFound(windowId)
+        }
+
+        let normalizedBundleId = bundleId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedAppName = appName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let matches: [WindowCandidate]
+        let query: String
+        if let normalizedBundleId, !normalizedBundleId.isEmpty {
+            query = "bundleId=\(normalizedBundleId)"
+            matches = candidates.filter { $0.bundleId == normalizedBundleId }
+        } else if let normalizedAppName, !normalizedAppName.isEmpty {
+            query = "appName=\(normalizedAppName)"
+            matches = candidates.filter {
+                $0.appName?.caseInsensitiveCompare(normalizedAppName) == .orderedSame
+            }
+        } else {
+            return .missingIdentity
+        }
+
+        switch matches.count {
+        case 0: return .appNotFound(query: query, available: candidates)
+        case 1: return .selected(matches[0].windowId)
+        default: return .ambiguous(query: query, matches: matches)
+        }
+    }
+
     // MARK: - Cleanup
 
     /// Best-effort cleanup of old capture files.
@@ -139,6 +199,8 @@ public enum ScreenModule {
     private static func captureImage(
         target: String,
         windowId: Int?,
+        bundleId: String?,
+        appName: String?,
         region: (x: Int, y: Int, w: Int, h: Int)?,
         displayIndex: Int? = nil
     ) async throws -> CGImage {
@@ -146,8 +208,30 @@ public enum ScreenModule {
 
         switch target {
         case "window":
-            guard let wid = windowId else {
-                throw ScreenModuleError.missingParameter("windowId required for window target")
+            let candidates = content.windows.map { window in
+                WindowCandidate(
+                    windowId: Int(window.windowID),
+                    bundleId: window.owningApplication?.bundleIdentifier,
+                    appName: window.owningApplication?.applicationName)
+            }
+            let wid: Int
+            switch resolveWindowTarget(
+                windowId: windowId,
+                bundleId: bundleId,
+                appName: appName,
+                candidates: candidates
+            ) {
+            case .selected(let selected):
+                wid = selected
+            case .missingIdentity:
+                throw ScreenModuleError.missingParameter(
+                    "windowId, bundleId, or appName required for window target")
+            case .windowIdNotFound(let id):
+                throw ScreenModuleError.windowNotFound(id)
+            case .appNotFound(let query, let available):
+                throw ScreenModuleError.windowNotFoundForApp(query: query, available: available)
+            case .ambiguous(let query, let matches):
+                throw ScreenModuleError.ambiguousWindowsForApp(query: query, matches: matches)
             }
             guard let window = content.windows.first(where: { $0.windowID == CGWindowID(wid) }) else {
                 throw ScreenModuleError.windowNotFound(wid)
@@ -274,7 +358,15 @@ public enum ScreenModule {
                     ]),
                     "windowId": .object([
                         "type": .string("integer"),
-                        "description": .string("Window ID to capture (required when target is 'window')")
+                        "description": .string("Exact window ID to capture. Takes precedence over bundleId/appName when target is 'window'.")
+                    ]),
+                    "bundleId": .object([
+                        "type": .string("string"),
+                        "description": .string("Owning application bundle identifier for target='window' when windowId is omitted. Errors when zero or multiple capturable windows match.")
+                    ]),
+                    "appName": .object([
+                        "type": .string("string"),
+                        "description": .string("Owning application name for target='window' when windowId and bundleId are omitted. Case-insensitive exact match; errors when zero or multiple windows match.")
                     ]),
                     "region": .object([
                         "type": .string("object"),
@@ -316,6 +408,14 @@ public enum ScreenModule {
                     if case .int(let w) = args["windowId"] { return w }
                     return nil
                 }()
+                let bundleId: String? = {
+                    if case .string(let value) = args["bundleId"] { return value }
+                    return nil
+                }()
+                let appName: String? = {
+                    if case .string(let value) = args["appName"] { return value }
+                    return nil
+                }()
                 let region: (x: Int, y: Int, w: Int, h: Int)? = {
                     if case .object(let r) = args["region"],
                        case .int(let x) = r["x"],
@@ -351,7 +451,13 @@ public enum ScreenModule {
                 // Capture
                 let cgImage: CGImage
                 do {
-                    cgImage = try await captureImage(target: target, windowId: windowId, region: region, displayIndex: displayIndex)
+                    cgImage = try await captureImage(
+                        target: target,
+                        windowId: windowId,
+                        bundleId: bundleId,
+                        appName: appName,
+                        region: region,
+                        displayIndex: displayIndex)
                 } catch let error as ScreenModuleError {
                     return error.toResponse()
                 } catch {
@@ -427,7 +533,15 @@ public enum ScreenModule {
                     ]),
                     "windowId": .object([
                         "type": .string("integer"),
-                        "description": .string("Window ID to capture (required when target is 'window')")
+                        "description": .string("Exact window ID to capture. Takes precedence over bundleId/appName when target is 'window'.")
+                    ]),
+                    "bundleId": .object([
+                        "type": .string("string"),
+                        "description": .string("Owning application bundle identifier for target='window' when windowId is omitted. Errors when zero or multiple capturable windows match.")
+                    ]),
+                    "appName": .object([
+                        "type": .string("string"),
+                        "description": .string("Owning application name for target='window' when windowId and bundleId are omitted. Case-insensitive exact match; errors when zero or multiple windows match.")
                     ]),
                     "region": .object([
                         "type": .string("object"),
@@ -464,6 +578,14 @@ public enum ScreenModule {
                     if case .int(let w) = args["windowId"] { return w }
                     return nil
                 }()
+                let bundleId: String? = {
+                    if case .string(let value) = args["bundleId"] { return value }
+                    return nil
+                }()
+                let appName: String? = {
+                    if case .string(let value) = args["appName"] { return value }
+                    return nil
+                }()
                 let region: (x: Int, y: Int, w: Int, h: Int)? = {
                     if case .object(let r) = args["region"],
                        case .int(let x) = r["x"],
@@ -486,7 +608,13 @@ public enum ScreenModule {
                 // Capture screen
                 let cgImage: CGImage
                 do {
-                    cgImage = try await captureImage(target: target, windowId: windowId, region: region, displayIndex: displayIndex)
+                    cgImage = try await captureImage(
+                        target: target,
+                        windowId: windowId,
+                        bundleId: bundleId,
+                        appName: appName,
+                        region: region,
+                        displayIndex: displayIndex)
                 } catch let error as ScreenModuleError {
                     return error.toResponse()
                 } catch {
@@ -559,6 +687,8 @@ private enum ScreenModuleError: Error {
     case screenRecordingDenied
     case noDisplays
     case windowNotFound(Int)
+    case windowNotFoundForApp(query: String, available: [ScreenModule.WindowCandidate])
+    case ambiguousWindowsForApp(query: String, matches: [ScreenModule.WindowCandidate])
     case missingParameter(String)
     case encodingFailed(String)
     case captureFailed(String)
@@ -580,6 +710,18 @@ private enum ScreenModuleError: Error {
                 "error": .string("window_not_found"),
                 "message": .string("Window ID \(id) not found in capturable windows.")
             ])
+        case .windowNotFoundForApp(let query, let available):
+            return .object([
+                "error": .string("window_not_found_for_app"),
+                "message": .string("No capturable window matched \(query). Available: \(windowList(available))."),
+                "availableWindows": .array(available.map(windowValue)),
+            ])
+        case .ambiguousWindowsForApp(let query, let matches):
+            return .object([
+                "error": .string("ambiguous_window_for_app"),
+                "message": .string("Multiple capturable windows matched \(query); pass windowId to choose one. Matches: \(windowList(matches))."),
+                "matchingWindows": .array(matches.map(windowValue)),
+            ])
         case .missingParameter(let msg):
             return .object([
                 "error": .string("invalid_parameters"),
@@ -596,5 +738,20 @@ private enum ScreenModuleError: Error {
                 "message": .string(msg)
             ])
         }
+    }
+
+    private func windowValue(_ candidate: ScreenModule.WindowCandidate) -> Value {
+        .object([
+            "windowId": .int(candidate.windowId),
+            "appName": candidate.appName.map(Value.string) ?? .null,
+            "bundleId": candidate.bundleId.map(Value.string) ?? .null,
+        ])
+    }
+
+    private func windowList(_ candidates: [ScreenModule.WindowCandidate]) -> String {
+        guard !candidates.isEmpty else { return "none" }
+        return candidates.map { candidate in
+            "\(candidate.windowId):\(candidate.appName ?? "unknown") [\(candidate.bundleId ?? "unknown")]"
+        }.joined(separator: ", ")
     }
 }

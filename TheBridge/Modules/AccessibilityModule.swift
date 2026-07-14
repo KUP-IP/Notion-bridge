@@ -614,6 +614,9 @@ public enum AccessibilityModule {
 
             let appEl = AXUIElementCreateApplication(pid)
             applyMessagingTimeout(appEl)
+            guard NSRunningApplication(processIdentifier: pid) != nil else {
+                throw AXModuleError.appNotFound(pid: pid)
+            }
             let budget = TraversalBudget(requestedDepth: maxD)
             _ = budget.admit() // count the root
             let matches = findElements(in: appEl, role: r, title: t, label: l,
@@ -639,6 +642,9 @@ public enum AccessibilityModule {
             let pid = try resolvePid(params)
             let appEl = AXUIElementCreateApplication(pid)
             applyMessagingTimeout(appEl)
+            guard NSRunningApplication(processIdentifier: pid) != nil else {
+                throw AXModuleError.appNotFound(pid: pid)
+            }
             let target = try resolveTarget(params, appElement: appEl)
             return detailedInfo(target)
         } catch let e as AXModuleError { return e.toResponse() } catch { return .object(["error": .string("Unexpected: \(error)")]) }

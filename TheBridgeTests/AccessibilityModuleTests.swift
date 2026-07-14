@@ -103,6 +103,44 @@ func runAccessibilityModuleTests() async {
         }
     }
 
+    await test("ax_inspect find_element rejects a dead pid like ax_tree") {
+        let deadPid = Int(Int32.max)
+        let result = try await router.dispatch(
+            toolName: "ax_inspect",
+            arguments: .object([
+                "mode": .string("find_element"),
+                "pid": .int(deadPid),
+                "role": .string("AXButton"),
+            ])
+        )
+        guard case .object(let dict) = result,
+              case .string(let error)? = dict["error"] else {
+            throw TestError.assertion("dead pid must return appNotFound error")
+        }
+        try expect(error == "Application with PID \(deadPid) not found or not running.",
+                   "unexpected dead-pid error: \(error)")
+        try expect(dict["matches"] == nil && dict["count"] == nil,
+                   "dead pid must not look like a zero-match success")
+    }
+
+    await test("ax_inspect element_info rejects the identical dead pid") {
+        let deadPid = Int(Int32.max)
+        let result = try await router.dispatch(
+            toolName: "ax_inspect",
+            arguments: .object([
+                "mode": .string("element_info"),
+                "pid": .int(deadPid),
+                "path": .string("/AXApplication:Missing"),
+            ])
+        )
+        guard case .object(let dict) = result,
+              case .string(let error)? = dict["error"] else {
+            throw TestError.assertion("dead pid must return appNotFound error")
+        }
+        try expect(error == "Application with PID \(deadPid) not found or not running.",
+                   "find_element and element_info must have dead-pid parity")
+    }
+
     await test("ax_perform_action handles missing required params") {
         let result = try await router.dispatch(
             toolName: "ax_perform_action",

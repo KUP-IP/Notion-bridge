@@ -50,6 +50,87 @@ func runScreenModuleTests() async {
         let tool = tools.first(where: { $0.name == "screen_ocr" })!
         try expect(tool.tier == .open, "Expected open, got \(tool.tier.rawValue)")
     }
+
+    await test("screen window schemas expose bundleId and appName at both registration sites") {
+        let tools = await router.registrations(forModule: "screen")
+        for name in ["screen_capture", "screen_ocr"] {
+            guard let tool = tools.first(where: { $0.name == name }),
+                  case .object(let schema) = tool.inputSchema,
+                  case .object(let properties)? = schema["properties"] else {
+                throw TestError.assertion("missing schema for \(name)")
+            }
+            try expect(properties["windowId"] != nil, "\(name) missing windowId")
+            try expect(properties["bundleId"] != nil, "\(name) missing bundleId")
+            try expect(properties["appName"] != nil, "\(name) missing appName")
+        }
+    }
+
+    let windows = [
+        ScreenModule.WindowCandidate(windowId: 11, bundleId: "com.example.one", appName: "Example"),
+        ScreenModule.WindowCandidate(windowId: 12, bundleId: "com.example.two", appName: "Example"),
+        ScreenModule.WindowCandidate(windowId: 13, bundleId: "com.example.unique", appName: "Unique App"),
+    ]
+
+    await test("screen window resolver gives windowId precedence over app identity") {
+        let result = ScreenModule.resolveWindowTarget(
+            windowId: 13,
+            bundleId: "com.example.one",
+            appName: "Example",
+            candidates: windows)
+        try expect(result == .selected(13), "windowId must win: \(result)")
+    }
+
+    await test("screen window resolver matches a unique bundleId") {
+        let result = ScreenModule.resolveWindowTarget(
+            windowId: nil,
+            bundleId: "com.example.unique",
+            appName: nil,
+            candidates: windows)
+        try expect(result == .selected(13), "unique bundle match failed: \(result)")
+    }
+
+    await test("screen window resolver matches appName case-insensitively") {
+        let result = ScreenModule.resolveWindowTarget(
+            windowId: nil,
+            bundleId: nil,
+            appName: "unique app",
+            candidates: windows)
+        try expect(result == .selected(13), "unique appName match failed: \(result)")
+    }
+
+    await test("screen window resolver reports zero matches with available windows") {
+        let result = ScreenModule.resolveWindowTarget(
+            windowId: nil,
+            bundleId: "com.example.missing",
+            appName: nil,
+            candidates: windows)
+        guard case .appNotFound(let query, let available) = result else {
+            throw TestError.assertion("expected appNotFound, got \(result)")
+        }
+        try expect(query.contains("com.example.missing"), "query should identify bundle")
+        try expect(available == windows, "failure must list all capturable ids/names")
+    }
+
+    await test("screen window resolver errors instead of guessing across multiple matches") {
+        let result = ScreenModule.resolveWindowTarget(
+            windowId: nil,
+            bundleId: nil,
+            appName: "Example",
+            candidates: windows)
+        guard case .ambiguous(_, let matches) = result else {
+            throw TestError.assertion("expected ambiguous result, got \(result)")
+        }
+        try expect(matches.map(\.windowId) == [11, 12], "ambiguous ids should be explicit")
+    }
+
+    await test("screen window resolver requires one identity") {
+        let result = ScreenModule.resolveWindowTarget(
+            windowId: nil,
+            bundleId: nil,
+            appName: nil,
+            candidates: windows)
+        try expect(result == .missingIdentity, "missing identity must not select a window")
+    }
     await test("screen_record_start is notify tier") {
         let tools = await router.registrations(forModule: "screen")
         let tool = tools.first(where: { $0.name == "screen_record_start" })!
