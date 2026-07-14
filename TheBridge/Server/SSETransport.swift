@@ -751,7 +751,8 @@ public actor SSEServer {
                 ToolDispatchContext(
                     transportSessionId: sessionID,
                     origin: origin,
-                    client: session.clientName
+                    client: session.clientName,
+                    clientVersion: session.clientVersion
                 )
             ) {
                 await session.transport.handleRequest(request)
@@ -1034,7 +1035,6 @@ public actor SSEServer {
                 regs = regs.filter { allowlist.contains($0.name) }
             }
             regs = await connectorVisibleRegistrations(regs, token: token, auth: auth)
-            regs = BrokerBootstrapToolOrdering.prioritize(regs)
             let tools: [[String: Any]] = regs.compactMap { reg in
                 guard let data = try? JSONEncoder().encode(MCPToolFactory.tool(for: reg)),
                       let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -1254,6 +1254,7 @@ public actor SSEServer {
         // for this transport is owned by the actor's `resourceSubscribers`
         // set, keyed by sessionID (see `broadcastResourcesUpdated`).
         let resourceClientName = clientName
+        let resourceClientVersion = clientVersion
         let resourceSessionID = sessionID
         await server.withMethodHandler(ListResources.self) { _ in
             ListResources.Result(resources: BridgeResources.list)
@@ -1329,7 +1330,8 @@ public actor SSEServer {
             let dispatchContext = ToolDispatchContext.current ?? ToolDispatchContext(
                 transportSessionId: resourceSessionID,
                 origin: origin,
-                client: resourceClientName
+                client: resourceClientName,
+                clientVersion: resourceClientVersion
             )
             let (text, isError) = await router.dispatchFormatted(
                 toolName: params.name,

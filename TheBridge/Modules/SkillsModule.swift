@@ -126,7 +126,7 @@ public enum SkillsModule {
             }
         }
         guard !skills.isEmpty else {
-            return "The Bridge MCP server. Call list_routing_skills to discover available skill-based capabilities.\n\n\(dispatchContract)"
+            return "The Bridge MCP server. Call skills_routing_list to discover available skill-based capabilities.\n\n\(dispatchContract)"
         }
         // Build compact JSON routing index
         var lines: [String] = []
@@ -140,7 +140,7 @@ public enum SkillsModule {
         return """
         The Bridge MCP server. \(skills.count) routing skill(s) available:
         \(lines.joined(separator: "\n"))
-        Use fetch_skill to load full skill content by name. Call list_routing_skills to refresh this index.
+        Use fetch_skill to load full skill content by name. Call skills_routing_list to refresh this index.
 
         \(dispatchContract)
         """

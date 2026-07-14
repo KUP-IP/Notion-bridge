@@ -2285,3 +2285,8 @@ set -euo pipefail
 # Recommended badge invariant, IconPickerCatalog emoji + SF Symbol
 # curation + de-duped + NSImage resolvable, CommandStore icon round-trip.
 # Baseline 1275 at HEAD 4554d32 + 14 + 25 + 19 + 27 = 1360.
+# Agent-surface reliability integration (2026-07-14): +5 net-new hermetic
+# tests cover deterministic manifest ordering, revision changes on registry
+# mutation, rate-limited unknown-tool audit telemetry, secret-shaped miss
+# redaction, and client name/version attribution. Measured 3207 passed, 0
+# failed on the current origin/main-based worktree. FLOOR 3202 -> 3207.

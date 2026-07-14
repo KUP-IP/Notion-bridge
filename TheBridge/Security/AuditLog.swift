@@ -28,6 +28,11 @@ public struct AuditEntry: Sendable, Codable {
     public let origin: ToolDispatchOrigin?
     public let transportSessionId: String?
     public let governanceNote: String?
+    /// Optional discriminator for non-tool-call events such as a pre-dispatch miss.
+    public let eventType: String?
+    /// Self-reported MCP clientInfo fields; labels, not authenticated identity.
+    public let reportedClientName: String?
+    public let reportedClientVersion: String?
 
     public init(
         timestamp: Date,
@@ -40,7 +45,10 @@ public struct AuditEntry: Sendable, Codable {
         governed: Bool? = nil,
         origin: ToolDispatchOrigin? = nil,
         transportSessionId: String? = nil,
-        governanceNote: String? = nil
+        governanceNote: String? = nil,
+        eventType: String? = nil,
+        reportedClientName: String? = nil,
+        reportedClientVersion: String? = nil
     ) {
         self.timestamp = timestamp
         self.toolName = toolName
@@ -53,6 +61,9 @@ public struct AuditEntry: Sendable, Codable {
         self.origin = origin
         self.transportSessionId = transportSessionId
         self.governanceNote = governanceNote
+        self.eventType = eventType
+        self.reportedClientName = reportedClientName
+        self.reportedClientVersion = reportedClientVersion
     }
 }
 
