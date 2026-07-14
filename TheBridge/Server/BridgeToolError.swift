@@ -67,6 +67,7 @@ public enum BridgeToolAliases {
         "page_id": "pageId",
         "block": "blockId",
         "block_id": "blockId",
+        "parent_id": "parentId",
         // v3.0·0.5: keys renamed to camelCase this packet — legacy
         // snake forms still accepted by handlers; steer new callers.
         "zip_code": "zipCode",
@@ -78,9 +79,17 @@ public enum BridgeToolAliases {
     /// Given the keys an agent actually sent, return a one-line
     /// "did you mean: a→b, c→d" hint, or nil if none look like a known
     /// misnomer. Pure + deterministic (sorted) so it is test-stable.
-    public static func didYouMean(providedKeys: [String]) -> String? {
+    public static func didYouMean(
+        providedKeys: [String],
+        acceptedKeys: Set<String> = []
+    ) -> String? {
         let hits = providedKeys
-            .compactMap { k -> String? in map[k].map { "\(k)→\($0)" } }
+            .compactMap { key -> String? in
+                guard !acceptedKeys.contains(key), let canonical = map[key] else {
+                    return nil
+                }
+                return "\(key)→\(canonical)"
+            }
             .sorted()
         guard !hits.isEmpty else { return nil }
         return "did you mean: " + hits.joined(separator: ", ")

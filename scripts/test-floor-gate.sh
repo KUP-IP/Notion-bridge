@@ -2198,6 +2198,12 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3156}"
 # AX-path click geometry, the voice-memo settings tool pair, and mode-aware
 # Memory Settings clarity. Measured 3194 passed, 0 failed. FLOOR 3177 -> 3194.
 FLOOR="${BRIDGE_TEST_FLOOR:-3194}"
+# PKT-1125 W3 hint-only tool-argument aliases (2026-07-14): +8 focused
+# tests cover exact deterministic mappings, accepted-key suppression, one-shot
+# handler failure with no retry, canonical argument preservation, unknown-key
+# behavior, live Notion dual-key schemas, and the single handler-call-site
+# source invariant. Measured 3202 passed, 0 failed. FLOOR 3194 -> 3202.
+FLOOR="${BRIDGE_TEST_FLOOR:-3202}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

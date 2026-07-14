@@ -716,8 +716,19 @@ public actor ToolRouter {
             // a known wrong key, append a did-you-mean so it self-corrects
             // without reading source. Applies to all 162 tools at once.
             var msg = "Error: \(error.localizedDescription)"
+            let acceptedKeys: Set<String> = {
+                guard let registration = registry[toolName],
+                      case .object(let schema) = registration.inputSchema,
+                      case .object(let properties)? = schema["properties"] else {
+                    return []
+                }
+                return Set(properties.keys)
+            }()
             if case .object(let argDict) = arguments,
-               let hint = BridgeToolAliases.didYouMean(providedKeys: Array(argDict.keys)) {
+               let hint = BridgeToolAliases.didYouMean(
+                   providedKeys: Array(argDict.keys),
+                   acceptedKeys: acceptedKeys
+               ) {
                 msg += " — \(hint)"
             }
             return (text: msg, isError: true)

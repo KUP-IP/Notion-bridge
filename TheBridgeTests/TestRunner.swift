@@ -768,6 +768,7 @@ await runBridgeModuleRegistryTests() // PKT v3.0·0.4: single-source module regi
 await runMCPToolFactoryTests()       // PKT v3.0·0.5: metadata contract + unified Tool factory
 await runRoutingIntegrityLayerTests() // PKT-1094: server-owned tool-skill registry + manifest gate
 await runToolConventionTests()       // PKT v3.0·0.5: P0 — aliases + key convention + dispatch contract
+await runToolArgumentAliasTests()    // PKT-1125: tool-aware hint-only aliases + no-mutation/no-retry proof
 await runToolMetadataAuthoringTests() // PKT v3.0·0.5: P1 — projection + authored-metadata render
 await runArtifactModuleTests()    // PKT-743 (v2.2 · 3.1)
 await runRunnerParsersTests()      // PKT-782 (v2.2 · 3.2b)
