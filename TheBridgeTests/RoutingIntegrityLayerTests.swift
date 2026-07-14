@@ -58,6 +58,9 @@ func runRoutingIntegrityLayerTests() async {
             try expect(receipt.routingIntegrity.registryVersion == ToolSkillBindingRegistry.registryVersion)
             try expect(receipt.routingIntegrity.boundToolCount == ToolSkillBindingRegistry.bindings.count)
             try expect(receipt.routingIntegrity.manifestMarkerTools.contains(BridgeInitializeModule.toolName))
+            try expect(receipt.routingIntegrity.manifestMarkerTools.contains("skills_routing_list"))
+            try expect(!receipt.routingIntegrity.manifestMarkerTools.contains("list_routing_skills"),
+                       "bridge_initialize must not advertise the removed routing alias")
             let value = BridgeInitializeModule.receiptValue(receipt)
             guard case .object(let dict) = value,
                   case .object(let ril)? = dict["routingIntegrity"],

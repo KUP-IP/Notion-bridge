@@ -122,13 +122,80 @@ public enum BrokerBootstrapToolOrdering {
 
     public static func prioritize(_ registrations: [ToolRegistration]) -> [ToolRegistration] {
         let rank = Dictionary(uniqueKeysWithValues: priority.enumerated().map { ($0.element, $0.offset) })
-        return registrations.enumerated().sorted { lhs, rhs in
-            let lhsRank = rank[lhs.element.name] ?? Int.max
-            let rhsRank = rank[rhs.element.name] ?? Int.max
+        return registrations.sorted { lhs, rhs in
+            let lhsRank = rank[lhs.name] ?? Int.max
+            let rhsRank = rank[rhs.name] ?? Int.max
             if lhsRank != rhsRank { return lhsRank < rhsRank }
-            return lhs.offset < rhs.offset
-        }.map(\.element)
+            let lhsKey = lhs.name.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            let rhsKey = rhs.name.lowercased(with: Locale(identifier: "en_US_POSIX"))
+            if lhsKey != rhsKey { return lhsKey < rhsKey }
+            return lhs.name.utf8.lexicographicallyPrecedes(rhs.name.utf8)
+        }
     }
+}
+
+/// One actor-isolated view of the enabled tool registry. A revision changes
+/// whenever registration changes, so callers can distinguish a real dynamic
+/// surface update from ordering instability.
+public struct ToolManifestSnapshot: Sendable {
+    public let revision: UInt64
+    public let registrations: [ToolRegistration]
+}
+
+private struct DispatchMissKey: Hashable {
+    let session: String
+    let safeToolName: String
+}
+
+private enum DispatchMissTelemetry {
+    static let eventType = "dispatch_miss"
+    static let windowSeconds: TimeInterval = 60
+
+    static func safeToolName(_ raw: String) -> String {
+        let lower = raw.lowercased(with: Locale(identifier: "en_US_POSIX"))
+        let secretMarkers = ["sk-", "sk_", "secret", "bearer", "token", "api_key", "apikey"]
+        let looksSecret = secretMarkers.contains { lower.contains($0) }
+        let bytes = Array(raw.utf8)
+        let isIdentifier = !bytes.isEmpty
+            && bytes.count <= 128
+            && bytes[0].isASCIIAlpha
+            && bytes.allSatisfy { $0.isASCIIAlphaNumeric || $0 == 95 }
+        guard isIdentifier, !looksSecret else {
+            return "<invalid-name:\(stableDigest(raw))>"
+        }
+        return raw
+    }
+
+    static func safeLabel(_ raw: String?, maxBytes: Int) -> String? {
+        guard let raw else { return nil }
+        let lower = raw.lowercased(with: Locale(identifier: "en_US_POSIX"))
+        if ["secret", "bearer", "token", "api_key", "apikey", "sk-", "sk_"].contains(where: lower.contains) {
+            return "<redacted>"
+        }
+        var result = ""
+        for scalar in raw.unicodeScalars {
+            guard scalar.value >= 0x20, scalar.value != 0x7f else { continue }
+            let next = String(scalar)
+            guard result.utf8.count + next.utf8.count <= maxBytes else { break }
+            result.append(next)
+        }
+        let trimmed = result.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func stableDigest(_ raw: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in raw.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
+    }
+}
+
+private extension UInt8 {
+    var isASCIIAlpha: Bool { (65...90).contains(self) || (97...122).contains(self) }
+    var isASCIIAlphaNumeric: Bool { isASCIIAlpha || (48...57).contains(self) }
 }
 
 // PKT-373 P1-5: ExecutionPlanEntry removed (was dead code)
@@ -138,10 +205,12 @@ public enum BrokerBootstrapToolOrdering {
 /// Central dispatch hub. Every tool call flows through here.
 public actor ToolRouter {
     private var registry: [String: ToolRegistration] = [:]
+    private var manifestRevision: UInt64 = 0
     /// FB-4: withhold `tools/list` until `BridgeModuleRegistry` finishes so
     /// clients never cache a partial surface during startup registration.
     private var modulesRegistrationComplete = false
     private var routingManifestSessionIDs: Set<String> = []
+    private var dispatchMissWindows: [DispatchMissKey: Date] = [:]
     private let securityGate: SecurityGate
     private let auditLog: AuditLog
     private let sessionRegistry: SessionRegistry
@@ -179,11 +248,14 @@ public actor ToolRouter {
     /// Register a tool. Overwrites any existing registration with the same name.
     public func register(_ tool: ToolRegistration) {
         registry[tool.name] = tool
+        manifestRevision &+= 1
     }
 
     /// Remove a tool registration by name.
     public func deregister(name: String) {
-        registry.removeValue(forKey: name)
+        if registry.removeValue(forKey: name) != nil {
+            manifestRevision &+= 1
+        }
     }
 
     /// All currently registered tools.
@@ -222,8 +294,18 @@ public actor ToolRouter {
 
     /// Surface for MCP `tools/list` — empty until startup registration completes (FB-4).
     public func registrationsForListTools(disabledNames: Set<String>) -> [ToolRegistration] {
-        guard modulesRegistrationComplete else { return [] }
-        return enabledRegistrations(disabledNames: disabledNames)
+        toolManifestSnapshot(disabledNames: disabledNames).registrations
+    }
+
+    /// Atomic, revisioned source for every MCP `tools/list` transport.
+    public func toolManifestSnapshot(disabledNames: Set<String>) -> ToolManifestSnapshot {
+        guard modulesRegistrationComplete else {
+            return ToolManifestSnapshot(revision: manifestRevision, registrations: [])
+        }
+        let registrations = BrokerBootstrapToolOrdering.prioritize(
+            enabledRegistrations(disabledNames: disabledNames)
+        )
+        return ToolManifestSnapshot(revision: manifestRevision, registrations: registrations)
     }
 
     // MARK: Dispatch
@@ -257,6 +339,39 @@ public actor ToolRouter {
         let start = ContinuousClock.now
 
         guard let tool = registry[toolName] else {
+            let safeName = DispatchMissTelemetry.safeToolName(toolName)
+            let session = context.transportSessionId ?? "<none>:\(context.origin.rawValue)"
+            let key = DispatchMissKey(session: session, safeToolName: safeName)
+            let now = Date()
+            let shouldAudit: Bool
+            if let windowStart = dispatchMissWindows[key],
+               now.timeIntervalSince(windowStart) < DispatchMissTelemetry.windowSeconds {
+                shouldAudit = false
+            } else {
+                dispatchMissWindows[key] = now
+                shouldAudit = true
+            }
+            if dispatchMissWindows.count > 1_024 {
+                dispatchMissWindows = dispatchMissWindows.filter {
+                    now.timeIntervalSince($0.value) < DispatchMissTelemetry.windowSeconds
+                }
+            }
+            if shouldAudit {
+                await auditLog.append(AuditEntry(
+                    timestamp: now,
+                    toolName: safeName,
+                    tier: .open,
+                    inputSummary: "",
+                    outputSummary: "ERROR: unknown tool",
+                    durationMs: Self.elapsedMs(since: start),
+                    approvalStatus: .error,
+                    origin: context.origin,
+                    transportSessionId: context.transportSessionId,
+                    eventType: DispatchMissTelemetry.eventType,
+                    reportedClientName: DispatchMissTelemetry.safeLabel(context.client, maxBytes: 128),
+                    reportedClientVersion: DispatchMissTelemetry.safeLabel(context.clientVersion, maxBytes: 64)
+                ))
+            }
             throw ToolRouterError.unknownTool(toolName)
         }
 

@@ -58,5 +58,9 @@ func runToolConventionTests() async {
         let instr = SkillsModule.buildRoutingInstructions()
         try expect(instr.contains("camelCase") && instr.contains("did you mean"),
                    "dispatch contract not surfaced in instructions")
+        try expect(instr.contains("skills_routing_list"),
+                   "instructions must advertise the canonical routing roster tool")
+        try expect(!instr.contains("list_routing_skills"),
+                   "instructions must not advertise the removed routing alias")
     }
 }

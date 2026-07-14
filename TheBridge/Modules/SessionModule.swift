@@ -73,9 +73,13 @@ public enum SessionModule {
 
                 let registrations: [ToolRegistration]
                 if let filter = moduleFilter {
-                    registrations = await router.registrations(forModule: filter)
+                    registrations = BrokerBootstrapToolOrdering.prioritize(
+                        await router.registrations(forModule: filter)
+                    )
                 } else {
-                    registrations = await router.allRegistrations()
+                    registrations = BrokerBootstrapToolOrdering.prioritize(
+                        await router.allRegistrations()
+                    )
                 }
 
                 func summarize(_ s: String) -> String {
@@ -343,7 +347,10 @@ public enum SessionModule {
             "outputSummary": .string(outputSummary),
             "durationMs": .double(entry.durationMs),
             "origin": entry.origin.map { .string($0.rawValue) } ?? .null,
-            "transportSessionId": entry.transportSessionId.map(Value.string) ?? .null
+            "transportSessionId": entry.transportSessionId.map(Value.string) ?? .null,
+            "eventType": entry.eventType.map(Value.string) ?? .null,
+            "reportedClientName": entry.reportedClientName.map(Value.string) ?? .null,
+            "reportedClientVersion": entry.reportedClientVersion.map(Value.string) ?? .null
         ])
     }
 }

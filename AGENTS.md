@@ -176,7 +176,7 @@ Every module exposes a `static func register(on router: ToolRouter) async` metho
 
 MCP metadata (`summary`, `triggerPhrases`, `antiTriggerPhrases`) is **authoritative** in app storage (`com.notionbridge.skills`). Optional Notion page `rich_text` properties mirror it for humans: **`Bridge Summary`**, **`Bridge Triggers`**, **`Bridge Anti-triggers`** (one phrase per line in the latter two). Use `manage_skill` **`sync_metadata_to_notion`** / **`sync_metadata_from_notion`** to copy in either direction; create those properties on the skill page if missing.
 
-- **`list_routing_skills`** (`.open`) — Returns enabled skills with `visibility == routing` and a non-empty Notion page id, including MCP metadata fields. Does not fetch page bodies.
+- **`skills_routing_list`** (`.open`) — Returns enabled skills with `visibility == routing` and a non-empty Notion page id, including MCP metadata fields. Does not fetch page bodies.
 - **`fetch_skill`** (`.open`) — Loads a configured skill page: paginates blocks, returns `summary` / `triggerPhrases` / `antiTriggerPhrases` next to `content`. Cache key includes a metadata fingerprint so metadata edits do not reuse stale fetches.
 - **`manage_skill`** (`.request`) — Registry CRUD, `set_visibility`, **`set_metadata`** (partial updates), and Notion sync actions above. Not a secrecy boundary: approved calls still see all skills.
 

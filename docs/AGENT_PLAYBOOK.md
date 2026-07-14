@@ -68,8 +68,8 @@ Do not shell out to `sed`/`python3` for in-place edits. Use the first-class edit
     context against current content and rejects on drift. Multi-file diffs must be split
     per file by the caller. Writes are atomic.
 
-`file_str_replace` and `file_apply_patch` still exist but are **deprecated 1-cycle
-aliases** of `file_edit` — prefer `file_edit`.
+The removed `file_str_replace` and `file_apply_patch` aliases are historical only.
+Use `file_edit` for surgical replacements and unified patches.
 
 Source: `TheBridge/Modules/CodeEditModule.swift`.
 

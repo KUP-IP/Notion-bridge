@@ -70,7 +70,6 @@ public enum ToolSkillBindingRegistry {
     public static let manifestMarkerTools: Set<String> = [
         BridgeInitializeModule.toolName,
         "fetch_skill",
-        "list_routing_skills",
         "skills_routing_list",
     ]
 

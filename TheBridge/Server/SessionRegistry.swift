@@ -57,21 +57,25 @@ public struct ToolDispatchContext: Sendable, Equatable {
     public let transportSessionId: String?
     public let origin: ToolDispatchOrigin
     public let client: String?
+    public let clientVersion: String?
 
     public init(
         transportSessionId: String?,
         origin: ToolDispatchOrigin,
-        client: String? = nil
+        client: String? = nil,
+        clientVersion: String? = nil
     ) {
         self.transportSessionId = transportSessionId
         self.origin = origin
         self.client = client
+        self.clientVersion = clientVersion
     }
 
     public static let localDefault = ToolDispatchContext(
         transportSessionId: nil,
         origin: .local,
-        client: nil
+        client: nil,
+        clientVersion: nil
     )
 }
 

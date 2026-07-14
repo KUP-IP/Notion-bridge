@@ -426,10 +426,10 @@ func runWave1BrokerTests() async {
             "session_info",
         ])
         try expect(Array(ordered.dropFirst(4)) == [
-            "shell_exec",
-            "memory_remember",
             "contacts_search",
-        ], "non-bootstrap tools must keep their original relative order")
+            "memory_remember",
+            "shell_exec",
+        ], "non-bootstrap tools must use deterministic alphabetical order")
     }
 
     await test("W1 doctrine_sync: request-tier writer refreshes doctrine core") {

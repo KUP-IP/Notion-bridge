@@ -855,6 +855,7 @@ await runSkillsCacheTests()
 await runSkillBodyCacheTests()
 await runSkillBodyCacheEvictionTests()
 await runToolRouterListToolsReadyTests()
+await runAgentSurfaceReliabilityTests()
 
 // routing/specialist-relation (v3.7.4): specialists now sourced from the
 // parent's curated `Specialist` relation property (NotionJSON.extract-
