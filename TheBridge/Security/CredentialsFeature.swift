@@ -3,7 +3,7 @@
 
 import Foundation
 
-/// User-controlled flag for credential storage + MCP tools (`credential_*` + `payment_execute`).
+/// User-controlled flag for credential storage + MCP tools (`credential_*`).
 public enum CredentialsFeature: Sendable {
     public static let userDefaultsKey = "com.notionbridge.credentialsEnabled"
     private static let migrationDoneKey = "com.notionbridge.credentialsEnabledMigration1"
@@ -14,7 +14,6 @@ public enum CredentialsFeature: Sendable {
         "credential_read",
         "credential_list",
         "credential_delete",
-        "payment_execute",
     ]
 
     /// PKT-441: UserDefaults key controlling whether API keys are retained

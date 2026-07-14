@@ -279,7 +279,6 @@ public enum ModuleGroupOverride {
     ///   • `cgevent_send`     → synthetic      (synthetic-input primitive)
     ///   • `keyboard_type`    → synthetic
     ///   • `mouse_click`      → synthetic
-    ///   • `payment_execute`  → payment
     ///   • `vitest_run` / `playwright_run` / `lighthouse_run` → system  (dev test runners; group as system to avoid 1-tool "vitest"/"playwright"/"lighthouse" groups)
     ///   • `swift_build` / `swift_test` / `make_run` → system  (FB [buildtools] dev build/test runners over bg_process; same rationale)
     ///   • `run_script`       → shell          (shell-adjacent)

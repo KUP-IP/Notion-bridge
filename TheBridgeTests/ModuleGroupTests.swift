@@ -65,7 +65,6 @@ func runModuleGroupTests() async {
         try expect(ModuleGroupDerivation.resolve(toolName: "run_script") == .shell)
         // http_fetch is its own group.
         try expect(ModuleGroupDerivation.resolve(toolName: "http_fetch") == .http)
-        // payment_execute → .payment
     }
 
     await test("override: synthetic-input primitives fold into .synthetic") {
