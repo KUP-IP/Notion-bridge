@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-TheBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. It exposes **81+N** MCP tools in a typical configuration — **80** from registered feature modules (`BridgeConstants.staticFeatureModuleToolCount`), **1** builtin (`echo`), plus **N** tools from the optional remote Stripe MCP proxy when API discovery succeeds (**N=0** if Stripe is not configured or discovery fails) — over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Feature code is organized in **15** Swift modules (`*Module`); `echo` is registered separately as `builtin`, and Stripe tools are registered dynamically from `StripeMcpModule`.
+TheBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. The current source version is **3.9.9** (build **81**). It registers **205 static feature-module tools** (`BridgeConstants.staticFeatureModuleToolCount`) across **31 module families** (`BridgeConstants.staticFeatureModuleFamilyCount`) over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Conditional tools such as `bridge_status` are outside that static count, and client listings may be filtered by enabled feature groups. The former builtin `echo` and Stripe/payment surfaces are no longer registered.
 
 Bundle ID: `kup.solutions.notion-bridge` (legacy: `solutions.kup.keepr`)
 
@@ -110,7 +110,7 @@ Trunk = `origin/main`. Branches are short-lived and **rebased onto current main 
 
 ### Release flow (the v3.7.x → 3.8.x pattern)
 
-**Versioning (operator rule, 2026-06-15):** each **published install (release)** bumps the marketing version **+1 patch** — NOT per branch merge; several task branches can merge to main and ship together as one install increment (bump only at release/ship-prep). Segments are **single-digit and roll at 9** — never double digits. Patch 9 → `X.(Y+1).0`; minor 9 → `(X+1).0.0` (so `3.8.9 → 3.9.0`, `3.9.9 → 4.0.0`). **The next version is `3.8.0`** — the `3.7.10`–`3.7.12` double-digit patches were pre-rule legacy, so restart clean at 3.8.0. **`4.0.0` is the sale-ready "V4" destination, reached incrementally** (each patch advances the product toward ready-for-sale). `CFBundleVersion` (build) is monotonic +1, independent of the marketing roll. Override only when Isaiah specifies.
+**Versioning (operator rule, 2026-06-15):** each **published install (release)** bumps the marketing version **+1 patch** — NOT per branch merge; several task branches can merge to main and ship together as one install increment (bump only at release/ship-prep). Segments are **single-digit and roll at 9** — never double digits. Patch 9 → `X.(Y+1).0`; minor 9 → `(X+1).0.0` (so `3.8.9 → 3.9.0`, `3.9.9 → 4.0.0`). From the current `3.9.9`, **the next published version is `4.0.0`**, the sale-ready "V4" destination. The `3.7.10`–`3.7.12` double-digit patches were pre-rule legacy. `CFBundleVersion` (build) is monotonic +1, independent of the marketing roll. Override only when Isaiah specifies.
 
 1. `git switch -c release/vX.Y.Z origin/main` (off current main).
 2. One atomic version commit: `Version.swift` (marketing + build) **and** root `Info.plist` (`CFBundleShortVersionString` + `CFBundleVersion`) in the SAME commit (see `### Version surfaces`), plus the `CHANGELOG.md` entry.
@@ -182,9 +182,9 @@ MCP metadata (`summary`, `triggerPhrases`, `antiTriggerPhrases`) is **authoritat
 
 `notion_page_read` uses the same block collection as skills: paginated siblings; optional nesting via `includeNested` (default false). Prefer `notion_page_markdown_read` for full prose when block structure is unnecessary.
 
-### Credentials (`CredentialModule` + `payment_execute`)
+### Credentials (`CredentialModule`)
 
-Enable **Keychain credentials** in Settings to expose `credential_*` MCP tools and allow `payment_execute` (Stripe PaymentIntent using a stored `pm_` from `credential_save`). When disabled, credential tools are filtered from `ListTools` and dispatch fails closed; `payment_execute` also checks the flag.
+Enable **Keychain credentials** in Settings to expose the `credential_*` MCP tools. When disabled, credential tools are filtered from `ListTools` and dispatch fails closed.
 
 ### Version surfaces
 

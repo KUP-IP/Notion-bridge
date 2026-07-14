@@ -4,9 +4,9 @@
 
 The Bridge exposes your local Mac and connected services as Model Context Protocol (MCP) tools over **Streamable HTTP**, **legacy SSE**, and **stdio** — locally on `127.0.0.1` for clients like Claude Code, Cursor, and Notion agents, and **securely from the cloud** (claude.ai and ChatGPT custom connectors) through a customer-owned Cloudflare Tunnel with OAuth. Built in Swift 6.2 for macOS 26+ on Apple Silicon, it is designed to be always-on, auto-launched, and safe enough for daily operator use.
 
-**~163 tools** across 26 module groups · **3 transports + cloud connector** (Claude web · ChatGPT) · **3-tier security model** with on-device approvals · **Liquid Glass UI**
+**205 static feature-module tools** across **31 module families** · **3 transports + cloud connector** (Claude web · ChatGPT) · **3-tier security model** with on-device approvals · **Liquid Glass UI**
 
-**Latest release:** [v3.7.11](https://github.com/KUP-IP/the-bridge/releases/tag/v3.7.11) (June 2026) — a tool-surface resurface that prunes the catalog to a lean, positioning-aligned ~163 tools (Chrome, the dynamic Stripe proxy, and the heavy dev-loop layer removed); `tools_list` is compact by default. Existing installs auto-update via Sparkle.
+**Latest published release:** [v3.9.9](https://github.com/KUP-IP/the-bridge/releases/tag/v3.9.9) (July 2026). The current source version is 3.9.9 (build 81). Existing installs auto-update via Sparkle.
 
 **Product page:** https://kup.solutions/notion-bridge
 
@@ -29,7 +29,7 @@ Current commercial posture:
 
 ## Current product surface
 
-The Bridge currently ships **~163 tools organized into 26 module groups**, surfaced collapsibly in **Settings → Tools**. Highlights below; the full registry is in-app.
+The Bridge registers **205 static feature-module tools across 31 module families**, surfaced collapsibly in **Settings → Tools**. Conditional tools such as cloud status are outside that static count, and the displayed list can be smaller when a feature group is disabled. Highlights below; the full live registry is in-app.
 
 | Module | Tools | Notes |
 |---|---:|---|
@@ -43,13 +43,10 @@ The Bridge currently ships **~163 tools organized into 26 module groups**, surfa
 | AppleScriptModule | 1 | in-process AppleScript execution |
 | AccessibilityModule | 5 | AX tree, inspection, and actions |
 | ScreenModule | 5 | capture, OCR, recording, screen analysis |
-| ChromeModule | 5 | tabs, navigation, page reads, JS, screenshots |
 | CredentialModule | 4 | Keychain-backed credential storage |
-| PaymentModule | 1 | Stripe payment execution |
 | SkillsModule | 3 | `fetch_skill`, `list_routing_skills`, `manage_skill` |
 | ConnectionsModule | 5 | connection inventory, health, validation |
-| BuiltinModule | 1 | `echo` (registered in `ServerManager`, not a Swift `*Module` type) |
-| **Total** | **~163** | Across 26 module groups after the v3.7.11 resurface: the Apple suite (**Calendar**, **Reminders**, **Notes**, **Mail**, **Shortcuts**), **Memory**, on-device **Automation**, **CommandStore**, **StandingOrders**, **JobsManager**, **Notion**, **Git/Gh** quick-fix, **Snippets**, **Permissions**, and screen/clipboard/accessibility/AppleScript Mac steering. Removed: Chrome, the dynamic Stripe proxy + payment, and the dev-loop/IDE layer (LSP, bg_process, dev servers, test runners, Swift build tools). |
+| **Total** | **205 static** | Across 31 feature-module families. The former builtin `echo` and Stripe/payment surfaces are removed; conditional tools are counted separately. The table highlights selected families, while **Settings → Tools** shows the full live registry. |
 
 Core product traits:
 - Native macOS menu-bar app with onboarding, settings, and a status popover
@@ -119,7 +116,7 @@ If you are using Notion tools, add a valid Notion integration token through the 
 
 **Factory Reset** clears local config, Keychain entries for The Bridge, resets macOS permissions for the app, and reloads in-memory workspace connection state. **Skills** are cleared to an **empty** list.
 
-**Credentials** (Settings → Security) are **opt-in**: enable “Keychain credentials & MCP tools” to use `credential_*` and `payment_execute` with stored payment methods. When disabled, those MCP tools are omitted from listings and fail closed if called.
+**Credentials** (Settings → Security) are **opt-in**: enable “Keychain credentials & MCP tools” to use the `credential_*` tools. When disabled, those MCP tools are omitted from listings and fail closed if called.
 
 If you launch the app with **`NOTION_API_TOKEN`** or **`NOTION_API_KEY`** set in the environment, Notion can still resolve a token after reset (that path is intentional for developers). Unset those variables when testing a truly empty workspace. Restart the app after reset so permission and connection UIs stay consistent.
 
@@ -154,7 +151,7 @@ Use stdio when connecting local clients such as Claude Code or Cursor directly t
 
 #### Using Bridge with Antigravity
 
-Google Antigravity enforces a strict 100-tool limit per MCP server, whereas The Bridge exposes ~163 tools. To use Bridge with Antigravity, we have curated a subset of ~84 tools to stay under the limit.
+Google Antigravity enforces a strict 100-tool limit per MCP server, whereas The Bridge registers 205 static feature-module tools. To use Bridge with Antigravity, we have curated a subset of ~84 tools to stay under the limit.
 
 You can launch the Bridge process with a `--multi-instance` flag (bypasses single-instance GUI guard) and `--allow-tools` flag pointing to the Antigravity allowlist:
 
