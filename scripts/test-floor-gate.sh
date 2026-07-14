@@ -2185,7 +2185,11 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3156}"
 # router-level remote reset denial (including with the broad hardening switch
 # off), and Settings runtime/reset clarity. Measured 3163 passed, 0 failed on
 # the current origin/main-based worktree. FLOOR raised 3156 -> 3163.
-FLOOR="${BRIDGE_TEST_FLOOR:-3163}"
+# PKT-1124 W2C governance propagation (2026-07-14): +4 hermetic tests prove
+# stable Streamable-HTTP session keying, fail-closed fresh reconnect/spoof
+# behavior, and stdio parity. Current main did not reproduce the authored
+# false-negative; no production behavior changed. Measured green 3163 + 4.
+FLOOR="${BRIDGE_TEST_FLOOR:-3167}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the
