@@ -2189,7 +2189,11 @@ FLOOR="${BRIDGE_TEST_FLOOR:-3156}"
 # stable Streamable-HTTP session keying, fail-closed fresh reconnect/spoof
 # behavior, and stdio parity. Current main did not reproduce the authored
 # false-negative; no production behavior changed. Measured green 3163 + 4.
-FLOOR="${BRIDGE_TEST_FLOOR:-3167}"
+# 2026-07-14 PKT-1121: +10 net-new hermetic config-path migration tests
+# (canonical/override resolution, fresh install, full archive + sidecars,
+# MemoryStore parity, idempotence, collision safety, override skip, and both
+# post-rename and pre-rename journal recovery paths).
+FLOOR="${BRIDGE_TEST_FLOOR:-3177}"
 # v3.7.6 (2026-06-04): credential policy defaults flipped ON; +1 isEnabled default-ON test (1776→1777).
 # v3.7·A (2026-05-28): SkillsCacheReader/Writer pipeline tests landed.
 # +12 SkillsCacheTests covering the on-disk skills cache that closes the

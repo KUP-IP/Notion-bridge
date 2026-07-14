@@ -295,6 +295,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // PKT-1121: migrate the XDG config + memory home before either
+        // ConfigManager or MemoryStore can open it. Fail closed on migration
+        // errors so an old memory DB is never silently replaced by a fresh one.
+        do {
+            let report = try ConfigPathMigration.runOnce(log: { print("[ConfigPathMigration] \($0)") })
+            if !report.alreadyComplete && !report.skippedForOverride {
+                print("[ConfigPathMigration] copied:\(report.itemsCopied) collisions:\(report.collisionsPreserved)")
+            }
+        } catch {
+            print("[ConfigPathMigration] ERROR: migration failed; stopping before config/memory initialization: \(error)")
+            NSApplication.shared.terminate(nil)
+            return
+        }
+
         // PKT-1 v3.5: Rename migration. Idempotent + atomic; no-ops on every
         // launch after the first successful run. Runs BEFORE any subsystem
         // touches Application Support so they see canonical paths.

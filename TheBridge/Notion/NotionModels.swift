@@ -22,7 +22,7 @@ public enum NotionClientError: Error, LocalizedError, Sendable {
     public var errorDescription: String? {
         switch self {
         case .missingAPIKey:
-            return "Notion API token not found. Set NOTION_API_TOKEN environment variable or add token to ~/.config/notion-bridge/config.json"
+            return "Notion API token not found. Set NOTION_API_TOKEN environment variable or add token to ~/.config/the-bridge/config.json"
         case .invalidResponse:
             return "Invalid HTTP response"
         case .maxRetriesExceeded:

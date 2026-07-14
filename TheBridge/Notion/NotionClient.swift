@@ -69,7 +69,7 @@ public enum NotionTokenResolver {
         }
         print("[TokenResolver] env:NOTION_API_KEY — not set or empty")
 
-        // 3. Config file fallback: ~/.config/notion-bridge/config.json
+        // 3. Config file fallback: ~/.config/the-bridge/config.json
         print("[TokenResolver] Trying config file fallback...")
         if let token = readFromConfigFile() {
             print("[TokenResolver] ✅ Found token via config file")

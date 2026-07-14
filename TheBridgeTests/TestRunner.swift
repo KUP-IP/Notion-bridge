@@ -777,6 +777,9 @@ await runEndToEndTests()
 // PKT-1 (v3.5): rename migration + canonical paths.
 await runPathMigrationTests()
 
+// PKT-1121: non-destructive XDG config + memory migration.
+await runConfigPathMigrationTests()
+
 // PKT-9 (v3.5): Standing Orders + Routing Index.
 await runStandingOrdersTests()
 

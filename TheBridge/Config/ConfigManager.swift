@@ -1,12 +1,12 @@
 // ConfigManager.swift — Centralized config read/write
 // TheBridge · Configuration
-// PKT-363 D1: Manages ~/.config/notion-bridge/config.json
+// PKT-363 D1 / PKT-1121: Manages ~/.config/the-bridge/config.json
 // Thread-safe via concurrent DispatchQueue with barrier writes.
 // Atomic file writes via Data.write(options: .atomic).
 
 import Foundation
 
-/// Centralized configuration manager for ~/.config/notion-bridge/config.json.
+/// Centralized configuration manager for ~/.config/the-bridge/config.json.
 /// Shared by SecurityGate (runtime path reads) and SettingsWindow (UI edits).
 public final class ConfigManager: @unchecked Sendable {
 
@@ -27,6 +27,7 @@ public final class ConfigManager: @unchecked Sendable {
     public static let defaultSSEPort = BridgeConstants.defaultSSEPort
 
     private let configURL: URL
+    private let legacyReadURL: URL?
     private let queue = DispatchQueue(label: "com.notionbridge.config", attributes: .concurrent)
 
     private init() {
@@ -34,19 +35,40 @@ public final class ConfigManager: @unchecked Sendable {
         // default location. Lets operators relocate config (e.g. sandboxed/CI
         // environments) and lets the test suite point at a temp file so tests
         // never read or mutate the user's real ~/.config/.../config.json.
-        if let override = ProcessInfo.processInfo.environment["BRIDGE_CONFIG_PATH"],
-           !override.isEmpty {
-            configURL = URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
+        let environment = ProcessInfo.processInfo.environment
+        configURL = Self.resolveConfigFileURL(environment: environment, homeRoot: BridgePaths.homeRoot)
+        if let override = environment["BRIDGE_CONFIG_PATH"], !override.isEmpty {
+            legacyReadURL = nil
         } else {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            configURL = home.appendingPathComponent(".config/notion-bridge/config.json")
+            legacyReadURL = BridgePaths.homeRoot
+                .appendingPathComponent(".config/notion-bridge/config.json")
         }
+    }
+
+    /// Pure path-resolution seam for hermetic migration tests.
+    public static func resolveConfigFileURL(
+        environment: [String: String],
+        homeRoot: URL
+    ) -> URL {
+        if let override = environment["BRIDGE_CONFIG_PATH"], !override.isEmpty {
+            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath)
+        }
+        return homeRoot.appendingPathComponent(".config/the-bridge/config.json")
     }
 
     // MARK: - Raw Config I/O
 
     private func readConfig() -> [String: Any] {
-        guard let data = try? Data(contentsOf: configURL),
+        let readURL: URL
+        if FileManager.default.fileExists(atPath: configURL.path) {
+            readURL = configURL
+        } else if let legacyReadURL,
+                  FileManager.default.fileExists(atPath: legacyReadURL.path) {
+            readURL = legacyReadURL
+        } else {
+            readURL = configURL
+        }
+        guard let data = try? Data(contentsOf: readURL),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             print("[ConfigManager] ⚠️ Failed to read config.json — returning empty config")
             return [:]
@@ -61,6 +83,10 @@ public final class ConfigManager: @unchecked Sendable {
     /// we chmod it to 0o600 (owner read/write only). The chmod runs on the FINAL
     /// path post-rename, so the mode sticks regardless of the temp file's umask.
     private func writeConfig(_ config: [String: Any]) throws {
+        try FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: configURL, options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configURL.path)

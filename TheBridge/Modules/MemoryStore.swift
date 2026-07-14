@@ -26,7 +26,7 @@
 // and no cross-thread handle sharing. The `sqlite3` handle (`OpaquePointer`)
 // never escapes the actor.
 //
-// DB PATH: alongside the app config (ConfigManager → ~/.config/notion-bridge/)
+// DB PATH: alongside the app config (ConfigManager → ~/.config/the-bridge/)
 // as `memory.sqlite`. `MemoryPaths.sqliteURL` derives it from
 // `ConfigManager.shared.configFileURL`'s parent so a `BRIDGE_CONFIG_PATH`
 // override relocates the memory DB in lockstep with config (tests + CI).
@@ -44,7 +44,7 @@ private let MEM_SQLITE_TRANSIENT = unsafeBitCast(OpaquePointer(bitPattern: -1), 
 // MARK: - Paths
 
 public enum MemoryPaths {
-    /// `~/.config/notion-bridge/memory.sqlite` — the memory DB lives ALONGSIDE
+    /// `~/.config/the-bridge/memory.sqlite` — the memory DB lives ALONGSIDE
     /// the app config file (ConfigManager owns that directory). Deriving it from
     /// `configFileURL` means a `BRIDGE_CONFIG_PATH` override relocates the
     /// memory store in lockstep (CI / sandbox / tests).
