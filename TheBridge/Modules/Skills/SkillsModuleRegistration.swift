@@ -1,0 +1,469 @@
+// Extracted from SkillsModule.swift by PKT-1126. Pure decomposition; behavior unchanged.
+
+import Foundation
+import MCP
+
+extension SkillsModule {
+    // MARK: - skills_routing_list (Sprint A · mcp-builder #14 rename)
+
+    static func registerListRoutingSkills(on router: ToolRouter) async {
+        // Sprint A · mcp-builder #14: list_routing_skills → skills_routing_list
+        // (mcp-builder prefix-consistency: skills_* family).
+        let skillsRoutingList = ToolRegistration(
+            name: "skills_routing_list",
+            module: moduleName,
+            tier: .open,
+            description: "Refresh the skill routing index (summaries + trigger phrases). Initial index is provided in server instructions at connection time — only call after a skill change.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([:]),
+                "required": .array([])
+            ]),
+            handler: { _ in
+                // W2 D6/W4: merged listing — Notion-source routing-visible
+                // skills + file-source skills whose effective routing flag
+                // is true (explicit toggle or frontmatter
+                // `visibility: routing`).
+                // Collisions annotate the Notion-source row with a
+                // `shadows: file:<path>` field for operator clarity;
+                // Notion wins on collision (D4).
+                let items = await Self.mergedRoutingSkills()
+                return .object([
+                    "skills": .array(items),
+                    "count": .int(items.count)
+                ])
+            }
+        )
+        await router.register(skillsRoutingList)
+    }
+
+    // MARK: - Sprint A · #2 split primitives
+
+    /// Register the 5 mcp-builder primitives (skill_create, skill_delete,
+    /// skill_update, skill_rename, skill_sync_notion).
+    static func registerSkillSplitPrimitives(
+        on router: ToolRouter
+    ) async {
+        // skill_create — single-add or bulk_add.
+        await router.register(ToolRegistration(
+            name: "skill_create",
+            module: moduleName,
+            tier: .notify,
+            description: "Create one or more skills after SKILLS Keepr approves the construction route. Requires routeReceipt. For a single skill: name + url (+ optional visibility). For bulk: skills=[{name,url},...]. Replaces manage_skill action='add'/'bulk_add'.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "name": .object(["type": .string("string"), "description": .string("Skill name (single-skill mode).")]),
+                    "url": .object(["type": .string("string"), "description": .string("Notion page URL or hex page ID (single-skill mode).")]),
+                    "visibility": .object(["type": .string("string"), "description": .string("routing | standard | command")]),
+                    "skills": .object([
+                        "type": .string("array"),
+                        "description": .string("Array of {name, url} objects for bulk creation."),
+                        "items": .object(["type": .string("object")])
+                    ]),
+                    "bypassConfirmation": .object(["type": .string("boolean")]),
+                    "routeReceipt": SkillRouteReceiptValidator.schema
+                ])
+            ]),
+            handler: { args in
+                let dict = Self.unpackArgsObject(args)
+                // Bulk mode if `skills` is an array; else single-add.
+                if case .array(let skillsArray) = dict["skills"] {
+                    var pairs: [(name: String, pageId: String)] = []
+                    for item in skillsArray {
+                        if case .object(let obj) = item,
+                           case .string(let n) = obj["name"],
+                           case .string(let u) = obj["url"] {
+                            pairs.append((name: n, pageId: u))
+                        }
+                    }
+                    try Self.requireSkillRouteReceipt(
+                        dict,
+                        expectedTargets: pairs.map { $0.name },
+                        toolName: "skill_create"
+                    )
+                    let result = writeBulkAdd(skills: pairs)
+                    var bulk: [String: Value] = [
+                        "action": .string("bulk_add"),
+                        "added": .int(result.added),
+                        "skipped": .int(result.skipped),
+                        "total": .int(pairs.count),
+                        "message": .string("Bulk add complete: \(result.added) added, \(result.skipped) skipped.")
+                    ]
+                    if !result.invalidPageRows.isEmpty {
+                        bulk["invalidPageRows"] = .array(result.invalidPageRows.map { row in
+                            .object(["name": .string(row.name), "reason": .string(row.reason)])
+                        })
+                    }
+                    return .object(bulk)
+                }
+                guard case .string(let name) = dict["name"],
+                      case .string(let url) = dict["url"] else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "skill_create",
+                        reason: "single-skill mode requires 'name' and 'url' parameters"
+                    )
+                }
+                try Self.requireSkillRouteReceipt(
+                    dict,
+                    expectedTargets: [name],
+                    toolName: "skill_create"
+                )
+                let vis = parseVisibilityArg(dict) ?? .standard
+                let parseResult = SkillURLParser.parse(url: url)
+                switch parseResult {
+                case .success(let parsed):
+                    let success = writeAddSkill(
+                        name: name, pageId: parsed.uuid, visibility: vis,
+                        url: parsed.originalURL, platform: parsed.platform
+                    )
+                    return .object([
+                        "success": .bool(success),
+                        "action": .string("add"),
+                        "name": .string(name),
+                        "platform": .string(parsed.platform.rawValue),
+                        "message": .string(success ? "Skill '\(name)' added (\(parsed.platform.displayName))." : "Failed — name may be empty or duplicate.")
+                    ])
+                case .failure:
+                    switch NotionPageRef.normalizedPageId(from: url) {
+                    case .failure(let err):
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("add"),
+                            "name": .string(name),
+                            "message": .string(err.message)
+                        ])
+                    case .success(let normalized):
+                        let success = writeAddSkill(name: name, pageId: normalized, visibility: vis, platform: .notion)
+                        return .object([
+                            "success": .bool(success),
+                            "action": .string("add"),
+                            "name": .string(name),
+                            "platform": .string("notion"),
+                            "message": .string(success ? "Skill '\(name)' added." : "Failed — name may be empty or duplicate.")
+                        ])
+                    }
+                }
+            }
+        ))
+
+        // skill_delete — delete one skill by name.
+        await router.register(ToolRegistration(
+            name: "skill_delete",
+            module: moduleName,
+            tier: .request,
+            neverAutoApprove: true,
+            description: "Delete one skill by name after SKILLS Keepr approves the lifecycle route. Requires routeReceipt. Replaces manage_skill action='delete'.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "name": .object(["type": .string("string"), "description": .string("Skill name to delete.")]),
+                    "bypassConfirmation": .object(["type": .string("boolean")]),
+                    "routeReceipt": SkillRouteReceiptValidator.schema
+                ]),
+                "required": .array([.string("name")])
+            ]),
+            handler: { args in
+                let dict = Self.unpackArgsObject(args)
+                guard case .string(let name) = dict["name"] else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "skill_delete",
+                        reason: "'name' parameter is required"
+                    )
+                }
+                try Self.requireSkillRouteReceipt(
+                    dict,
+                    expectedTargets: [name],
+                    toolName: "skill_delete"
+                )
+                let success = writeDeleteSkill(named: name)
+                return .object([
+                    "success": .bool(success),
+                    "action": .string("delete"),
+                    "name": .string(name),
+                    "message": .string(success ? "Skill '\(name)' deleted." : "Skill '\(name)' not found.")
+                ])
+            }
+        ))
+
+        // skill_update — toggle, update_url, set_visibility, or set_metadata.
+        await router.register(ToolRegistration(
+            name: "skill_update",
+            module: moduleName,
+            tier: .notify,
+            description: "Update one skill after SKILLS Keepr approves the change. Requires routeReceipt. Supports toggle, URL, visibility, or MCP metadata changes. Replaces manage_skill toggle/update_url/set_visibility/set_metadata.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "name": .object(["type": .string("string"), "description": .string("Skill name (required).")]),
+                    "toggle": .object(["type": .string("boolean"), "description": .string("If true, toggle enabled/disabled.")]),
+                    "url": .object(["type": .string("string"), "description": .string("New URL — selects update_url path.")]),
+                    "visibility": .object(["type": .string("string"), "description": .string("routing | standard | command — selects set_visibility.")]),
+                    "summary": .object(["type": .string("string")]),
+                    "triggerPhrases": .object(["type": .string("array"), "items": .object(["type": .string("string")])]),
+                    "antiTriggerPhrases": .object(["type": .string("array"), "items": .object(["type": .string("string")])]),
+                    "bypassConfirmation": .object(["type": .string("boolean")]),
+                    "routeReceipt": SkillRouteReceiptValidator.schema
+                ]),
+                "required": .array([.string("name")])
+            ]),
+            handler: { args in
+                let dict = Self.unpackArgsObject(args)
+                guard case .string(let name) = dict["name"] else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "skill_update",
+                        reason: "'name' parameter is required"
+                    )
+                }
+                try Self.requireSkillRouteReceipt(
+                    dict,
+                    expectedTargets: [name],
+                    toolName: "skill_update"
+                )
+                if case .bool(true) = dict["toggle"] {
+                    let result = writeToggleSkill(named: name)
+                    return .object([
+                        "success": .bool(result.found),
+                        "action": .string("toggle"),
+                        "name": .string(name),
+                        "enabled": .bool(result.newState),
+                        "message": .string(result.found ? "Skill '\(name)' is now \(result.newState ? "enabled" : "disabled")." : "Skill '\(name)' not found.")
+                    ])
+                } else if case .string(let url) = dict["url"] {
+                    switch NotionPageRef.normalizedPageId(from: url) {
+                    case .failure(let err):
+                        return .object([
+                            "success": .bool(false),
+                            "action": .string("update_url"),
+                            "name": .string(name),
+                            "message": .string(err.message)
+                        ])
+                    case .success(let normalized):
+                        let success = writeUpdateSkillURL(named: name, newPageId: normalized)
+                        return .object([
+                            "success": .bool(success),
+                            "action": .string("update_url"),
+                            "name": .string(name),
+                            "message": .string(success ? "Skill '\(name)' URL updated." : "Skill '\(name)' not found.")
+                        ])
+                    }
+                } else if dict["summary"] != nil || dict["triggerPhrases"] != nil || dict["antiTriggerPhrases"] != nil {
+                    let hasSummary = dict["summary"] != nil
+                    let hasTrig = dict["triggerPhrases"] != nil
+                    let hasAnti = dict["antiTriggerPhrases"] != nil
+                    guard hasSummary || hasTrig || hasAnti else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "skill_update",
+                            reason: "set_metadata requires at least one of: summary, triggerPhrases, antiTriggerPhrases"
+                        )
+                    }
+                    var skills = readAllSkills()
+                    guard let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) else {
+                        return .object(["success": .bool(false), "action": .string("set_metadata"), "message": .string("Skill not found.")])
+                    }
+                    let cur = skills[idx]
+                    let newSummary: String = {
+                        if case .string(let s) = dict["summary"] { return SkillMetadataLimits.clampedSummary(s) }
+                        return cur.summary
+                    }()
+                    let newTrig: [String] = {
+                        if let v = dict["triggerPhrases"] { return SkillMetadataLimits.clampedPhraseList(Self.parseStringArrayValue(v)) }
+                        return cur.triggerPhrases
+                    }()
+                    let newAnti: [String] = {
+                        if let v = dict["antiTriggerPhrases"] { return SkillMetadataLimits.clampedPhraseList(Self.parseStringArrayValue(v)) }
+                        return cur.antiTriggerPhrases
+                    }()
+                    skills[idx] = SkillConfig(
+                        name: cur.name, source: cur.source, enabled: cur.enabled,
+                        routingDiscoverable: cur.routingDiscoverable, inCommandPalette: cur.inCommandPalette,
+                        summary: newSummary, triggerPhrases: newTrig, antiTriggerPhrases: newAnti,
+                        url: cur.url, platform: cur.platform
+                    )
+                    writeSkills(skills)
+                    return .object(["success": .bool(true), "action": .string("set_metadata"), "name": .string(name), "message": .string("Metadata updated.")])
+                } else if dict["visibility"] != nil {
+                    guard let vis = parseVisibilityArg(dict) else {
+                        throw ToolRouterError.invalidArguments(
+                            toolName: "skill_update",
+                            reason: "set_visibility requires valid visibility: routing, standard, or command"
+                        )
+                    }
+                    let success = writeSetVisibility(named: name, visibility: vis)
+                    return .object([
+                        "success": .bool(success),
+                        "action": .string("set_visibility"),
+                        "name": .string(name),
+                        "visibility": .string(vis.rawValue),
+                        "message": .string(success ? "Skill '\(name)' visibility set to \(vis.rawValue)." : "Skill '\(name)' not found.")
+                    ])
+                } else {
+                    return .object([
+                        "error": .string("skill_update requires at least one update field: toggle, url, visibility, summary, triggerPhrases, antiTriggerPhrases")
+                    ])
+                }
+            }
+        ))
+
+        // skill_rename — rename one skill.
+        await router.register(ToolRegistration(
+            name: "skill_rename",
+            module: moduleName,
+            tier: .notify,
+            description: "Rename one skill after SKILLS Keepr approves identity propagation. Requires routeReceipt and preserves UUID, enabled state, visibility, and metadata. Replaces manage_skill action='rename'.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "name": .object(["type": .string("string"), "description": .string("Current skill name.")]),
+                    "newName": .object(["type": .string("string"), "description": .string("New skill name.")]),
+                    "bypassConfirmation": .object(["type": .string("boolean")]),
+                    "routeReceipt": SkillRouteReceiptValidator.schema
+                ]),
+                "required": .array([.string("name"), .string("newName")])
+            ]),
+            handler: { args in
+                let dict = Self.unpackArgsObject(args)
+                guard case .string(let name) = dict["name"],
+                      case .string(let newName) = dict["newName"] else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "skill_rename",
+                        reason: "'name' and 'newName' parameters are required"
+                    )
+                }
+                try Self.requireSkillRouteReceipt(
+                    dict,
+                    expectedTargets: [name, newName],
+                    toolName: "skill_rename"
+                )
+                let success = writeRenameSkill(named: name, to: newName)
+                return .object([
+                    "success": .bool(success),
+                    "action": .string("rename"),
+                    "oldName": .string(name),
+                    "newName": .string(newName),
+                    "message": .string(success ? "Skill renamed '\(name)' → '\(newName)'." : "Failed — skill not found or name conflict.")
+                ])
+            }
+        ))
+
+        // skill_sync_notion — push or pull metadata between local store and Notion.
+        await router.register(ToolRegistration(
+            name: "skill_sync_notion",
+            module: moduleName,
+            tier: .notify,
+            description: "Sync one skill's MCP metadata between local store and Notion. direction='push' is a skill-system mutation and requires routeReceipt; direction='pull' is read-only. Replaces manage_skill sync_metadata_to_notion / sync_metadata_from_notion.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "name": .object(["type": .string("string"), "description": .string("Skill name (required).")]),
+                    "direction": .object([
+                        "type": .string("string"),
+                        "description": .string("'push' = local → Notion. 'pull' = Notion → local."),
+                        "enum": .array([.string("push"), .string("pull")])
+                    ]),
+                    "bypassConfirmation": .object(["type": .string("boolean")]),
+                    "routeReceipt": SkillRouteReceiptValidator.schema
+                ]),
+                "required": .array([.string("name"), .string("direction")])
+            ]),
+            handler: { args in
+                let dict = Self.unpackArgsObject(args)
+                guard case .string(let name) = dict["name"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "skill_sync_notion", reason: "'name' is required")
+                }
+                guard case .string(let dir) = dict["direction"], dir == "push" || dir == "pull" else {
+                    return .object(["error": .string("skill_sync_notion requires direction='push' or 'pull'")])
+                }
+                let isPush = (dir == "push")
+                let actionLabel = isPush ? "sync_metadata_to_notion" : "sync_metadata_from_notion"
+                if isPush {
+                    try Self.requireSkillRouteReceipt(
+                        dict,
+                        expectedTargets: [name],
+                        toolName: "skill_sync_notion"
+                    )
+                }
+                guard let skill = lookupSkill(named: name) else {
+                    return .object(["success": .bool(false), "action": .string(actionLabel), "message": .string("Skill not found.")])
+                }
+                let pageId = skill.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard NotionPageRef.isValidStoredPageId(pageId) else {
+                    return .object(["success": .bool(false), "action": .string(actionLabel), "message": .string("Skill has an invalid Notion page id — fix in Settings → Skills.")])
+                }
+                do {
+                    let client = try NotionClient()
+                    if isPush {
+                        let patch = try SkillNotionMetadata.buildPagePropertiesPatchData(
+                            summary: skill.summary,
+                            triggerPhrases: skill.triggerPhrases,
+                            antiTriggerPhrases: skill.antiTriggerPhrases
+                        )
+                        _ = try await client.updatePage(pageId: pageId, properties: patch)
+                        return .object(["success": .bool(true), "action": .string(actionLabel), "name": .string(name), "message": .string("Notion page properties updated from MCP metadata.")])
+                    } else {
+                        let pageData = try await client.getPage(pageId: pageId)
+                        guard let pageJSON = try? JSONSerialization.jsonObject(with: pageData) as? [String: Any],
+                              let properties = pageJSON["properties"] as? [String: Any] else {
+                            return .object(["success": .bool(false), "action": .string(actionLabel), "message": .string("Failed to parse Notion page.")])
+                        }
+                        // SSOT = Notion. Read the REAL columns
+                        // (Description, Activation Examples, Anti-Triggers).
+                        // GATE-SAFE: an empty Notion value never
+                        // overwrites a non-empty local value, so a pull can no
+                        // longer blank metadata (the historical phantom-column
+                        // bug). See SkillNotionMetadata.parsePulledMetadata.
+                        let pulled = SkillNotionMetadata.parsePulledMetadata(properties: properties)
+                        var skills = readAllSkills()
+                        guard let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) else {
+                            return .object(["success": .bool(false), "action": .string(actionLabel), "message": .string("Skill not found.")])
+                        }
+                        let cur = skills[idx]
+                        let newSummary = pulled.summary.isEmpty
+                            ? cur.summary
+                            : SkillMetadataLimits.clampedSummary(pulled.summary)
+                        let trig = pulled.triggerPhrases.isEmpty
+                            ? cur.triggerPhrases
+                            : SkillMetadataLimits.clampedPhraseList(pulled.triggerPhrases)
+                        let anti = pulled.antiTriggerPhrases.isEmpty
+                            ? cur.antiTriggerPhrases
+                            : SkillMetadataLimits.clampedPhraseList(pulled.antiTriggerPhrases)
+                        skills[idx] = SkillConfig(
+                            name: cur.name, source: cur.source, enabled: cur.enabled,
+                            routingDiscoverable: cur.routingDiscoverable, inCommandPalette: cur.inCommandPalette,
+                            summary: newSummary, triggerPhrases: trig, antiTriggerPhrases: anti,
+                            url: cur.url, platform: cur.platform
+                        )
+                        writeSkills(skills)
+                        return .object(["success": .bool(true), "action": .string(actionLabel), "name": .string(name), "message": .string("MCP metadata updated from Notion (Description-sourced; empty fields preserved).")])
+                    }
+                } catch let error as NotionClientError {
+                    return .object(["success": .bool(false), "action": .string(actionLabel), "error": .string(error.localizedDescription)])
+                } catch {
+                    return .object(["success": .bool(false), "action": .string(actionLabel), "error": .string(error.localizedDescription)])
+                }
+            }
+        ))
+    }
+
+    /// Unpack a Value argument expected to be an object literal. Returns
+    /// empty dict on non-object input (the handler's own validation will
+    /// then surface a meaningful error).
+    static func unpackArgsObject(_ v: Value) -> [String: Value] {
+        if case .object(let dict) = v { return dict }
+        return [:]
+    }
+
+    static func requireSkillRouteReceipt(
+        _ args: [String: Value],
+        expectedTargets: [String],
+        toolName: String
+    ) throws {
+        if let error = SkillRouteReceiptValidator.validationError(
+            receipt: args["routeReceipt"],
+            expectedTargets: expectedTargets
+        ) {
+            throw ToolRouterError.invalidArguments(toolName: toolName, reason: error)
+        }
+    }
+
+}
