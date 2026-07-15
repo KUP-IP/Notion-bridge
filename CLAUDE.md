@@ -56,7 +56,10 @@ A macOS menu-bar app that exposes the Mac + a Notion workspace to AI agents over
   (CFBundleShortVersionString/CFBundleVersion — the build reads the plist, keep both in sync).
   +1 patch per published install.
 
-## Current Sprint
+## Historical Sprint — Data-Source Registry (v3.8.1)
+
+The build 60 version and counts below are a historical shipped snapshot, not current product truth.
+
 **Data-Source Registry — vertical slice SHIPPED + live-verified** (spec: config-driven
 `entity type → Notion data source + property map bound by PROPERTY ID`; foundation for
 "Sell The Bridge"). All under `Modules/Registry/` (13 files) + `UI/Sections/DataSourcesSection.swift`.
