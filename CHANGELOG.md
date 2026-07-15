@@ -14,6 +14,18 @@
   `data_source` only (not `database`) under Notion-Version 2026-03-11.
 - **Counts** — static feature tools 205 → 207; test floor 3207 → 3213.
 
+## Unreleased — Voice Memo Reliability (list + receipts + identity projection) — 2026-07-15
+
+- **Fix** — `FieldsFilter` retains `id` / `entity` / `title` on projected registry
+  rows by default (`includeIdentity: true`) so `registry_find`/`list` projections
+  stay usable for follow-on writes without a second unprojected lookup.
+- **Feature** — `voice_memo_list` supports dateFrom/dateTo, hasTranscript,
+  transcriptContains, sort, limit/cursor pagination, and a `health` block
+  (curator job status + unprocessed/pending-review backlog).
+- **Feature** — `voice_memo_commit` returns structured receipts:
+  `memoState` / `intentState` / `completedIntents` / `remainingIntents` / `write`
+  while preserving legacy ok/memoId/intentKind/detail/markedProcessed fields.
+
 ## v3.9.9 (build 80) — Remote shell and control-plane parity — 2026-07-10
 
 - **Fix** — the Wave 1 remote control-plane preference now defaults OFF instead

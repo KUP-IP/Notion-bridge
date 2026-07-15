@@ -1422,14 +1422,19 @@ public enum VoiceMemoProcessor {
                 ),
                 provenance: "stage-timeout"
             ))
-            return .object([
-                "ok": .bool(false),
-                "needsManual": .bool(true),
-                "memoId": .string(recording.id),
-                "intentKind": .string(kind.rawValue),
-                "detail": .string(timeoutError.localizedDescription),
-                "markedProcessed": .bool(false),
-            ])
+            var receipt = commitReceipt(
+                ok: false,
+                memoId: recording.id,
+                intentKind: kind.rawValue,
+                intentState: "review_required",
+                detail: timeoutError.localizedDescription,
+                markedProcessed: false
+            )
+            if case .object(var obj) = receipt {
+                obj["needsManual"] = .bool(true)
+                receipt = .object(obj)
+            }
+            return receipt
         }
         var intent = plan.intents.first { $0.kind == kind } ?? VoiceMemoIntent(kind: kind, confidence: 1.0)
         if let entityKey = stringArg(obj, "entityKey") { intent.entityKey = entityKey }
@@ -1492,24 +1497,34 @@ public enum VoiceMemoProcessor {
                 entityHint: intent.entityHint,
                 provenance: "stage-timeout"
             ))
-            return .object([
-                "ok": .bool(false),
-                "needsManual": .bool(true),
-                "memoId": .string(recording.id),
-                "intentKind": .string(kind.rawValue),
-                "detail": .string(timeoutError.localizedDescription),
-                "markedProcessed": .bool(false),
-            ])
+            var receipt = commitReceipt(
+                ok: false,
+                memoId: recording.id,
+                intentKind: kind.rawValue,
+                intentState: "review_required",
+                detail: timeoutError.localizedDescription,
+                markedProcessed: false
+            )
+            if case .object(var obj) = receipt {
+                obj["needsManual"] = .bool(true)
+                receipt = .object(obj)
+            }
+            return receipt
         } catch let error as VoiceMemoError {
             if case .registryAmbiguous = error {
-                return .object([
-                    "ok": .bool(false),
-                    "needsManual": .bool(true),
-                    "memoId": .string(recording.id),
-                    "intentKind": .string(kind.rawValue),
-                    "detail": .string(error.localizedDescription),
-                    "markedProcessed": .bool(false),
-                ])
+                var receipt = commitReceipt(
+                    ok: false,
+                    memoId: recording.id,
+                    intentKind: kind.rawValue,
+                    intentState: "review_required",
+                    detail: error.localizedDescription,
+                    markedProcessed: false
+                )
+                if case .object(var obj) = receipt {
+                    obj["needsManual"] = .bool(true)
+                    receipt = .object(obj)
+                }
+                return receipt
             }
             if case .contentQualityRejected = error {
                 // GH #81 — the commit-time counterpart of processOne's queueReview: an
@@ -1531,14 +1546,19 @@ public enum VoiceMemoProcessor {
                     entityHint: intent.entityHint,
                     provenance: "content-quality-gate"
                 ))
-                return .object([
-                    "ok": .bool(false),
-                    "needsManual": .bool(true),
-                    "memoId": .string(recording.id),
-                    "intentKind": .string(kind.rawValue),
-                    "detail": .string(error.localizedDescription),
-                    "markedProcessed": .bool(false),
-                ])
+                var receipt = commitReceipt(
+                    ok: false,
+                    memoId: recording.id,
+                    intentKind: kind.rawValue,
+                    intentState: "review_required",
+                    detail: error.localizedDescription,
+                    markedProcessed: false
+                )
+                if case .object(var obj) = receipt {
+                    obj["needsManual"] = .bool(true)
+                    receipt = .object(obj)
+                }
+                return receipt
             }
             throw error
         }
@@ -1559,13 +1579,87 @@ public enum VoiceMemoProcessor {
         }
         let markedProcessed = try VoiceMemoProcessedGate.markProcessedIfClear(memoId: recording.id)
         recordCommitted(recording: recording, intentId: committedIntentId, kind: kind, detail: detail)
-        return .object([
-            "ok": .bool(true),
-            "memoId": .string(recording.id),
-            "intentKind": .string(kind.rawValue),
+        return commitReceipt(
+            ok: true,
+            memoId: recording.id,
+            intentKind: kind.rawValue,
+            intentState: "committed",
+            detail: detail,
+            markedProcessed: markedProcessed,
+            write: parseWriteDestination(detail: detail, kind: kind, intent: intent)
+        )
+    }
+
+    /// Structured commit receipt (Voice Memo Reliability packet SC #7 / proposed receipt).
+    /// Additive fields — existing clients still read ok/memoId/intentKind/detail/markedProcessed.
+    static func commitReceipt(
+        ok: Bool,
+        memoId: String,
+        intentKind: String,
+        intentState: String,
+        detail: String,
+        markedProcessed: Bool,
+        write: [String: Value]? = nil
+    ) -> Value {
+        let remaining = VoiceMemoReviewStore.pendingEntries()
+            .filter { $0.memoId == memoId }
+            .map { $0.intentKind }
+        let completed = VoiceMemoReviewStore.load().entries
+            .filter { $0.memoId == memoId && ($0.status == .resolved || $0.status == .dismissed) }
+            .map { $0.intentKind }
+        // Include the intent we just committed even if the review entry was just resolved.
+        var completedSet = Set(completed)
+        if ok { completedSet.insert(intentKind) }
+
+        let memoState: String
+        if markedProcessed {
+            memoState = "committed"
+        } else if !remaining.isEmpty {
+            memoState = "partially_committed"
+        } else if !ok {
+            memoState = intentState == "review_required" ? "review_required" : "failed"
+        } else {
+            memoState = "partially_committed"
+        }
+
+        var obj: [String: Value] = [
+            "ok": .bool(ok),
+            "memoId": .string(memoId),
+            "intentKind": .string(intentKind),
+            "intentState": .string(intentState),
+            "memoState": .string(memoState),
             "detail": .string(detail),
             "markedProcessed": .bool(markedProcessed),
-        ])
+            "completedIntents": .array(completedSet.sorted().map { .string($0) }),
+            "remainingIntents": .array(remaining.sorted().map { .string($0) }),
+        ]
+        if let write { obj["write"] = .object(write) }
+        return .object(obj)
+    }
+
+    /// Best-effort parse of lane execute() detail strings into a write receipt block.
+    static func parseWriteDestination(
+        detail: String,
+        kind: VoiceMemoIntentKind,
+        intent: VoiceMemoIntent
+    ) -> [String: Value]? {
+        // Common detail shapes: "memory_keep pageId=…", "registry_update contact rowId=…",
+        // "reminder id=…", "memory_remember scope=… (N chars)".
+        var write: [String: Value] = [
+            "tool": .string(kind.rawValue),
+        ]
+        if let entity = intent.entityKey { write["entity"] = .string(entity) }
+        if let title = intent.entityHint ?? intent.title { write["title"] = .string(title) }
+        // Capture first UUID-looking token as recordId when present.
+        let uuidPattern = #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}"#
+        if let regex = try? NSRegularExpression(pattern: uuidPattern),
+           let match = regex.firstMatch(in: detail, range: NSRange(detail.startIndex..., in: detail)),
+           let range = Range(match.range, in: detail) {
+            write["recordId"] = .string(String(detail[range]))
+        }
+        if detail.contains("append") { write["mode"] = .string("append") }
+        write["detail"] = .string(detail)
+        return write
     }
 
     static func memoValue(_ recording: VoiceMemoRecording, transcript: String) -> Value {

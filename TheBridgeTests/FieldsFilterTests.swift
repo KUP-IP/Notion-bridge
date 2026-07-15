@@ -71,20 +71,29 @@ func runFieldsFilterTests() async {
     // MARK: #3 — top-level key selection
     // ============================================================
 
-    await test("FieldsFilter: single top-level key narrows to just that key") {
+    await test("FieldsFilter: single top-level key retains identity keys by default") {
         let projected = dict(FieldsFilter.project(sampleRow(), fields: ["title"]))
+        // title was requested; id+entity re-attached as identity keys.
+        try expect(Set(projected.keys) == ["title", "id", "entity"], "got \(projected.keys.sorted())")
+        try expect(projected["title"] == .string("Alpha"), "title value preserved")
+        try expect(projected["id"] == .string("aaaa0000000000000000000000000001"), "id retained")
+        try expect(projected["entity"] == .string("skill"), "entity retained")
+    }
+
+    await test("FieldsFilter: includeIdentity:false allows pure single-key projection") {
+        let projected = dict(FieldsFilter.project(sampleRow(), fields: ["title"], includeIdentity: false))
         try expect(projected.count == 1, "expected exactly 1 key, got \(projected.count): \(projected.keys.sorted())")
         try expect(projected["title"] == .string("Alpha"), "title value preserved")
     }
 
     await test("FieldsFilter: multiple top-level keys all survive") {
         let projected = dict(FieldsFilter.project(sampleRow(), fields: ["title", "id", "stale"]))
-        try expect(Set(projected.keys) == ["title", "id", "stale"], "got \(projected.keys.sorted())")
+        try expect(Set(projected.keys) == ["title", "id", "stale", "entity"], "got \(projected.keys.sorted())")
     }
 
-    await test("FieldsFilter: bare 'properties' keeps the WHOLE properties map") {
+    await test("FieldsFilter: bare 'properties' keeps the WHOLE properties map + identity") {
         let projected = dict(FieldsFilter.project(sampleRow(), fields: ["properties"]))
-        try expect(projected.count == 1, "only properties key expected")
+        try expect(Set(projected.keys) == ["properties", "id", "entity", "title"], "got \(projected.keys.sorted())")
         guard case .object(let props)? = projected["properties"] else {
             throw TestError.assertion("properties must be an object")
         }
@@ -97,6 +106,7 @@ func runFieldsFilterTests() async {
 
     await test("FieldsFilter: properties.X sub-selects ONE property out of the map") {
         let projected = dict(FieldsFilter.project(sampleRow(), fields: ["properties.summary"]))
+        try expect(projected["id"] != nil, "identity id retained with properties.X projection")
         guard case .object(let props)? = projected["properties"] else {
             throw TestError.assertion("properties must be present as an object")
         }
@@ -129,8 +139,11 @@ func runFieldsFilterTests() async {
     // ============================================================
 
     await test("FieldsFilter: unknown top-level key → silently absent, no error") {
+        // With includeIdentity (default), only identity keys from the source remain.
         let projected = dict(FieldsFilter.project(sampleRow(), fields: ["doesNotExist"]))
-        try expect(projected.isEmpty, "unknown key must contribute nothing; got \(projected.keys.sorted())")
+        try expect(Set(projected.keys) == ["id", "entity", "title"], "got \(projected.keys.sorted())")
+        let pure = dict(FieldsFilter.project(sampleRow(), fields: ["doesNotExist"], includeIdentity: false))
+        try expect(pure.isEmpty, "unknown key must contribute nothing without identity; got \(pure.keys.sorted())")
     }
 
     await test("FieldsFilter: unknown property path → the requested property is silently absent (properties: {})") {
@@ -139,7 +152,7 @@ func runFieldsFilterTests() async {
         // and got zero matches" from "you never asked for properties at
         // all") — but it contains none of the sampleRow's real keys, i.e.
         // the unknown path silently contributes zero matches, never an error.
-        let projected = dict(FieldsFilter.project(sampleRow(), fields: ["properties.doesNotExist"]))
+        let projected = dict(FieldsFilter.project(sampleRow(), fields: ["properties.doesNotExist"], includeIdentity: false))
         guard case .object(let props)? = projected["properties"] else {
             throw TestError.assertion("properties must be present as an object when a properties.X path was requested")
         }
@@ -148,7 +161,8 @@ func runFieldsFilterTests() async {
 
     await test("FieldsFilter: known + unknown top-level keys mixed → only known survive") {
         let projected = dict(FieldsFilter.project(sampleRow(), fields: ["title", "ghost", "id"]))
-        try expect(Set(projected.keys) == ["title", "id"], "got \(projected.keys.sorted())")
+        // entity re-attached via includeIdentity even though not requested.
+        try expect(Set(projected.keys) == ["title", "id", "entity"], "got \(projected.keys.sorted())")
     }
 
     // ============================================================
@@ -176,8 +190,11 @@ func runFieldsFilterTests() async {
     await test("FieldsFilter: mixed-case top-level key is NOT matched case-insensitively (exact key match)") {
         // Top-level keys are exact-match (only the propertiesKey token itself
         // is treated case-insensitively) — this pins that distinction.
+        // Identity keys are still re-attached from the source envelope.
         let projected = dict(FieldsFilter.project(sampleRow(), fields: ["Title"]))
-        try expect(projected.isEmpty, "top-level keys are case-SENSITIVE except the properties token")
+        try expect(Set(projected.keys) == ["id", "entity", "title"], "got \(projected.keys.sorted())")
+        let pure = dict(FieldsFilter.project(sampleRow(), fields: ["Title"], includeIdentity: false))
+        try expect(pure.isEmpty, "top-level keys are case-SENSITIVE except the properties token")
     }
 
     // ============================================================
