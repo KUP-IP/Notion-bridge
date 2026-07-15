@@ -2290,3 +2290,5 @@ set -euo pipefail
 # mutation, rate-limited unknown-tool audit telemetry, secret-shaped miss
 # redaction, and client name/version attribution. Measured 3207 passed, 0
 # failed on the current origin/main-based worktree. FLOOR 3202 -> 3207.
+
+# 2026-07-15 Notion views list/get + comment discussionId reply. FLOOR 3207→3213 (+6 greens; hermetic body/schema tests). staticFeatureModuleToolCount 205→207.

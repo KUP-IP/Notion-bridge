@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Notion Views read + comment reply fidelity — 2026-07-15
+
+- **Feature** — `notion_views_list` and `notion_view_get` wrap the Notion Views
+  API (`GET /v1/views`, `GET /v1/views/{id}`) so agents can discover and inspect
+  table/board/chart/calendar views that already exist on KEEP OS data sources.
+- **Fix** — `notion_comment_create` accepts `discussionId` for true thread
+  replies (POST body uses `discussion_id`, not `parent`). Exactly one of
+  `pageId` / `discussionId`. Voice-memo `pageId`+`text` path unchanged.
+- **Fix** — `notion_discussion_create` description no longer claims to be the
+  reply tool; it starts a new page-level thread (same as `pageId` create).
+- **Docs** — `notion_search` notes that API filter object types are `page` |
+  `data_source` only (not `database`) under Notion-Version 2026-03-11.
+- **Counts** — static feature tools 205 → 207; test floor 3207 → 3213.
+
 ## v3.9.9 (build 80) — Remote shell and control-plane parity — 2026-07-10
 
 - **Fix** — the Wave 1 remote control-plane preference now defaults OFF instead

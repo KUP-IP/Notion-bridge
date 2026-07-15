@@ -22,9 +22,9 @@ func runNotionModuleTests() async {
     // MARK: - Tool Registration (23 tools)
     // ============================================================
 
-    await test("NotionModule registers 22 tools (FB-notionwrite: notion_page_edit added)") {
+    await test("NotionModule registers 24 tools (views list/get + prior surface)") {
         let tools = await router.registrations(forModule: "notion")
-        try expect(tools.count == 22, "Expected 22 notion tools, got \(tools.count)")
+        try expect(tools.count == 24, "Expected 24 notion tools, got \(tools.count)")
     }
 
     let expectedTools: [String] = [
@@ -36,7 +36,8 @@ func runNotionModuleTests() async {
         "notion_page_move", "notion_file_upload", "notion_token_introspect",
         "notion_block_update",
         "notion_datasource_update", "notion_datasource_create",
-        "notion_discussion_create"
+        "notion_discussion_create",
+        "notion_views_list", "notion_view_get"
     ]
 
     for toolName in expectedTools {
@@ -55,7 +56,8 @@ func runNotionModuleTests() async {
         "notion_search", "notion_page_read", "notion_query",
         "notion_page_markdown_read", "notion_comments_list",
         "notion_users_list", "notion_token_introspect",
-        "notion_database_get", "notion_datasource_get"
+        "notion_database_get", "notion_datasource_get",
+        "notion_views_list", "notion_view_get"
     ]
     for toolName in openTools {
         await test("\(toolName) tier is open") {
@@ -234,6 +236,89 @@ func runNotionModuleTests() async {
             )
             throw TestError.assertion("Expected error for missing parentId/discussionId")
         } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_comment_create rejects both pageId and discussionId") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_comment_create",
+                arguments: .object([
+                    "pageId": .string("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+                    "discussionId": .string("11111111-2222-3333-4444-555555555555"),
+                    "text": .string("nope")
+                ])
+            )
+            throw TestError.assertion("Expected error when both pageId and discussionId set")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_views_list rejects missing databaseId and dataSourceId") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_views_list",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing databaseId/dataSourceId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_view_get rejects missing viewId") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_view_get",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing viewId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("buildCreateCommentRequestBody: page path uses parent.page_id") {
+        let body = try NotionClient.buildCreateCommentRequestBody(
+            pageId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            discussionId: nil,
+            text: "hello"
+        )
+        let parent = body["parent"] as? [String: Any]
+        try expect(parent?["page_id"] as? String != nil, "page path must set parent.page_id")
+        try expect(body["discussion_id"] == nil, "page path must not set discussion_id")
+        let rt = body["rich_text"] as? [[String: Any]]
+        try expect(rt?.count == 1, "rich_text should have one run")
+    }
+
+    await test("buildCreateCommentRequestBody: discussion path uses discussion_id only") {
+        let body = try NotionClient.buildCreateCommentRequestBody(
+            pageId: nil,
+            discussionId: "11111111-2222-3333-4444-555555555555",
+            text: "reply"
+        )
+        try expect(body["parent"] == nil, "reply path must not set parent")
+        let did = body["discussion_id"] as? String
+        try expect(did == "11111111222233334444555555555555", "discussion_id should be dash-stripped, got \(did ?? "nil")")
+    }
+
+    await test("buildCreateCommentRequestBody rejects neither and both targets") {
+        do {
+            _ = try NotionClient.buildCreateCommentRequestBody(pageId: nil, discussionId: nil, text: "x")
+            throw TestError.assertion("neither target should throw")
+        } catch is NotionClientError {
+            // Expected
+        }
+        do {
+            _ = try NotionClient.buildCreateCommentRequestBody(
+                pageId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                discussionId: "11111111-2222-3333-4444-555555555555",
+                text: "x"
+            )
+            throw TestError.assertion("both targets should throw")
+        } catch is NotionClientError {
             // Expected
         }
     }
