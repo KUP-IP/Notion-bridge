@@ -721,16 +721,12 @@ public actor NotionClient {
         return data
     }
 
-    /// A9b: Create a comment on a page.
-    /// POST /v1/comments
-    public func createComment(pageId: String, text: String) async throws -> Data {
+    /// A9b: Create a comment on a page, or reply to an existing discussion.
+    /// POST /v1/comments — exactly one of `pageId` (parent.page_id) or `discussionId`.
+    /// When `discussionId` is set, the body is a thread reply (no parent).
+    public func createComment(pageId: String? = nil, discussionId: String? = nil, text: String) async throws -> Data {
         try Self.validateSingleRichTextRun(text, context: "notion_comment_create")
-        // v1.9.0 B3: accept raw UUID, dashed UUID, Notion URL, or compressed placeholder
-        let cleanId = Self.normalizePageId(pageId)
-        let body: [String: Any] = [
-            "parent": ["page_id": cleanId],
-            "rich_text": [["type": "text", "text": ["content": text]]]
-        ]
+        let body = try Self.buildCreateCommentRequestBody(pageId: pageId, discussionId: discussionId, text: text)
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await request(method: "POST", path: "/comments", body: bodyData)
         guard (200...299).contains(response.statusCode) else {
@@ -738,6 +734,35 @@ public actor NotionClient {
             throw NotionClientError.httpError(response.statusCode, msg)
         }
         return data
+    }
+
+    /// Builds the JSON body for create-comment. Public for unit tests.
+    /// Exactly one of `pageId` or `discussionId` must be non-empty (API contract).
+    nonisolated public static func buildCreateCommentRequestBody(
+        pageId: String?,
+        discussionId: String?,
+        text: String
+    ) throws -> [String: Any] {
+        let hasPage = !(pageId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        let hasDiscussion = !(discussionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        guard hasPage != hasDiscussion else {
+            throw NotionClientError.decodingError(
+                "createComment requires exactly one of pageId or discussionId (got page=\(hasPage) discussion=\(hasDiscussion))"
+            )
+        }
+        let richText: [[String: Any]] = [["type": "text", "text": ["content": text]]]
+        if hasDiscussion, let discussionId {
+            let clean = discussionId.replacingOccurrences(of: "-", with: "")
+            return [
+                "discussion_id": clean,
+                "rich_text": richText
+            ]
+        }
+        let cleanId = Self.normalizePageId(pageId!)
+        return [
+            "parent": ["page_id": cleanId],
+            "rich_text": richText
+        ]
     }
 
     /// A10a: List all users in the workspace.
@@ -971,16 +996,47 @@ public actor NotionClient {
 
     /// E5 (v1.9.1): Create a new discussion thread on a page.
     /// POST /v1/comments with parent.page_id (no discussion_id → starts a new thread).
-    /// Accepts raw UUID, dashed UUID, Notion URL, or compressed placeholder (via normalizePageId).
+    /// Not a reply primitive — for replies use `createComment(discussionId:text:)`.
     public func createDiscussion(pageId: String, text: String) async throws -> Data {
-        try Self.validateSingleRichTextRun(text, context: "notion_discussion_create")
-        let cleanId = Self.normalizePageId(pageId)
-        let body: [String: Any] = [
-            "parent": ["page_id": cleanId],
-            "rich_text": [["type": "text", "text": ["content": text]]]
-        ]
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await request(method: "POST", path: "/comments", body: bodyData)
+        try await createComment(pageId: pageId, discussionId: nil, text: text)
+    }
+
+    // MARK: - Views API (2025-09-03+ / 2026-03-11)
+
+    /// List views for a database and/or data source.
+    /// GET /v1/views?database_id=… and/or data_source_id=…
+    /// At least one of `databaseId` / `dataSourceId` is required.
+    public func listViews(databaseId: String? = nil, dataSourceId: String? = nil, startCursor: String? = nil, pageSize: Int = 100) async throws -> Data {
+        var parts: [String] = []
+        if let databaseId, !databaseId.isEmpty {
+            parts.append("database_id=\(databaseId.replacingOccurrences(of: "-", with: ""))")
+        }
+        if let dataSourceId, !dataSourceId.isEmpty {
+            parts.append("data_source_id=\(dataSourceId.replacingOccurrences(of: "-", with: ""))")
+        }
+        guard !parts.isEmpty else {
+            throw NotionClientError.decodingError("listViews requires databaseId and/or dataSourceId")
+        }
+        let size = min(max(pageSize, 1), 100)
+        parts.append("page_size=\(size)")
+        if let startCursor, !startCursor.isEmpty {
+            let encoded = startCursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? startCursor
+            parts.append("start_cursor=\(encoded)")
+        }
+        let path = "/views?" + parts.joined(separator: "&")
+        let (data, response) = try await request(method: "GET", path: path)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// Retrieve a view by ID (full filter/sorts/configuration).
+    /// GET /v1/views/{view_id}
+    public func getView(viewId: String) async throws -> Data {
+        let cleanId = viewId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(method: "GET", path: "/views/\(cleanId)")
         guard (200...299).contains(response.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? ""
             throw NotionClientError.httpError(response.statusCode, msg)

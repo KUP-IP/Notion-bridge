@@ -9,7 +9,11 @@
 # the floor OR any test fails.
 #
 # Full append-only FLOOR provenance: scripts/test-floor-gate-history.md
-FLOOR="${BRIDGE_TEST_FLOOR:-3207}"
+# 2026-07-15: Notion views list/get + comment discussionId reply body tests.
+# Measured green count 3213 (4 pre-existing WorkOS fail-closed tests still red
+# when OAuth/WorkOS credentials are present in the process environment / baked
+# config — not regressions from this slice). Floor raised to net greens.
+FLOOR="${BRIDGE_TEST_FLOOR:-3213}"
 BIN=".build/debug/TheBridgeTests"
 
 echo "🧪 test-floor-gate: building debug + running suite (floor=${FLOOR})..."

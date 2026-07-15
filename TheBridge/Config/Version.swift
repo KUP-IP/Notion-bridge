@@ -442,7 +442,10 @@ public enum BridgeConstants {
     /// PKT-1120 Tool Ergonomics (2026-07-14): +2
     ///   (voice_memo_settings_get + voice_memo_settings_set; voice family).
     ///   203 + 2 = 205.
-    public static let staticFeatureModuleToolCount = 205
+    /// Notion Views read + comment reply (2026-07-15): +2
+    ///   (notion_views_list + notion_view_get; notion family). Comment path
+    ///   gains discussionId reply (no new tool). 205 + 2 = 207.
+    public static let staticFeatureModuleToolCount = 207
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.
