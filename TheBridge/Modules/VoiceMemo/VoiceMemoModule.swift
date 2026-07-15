@@ -31,7 +31,7 @@ public enum VoiceMemoModule {
             name: "voice_memo_list",
             module: moduleName,
             tier: .open,
-            description: "List Voice Memos recordings discovered on disk. Marks which are already processed by the morning curator job. Read-only.",
+            description: "List Voice Memos recordings discovered on disk with optional date/transcript/processed filters, limit/cursor pagination, and curator/backlog health. Read-only.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -39,22 +39,84 @@ public enum VoiceMemoModule {
                         "type": .string("boolean"),
                         "description": .string("Include memos already processed (default false)."),
                     ]),
+                    "limit": .object([
+                        "type": .string("integer"),
+                        "description": .string("Max memos to return (default 50, max 500)."),
+                    ]),
+                    "cursor": .object([
+                        "type": .string("string"),
+                        "description": .string("Opaque pagination cursor from a prior nextCursor."),
+                    ]),
+                    "dateFrom": .object([
+                        "type": .string("string"),
+                        "description": .string("ISO-8601 lower bound on recordedAt (inclusive)."),
+                    ]),
+                    "dateTo": .object([
+                        "type": .string("string"),
+                        "description": .string("ISO-8601 upper bound on recordedAt (inclusive)."),
+                    ]),
+                    "hasTranscript": .object([
+                        "type": .string("boolean"),
+                        "description": .string("When set, only memos with/without a transcript body."),
+                    ]),
+                    "transcriptContains": .object([
+                        "type": .string("string"),
+                        "description": .string("Case-insensitive substring match against title + known transcript text."),
+                    ]),
+                    "sort": .object([
+                        "type": .string("string"),
+                        "description": .string("recordedAt_desc (default) or recordedAt_asc."),
+                    ]),
+                    "includeHealth": .object([
+                        "type": .string("boolean"),
+                        "description": .string("Include curator job status + backlog counts (default true)."),
+                    ]),
                 ]),
             ]),
             metadata: ToolMetadata(
                 title: "Voice Memo List",
-                whenToUse: ["inspect unprocessed Voice Memos before running the curator", "debug discovery paths and transcript sidecars"],
+                whenToUse: [
+                    "inspect unprocessed Voice Memos before running the curator",
+                    "date-scoped triage without downloading the full backlog",
+                    "debug discovery paths and transcript sidecars",
+                ],
                 whenNotToUse: ["routing writes — use voice_memo_process"],
-                relatedTools: ["voice_memo_process"]
+                relatedTools: ["voice_memo_process", "voice_memo_settings_get"]
             ),
             handler: { args in
-                var includeProcessed = false
-                if case .object(let obj) = args, case .bool(let b)? = obj["includeProcessed"] { includeProcessed = b }
+                let obj: [String: Value]
+                if case .object(let o) = args { obj = o } else { obj = [:] }
+
+                var query = VoiceMemoListQuery()
+                if case .bool(let b)? = obj["includeProcessed"] { query.includeProcessed = b }
+                if case .int(let n)? = obj["limit"] { query.limit = n }
+                if case .double(let d)? = obj["limit"] { query.limit = Int(d) }
+                if case .string(let c)? = obj["cursor"] { query.cursor = c }
+                if case .bool(let b)? = obj["hasTranscript"] { query.hasTranscript = b }
+                if case .string(let s)? = obj["transcriptContains"] { query.transcriptContains = s }
+                if case .string(let sort)? = obj["sort"] {
+                    query.sortAscending = sort.lowercased().contains("asc")
+                }
+                let iso = ISO8601DateFormatter()
+                iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                let isoBasic = ISO8601DateFormatter()
+                if case .string(let from)? = obj["dateFrom"] {
+                    query.dateFrom = iso.date(from: from) ?? isoBasic.date(from: from)
+                }
+                if case .string(let to)? = obj["dateTo"] {
+                    query.dateTo = iso.date(from: to) ?? isoBasic.date(from: to)
+                }
+                var includeHealth = true
+                if case .bool(let b)? = obj["includeHealth"] { includeHealth = b }
+
                 let all = VoiceMemoDiscovery.listRecordings(roots: VoiceMemoDiscovery.defaultRecordingRoots())
-                let rows = all.filter { includeProcessed || !VoiceMemoProcessedStore.isProcessed(id: $0.id) }
-                return .object([
-                    "count": .int(rows.count),
-                    "memos": .array(rows.map { memo in
+                let page = VoiceMemoListFilter.page(recordings: all, query: query)
+
+                var result: [String: Value] = [
+                    "count": .int(page.memos.count),
+                    "totalMatched": .int(page.totalMatched),
+                    "hasMore": .bool(page.hasMore),
+                    "memos": .array(page.memos.map { memo in
                         .object([
                             "id": .string(memo.id),
                             "title": .string(memo.title),
@@ -65,7 +127,33 @@ public enum VoiceMemoModule {
                             "processed": .bool(VoiceMemoProcessedStore.isProcessed(id: memo.id)),
                         ])
                     }),
-                ])
+                ]
+                if let next = page.nextCursor { result["nextCursor"] = .string(next) }
+
+                if includeHealth {
+                    let unprocessed = all.filter { !VoiceMemoProcessedStore.isProcessed(id: $0.id) }.count
+                    let pendingReview = VoiceMemoReviewStore.pendingEntries().count
+                    var curatorStatus = "missing"
+                    var curatorActive = false
+                    do {
+                        try await JobStore.shared.open()
+                        if let job = try await JobStore.shared.fetch(id: VoiceMemoCuratorJob.jobId) {
+                            curatorStatus = job.status.rawValue
+                            curatorActive = job.status == .active
+                        }
+                    } catch {
+                        curatorStatus = "unavailable"
+                    }
+                    result["health"] = .object([
+                        "curatorJobId": .string(VoiceMemoCuratorJob.jobId),
+                        "curatorStatus": .string(curatorStatus),
+                        "curatorActive": .bool(curatorActive),
+                        "unprocessedCount": .int(unprocessed),
+                        "pendingReviewCount": .int(pendingReview),
+                        "backlogHealthy": .bool(unprocessed < 50 && curatorActive),
+                    ])
+                }
+                return .object(result)
             }
         )
     }

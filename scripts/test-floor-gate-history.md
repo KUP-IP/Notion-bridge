@@ -2290,3 +2290,4 @@ set -euo pipefail
 # mutation, rate-limited unknown-tool audit telemetry, secret-shaped miss
 # redaction, and client name/version attribution. Measured 3207 passed, 0
 # failed on the current origin/main-based worktree. FLOOR 3202 -> 3207.
+# 2026-07-15 Voice Memo Reliability (list filters/pagination/health + commit receipts + FieldsFilter identity keys). FLOOR 3207→3214 (+7).

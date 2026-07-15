@@ -9,7 +9,9 @@
 # the floor OR any test fails.
 #
 # Full append-only FLOOR provenance: scripts/test-floor-gate-history.md
-FLOOR="${BRIDGE_TEST_FLOOR:-3207}"
+# 2026-07-15 Voice Memo Reliability: list filters + commit receipts + FieldsFilter
+# identity retention. Measured 3214 passed / 0 failed. FLOOR 3207→3214.
+FLOOR="${BRIDGE_TEST_FLOOR:-3214}"
 BIN=".build/debug/TheBridgeTests"
 
 echo "🧪 test-floor-gate: building debug + running suite (floor=${FLOOR})..."

@@ -129,7 +129,7 @@ public enum RegistryModule {
     /// Shared description snippet for the `fields` result-projection param,
     /// reused verbatim across all 6 tools (Round 2 Decision 4 — one
     /// mechanism, learned once, recognized everywhere).
-    static let fieldsParamDescriptionSuffix = " Optional `fields` (array of strings) narrows the returned row to only the requested top-level keys — e.g. [\"title\",\"properties.status\"] — instead of the full envelope. Bare \"properties\" keeps the whole properties map; a dotted \"properties.X\" sub-selects one property (case-insensitive). Omitted or [] → unchanged full response. Unknown keys/paths are silently absent, never an error. On write tools this NEVER filters the operation-status wrapper (created/updated/matchedId/bodyWrite/idempotentReplay/partialFailure/reason) — only the row payload."
+    static let fieldsParamDescriptionSuffix = " Optional `fields` (array of strings) narrows the returned row to only the requested top-level keys — e.g. [\"title\",\"properties.status\"] — instead of the full envelope. Bare \"properties\" keeps the whole properties map; a dotted \"properties.X\" sub-selects one property (case-insensitive). Identity keys (`id`, `entity`, `title`) are always retained when present so projected list/find rows remain usable for follow-on updates. Omitted or [] → unchanged full response. Unknown keys/paths are silently absent, never an error. On write tools this NEVER filters the operation-status wrapper (created/updated/matchedId/bodyWrite/idempotentReplay/partialFailure/reason) — only the row payload."
 
     static func fieldsParamSchema() -> Value {
         .object([

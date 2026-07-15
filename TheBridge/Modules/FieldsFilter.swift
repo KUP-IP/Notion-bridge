@@ -26,10 +26,20 @@
 //    type is broken caller code, not a typo.
 //  - No max-length cap: a Set-lookup filter is O(1) per key, nothing here
 //    to defend against (Round 2 Decision 1).
+//  - Identity keys (Voice Memo Reliability / registry audit): when projecting
+//    a non-empty `fields` set, always re-attach any of `id` / `entity` /
+//    `title` that were present on the source envelope (`includeIdentity`
+//    default true). Follow-on relation/update calls need the row id even
+//    when the caller only projected display fields.
 
 import MCP
 
 public enum FieldsFilter {
+
+    /// Immutable envelope keys re-attached after a non-empty projection when
+    /// `includeIdentity` is true (default). Only keys that exist on the source
+    /// envelope are restored — skill envelopes without `id` are unaffected.
+    public static let identityKeys: [String] = ["id", "entity", "title"]
 
     /// Parse the raw `fields` argument (if present) into a validated
     /// `[String]`. Returns `nil` when the key is absent — the "omitted"
@@ -73,12 +83,17 @@ public enum FieldsFilter {
     ///   `propertiesKey` (case-insensitive) keeps the WHOLE map and wins
     ///   over any narrower dotted selection for the same key (permissive
     ///   union — Success Criteria #3).
+    /// - `includeIdentity` (default `true`) re-attaches any of
+    ///   `identityKeys` that exist on the source envelope after projection,
+    ///   so callers who only ask for `properties.status` still receive a
+    ///   usable `id` for follow-on writes.
     /// - Non-object `envelope` (defensive — every real caller passes
     ///   `.object`) is returned untouched.
     public static func project(
         _ envelope: Value,
         fields: [String]?,
-        propertiesKey: String = "properties"
+        propertiesKey: String = "properties",
+        includeIdentity: Bool = true
     ) -> Value {
         guard let fields, !fields.isEmpty else { return envelope }
         guard case .object(let dict) = envelope else { return envelope }
@@ -120,6 +135,14 @@ public enum FieldsFilter {
             }
             if topLevelKeys.contains(key) {
                 result[key] = value
+            }
+        }
+
+        if includeIdentity {
+            for identityKey in identityKeys {
+                if result[identityKey] == nil, let value = dict[identityKey] {
+                    result[identityKey] = value
+                }
             }
         }
         return .object(result)

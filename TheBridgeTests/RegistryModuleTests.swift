@@ -925,8 +925,10 @@ func runRegistryModuleTests() async {
                 "entity": .string("skill"), "id": .string("bbbb0000000000000000000000000001"),
                 "fields": .array([.string("title")]),
             ]))
-            try expect(obj(out).count == 1, "expected exactly 1 key, got \(obj(out).keys.sorted())")
+            // Identity keys (id/entity/title) retained with the requested projection.
             try expect(obj(out)["title"] == .string("Gamma"), "title value preserved")
+            try expect(obj(out)["id"] != nil, "id retained with projected fields")
+            try expect(obj(out)["entity"] != nil, "entity retained with projected fields")
         }
     }
 
@@ -974,7 +976,8 @@ func runRegistryModuleTests() async {
             guard case .array(let rows)? = obj(out)["rows"] else { throw TestError.assertion("rows missing") }
             try expect(rows.count == 2, "both rows present")
             for r in rows {
-                try expect(obj(r).count == 1 && obj(r)["title"] != nil, "each row projected to just title: \(obj(r))")
+                try expect(obj(r)["title"] != nil, "each row keeps title: \(obj(r))")
+                try expect(obj(r)["id"] != nil, "each projected row retains id: \(obj(r))")
             }
             // count/entity wrapper keys survive untouched (list has no write-status wrapper, but its own keys aren't row-shaped).
             try expect(obj(out)["count"] == .int(2), "count unaffected by fields")
@@ -991,7 +994,8 @@ func runRegistryModuleTests() async {
                 "fields": .array([.string("id")]),
             ]))
             guard case .array(let rows)? = obj(out)["rows"], let r0 = rows.first else { throw TestError.assertion("no rows") }
-            try expect(obj(r0).count == 1 && obj(r0)["id"] == .string("dddd0000000000000000000000000001"), "got \(obj(r0))")
+            try expect(obj(r0)["id"] == .string("dddd0000000000000000000000000001"), "id preserved: \(obj(r0))")
+            try expect(obj(r0)["title"] != nil || obj(r0)["entity"] != nil, "identity keys retained: \(obj(r0))")
         }
     }
 
@@ -1070,8 +1074,10 @@ func runRegistryModuleTests() async {
             try expect(obj(out)["updated"] == .bool(true), "wrapper key present")
             try expect(obj(out)["matchedId"] != nil, "wrapper key matchedId present")
             guard case .object(let row)? = obj(out)["row"] else { throw TestError.assertion("row missing") }
-            try expect(row.count == 1 && row["id"] == .string("ffff0000000000000000000000000010"),
-                       "row must be projected via resultFields to just id, got \(row)")
+            try expect(row["id"] == .string("ffff0000000000000000000000000010"),
+                       "row id preserved via resultFields, got \(row)")
+            try expect(row["entity"] != nil || row["title"] != nil,
+                       "identity keys retained on projected row, got \(row)")
         }
     }
 

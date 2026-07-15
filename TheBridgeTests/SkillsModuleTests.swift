@@ -178,7 +178,7 @@ func runSkillsModuleTests() async {
             name: "demo", title: "Demo", url: "https://n/demo",
             markdownJSONOrText: md, summary: "sum", triggerPhrases: ["t1"], antiTriggerPhrases: ["a1"]
         ) { _ in nil }
-        let projected = FieldsFilter.project(envelope, fields: ["content"])
+        let projected = FieldsFilter.project(envelope, fields: ["content"], includeIdentity: false)
         guard case .object(let dict) = projected else { throw TestError.assertion("expected object") }
         try expect(dict.count == 1, "expected exactly 1 key, got \(dict.keys.sorted())")
         guard case .string(let content)? = dict["content"] else { throw TestError.assertion("content missing") }
@@ -196,7 +196,7 @@ func runSkillsModuleTests() async {
             name: "demo2", title: "Demo2", url: "https://n/demo2",
             markdownJSONOrText: md, pageProperties: pageProps
         ) { _ in nil }
-        let projected = FieldsFilter.project(envelope, fields: ["properties.status"])
+        let projected = FieldsFilter.project(envelope, fields: ["properties.status"], includeIdentity: false)
         guard case .object(let dict) = projected,
               case .object(let props)? = dict["properties"] else {
             throw TestError.assertion("expected projected properties object")
@@ -226,7 +226,9 @@ func runSkillsModuleTests() async {
         ) { _ in nil }
         let projected = FieldsFilter.project(envelope, fields: ["ghostKey", "title"])
         guard case .object(let dict) = projected else { throw TestError.assertion("expected object") }
-        try expect(Set(dict.keys) == ["title"], "only known key survives, got \(dict.keys.sorted())")
+        // title requested; id/entity re-attached only if present on skill envelope.
+        try expect(dict["title"] != nil, "title must survive")
+        try expect(dict["ghostKey"] == nil, "unknown key must not survive")
     }
 
     // ============================================================

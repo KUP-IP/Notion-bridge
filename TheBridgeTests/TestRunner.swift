@@ -642,6 +642,7 @@ await runRegistryDataPathTests()     // Data-Source Registry W2: live data path 
 await runRegistryModuleTests()       // Data-Source Registry W3: MCP tool surface (13 tools: generic CRUD + resolve_and_update + add/remove_entity + introspect + possess + hydrate, registration + handler behavior)
 await runRegistryAppendMergeTests()  // PKT-MEM-135: RegistryAppendMerge shared append-merge primitive (ported from VoiceMemoProcessor.mergeAppendRegistryFields)
 await runFieldsFilterTests()         // PKT: fields Param Across Registry Tools + fetch_skill — shared FieldsFilter primitive (parse + project), hermetic synthetic-Value fixtures
+await runVoiceMemoListQueryTests()   // Voice Memo Reliability: list date/transcript filters + cursor pagination
 await runDataSourcesViewModelTests() // Data-Source Registry W4: Settings pane scenarios (propose→confirm, TTL, drift, errors) + BE↔FE alignment
 await runRegistryEdgeCaseTests()     // Data-Source Registry: adversarial edge cases (codec chunking, pagination, cache concurrency, config race, writer)
 await runRegistryHydrationTests()    // Packet Runner v1 (FR-1/§8.3): packet-registry-v1 one-hop hydration envelope (primary+body+relations+provenance+warnings)
