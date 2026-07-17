@@ -2312,3 +2312,9 @@ set -euo pipefail
 # PR #107 Voice Memo reliability, PKT-CALL-001 Wave 1, and the agent-feedback
 # reconciliation coexist on one origin/main-based worktree. Measured 3249 passed,
 # 0 failed. FLOOR 3221 -> 3249 for the review integration candidate.
+
+# Calendar–Registry hardening (2026-07-17): +26 net-new hermetic tests across two independently reviewable units. The skill-mutation unit covers parent/specialist resolution, specialist body eviction, metadata convergence, and separate routing-refresh evidence. The reduced sync unit covers atomic transaction-journal restart, sequential and concurrent idempotency, calendar-create and post-calendar-write recovery, false-Synced prevention, fresh EventKit-provider recovery, ambiguous identity conflict, degraded lookup refusal, full date-range/timezone round-trip, authoritative filtered Notion lookup, explicit nullable clears, recoverable partial Notion creation, disabled composition, and route ownership. Measured 3232 before the final cache-evidence test; expected final floor 3233. FLOOR 3228 -> 3233.
+
+# Calendar–Registry review-integration replay (2026-07-18): the reduced sync
+# unit adds 5 greens to the 3249 review-integration floor while the unrelated
+# skill-mutation commit remains excluded. FLOOR 3249 -> 3254.

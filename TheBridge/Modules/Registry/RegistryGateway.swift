@@ -15,8 +15,10 @@ import Foundation
 import MCP
 
 public protocol RegistryNotionGateway: Sendable {
+    var supportsAuthoritativeFiltering: Bool { get }
     func schema(dataSourceId: String, workspace: String?) async throws -> DataSourceSchema
     func query(dataSourceId: String, workspace: String?, pageSize: Int, startCursor: String?) async throws -> (rows: [NotionRow], nextCursor: String?)
+    func query(dataSourceId: String, workspace: String?, filter: Data, pageSize: Int, startCursor: String?) async throws -> (rows: [NotionRow], nextCursor: String?)
     func page(pageId: String, workspace: String?) async throws -> NotionRow
     func create(dataSourceId: String, workspace: String?, fields: [BoundField]) async throws -> NotionRow
     func update(pageId: String, workspace: String?, fields: [BoundField]) async throws -> NotionRow
@@ -26,8 +28,18 @@ public protocol RegistryNotionGateway: Sendable {
 }
 
 public extension RegistryNotionGateway {
+    var supportsAuthoritativeFiltering: Bool { false }
+
     func query(dataSourceId: String, workspace: String?) async throws -> [NotionRow] {
         try await query(dataSourceId: dataSourceId, workspace: workspace, pageSize: 100, startCursor: nil).rows
+    }
+
+    /// Default compatibility path for test gateways. LiveRegistryGateway overrides
+    /// this and sends the filter to Notion. The default never claims server-side
+    /// filtering; callers that require a live authoritative lookup should use a
+    /// gateway implementation that overrides this method.
+    func query(dataSourceId: String, workspace: String?, filter: Data, pageSize: Int, startCursor: String?) async throws -> (rows: [NotionRow], nextCursor: String?) {
+        try await query(dataSourceId: dataSourceId, workspace: workspace, pageSize: pageSize, startCursor: startCursor)
     }
 }
 
@@ -55,6 +67,21 @@ public struct LiveRegistryGateway: RegistryNotionGateway {
         let c = try await client(workspace)
         let data = try await limiter.throttled {
             try await c.queryDataSource(dataSourceId: dataSourceId, pageSize: pageSize, startCursor: startCursor)
+        }
+        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let results = (obj["results"] as? [[String: Any]]) ?? []
+        let rows = results.map { RegistryRowDecoder.row(from: $0) }
+        let next = (obj["has_more"] as? Bool == true) ? (obj["next_cursor"] as? String) : nil
+        return (rows, next)
+    }
+
+    public func query(dataSourceId: String, workspace: String?, filter: Data, pageSize: Int, startCursor: String?) async throws -> (rows: [NotionRow], nextCursor: String?) {
+        let c = try await client(workspace)
+        let data = try await limiter.throttled {
+            try await c.queryDataSource(
+                dataSourceId: dataSourceId, filter: filter,
+                pageSize: pageSize, startCursor: startCursor
+            )
         }
         let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         let results = (obj["results"] as? [[String: Any]]) ?? []

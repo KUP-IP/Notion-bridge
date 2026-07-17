@@ -1,0 +1,36 @@
+{
+  "entity": "schedule",
+  "additiveProperties": [
+    {
+      "key": "providerExternalId",
+      "notionName": "Provider External ID",
+      "type": "rich_text",
+      "role": "data"
+    }
+  ],
+  "requiredExistingKeys": [
+    "title",
+    "date",
+    "status",
+    "syncKey",
+    "calendarProvider",
+    "calendarId",
+    "calendarEventId",
+    "calendarUrl",
+    "eventClass",
+    "meetingType",
+    "primaryBlock",
+    "blocks",
+    "projects",
+    "contacts",
+    "schedulingAuthority",
+    "syncState",
+    "lastSyncedAt",
+    "registryUpdatedAt",
+    "calendarUpdatedAt",
+    "syncHash",
+    "lastSyncError",
+    "scheduledDuration",
+    "calendarLocation"
+  ]
+}

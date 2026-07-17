@@ -99,11 +99,20 @@ func runRegistryPropertyCodecTests() async {
                    "multi_select decode")
     }
 
-    await test("decode date → start only (or .null when unset)") {
+    await test("decode date → full range when end/timezone exist") {
         let prop: [String: Any] = ["type": "date",
-            "date": ["start": "2026-06-17", "end": "2026-06-18"]]
-        try expect(RegistryPropertyCodec.decode(type: "date", property: prop) == .string("2026-06-17"),
-                   "date decode (start only)")
+            "date": [
+                "start": "2026-06-17T09:00:00-05:00",
+                "end": "2026-06-17T10:00:00-05:00",
+                "time_zone": "America/Chicago"
+            ]]
+        try expect(RegistryPropertyCodec.decode(type: "date", property: prop) == .object([
+            "start": .string("2026-06-17T09:00:00-05:00"),
+            "end": .string("2026-06-17T10:00:00-05:00"),
+            "timeZone": .string("America/Chicago")
+        ]), "date range decode")
+        let startOnly: [String: Any] = ["type": "date", "date": ["start": "2026-06-17"]]
+        try expect(RegistryPropertyCodec.decode(type: "date", property: startOnly) == .string("2026-06-17"))
         let unset: [String: Any] = ["type": "date", "date": NSNull()]
         try expect(RegistryPropertyCodec.decode(type: "date", property: unset) == .null,
                    "date(unset) → .null")
@@ -390,4 +399,19 @@ func runRegistryPropertyCodecTests() async {
     }
 
     print("  (RegistryPropertyCodec: decode/encode/isWritable + round-trip matrix complete)")
+    await test("encode: date range object preserves start and end") {
+        let encoded = RegistryPropertyCodec.encode(
+            type: "date",
+            value: .object([
+                "start": .string("2026-07-17T09:00:00-05:00"),
+                "end": .string("2026-07-17T10:30:00-05:00")
+            ])
+        )
+        guard let date = encoded?["date"] as? [String: Any] else {
+            throw TestError.assertion("date range did not encode")
+        }
+        try expect(date["start"] as? String == "2026-07-17T09:00:00-05:00")
+        try expect(date["end"] as? String == "2026-07-17T10:30:00-05:00")
+    }
+
 }
