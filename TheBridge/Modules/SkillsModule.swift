@@ -194,8 +194,8 @@ public enum SkillsModule {
 
             GRANULAR FETCH: pass `section="<heading>"` to return ONLY that heading's \
             slice instead of the whole body — use this when you need one part of a \
-            large skill and want to stay under token caps. No match → full body + a \
-            `section-not-found` annotation.
+            large skill and want to stay under token caps. No match → compact heading \
+            index + a `section-not-found` annotation.
             """,
             inputSchema: .object([
                 "type": .string("object"),
@@ -226,7 +226,7 @@ public enum SkillsModule {
                     ]),
                     "section": .object([
                         "type": .string("string"),
-                        "description": .string("Optional heading name to return ONLY that section's slice (case-insensitive, '#' markers ignored) instead of the whole body — a granular partial fetch to avoid blowing token caps. Nested subsections are included; a sibling/shallower heading ends the slice. No match → full body + a `section-not-found` annotation.")
+                        "description": .string("Optional heading name to return ONLY that section's slice (case-insensitive, '#' markers ignored) instead of the whole body — a granular partial fetch to avoid blowing token caps. Nested subsections are included; a sibling/shallower heading ends the slice. No match → compact heading index + a `section-not-found` annotation.")
                     ]),
                     "fields": .object([
                         "type": .string("array"),
@@ -553,13 +553,20 @@ public enum SkillsModule {
                     // fb-resultsize: when a `section` is requested, slice the
                     // rendered markdown down to that heading's content before
                     // mention-resolution + envelope build — a granular partial
-                    // fetch. No match → full body, and we record it so the
-                    // envelope carries a `section-not-found` annotation.
+                    // fetch. No match → a compact heading index, and we record
+                    // it so the envelope carries a `section-not-found` annotation.
                     let sectionBody = sectionArg.flatMap {
                         Self.extractMarkdownSection(rawMarkdown, section: $0)
                     }
-                    let bodyForEnvelope = sectionBody ?? rawMarkdown
                     let sectionMissed = (sectionArg != nil) && (sectionBody == nil)
+                    let bodyForEnvelope: String
+                    if let sectionBody {
+                        bodyForEnvelope = sectionBody
+                    } else if let sectionArg {
+                        bodyForEnvelope = Self.sectionMissMarkdown(requested: sectionArg, markdown: rawMarkdown)
+                    } else {
+                        bodyForEnvelope = rawMarkdown
+                    }
 
                     // Skill-body <mention-page> tags now render as
                     // [Title](url) via the shared MentionResolver (cmd-w2),

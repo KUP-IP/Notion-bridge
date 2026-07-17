@@ -213,6 +213,32 @@ func runNotionModuleTests() async {
         }
     }
 
+    await test("notion_page_markdown_read schema exposes bounded section selector") {
+        let tools = await router.registrations(forModule: "notion")
+        guard let tool = tools.first(where: { $0.name == "notion_page_markdown_read" }),
+              case .object(let schema) = tool.inputSchema,
+              case .object(let properties) = schema["properties"] else {
+            throw TestError.assertion("Missing notion_page_markdown_read schema")
+        }
+        try expect(properties["section"] != nil)
+    }
+
+    await test("block-level writes derive configured-skill cache eviction candidates") {
+        let candidates = NotionModule.skillCacheEvictionCandidates(
+            targetId: "child-block",
+            responseJSON: ["parent": ["type": "page_id", "page_id": "skill-page"]]
+        )
+        try expect(candidates == ["child-block", "skill-page"])
+        let direct = NotionModule.skillCacheEvictionCandidates(targetId: "skill-page")
+        try expect(direct == ["skill-page"])
+    }
+
+    await test("Notion 401 errors carry a concrete reauthorization path") {
+        let message = NotionClientError.httpError(401, "unauthorized").localizedDescription
+        try expect(message.contains("Settings > Connections"))
+        try expect(message.contains("notion_token_introspect"))
+    }
+
 
     await test("notion_comments_create rejects missing text") {
         do {

@@ -117,6 +117,21 @@ extension SkillsModule {
 
         // Intent ranking → confident / disambiguate / none.
         if let intent = intent {
+            // An exact canonical parent with no specialist roster is already
+            // resolved. Intent cannot route anywhere, so do not mislabel the
+            // authoritative parent body as low-confidence.
+            if allSpecialists.isEmpty {
+                let parentEnvelope = await Self.buildFileSkillResult(parent)
+                return Self.annotateFileEnvelope(
+                    parentEnvelope,
+                    parentName: parentName,
+                    annotation: nil,
+                    resolvedPath: nil,
+                    score: 1.0,
+                    reason: "exact canonical name; no specialists configured",
+                    siblingTitles: []
+                )
+            }
             let candidates: [SkillIntentCandidate] = allSpecialists.map { s in
                 var aliases: [String] = []
                 if case .array(let arr) = s.frontmatter["aliases"] { aliases = arr }
@@ -247,6 +262,19 @@ extension SkillsModule {
         // `childPages` already holds only curated specialists.
         let childPages = await Self.listNotionChildPages(client: client, pageId: parentPageId)
         let siblingTitles = childPages.map { $0.title }
+
+        // Intent on an exact canonical parent that has no curated specialists
+        // is a definitive parent fetch, not a routing failure.
+        if parsedPath.child == nil, intent != nil, childPages.isEmpty {
+            return SpecialistDispatch(
+                resolvedSpecialist: nil,
+                resolvedPath: nil,
+                annotation: nil,
+                matchScore: 1.0,
+                matchReason: "exact canonical name; no specialists configured",
+                siblingTitles: []
+            )
+        }
 
         if let childName = parsedPath.child {
             let needle = childName.lowercased()
@@ -550,8 +578,8 @@ extension SkillsModule {
     /// `section` (the requested name) + `sectionMatched: true` so the agent
     /// knows the body is a partial slice. When the section was requested but
     /// no heading matched, records `annotation: "section-not-found"` plus
-    /// the requested name and `sectionMatched: false` — the full body is
-    /// returned (never silently empty). No-op when no section was requested.
+    /// the requested name and `sectionMatched: false` — a compact heading
+    /// index is returned instead of the full body. No-op when no section was requested.
     ///
     /// Pure + nonisolated: mutates only its own envelope copy.
     nonisolated static func annotateSection(
@@ -575,7 +603,7 @@ extension SkillsModule {
     /// `content` markdown to the requested heading, recomputes the honest
     /// `blockCount` (non-empty line count), and stamps the section
     /// annotation. No section requested → returns the envelope untouched.
-    /// No match → full content kept + `section-not-found` annotation.
+    /// No match → compact heading index + `section-not-found` annotation.
     ///
     /// Pure + nonisolated: reads/writes only its own envelope copy.
     nonisolated static func applySectionToEnvelope(
@@ -599,6 +627,10 @@ extension SkillsModule {
             dict["blockCount"] = .int(nonEmptyLineCount)
             return Self.annotateSection(.object(dict), requested: section, matched: true, missed: false)
         }
+        let headings = Self.markdownHeadings(content)
+        dict["content"] = .string(Self.sectionMissMarkdown(requested: section, markdown: content))
+        dict["availableSections"] = .array(headings.prefix(100).map(Value.string))
+        dict["blockCount"] = .int(headings.isEmpty ? 1 : headings.count + 2)
         return Self.annotateSection(.object(dict), requested: section, matched: false, missed: true)
     }
 

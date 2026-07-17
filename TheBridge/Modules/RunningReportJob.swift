@@ -60,7 +60,7 @@ public enum RunningReportJob {
     /// operator-pending banner for the Strava data source. NO fabricated numbers.
     /// When the operator wires a data source, they replace this one step (e.g.
     /// with an `http_fetch` of their Strava activities + a formatter) — the
-    /// delivery step downstream is unchanged because it reads `$prev_result`.
+    /// delivery step downstream is unchanged because it reads `$prev_result.stdout`.
     static let reportBuilderScript = """
     cat <<'REPORT'
     🏃 Morning Running Report — $(date '+%a %b %-d')
@@ -79,7 +79,7 @@ public enum RunningReportJob {
     """
 
     /// The default action chain: build the report text, then deliver it as an
-    /// iMessage. Step 2 reads `$prev_result` (the report builder's stdout).
+    /// iMessage. Step 2 extracts the report builder's stdout explicitly.
     public static func defaultActionChain(recipient: String = selfHandlePlaceholder) -> [ActionStep] {
         [
             // Step 0 — build the running summary text (honest scaffold).
@@ -96,7 +96,7 @@ public enum RunningReportJob {
                 tool: "messages_send",
                 arguments: [
                     "recipient": .string(recipient),
-                    "body": .string("$prev_result"),
+                    "body": .string("$prev_result.stdout"),
                     "confirm": .string("SEND")
                 ],
                 onFail: .continue

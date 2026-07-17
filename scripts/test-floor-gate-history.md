@@ -2290,3 +2290,11 @@ set -euo pipefail
 # mutation, rate-limited unknown-tool audit telemetry, secret-shaped miss
 # redaction, and client name/version attribution. Measured 3207 passed, 0
 # failed on the current origin/main-based worktree. FLOOR 3202 -> 3207.
+# Agent-feedback reconciliation (2026-07-17): +11 net-new tests cover job
+# previous-result paths and fail-closed misses, Messages attribution provenance,
+# bounded skill/Notion section misses, skill metadata drift, block/page cache
+# eviction, cross-entity registry cache eviction, packet/session compatibility,
+# and actionable Notion 401 guidance. Measured 3218 passed, 0 failed on the
+# origin/main-based feedback worktree. FLOOR 3207 -> 3218. A deliberately
+# failing precursor also proved complete-log retention to the stable evidence
+# directory before its assertion was corrected.

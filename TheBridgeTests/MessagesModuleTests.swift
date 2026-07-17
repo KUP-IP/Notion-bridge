@@ -105,6 +105,35 @@ func runMessagesModuleTests() async {
         }
     }
 
+    await test("messages_recent attribution prefers Messages metadata over Contacts") {
+        let fields = MessagesModule.attributionFields(
+            messagesDisplayName: "Scott",
+            handle: "+16055550123",
+            contact: .init(resolvedName: "Different Contact", source: "contacts_exact_handle", confidence: "exact", failureReason: nil)
+        )
+        try expect(fields["resolvedName"] == .string("Scott"))
+        try expect(fields["attributionSource"] == .string("messages_chat_display_name"))
+        try expect(fields["attributionFailureReason"] == .null)
+    }
+
+    await test("messages_recent attribution uses exact Contacts result and exposes failure reason") {
+        let resolved = MessagesModule.attributionFields(
+            messagesDisplayName: nil,
+            handle: "+16055550123",
+            contact: .init(resolvedName: "Known Person", source: "contacts_exact_handle", confidence: "exact", failureReason: nil)
+        )
+        try expect(resolved["resolvedName"] == .string("Known Person"))
+        try expect(resolved["attributionConfidence"] == .string("exact"))
+
+        let unresolved = MessagesModule.attributionFields(
+            messagesDisplayName: nil,
+            handle: "+16055550123",
+            contact: .init(resolvedName: nil, source: "contacts", confidence: "none", failureReason: "no_exact_contact_match")
+        )
+        try expect(unresolved["resolvedName"] == .null)
+        try expect(unresolved["attributionFailureReason"] == .string("no_exact_contact_match"))
+    }
+
     // messages_send rejects without confirm
     await test("messages_send rejects without confirm='SEND'") {
         let result = try await router.dispatch(

@@ -69,7 +69,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test test-floor check-counter-collisions app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps check-stale-build check-clean-tree inject-license-key inject-remote-access
+.PHONY: debug build test test-floor test-clean check-counter-collisions app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps check-stale-build check-clean-tree inject-license-key inject-remote-access
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -129,6 +129,14 @@ test:
 # Used by CI so a shrunk/disabled suite fails. Floor provenance lives in
 # scripts/test-floor-gate.sh.
 test-floor:
+	./scripts/test-floor-gate.sh
+
+# Branch/tool-surface switch verification: clear every SwiftPM object before
+# running the same locked floor gate. Use when a worktree changes branches or
+# cherry-picks a module-registration change; prevents stale tools from a prior
+# HEAD surviving in .build and producing a false surface-audit failure.
+test-clean:
+	swift package clean
 	./scripts/test-floor-gate.sh
 
 # PKT-1115: detect duplicate monotonic counter/FLOOR claims across open PRs.
@@ -327,6 +335,7 @@ install: check-clean-tree check-stale-build notarize
 	@killall Dock 2>/dev/null || true
 	$(VERIFY_INSTALL)
 	@echo "✅ Installed: /Applications/The Bridge.app"
+	@echo "🔌 Reconnect every MCP client after relaunch so it re-runs initialize + tools/list."
 
 # v1.7.0: Copy-only install (no notarize dep, no killall) (F3)
 install-copy: check-clean-tree check-stale-build sign
@@ -340,6 +349,7 @@ install-copy: check-clean-tree check-stale-build sign
 	$(VERIFY_INSTALL)
 	@echo "Installed: /Applications/The Bridge.app"
 	@echo "Restart The Bridge manually to pick up changes."
+	@echo "Reconnect every MCP client after relaunch so it re-runs initialize + tools/list."
 
 # Alias for agents / remote MCP sessions: same as install-copy (no notarize; does not kill The Bridge).
 install-agent-safe: install-copy

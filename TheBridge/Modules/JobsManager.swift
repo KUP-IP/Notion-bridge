@@ -1321,8 +1321,9 @@ public actor JobsManager {
         var overall: ExecutionRecord.Status = .success
 
         for (idx, step) in job.actionChain.enumerated() {
-            let mcpArgs = Self.substitutePrev(step.arguments, prev: stepResults.last)
+            let previousResult = stepResults.last
             do {
+                let mcpArgs = try Self.substitutePrev(step.arguments, prev: previousResult)
                 let toolName = Self.canonicalActionToolName(step.tool)
                 let result = try await router.dispatch(toolName: toolName, arguments: .object(mcpArgs))
                 stepResults.append(JSONValue.fromMCP(result))
@@ -1342,6 +1343,7 @@ public actor JobsManager {
                     // One retry with a short backoff.
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     do {
+                        let mcpArgs = try Self.substitutePrev(step.arguments, prev: previousResult)
                         let toolName = Self.canonicalActionToolName(step.tool)
                         let result = try await router.dispatch(toolName: toolName, arguments: .object(mcpArgs))
                         stepResults[stepResults.count - 1] = JSONValue.fromMCP(result)
@@ -1416,18 +1418,83 @@ public actor JobsManager {
         throw JobsModuleError.invalidActionChain("missing required arg '\(key)'")
     }
 
-    /// Substitute the literal `"$prev_result"` token in argument values with
-    /// the previous step's full result. Non-string values pass through.
-    private static func substitutePrev(_ args: [String: JSONValue], prev: JSONValue?) -> [String: Value] {
+    /// Substitute `$prev_result` or a path such as `$prev_result.stdout` /
+    /// `$prev_result.content[0].text` in argument values. An unresolved path
+    /// fails the step before dispatch; it never silently becomes an empty body.
+    public static func substitutePrev(_ args: [String: JSONValue], prev: JSONValue?) throws -> [String: Value] {
         var out: [String: Value] = [:]
         for (k, v) in args {
-            if case .string(let s) = v, s == "$prev_result", let prev {
-                out[k] = prev.toMCP()
+            if case .string(let s) = v, s.hasPrefix("$prev_result") {
+                guard let prev else {
+                    throw JobsModuleError.invalidActionChain("argument '\(k)' references $prev_result before a previous step exists")
+                }
+                guard let resolved = resolvePrevPath(s, in: prev) else {
+                    throw JobsModuleError.invalidActionChain("argument '\(k)' could not resolve previous-result path '\(s)'")
+                }
+                out[k] = resolved.toMCP()
             } else {
                 out[k] = v.toMCP()
             }
         }
         return out
+    }
+
+    private enum PrevPathComponent: Equatable {
+        case key(String)
+        case index(Int)
+    }
+
+    private static func resolvePrevPath(_ token: String, in root: JSONValue) -> JSONValue? {
+        guard token.hasPrefix("$prev_result") else { return nil }
+        let suffix = String(token.dropFirst("$prev_result".count))
+        if suffix.isEmpty { return root }
+        guard let components = parsePrevPath(suffix) else { return nil }
+
+        var current = root
+        for component in components {
+            switch (component, current) {
+            case (.key(let key), .object(let object)):
+                guard let next = object[key] else { return nil }
+                current = next
+            case (.index(let index), .array(let array)):
+                guard array.indices.contains(index) else { return nil }
+                current = array[index]
+            default:
+                return nil
+            }
+        }
+        return current
+    }
+
+    private static func parsePrevPath(_ suffix: String) -> [PrevPathComponent]? {
+        var components: [PrevPathComponent] = []
+        var index = suffix.startIndex
+
+        while index < suffix.endIndex {
+            if suffix[index] == "." {
+                index = suffix.index(after: index)
+                let start = index
+                while index < suffix.endIndex, suffix[index] != ".", suffix[index] != "[" {
+                    index = suffix.index(after: index)
+                }
+                guard start < index else { return nil }
+                components.append(.key(String(suffix[start..<index])))
+            } else if suffix[index] == "[" {
+                index = suffix.index(after: index)
+                let start = index
+                while index < suffix.endIndex, suffix[index] != "]" {
+                    index = suffix.index(after: index)
+                }
+                guard index < suffix.endIndex,
+                      let numeric = Int(suffix[start..<index]), numeric >= 0 else { return nil }
+                components.append(.index(numeric))
+                index = suffix.index(after: index)
+            } else {
+                return nil
+            }
+        }
+
+        return components.isEmpty ? nil : components
     }
 
     /// Reject action chains that would trigger auto-escalation in unattended

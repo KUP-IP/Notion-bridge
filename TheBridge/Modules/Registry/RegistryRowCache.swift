@@ -108,6 +108,31 @@ public actor RegistryRowCache {
         try? FileManager.default.removeItem(at: Self.entityDir(entity))
     }
 
+    /// Evict one Notion page id from every configured/entity cache directory.
+    /// Direct notion_* writes do not know which Registry entity owns a page;
+    /// scanning the shallow entity directories keeps post-write reads honest.
+    @discardableResult
+    public func evictPageEverywhere(pageId: String) -> [String] {
+        let root = BridgePaths.applicationSupport(.registryCache)
+        let fm = FileManager.default
+        guard let entityNames = try? fm.contentsOfDirectory(atPath: root.path) else { return [] }
+        var evicted: [String] = []
+        for entityName in entityNames.sorted() {
+            let candidate = root
+                .appendingPathComponent(entityName, isDirectory: true)
+                .appendingPathComponent("\(Self.safeComponent(CachedRow.normalize(pageId))).json")
+            guard fm.fileExists(atPath: candidate.path) else { continue }
+            do {
+                try fm.removeItem(at: candidate)
+                evicted.append(entityName)
+            } catch {
+                // Cache eviction is a best-effort freshness hint. A failed
+                // removal remains visible to forceRefresh and normal TTL.
+            }
+        }
+        return evicted
+    }
+
     /// Increment the persisted `callCount` and return the new value (0 when
     /// no entry). The read-bump-write runs inside the actor, so concurrent
     /// ticks can't lose an increment. Drives the revalidation cadence.

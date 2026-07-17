@@ -106,6 +106,35 @@ public enum NotionModule {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// Block-level write responses include their parent when the touched block
+    /// is directly under a page. Evict both the explicit target (which may be a
+    /// page id for top-level appends) and any returned page/block parent; the
+    /// eviction helper itself ignores ids that are not configured skill pages.
+    public static func skillCacheEvictionCandidates(
+        targetId: String,
+        responseJSON: [String: Any]? = nil
+    ) -> [String] {
+        var candidates = [targetId]
+        guard let parent = responseJSON?["parent"] as? [String: Any] else { return candidates }
+        for key in ["page_id", "block_id"] {
+            if let parentId = parent[key] as? String {
+                candidates.append(parentId)
+            }
+        }
+        var seen: Set<String> = []
+        return candidates.filter { seen.insert($0).inserted }
+    }
+
+    private static func evictSkillBodyCache(
+        targetId: String,
+        responseJSON: [String: Any]? = nil
+    ) async {
+        for candidate in skillCacheEvictionCandidates(targetId: targetId, responseJSON: responseJSON) {
+            await SkillBodyCacheEviction.evictIfConfiguredSkillPage(candidate)
+            await RegistryRowCache.shared.evictPageEverywhere(pageId: candidate)
+        }
+    }
+
     /// Register all NotionModule tools on the given router.
     /// Lazily initializes NotionClientRegistry on first tool invocation.
     public static func register(on router: ToolRouter) async {
@@ -352,6 +381,7 @@ public enum NotionModule {
                 let url = resultJSON["url"] as? String ?? ""
 
                 await SkillBodyCacheEviction.evictIfConfiguredSkillPage(pageId)
+                await RegistryRowCache.shared.evictPageEverywhere(pageId: pageId)
 
                 return .object([
                     "success": .bool(true),
@@ -712,6 +742,8 @@ public enum NotionModule {
                         return .object(["error": .string("Failed to parse append response")])
                     }
 
+                    await Self.evictSkillBodyCache(targetId: blockId, responseJSON: results.first)
+
                     var resultItems: [Value] = []
                     for block in results {
                         let bid = block["id"] as? String ?? ""
@@ -742,6 +774,8 @@ public enum NotionModule {
                     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                         return .object(["error": .string("Failed to parse append response")])
                     }
+
+                    await Self.evictSkillBodyCache(targetId: blockId, responseJSON: json)
 
                     // The markdown endpoint doesn't return a per-block results
                     // array like PATCH /blocks/{id}/children does; report what
@@ -809,6 +843,7 @@ public enum NotionModule {
                     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                         return .object(["error": .string("Failed to parse delete response")])
                     }
+                    await Self.evictSkillBodyCache(targetId: blockId, responseJSON: json)
                     return .object([
                         "success": .bool(true),
                         "id": .string(json["id"] as? String ?? blockId),
@@ -824,6 +859,7 @@ public enum NotionModule {
                     do {
                         let data = try await client.deleteBlock(blockId: blockId)
                         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                        await Self.evictSkillBodyCache(targetId: blockId, responseJSON: json)
                         deleted += 1
                         results.append(.object([
                             "id": .string((json?["id"] as? String) ?? blockId),
@@ -855,11 +891,12 @@ public enum NotionModule {
             name: "notion_page_markdown_read",
             module: moduleName,
             tier: .open,
-            description: "Read a Notion page body as plain markdown only — no properties, no block IDs. Use when you just need the text.",
+            description: "Read a Notion page body as plain markdown only — no properties or block IDs. Optional section returns one heading slice; a miss returns a compact heading index instead of the full page.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "pageId": .object(["type": .string("string"), "description": .string("Notion page ID")]),
+                    "section": .object(["type": .string("string"), "description": .string("Optional markdown heading to return, case-insensitive and without # markers.")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("pageId")])
@@ -873,12 +910,24 @@ public enum NotionModule {
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
                 let data = try await client.getPageMarkdown(pageId: pageId)
 
-                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    let text = String(data: data, encoding: .utf8) ?? ""
-                    return .object(["markdown": .string(text)])
+                let markdown = SkillsModule.skillMarkdownString(fromMarkdownJSON: data)
+                if case .string(let section)? = args["section"] {
+                    if let slice = SkillsModule.extractMarkdownSection(markdown, section: section) {
+                        return .object([
+                            "markdown": .string(slice),
+                            "section": .string(section),
+                            "sectionMatched": .bool(true)
+                        ])
+                    }
+                    let headings = SkillsModule.markdownHeadings(markdown)
+                    return .object([
+                        "markdown": .string(SkillsModule.sectionMissMarkdown(requested: section, markdown: markdown)),
+                        "section": .string(section),
+                        "sectionMatched": .bool(false),
+                        "annotation": .string("section-not-found"),
+                        "availableSections": .array(headings.prefix(100).map(Value.string))
+                    ])
                 }
-
-                let markdown = json["markdown"] as? String ?? String(data: data, encoding: .utf8) ?? ""
                 return .object(["markdown": .string(markdown)])
             }
         ))
@@ -981,6 +1030,7 @@ public enum NotionModule {
                 _ = try await client.replacePageMarkdown(pageId: pageId, markdown: editedMarkdown)
 
                 await SkillBodyCacheEviction.evictIfConfiguredSkillPage(pageId)
+                await RegistryRowCache.shared.evictPageEverywhere(pageId: pageId)
 
                 let totalReplacements = editResults.reduce(0) { $0 + $1.replacements }
                 return .object([
@@ -1390,6 +1440,8 @@ public enum NotionModule {
                 guard let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] else {
                     return .object(["error": .string("Failed to parse update response")])
                 }
+
+                await Self.evictSkillBodyCache(targetId: blockId, responseJSON: json)
 
                 let id = json["id"] as? String ?? ""
                 let type = json["type"] as? String ?? ""

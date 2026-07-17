@@ -76,9 +76,17 @@ func runResultSizeControlsTests() async {
         try expect(a == b, "case/whitespace variants should resolve identically")
     }
 
-    await test("fb-resultsize (1): no match → nil (caller falls back to full body)") {
+    await test("fb-resultsize (1): no match → nil for caller-controlled bounded response") {
         try expect(SkillsModule.extractMarkdownSection(doc, section: "Nonexistent") == nil,
                    "unknown heading must return nil, not an empty/wrong slice")
+    }
+
+    await test("fb-resultsize (1): section miss response is compact and lists real headings") {
+        let miss = SkillsModule.sectionMissMarkdown(requested: "Nonexistent", markdown: doc)
+        try expect(miss.contains("Section not found: Nonexistent"))
+        try expect(miss.contains("- Setup") && miss.contains("- Usage"))
+        try expect(!miss.contains("Setup line one."), "miss must not echo the oversized full body")
+        try expect(SkillsModule.markdownHeadings(doc) == ["Overview", "Setup", "Prereqs", "Usage", "Teardown"])
     }
 
     await test("fb-resultsize (1): empty section name → nil (no-op)") {
