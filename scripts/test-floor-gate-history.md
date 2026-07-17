@@ -2307,3 +2307,8 @@ set -euo pipefail
 # origin/main-based feedback worktree. FLOOR 3207 -> 3218. A deliberately
 # failing precursor also proved complete-log retention to the stable evidence
 # directory before its assertion was corrected.
+
+# Review integration proof (2026-07-17): PR #106 Notion views/comment replies,
+# PR #107 Voice Memo reliability, PKT-CALL-001 Wave 1, and the agent-feedback
+# reconciliation coexist on one origin/main-based worktree. Measured 3249 passed,
+# 0 failed. FLOOR 3221 -> 3249 for the review integration candidate.
