@@ -11,7 +11,7 @@ import MCP
 // MARK: - Skill Cache
 
 /// Cache entry for a fetched skill page.
-private struct CachedSkill: Sendable {
+struct CachedSkill: Sendable {
     let content: Value
     let fetchedAt: Date
 
@@ -22,6 +22,7 @@ private struct CachedSkill: Sendable {
 
 /// Thread-safe actor cache for fetched skill content.
 actor SkillCache {
+    static let shared = SkillCache()
     private var cache: [String: CachedSkill] = [:]
 
     func get(_ key: String) -> Value? {
@@ -149,7 +150,7 @@ public enum SkillsModule {
     /// Register the `fetch_skill` tool on the given router.
     public static func register(on router: ToolRouter) async {
 
-        let cache = SkillCache()
+        let cache = SkillCache.shared
 
         // fetch_skill — open tier
         // PKT-907: now accepts slash-delimited paths (`"parent/child"`)

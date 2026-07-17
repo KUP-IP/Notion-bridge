@@ -861,6 +861,7 @@ await runSkillsCacheTests()
 // envelope-equivalence between the cache-hit and network paths.
 await runSkillBodyCacheTests()
 await runSkillBodyCacheEvictionTests()
+await runSkillMutationTargetResolverTests()
 await runToolRouterListToolsReadyTests()
 await runAgentSurfaceReliabilityTests()
 
