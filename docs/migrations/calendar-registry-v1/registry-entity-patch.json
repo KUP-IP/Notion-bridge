@@ -1,11 +1,18 @@
 {
+  "schemaVersion": 2,
   "entity": "schedule",
   "additiveProperties": [
     {
       "key": "providerExternalId",
       "notionName": "Provider External ID",
       "type": "rich_text",
-      "role": "data"
+      "role": "generic"
+    },
+    {
+      "key": "operationFingerprint",
+      "notionName": "Operation Fingerprint",
+      "type": "rich_text",
+      "role": "generic"
     }
   ],
   "requiredExistingKeys": [

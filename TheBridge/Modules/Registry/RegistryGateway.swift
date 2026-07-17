@@ -14,6 +14,36 @@
 import Foundation
 import MCP
 
+public enum RegistryGatewayError: Error, LocalizedError, Equatable {
+    case invalidResponse(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidResponse(let reason): return "registry gateway response invalid: \(reason)"
+        }
+    }
+}
+
+public enum RegistryQueryResponseDecoder {
+    public static func decode(_ data: Data) throws -> (rows: [NotionRow], nextCursor: String?) {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let results = object["results"] as? [[String: Any]],
+              let hasMore = object["has_more"] as? Bool else {
+            throw RegistryGatewayError.invalidResponse("Notion query response is missing results or has_more")
+        }
+        let next: String?
+        if hasMore {
+            guard let cursor = object["next_cursor"] as? String, !cursor.isEmpty else {
+                throw RegistryGatewayError.invalidResponse("Notion query response has_more=true without next_cursor")
+            }
+            next = cursor
+        } else {
+            next = nil
+        }
+        return (results.map { RegistryRowDecoder.row(from: $0) }, next)
+    }
+}
+
 public protocol RegistryNotionGateway: Sendable {
     var supportsAuthoritativeFiltering: Bool { get }
     func schema(dataSourceId: String, workspace: String?) async throws -> DataSourceSchema
@@ -46,6 +76,7 @@ public extension RegistryNotionGateway {
 /// Production gateway: `NotionClientRegistry` for the connection + the shared
 /// rate limiter for every call.
 public struct LiveRegistryGateway: RegistryNotionGateway {
+    public var supportsAuthoritativeFiltering: Bool { true }
     private let limiter: RegistryRateLimiter
 
     public init(limiter: RegistryRateLimiter = .shared) {
@@ -68,11 +99,7 @@ public struct LiveRegistryGateway: RegistryNotionGateway {
         let data = try await limiter.throttled {
             try await c.queryDataSource(dataSourceId: dataSourceId, pageSize: pageSize, startCursor: startCursor)
         }
-        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        let results = (obj["results"] as? [[String: Any]]) ?? []
-        let rows = results.map { RegistryRowDecoder.row(from: $0) }
-        let next = (obj["has_more"] as? Bool == true) ? (obj["next_cursor"] as? String) : nil
-        return (rows, next)
+        return try RegistryQueryResponseDecoder.decode(data)
     }
 
     public func query(dataSourceId: String, workspace: String?, filter: Data, pageSize: Int, startCursor: String?) async throws -> (rows: [NotionRow], nextCursor: String?) {
@@ -83,11 +110,7 @@ public struct LiveRegistryGateway: RegistryNotionGateway {
                 pageSize: pageSize, startCursor: startCursor
             )
         }
-        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        let results = (obj["results"] as? [[String: Any]]) ?? []
-        let rows = results.map { RegistryRowDecoder.row(from: $0) }
-        let next = (obj["has_more"] as? Bool == true) ? (obj["next_cursor"] as? String) : nil
-        return (rows, next)
+        return try RegistryQueryResponseDecoder.decode(data)
     }
 
     public func page(pageId: String, workspace: String?) async throws -> NotionRow {

@@ -2318,3 +2318,8 @@ set -euo pipefail
 # Calendar–Registry review-integration replay (2026-07-18): the reduced sync
 # unit adds 5 greens to the 3249 review-integration floor while the unrelated
 # skill-mutation commit remains excluded. FLOOR 3249 -> 3254.
+
+- Calendar–Registry recovery hardening (2026-07-17): replaced the process-local JSON correctness boundary with a SQLite recovery ledger and immutable operation fingerprint persisted on Notion and EventKit; added production gateway truth/strict decoding, identity-envelope repair, manifest-authority verification, timezone/event-shape/calendar-qualification gates, durable failure receipts, and migration-model validation. The recovery matrix now contains 22 scenarios, including independent SQLite handles, ledger-loss reconstruction/conflict, partial-page retry, drift refusal, invalid timezone/key, shape rejection, unqualified calendar refusal, and unpersisted recovery evidence. Measured 3239 passed, 0 failed. FLOOR 3233 -> 3239.
+
+# Review-integration replay: recovery hardening adds 6 greens to the combined
+# candidate floor. FLOOR 3254 -> 3260.

@@ -57,12 +57,29 @@ public struct CalendarInfo: Sendable, Equatable {
     public let title: String
     public let isDefault: Bool
     public let allowsModify: Bool
+    public let calendarType: String
+    public let sourceIdentifier: String?
+    public let sourceTitle: String?
+    public let sourceType: String?
 
-    public init(id: String, title: String, isDefault: Bool, allowsModify: Bool) {
+    public init(
+        id: String,
+        title: String,
+        isDefault: Bool,
+        allowsModify: Bool,
+        calendarType: String = "unknown",
+        sourceIdentifier: String? = nil,
+        sourceTitle: String? = nil,
+        sourceType: String? = nil
+    ) {
         self.id = id
         self.title = title
         self.isDefault = isDefault
         self.allowsModify = allowsModify
+        self.calendarType = calendarType
+        self.sourceIdentifier = sourceIdentifier
+        self.sourceTitle = sourceTitle
+        self.sourceType = sourceType
     }
 }
 
@@ -372,6 +389,30 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
         )
     }
 
+
+    private static func calendarTypeName(_ type: EKCalendarType) -> String {
+        switch type {
+        case .local: return "local"
+        case .calDAV: return "caldav"
+        case .exchange: return "exchange"
+        case .subscription: return "subscription"
+        case .birthday: return "birthday"
+        @unknown default: return "unknown"
+        }
+    }
+
+    private static func sourceTypeName(_ type: EKSourceType) -> String {
+        switch type {
+        case .local: return "local"
+        case .exchange: return "exchange"
+        case .calDAV: return "caldav"
+        case .mobileMe: return "mobileme"
+        case .subscribed: return "subscribed"
+        case .birthdays: return "birthdays"
+        @unknown default: return "unknown"
+        }
+    }
+
     public func calendars() async throws -> [CalendarInfo] {
         try await ensureAccess()
         return store.calendars(for: .event).map { cal in
@@ -380,7 +421,11 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
                 title: cal.title,
                 isDefault: cal.calendarIdentifier
                     == store.defaultCalendarForNewEvents?.calendarIdentifier,
-                allowsModify: cal.allowsContentModifications
+                allowsModify: cal.allowsContentModifications,
+                calendarType: Self.calendarTypeName(cal.type),
+                sourceIdentifier: cal.source?.sourceIdentifier,
+                sourceTitle: cal.source?.title,
+                sourceType: cal.source.map { Self.sourceTypeName($0.sourceType) }
             )
         }
     }
