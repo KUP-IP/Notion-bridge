@@ -12,12 +12,13 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    # Workflow-level safety net. Cap the whole job at 45 minutes so a
+    # Workflow-level safety net. Cap the whole job at 60 minutes so a
     # hanging test (or a Swift toolchain stall on the GHA runner) fails
     # fast instead of riding the 6h default to cancellation. Locally
-    # the suite runs in <10min; 45min gives headroom for FluidAudio
-    # (Parakeet) fetch+compile on the macos runner's slower IO.
-    timeout-minutes: 45
+    # the suite runs in <10min; 60min gives headroom for FluidAudio
+    # (Parakeet) fetch+compile plus the full floor on the macos runner's
+    # slower IO.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,9 +39,10 @@ jobs:
 
       - name: Build release
         # Per-step timeout — Swift release build on macos-26 with strict
-        # concurrency + FluidAudio (Parakeet) fetch takes ~20min on GHA;
-        # 25min cap catches a stuck compile without burning the job budget.
-        timeout-minutes: 25
+        # concurrency + FluidAudio (Parakeet) fetch can exceed 25min on GHA;
+        # PR #107 reached the final link step before that cap killed it. A 35min
+        # cap keeps a bounded failure while allowing a healthy cold build.
+        timeout-minutes: 35
         run: make build
 
       - name: Run test suite + floor gate
