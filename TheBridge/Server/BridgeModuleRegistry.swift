@@ -40,6 +40,7 @@ public enum BridgeModuleRegistry {
         await FileModule.register(on: router)
         await registerSession(router)
         await MessagesModule.register(on: router)
+        await CallHistoryModule.register(on: router)      // Bridge v4 Wave 1: calls_recent read-only CallHistoryDB projection
         await MailModule.register(on: router)
         await NotesModule.register(on: router)
         await SystemModule.register(on: router)

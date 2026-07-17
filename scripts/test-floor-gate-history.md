@@ -2293,3 +2293,9 @@ set -euo pipefail
 
 # 2026-07-15 Notion views list/get + comment discussionId reply. FLOOR 3207→3213 (+6 greens; hermetic body/schema tests). staticFeatureModuleToolCount 205→207.
 # 2026-07-15 Voice Memo Reliability (list filters/pagination/health + commit receipts + FieldsFilter identity keys). FLOOR 3207→3214 (+7).
+# PKT-CALL-001 Wave 1 (2026-07-17): +14 hermetic CallHistory tests cover
+# calls_recent registration/tier/schema/annotations, phone normalization,
+# limit/since/number/direction filters, newest-first ordering, identity-free
+# output, actionable Full Disk Access failure, explicit schema-drift failure,
+# and an incompatible SQLite fixture. Measured 3221 passed, 0 failed on the
+# origin/main-based calls worktree. FLOOR 3207 -> 3221.
