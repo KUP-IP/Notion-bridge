@@ -47,11 +47,20 @@ public struct TimeInstanceSemantics: Codable, Sendable, Equatable {
         contactIds: [String] = []
     ) {
         self.eventClass = eventClass
-        self.meetingType = meetingType
-        self.primaryBlockId = primaryBlockId
-        self.blockIds = blockIds.isEmpty ? [primaryBlockId] : blockIds
-        self.projectIds = projectIds
-        self.contactIds = contactIds
+        self.meetingType = Self.optional(meetingType)
+        self.primaryBlockId = primaryBlockId.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.blockIds = Array(Set((blockIds + [self.primaryBlockId])
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty })).sorted()
+        self.projectIds = Array(Set(projectIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty })).sorted()
+        self.contactIds = Array(Set(contactIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty })).sorted()
+    }
+
+    private static func optional(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
     }
 }
 
@@ -299,12 +308,21 @@ public enum RegistryLookupSource: String, Sendable, Equatable {
 
 public struct RegistryUnresolvedIdentity: Sendable, Equatable {
     public var pageId: String
+    public var syncKey: String?
     public var operationFingerprint: String?
 
-    public init(pageId: String, operationFingerprint: String?) {
+    public init(pageId: String, syncKey: String? = nil, operationFingerprint: String?) {
         self.pageId = pageId
+        self.syncKey = syncKey
         self.operationFingerprint = operationFingerprint
     }
+}
+
+public enum RegistryRecordIdentityRead: Sendable, Equatable {
+    case decoded(TimeInstanceRecord)
+    case partial(pageId: String, syncKey: String?, operationFingerprint: String?)
+    case missing
+    case malformed(pageId: String, reason: String)
 }
 
 public struct RegistryIdentityLookup: Sendable, Equatable {
@@ -339,6 +357,7 @@ public struct PartialRegistryCreateError: Error, LocalizedError, Sendable, Equat
 
 public protocol TimeInstanceRegistryStoring: Sendable {
     func findBySyncKey(_ syncKey: String) async throws -> RegistryIdentityLookup
+    func readIdentity(id: String, forceRefresh: Bool) async throws -> RegistryRecordIdentityRead
     func get(id: String, forceRefresh: Bool) async throws -> TimeInstanceRecord?
     func create(_ record: TimeInstanceRecord) async throws -> TimeInstanceRecord
     func repair(id: String, from record: TimeInstanceRecord) async throws -> TimeInstanceRecord
@@ -385,6 +404,28 @@ public struct RegistryFirstTimeInstanceRequest: Sendable, Equatable {
         self.semantics = semantics
     }
 
+    public var canonicalized: RegistryFirstTimeInstanceRequest {
+        let manifest = self.manifest
+        return RegistryFirstTimeInstanceRequest(
+            idempotencyKey: idempotencyKey,
+            title: manifest.title,
+            start: manifest.start,
+            end: manifest.end,
+            timeZoneIdentifier: manifest.timeZoneIdentifier,
+            calendarId: manifest.calendarId,
+            location: manifest.location,
+            notes: manifest.notes,
+            semantics: TimeInstanceSemantics(
+                eventClass: semantics.eventClass,
+                meetingType: manifest.meetingType,
+                primaryBlockId: manifest.primaryBlockId,
+                blockIds: manifest.blockIds,
+                projectIds: manifest.projectIds,
+                contactIds: manifest.contactIds
+            )
+        )
+    }
+
     public var manifest: CalendarRegistryOperationManifest {
         CalendarRegistryOperationManifest(
             title: title,
@@ -412,6 +453,10 @@ public struct CalendarRegistrySyncReceipt: Sendable, Equatable {
     public var operationId: String
     public var idempotencyKey: String
     public var operationFingerprint: String
+    public var fencingToken: String?
+    public var ledgerRevision: Int?
+    public var verifiedSyncHash: String?
+    public var verifiedAt: Date?
     public var stageBefore: CalendarRegistryTransactionStage
     public var stageAfter: CalendarRegistryTransactionStage
     public var record: TimeInstanceRecord?
@@ -493,6 +538,8 @@ public actor CalendarRegistrySyncEngine {
     private let operationGate: CalendarRegistryOperationGate
     private let clock: @Sendable () -> Date
     private let makeOperationId: @Sendable () -> String
+    private let makeLeaseToken: @Sendable () -> String
+    private let leaseDuration: TimeInterval
 
     public init(
         registry: any TimeInstanceRegistryStoring,
@@ -500,7 +547,9 @@ public actor CalendarRegistrySyncEngine {
         transactions: any CalendarRegistryTransactionStoring,
         operationGate: CalendarRegistryOperationGate = .shared,
         clock: @Sendable @escaping () -> Date = { Date() },
-        makeOperationId: @Sendable @escaping () -> String = { UUID().uuidString.lowercased() }
+        makeOperationId: @Sendable @escaping () -> String = { UUID().uuidString.lowercased() },
+        makeLeaseToken: @Sendable @escaping () -> String = { UUID().uuidString.lowercased() },
+        leaseDuration: TimeInterval = 600
     ) {
         self.registry = registry
         self.calendar = calendar
@@ -508,42 +557,56 @@ public actor CalendarRegistrySyncEngine {
         self.operationGate = operationGate
         self.clock = clock
         self.makeOperationId = makeOperationId
+        self.makeLeaseToken = makeLeaseToken
+        self.leaseDuration = leaseDuration
     }
 
     public func registryFirstCreate(
-        _ request: RegistryFirstTimeInstanceRequest
+        _ rawRequest: RegistryFirstTimeInstanceRequest
     ) async throws -> CalendarRegistrySyncReceipt {
+        let request = rawRequest.canonicalized
         try validate(request)
-        await operationGate.acquire(request.idempotencyKey)
+        try await operationGate.acquire(request.idempotencyKey)
         do {
             let receipt = try await performRegistryFirstCreate(request)
             await operationGate.release(request.idempotencyKey)
             return receipt
-        } catch let conflict as CalendarRegistryTransactionStoreError {
+        } catch let storeError as CalendarRegistryTransactionStoreError {
             let existing = try? await transactions.get(idempotencyKey: request.idempotencyKey)
-            let isConflict: Bool
-            if case .idempotencyConflict = conflict { isConflict = true } else { isConflict = false }
             await operationGate.release(request.idempotencyKey)
+            let isConflict: Bool
+            let active: Bool
+            switch storeError {
+            case .idempotencyConflict: isConflict = true; active = false
+            case .operationActive: isConflict = false; active = true
+            default: isConflict = false; active = false
+            }
             return CalendarRegistrySyncReceipt(
                 succeeded: false,
-                infrastructureFault: !isConflict,
+                infrastructureFault: !isConflict && !active,
                 recoveryStatePersisted: existing != nil,
                 registryFailureStatePersisted: false,
                 operationId: existing?.operationId ?? "",
                 idempotencyKey: request.idempotencyKey,
                 operationFingerprint: request.manifest.fingerprint,
+                fencingToken: nil,
+                ledgerRevision: existing?.revision,
+                verifiedSyncHash: nil,
+                verifiedAt: nil,
                 stageBefore: existing?.stage ?? .prepared,
-                stageAfter: isConflict ? .conflict : .recoverableError,
+                stageAfter: isConflict ? .conflict : (existing?.stage ?? .prepared),
                 record: nil,
                 calendarItem: nil,
                 registryFieldsWritten: [],
                 calendarFieldsWritten: [],
                 verificationEvidence: [],
                 partialEffects: existing?.partialEffects ?? [],
-                recoveryAction: isConflict
-                    ? "use a new idempotency key for a materially different manifest"
-                    : "inspect the SQLite recovery ledger before retrying",
-                discrepancy: conflict.localizedDescription
+                recoveryAction: active
+                    ? "another fenced worker owns this operation; retry after its lease ends"
+                    : (isConflict
+                        ? "use a new idempotency key for a materially different manifest"
+                        : "inspect the SQLite recovery ledger before retrying"),
+                discrepancy: storeError.localizedDescription
             )
         } catch {
             await operationGate.release(request.idempotencyKey)
@@ -555,20 +618,131 @@ public actor CalendarRegistrySyncEngine {
         _ request: RegistryFirstTimeInstanceRequest
     ) async throws -> CalendarRegistrySyncReceipt {
         let fingerprint = request.manifest.fingerprint
+        let operationId = makeOperationId()
+        let requestedFence = makeLeaseToken()
         var transaction = try await transactions.claim(
             idempotencyKey: request.idempotencyKey,
             manifestFingerprint: fingerprint,
-            operationId: makeOperationId(),
-            now: clock()
+            operationId: operationId,
+            leaseOwner: operationId,
+            leaseToken: requestedFence,
+            leaseDuration: leaseDuration
         )
         let stageBefore = transaction.stage
+        let fencingToken = transaction.leaseToken
         var record: TimeInstanceRecord?
         var calendarItem: ExternalCalendarItem?
         var registryFields: [String] = []
         var calendarFields: [String] = []
         var evidence: [String] = []
 
+        if transaction.stage == .conflict || transaction.stage == .abandoned {
+            let released = try await transactions.release(transaction)
+            return CalendarRegistrySyncReceipt(
+                succeeded: false,
+                infrastructureFault: false,
+                recoveryStatePersisted: true,
+                registryFailureStatePersisted: false,
+                operationId: transaction.operationId,
+                idempotencyKey: transaction.idempotencyKey,
+                operationFingerprint: fingerprint,
+                fencingToken: fencingToken,
+                ledgerRevision: released.revision,
+                verifiedSyncHash: nil,
+                verifiedAt: nil,
+                stageBefore: stageBefore,
+                stageAfter: stageBefore,
+                record: nil,
+                calendarItem: nil,
+                registryFieldsWritten: [],
+                calendarFieldsWritten: [],
+                verificationEvidence: [],
+                partialEffects: transaction.partialEffects,
+                recoveryAction: "resolve the recorded conflict before automatic retry",
+                discrepancy: transaction.lastError ?? "transaction is not automatically resumable"
+            )
+        }
+
+        if transaction.stage == .synced,
+           let recordId = transaction.registryEventId,
+           let calendarEventId = transaction.calendarEventId {
+            do {
+                let final = try await verify(
+                    request: request,
+                    recordId: recordId,
+                    calendarEventId: calendarEventId
+                )
+                guard final.record.syncState == .synced,
+                      !final.record.syncHash.isEmpty,
+                      let lastSyncedAt = final.record.lastSyncedAt else {
+                    throw CalendarRegistrySyncError.verificationFailed("existing Synced pair lacks durable evidence")
+                }
+                let expectedHash = Self.syncFingerprint(record: final.record, item: final.item)
+                guard final.record.syncHash == expectedHash else {
+                    throw CalendarRegistrySyncError.verificationFailed("existing Synced pair hash differs")
+                }
+                let released = try await transactions.release(transaction)
+                return CalendarRegistrySyncReceipt(
+                    succeeded: true,
+                    infrastructureFault: false,
+                    recoveryStatePersisted: true,
+                    registryFailureStatePersisted: true,
+                    operationId: transaction.operationId,
+                    idempotencyKey: transaction.idempotencyKey,
+                    operationFingerprint: fingerprint,
+                    fencingToken: fencingToken,
+                    ledgerRevision: released.revision,
+                    verifiedSyncHash: expectedHash,
+                    verifiedAt: lastSyncedAt,
+                    stageBefore: stageBefore,
+                    stageAfter: .synced,
+                    record: final.record,
+                    calendarItem: final.item,
+                    registryFieldsWritten: [],
+                    calendarFieldsWritten: [],
+                    verificationEvidence: final.evidence + ["existing Synced pair was reverified without new writes"],
+                    partialEffects: transaction.partialEffects,
+                    recoveryAction: nil,
+                    discrepancy: nil
+                )
+            } catch {
+                transaction.stage = Self.isConflict(error) ? .conflict : .recoverableError
+                transaction.lastError = error.localizedDescription
+                transaction = try await transactions.save(transaction)
+                var releaseError: Error?
+                do { transaction = try await transactions.release(transaction) }
+                catch { releaseError = error }
+                return CalendarRegistrySyncReceipt(
+                    succeeded: false,
+                    infrastructureFault: releaseError != nil,
+                    recoveryStatePersisted: true,
+                    registryFailureStatePersisted: false,
+                    operationId: transaction.operationId,
+                    idempotencyKey: transaction.idempotencyKey,
+                    operationFingerprint: fingerprint,
+                    fencingToken: fencingToken,
+                    ledgerRevision: transaction.revision,
+                    verifiedSyncHash: nil,
+                    verifiedAt: nil,
+                    stageBefore: stageBefore,
+                    stageAfter: transaction.stage,
+                    record: nil,
+                    calendarItem: nil,
+                    registryFieldsWritten: [],
+                    calendarFieldsWritten: [],
+                    verificationEvidence: [],
+                    partialEffects: transaction.partialEffects,
+                    recoveryAction: releaseError == nil
+                        ? "inspect the previously Synced pair before retrying"
+                        : "do not retry until the prior lease expires or the ledger is inspected",
+                    discrepancy: [error.localizedDescription, releaseError.map { "lease release failed: \($0.localizedDescription)" }]
+                        .compactMap { $0 }.joined(separator: " | ")
+                )
+            }
+        }
+
         do {
+            try Task.checkCancellation()
             let qualification = try await calendar.qualify(calendarId: request.calendarId)
             guard qualification.qualifiedForPrivateSmoke else {
                 throw CalendarRegistrySyncError.calendarNotQualified(
@@ -595,68 +769,98 @@ public actor CalendarRegistrySyncEngine {
             pair.syncState = .pendingCreate
             pair.lastSyncError = nil
             pair.registryUpdatedAt = clock()
+            try await fence(&transaction)
             pair = try await registry.save(pair)
             record = pair
             registryFields.append(contentsOf: Self.pairingFieldNames)
 
             transaction.registryEventId = pair.id
             transaction.stage = .pairPersisted
-            transaction.updatedAt = clock()
             transaction.partialEffects.append("pair identity persisted to Notion EVENT")
-            try await transactions.save(transaction)
+            transaction = try await transactions.save(transaction)
 
             let verified = try await verify(
                 request: request, recordId: pair.id, calendarEventId: calendarItem.localEventId
             )
             evidence.append(contentsOf: verified.evidence)
             var verifiedRecord = verified.record
+            let verifiedAt = clock()
+            let expectedHash = Self.syncFingerprint(record: verifiedRecord, item: verified.item)
             verifiedRecord.syncState = .synced
-            verifiedRecord.lastSyncedAt = clock()
-            verifiedRecord.registryUpdatedAt = clock()
+            verifiedRecord.lastSyncedAt = verifiedAt
+            verifiedRecord.registryUpdatedAt = verifiedAt
             verifiedRecord.lastSyncError = nil
-            verifiedRecord.syncHash = Self.syncFingerprint(record: verifiedRecord, item: verified.item)
+            verifiedRecord.syncHash = expectedHash
+            try await fence(&transaction)
             verifiedRecord = try await registry.save(verifiedRecord)
 
             transaction.stage = .verified
-            transaction.lastVerifiedAt = clock()
-            transaction.updatedAt = clock()
+            transaction.lastVerifiedAt = verifiedAt
             transaction.lastError = nil
-            try await transactions.save(transaction)
+            transaction = try await transactions.save(transaction)
 
             let final = try await verify(
                 request: request,
                 recordId: verifiedRecord.id,
-                calendarEventId: verified.item.localEventId
+                calendarEventId: verified.item.localEventId,
+                expectedSyncHash: expectedHash,
+                expectedSyncedAt: verifiedAt
             )
-            guard final.record.syncState == .synced else {
-                throw CalendarRegistrySyncError.verificationFailed("final Notion read did not retain Synced state")
-            }
-
             transaction.stage = .synced
-            transaction.lastVerifiedAt = clock()
-            transaction.updatedAt = clock()
-            try await transactions.save(transaction)
-            evidence.append("final fresh reads repeated the complete manifest and pair comparison")
+            transaction.lastVerifiedAt = verifiedAt
+            transaction = try await transactions.save(transaction)
+            evidence.append("final fresh reads confirmed the complete manifest, pair identity, Sync Hash, and Last Synced At")
 
-            return CalendarRegistrySyncReceipt(
-                succeeded: true,
-                infrastructureFault: false,
-                recoveryStatePersisted: true,
-                registryFailureStatePersisted: true,
-                operationId: transaction.operationId,
-                idempotencyKey: transaction.idempotencyKey,
-                operationFingerprint: fingerprint,
-                stageBefore: stageBefore,
-                stageAfter: transaction.stage,
-                record: final.record,
-                calendarItem: final.item,
-                registryFieldsWritten: Array(Set(registryFields)).sorted(),
-                calendarFieldsWritten: Array(Set(calendarFields)).sorted(),
-                verificationEvidence: evidence,
-                partialEffects: transaction.partialEffects,
-                recoveryAction: nil,
-                discrepancy: nil
-            )
+            do {
+                let released = try await transactions.release(transaction)
+                return CalendarRegistrySyncReceipt(
+                    succeeded: true,
+                    infrastructureFault: false,
+                    recoveryStatePersisted: true,
+                    registryFailureStatePersisted: true,
+                    operationId: transaction.operationId,
+                    idempotencyKey: transaction.idempotencyKey,
+                    operationFingerprint: fingerprint,
+                    fencingToken: fencingToken,
+                    ledgerRevision: released.revision,
+                    verifiedSyncHash: expectedHash,
+                    verifiedAt: verifiedAt,
+                    stageBefore: stageBefore,
+                    stageAfter: transaction.stage,
+                    record: final.record,
+                    calendarItem: final.item,
+                    registryFieldsWritten: Array(Set(registryFields)).sorted(),
+                    calendarFieldsWritten: Array(Set(calendarFields)).sorted(),
+                    verificationEvidence: evidence,
+                    partialEffects: transaction.partialEffects,
+                    recoveryAction: nil,
+                    discrepancy: nil
+                )
+            } catch {
+                return CalendarRegistrySyncReceipt(
+                    succeeded: false,
+                    infrastructureFault: true,
+                    recoveryStatePersisted: true,
+                    registryFailureStatePersisted: true,
+                    operationId: transaction.operationId,
+                    idempotencyKey: transaction.idempotencyKey,
+                    operationFingerprint: fingerprint,
+                    fencingToken: fencingToken,
+                    ledgerRevision: transaction.revision,
+                    verifiedSyncHash: expectedHash,
+                    verifiedAt: verifiedAt,
+                    stageBefore: stageBefore,
+                    stageAfter: transaction.stage,
+                    record: final.record,
+                    calendarItem: final.item,
+                    registryFieldsWritten: Array(Set(registryFields)).sorted(),
+                    calendarFieldsWritten: Array(Set(calendarFields)).sorted(),
+                    verificationEvidence: evidence,
+                    partialEffects: transaction.partialEffects,
+                    recoveryAction: "pair is verified Synced; wait for lease expiry or inspect the ledger before retrying",
+                    discrepancy: "pair synchronized but lease release failed: \(error.localizedDescription)"
+                )
+            }
         } catch {
             if let partial = error as? PartialRegistryCreateError {
                 transaction.registryEventId = partial.pageId
@@ -664,37 +868,52 @@ public actor CalendarRegistrySyncEngine {
             }
             transaction.stage = Self.isConflict(error) ? .conflict : .recoverableError
             transaction.lastError = error.localizedDescription
-            transaction.updatedAt = clock()
 
             var ledgerError: Error?
-            do { try await transactions.save(transaction) }
+            do { transaction = try await transactions.save(transaction) }
             catch { ledgerError = error }
 
             var registryError: Error?
-            if var failed = record {
-                failed.syncState = transaction.stage == .conflict ? .conflict : .error
-                failed.lastSyncError = error.localizedDescription
-                failed.registryUpdatedAt = clock()
-                do { record = try await registry.save(failed) }
-                catch { registryError = error }
+            var registryFailureWriteAttempted = false
+            if var failed = record, ledgerError == nil {
+                registryFailureWriteAttempted = true
+                do {
+                    transaction = try await transactions.renew(transaction, leaseDuration: leaseDuration)
+                    failed.syncState = transaction.stage == .conflict ? .conflict : .error
+                    failed.lastSyncError = error.localizedDescription
+                    failed.registryUpdatedAt = clock()
+                    record = try await registry.save(failed)
+                } catch {
+                    registryError = error
+                }
             }
 
+            var releaseError: Error?
+            if ledgerError == nil {
+                do { transaction = try await transactions.release(transaction) }
+                catch { releaseError = error }
+            }
             let persisted = ledgerError == nil
-            let registryPersisted = record == nil ? false : registryError == nil
+            let registryPersisted = registryFailureWriteAttempted && registryError == nil
             let combined = [
                 error.localizedDescription,
                 ledgerError.map { "recovery ledger write failed: \($0.localizedDescription)" },
-                registryError.map { "registry failure-state write failed: \($0.localizedDescription)" }
+                registryError.map { "registry failure-state write failed: \($0.localizedDescription)" },
+                releaseError.map { "lease release failed: \($0.localizedDescription)" }
             ].compactMap { $0 }.joined(separator: " | ")
 
             return CalendarRegistrySyncReceipt(
                 succeeded: false,
-                infrastructureFault: !persisted,
+                infrastructureFault: !persisted || releaseError != nil,
                 recoveryStatePersisted: persisted,
                 registryFailureStatePersisted: registryPersisted,
                 operationId: transaction.operationId,
                 idempotencyKey: transaction.idempotencyKey,
                 operationFingerprint: fingerprint,
+                fencingToken: fencingToken,
+                ledgerRevision: transaction.revision,
+                verifiedSyncHash: nil,
+                verifiedAt: nil,
                 stageBefore: stageBefore,
                 stageAfter: transaction.stage,
                 record: record,
@@ -704,11 +923,17 @@ public actor CalendarRegistrySyncEngine {
                 verificationEvidence: evidence,
                 partialEffects: transaction.partialEffects,
                 recoveryAction: persisted
-                    ? "retry with the same idempotency key; resume from \(transaction.stage.rawValue)"
+                    ? "retry with the same idempotency key after the lease is released; resume from \(transaction.stage.rawValue)"
                     : "do not retry automatically; inspect Notion by Sync Key and Calendar by Bridge metadata before reconstructing the ledger",
                 discrepancy: combined
             )
         }
+    }
+
+    private func fence(_ transaction: inout CalendarRegistryTransaction) async throws {
+        try Task.checkCancellation()
+        transaction = try await transactions.renew(transaction, leaseDuration: leaseDuration)
+        try Task.checkCancellation()
     }
 
     private func desiredRecord(_ request: RegistryFirstTimeInstanceRequest) -> TimeInstanceRecord {
@@ -735,14 +960,25 @@ public actor CalendarRegistrySyncEngine {
     ) async throws -> TimeInstanceRecord {
         let desired = desiredRecord(request)
         if let id = transaction.registryEventId {
-            if let existing = try await registry.get(id: id, forceRefresh: true) {
+            switch try await registry.readIdentity(id: id, forceRefresh: true) {
+            case .decoded(let existing):
                 try assertRegistryMatchesManifest(existing, request: request)
                 return existing
+            case .partial(_, let syncKey, let operationFingerprint):
+                guard syncKey == request.idempotencyKey,
+                      operationFingerprint == request.manifest.fingerprint else {
+                    throw CalendarRegistrySyncError.identityConflict("ledger-known Notion page identity differs or is missing")
+                }
+                try await fence(&transaction)
+                let repaired = try await registry.repair(id: id, from: desired)
+                try assertRegistryMatchesManifest(repaired, request: request)
+                fieldsWritten.append(contentsOf: Self.semanticFieldNames)
+                return repaired
+            case .missing:
+                throw CalendarRegistrySyncError.identityConflict("ledger-known Notion page is missing; replacement creation refused")
+            case .malformed(_, let reason):
+                throw CalendarRegistrySyncError.identityConflict("ledger-known Notion page is malformed: \(reason)")
             }
-            let repaired = try await registry.repair(id: id, from: desired)
-            try assertRegistryMatchesManifest(repaired, request: request)
-            fieldsWritten.append(contentsOf: Self.semanticFieldNames)
-            return repaired
         }
 
         let lookup = try await registry.findBySyncKey(request.idempotencyKey)
@@ -754,17 +990,16 @@ public actor CalendarRegistrySyncEngine {
             )
         }
         if let unresolved = lookup.unresolvedIdentities.first {
-            guard unresolved.operationFingerprint == request.manifest.fingerprint else {
-                throw CalendarRegistrySyncError.identityConflict(
-                    "partial Notion EVENT fingerprint differs or is missing"
-                )
+            guard unresolved.syncKey == request.idempotencyKey,
+                  unresolved.operationFingerprint == request.manifest.fingerprint else {
+                throw CalendarRegistrySyncError.identityConflict("partial Notion EVENT identity differs or is missing")
             }
+            try await fence(&transaction)
             let repaired = try await registry.repair(id: unresolved.pageId, from: desired)
             transaction.registryEventId = repaired.id
             transaction.stage = .registryCreated
-            transaction.updatedAt = clock()
             transaction.partialEffects.append("repaired partial Notion EVENT \(repaired.id)")
-            try await transactions.save(transaction)
+            transaction = try await transactions.save(transaction)
             fieldsWritten.append(contentsOf: Self.semanticFieldNames)
             return repaired
         }
@@ -775,27 +1010,25 @@ public actor CalendarRegistrySyncEngine {
             transaction.calendarId = existing.calendarId
             transaction.providerExternalId = existing.providerExternalId
             transaction.stage = .registryCreated
-            transaction.updatedAt = clock()
             transaction.partialEffects.append("reused existing Notion EVENT \(existing.id)")
-            try await transactions.save(transaction)
+            transaction = try await transactions.save(transaction)
             return existing
         }
 
         do {
+            try await fence(&transaction)
             let created = try await registry.create(desired)
             transaction.registryEventId = created.id
             transaction.stage = .registryCreated
-            transaction.updatedAt = clock()
             transaction.partialEffects.append("created Notion EVENT \(created.id)")
-            try await transactions.save(transaction)
+            transaction = try await transactions.save(transaction)
             fieldsWritten.append(contentsOf: Self.semanticFieldNames)
             return created
         } catch let partial as PartialRegistryCreateError {
             transaction.registryEventId = partial.pageId
             transaction.stage = .registryCreated
-            transaction.updatedAt = clock()
             transaction.partialEffects.append("Notion identity envelope created before semantic PATCH failure: \(partial.pageId)")
-            try await transactions.save(transaction)
+            transaction = try await transactions.save(transaction)
             throw partial
         }
     }
@@ -830,9 +1063,8 @@ public actor CalendarRegistrySyncEngine {
             transaction.calendarId = existing.calendarId
             transaction.providerExternalId = existing.providerExternalId
             transaction.stage = .calendarCreated
-            transaction.updatedAt = clock()
             transaction.partialEffects.append("recovered calendar event \(existing.localEventId)")
-            try await transactions.save(transaction)
+            transaction = try await transactions.save(transaction)
             return existing
         }
         if priorEvidence {
@@ -841,6 +1073,7 @@ public actor CalendarRegistrySyncEngine {
             )
         }
 
+        try await fence(&transaction)
         let created = try await calendar.create(ExternalCalendarDraft(
             title: request.title,
             start: request.start,
@@ -857,9 +1090,8 @@ public actor CalendarRegistrySyncEngine {
         transaction.calendarId = created.calendarId
         transaction.providerExternalId = created.providerExternalId
         transaction.stage = .calendarCreated
-        transaction.updatedAt = clock()
         transaction.partialEffects.append("created calendar event \(created.localEventId)")
-        try await transactions.save(transaction)
+        transaction = try await transactions.save(transaction)
         fieldsWritten.append(contentsOf: [
             "title", "start", "end", "timeZone", "calendarId", "location", "notes",
             "syncKey", "operationFingerprint"
@@ -870,7 +1102,9 @@ public actor CalendarRegistrySyncEngine {
     private func verify(
         request: RegistryFirstTimeInstanceRequest,
         recordId: String,
-        calendarEventId: String
+        calendarEventId: String,
+        expectedSyncHash: String? = nil,
+        expectedSyncedAt: Date? = nil
     ) async throws -> (record: TimeInstanceRecord, item: ExternalCalendarItem, evidence: [String]) {
         guard let record = try await registry.get(id: recordId, forceRefresh: true) else {
             throw CalendarRegistrySyncError.verificationFailed("Notion EVENT missing after write")
@@ -885,13 +1119,24 @@ public actor CalendarRegistrySyncEngine {
               record.providerExternalId == item.providerExternalId else {
             throw CalendarRegistrySyncError.verificationFailed("pair identity is not persisted consistently")
         }
+        if let expectedSyncHash {
+            guard record.syncState == .synced,
+                  record.syncHash == expectedSyncHash,
+                  let lastSyncedAt = record.lastSyncedAt else {
+                throw CalendarRegistrySyncError.verificationFailed("final Notion read did not retain Synced evidence")
+            }
+            if let expectedSyncedAt,
+               abs(lastSyncedAt.timeIntervalSince(expectedSyncedAt)) >= 1 {
+                throw CalendarRegistrySyncError.verificationFailed("Last Synced At does not match the verification transaction")
+            }
+        }
         return (
             record,
             item,
             [
                 "fresh Notion read confirmed EVENT \(record.id)",
                 "provider read confirmed calendar event \(item.localEventId)",
-                "Sync Key, operation fingerprint, title, start, end, timezone, calendar ID, event ID, and event shape match the immutable manifest"
+                "canonical manifest, pair identity, event shape, and requested evidence match"
             ]
         )
     }
@@ -901,16 +1146,13 @@ public actor CalendarRegistrySyncEngine {
         guard request.idempotencyKey.range(of: pattern, options: .regularExpression) != nil else {
             throw CalendarRegistrySyncError.invalidIdempotencyKey
         }
+        guard !request.title.isEmpty else { throw CalendarRegistrySyncError.identityConflict("title is empty after canonicalization") }
         guard request.end > request.start else { throw CalendarRegistrySyncError.invalidTimeRange }
         guard TimeZone(identifier: request.timeZoneIdentifier) != nil else {
             throw CalendarRegistrySyncError.invalidTimeZone(request.timeZoneIdentifier)
         }
-        guard !request.calendarId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw CalendarRegistrySyncError.missingCalendarId
-        }
-        guard !request.semantics.primaryBlockId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw CalendarRegistrySyncError.missingPrimaryBlock
-        }
+        guard !request.calendarId.isEmpty else { throw CalendarRegistrySyncError.missingCalendarId }
+        guard !request.semantics.primaryBlockId.isEmpty else { throw CalendarRegistrySyncError.missingPrimaryBlock }
         if let notes = request.notes,
            notes.contains(CalendarRegistryCalendarMetadata.beginMarker) ||
            notes.contains(CalendarRegistryCalendarMetadata.endMarker) {
@@ -937,10 +1179,10 @@ public actor CalendarRegistrySyncEngine {
               record.location == request.location,
               record.notes == request.notes,
               record.semantics == request.semantics else {
-            throw CalendarRegistrySyncError.identityConflict("Notion semantic state differs from the immutable manifest")
+            throw CalendarRegistrySyncError.identityConflict("Notion semantic state differs from the canonical manifest")
         }
         if let calendarId = record.calendarId, calendarId != request.calendarId {
-            throw CalendarRegistrySyncError.identityConflict("Notion calendar ID differs from the immutable manifest")
+            throw CalendarRegistrySyncError.identityConflict("Notion calendar ID differs from the canonical manifest")
         }
     }
 
@@ -965,7 +1207,7 @@ public actor CalendarRegistrySyncEngine {
               item.calendarId == request.calendarId,
               item.location == request.location,
               item.notes == request.notes else {
-            throw CalendarRegistrySyncError.identityConflict("calendar state differs from the immutable manifest")
+            throw CalendarRegistrySyncError.identityConflict("calendar state differs from the canonical manifest")
         }
     }
 
@@ -982,7 +1224,9 @@ public actor CalendarRegistrySyncEngine {
         if let sync = error as? CalendarRegistrySyncError {
             switch sync {
             case .ambiguousRegistryIdentity, .undecodableRegistryIdentity,
-                 .ambiguousCalendarIdentity, .identityConflict:
+                 .ambiguousCalendarIdentity, .identityConflict,
+                 .recurringEventUnsupported, .allDayEventUnsupported,
+                 .detachedEventUnsupported, .participantConsequencesUnsupported:
                 return true
             default:
                 return false
@@ -994,11 +1238,16 @@ public actor CalendarRegistrySyncEngine {
 
     private static func syncFingerprint(record: TimeInstanceRecord, item: ExternalCalendarItem) -> String {
         let canonical = [
-            record.syncKey, record.operationFingerprint, item.calendarId, item.localEventId,
-            item.providerExternalId ?? "", item.title,
-            CalendarRegistryISO.string(item.start), CalendarRegistryISO.string(item.end),
-            item.timeZoneIdentifier, record.semantics.primaryBlockId,
-            record.semantics.eventClass.rawValue
+            record.operationFingerprint,
+            record.syncKey,
+            item.provider,
+            item.calendarId,
+            item.localEventId,
+            item.providerExternalId ?? "",
+            item.itemURL ?? "",
+            record.calendarProvider ?? "",
+            record.calendarEventId ?? "",
+            record.providerExternalId ?? ""
         ].joined(separator: "\u{1F}")
         return CalendarRegistryDigest.sha256(canonical)
     }
@@ -1093,8 +1342,12 @@ public enum CalendarRegistryCalendarMetadata {
                 fingerprint = String(line.dropFirst("Operation-Fingerprint:".count)).trimmingCharacters(in: .whitespaces)
             }
         }
-        guard let syncKey, let fingerprint, !syncKey.isEmpty, fingerprint.count == 64 else {
-            throw CalendarRegistrySyncError.identityConflict("calendar Bridge metadata is incomplete")
+        let keyPattern = #"^[A-Za-z0-9._:-]{1,128}$"#
+        let hexPattern = #"^[0-9a-f]{64}$"#
+        guard let syncKey, let fingerprint,
+              syncKey.range(of: keyPattern, options: .regularExpression) != nil,
+              fingerprint.range(of: hexPattern, options: .regularExpression) != nil else {
+            throw CalendarRegistrySyncError.identityConflict("calendar Bridge metadata is incomplete or invalid")
         }
         return Identity(syncKey: syncKey, operationFingerprint: fingerprint)
     }
@@ -1176,25 +1429,50 @@ public actor CalendarStoringSyncProvider: CalendarSyncProviding {
         let events = try await store.events(CalendarEventQuery(
             start: Self.iso(lower), end: Self.iso(upper), calendarId: nil
         ))
-        let mapped = try events.map(map)
-        let eligible = mapped.filter { !$0.isRecurring && !$0.isAllDay && !$0.isDetached }
+        var mapped: [ExternalCalendarItem] = []
+        for event in events {
+            do {
+                mapped.append(try map(event))
+            } catch {
+                if Self.matchesTargetEvidence(event, query: query) {
+                    throw CalendarRegistrySyncError.identityConflict(
+                        "target-related calendar metadata is malformed for event \(event.id)"
+                    )
+                }
+                continue
+            }
+        }
 
-        let byIdentity = eligible.filter {
+        let byIdentity = mapped.filter {
             $0.syncKey == query.syncKey && $0.operationFingerprint == query.operationFingerprint
         }
         if !byIdentity.isEmpty { return byIdentity }
 
         if let external = query.providerExternalId {
-            let byExternal = eligible.filter { $0.providerExternalId == external }
+            let byExternal = mapped.filter { $0.providerExternalId == external }
             if !byExternal.isEmpty { return byExternal }
         }
 
+        let eligible = mapped.filter { !$0.isRecurring && !$0.isAllDay && !$0.isDetached }
         return eligible.filter {
             $0.calendarId == query.calendarId
                 && $0.title.caseInsensitiveCompare(query.title) == .orderedSame
                 && abs($0.start.timeIntervalSince(query.start)) < 1
                 && abs($0.end.timeIntervalSince(query.end)) < 1
         }
+    }
+
+    private static func matchesTargetEvidence(_ event: CalendarEvent, query: CalendarRecoveryQuery) -> Bool {
+        if event.id == query.localEventId { return true }
+        if let external = query.providerExternalId, event.externalId == external { return true }
+        if event.notes?.contains(query.syncKey) == true || event.notes?.contains(query.operationFingerprint) == true {
+            return true
+        }
+        guard event.calendarId == query.calendarId,
+              event.title.caseInsensitiveCompare(query.title) == .orderedSame,
+              let start = try? CalendarISOParsing.parse(event.start),
+              let end = try? CalendarISOParsing.parse(event.end) else { return false }
+        return abs(start.timeIntervalSince(query.start)) < 1 && abs(end.timeIntervalSince(query.end)) < 1
     }
 
     private func map(_ event: CalendarEvent) throws -> ExternalCalendarItem {
@@ -1282,8 +1560,15 @@ public struct NotionTimeInstanceRegistryStore: TimeInstanceRegistryStoring {
                     } else {
                         fingerprint = nil
                     }
+                    let rawSyncKey: String?
+                    if case .object(let properties) = cached.properties {
+                        rawSyncKey = Self.string(properties["syncKey"])
+                    } else {
+                        rawSyncKey = nil
+                    }
                     unresolved.append(RegistryUnresolvedIdentity(
                         pageId: row.id,
+                        syncKey: rawSyncKey,
                         operationFingerprint: fingerprint
                     ))
                 }
@@ -1297,9 +1582,31 @@ public struct NotionTimeInstanceRegistryStore: TimeInstanceRegistryStoring {
         )
     }
 
+    public func readIdentity(id: String, forceRefresh: Bool) async throws -> RegistryRecordIdentityRead {
+        let row: CachedRow
+        do {
+            row = try await reader.get(entity: entity, pageId: id, forceRefresh: forceRefresh)
+        } catch let error as RegistryReader.RegistryReadError {
+            if case .deleted = error { return .missing }
+            throw error
+        }
+        if let decoded = Self.decode(row) { return .decoded(decoded) }
+        guard case .object(let properties) = row.properties else {
+            return .malformed(pageId: row.pageId, reason: "projected properties are not an object")
+        }
+        let syncKey = Self.string(properties["syncKey"])
+        let fingerprint = Self.string(properties["operationFingerprint"])
+        if syncKey != nil || fingerprint != nil {
+            return .partial(pageId: row.pageId, syncKey: syncKey, operationFingerprint: fingerprint)
+        }
+        return .malformed(pageId: row.pageId, reason: "Sync Key and Operation Fingerprint are absent")
+    }
+
     public func get(id: String, forceRefresh: Bool) async throws -> TimeInstanceRecord? {
-        let row = try await reader.get(entity: entity, pageId: id, forceRefresh: forceRefresh)
-        return Self.decode(row)
+        switch try await readIdentity(id: id, forceRefresh: forceRefresh) {
+        case .decoded(let record): return record
+        case .partial, .missing, .malformed: return nil
+        }
     }
 
     public func create(_ record: TimeInstanceRecord) async throws -> TimeInstanceRecord {

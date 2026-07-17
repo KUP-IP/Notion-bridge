@@ -24,6 +24,29 @@ public enum RegistryGatewayError: Error, LocalizedError, Equatable {
     }
 }
 
+public enum RegistryRowResponseDecoder {
+    public static func decode(_ data: Data, context: String) throws -> NotionRow {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw RegistryGatewayError.invalidResponse("\(context) is not a JSON object")
+        }
+        return try decode(object, context: context)
+    }
+
+    public static func decode(_ object: [String: Any], context: String) throws -> NotionRow {
+        guard let id = object["id"] as? String, !id.isEmpty else {
+            throw RegistryGatewayError.invalidResponse("\(context) is missing a nonempty page id")
+        }
+        guard object["properties"] is [String: Any] else {
+            throw RegistryGatewayError.invalidResponse("\(context) is missing a properties object for page \(id)")
+        }
+        let row = RegistryRowDecoder.row(from: object)
+        guard !row.id.isEmpty else {
+            throw RegistryGatewayError.invalidResponse("\(context) decoded an empty page id")
+        }
+        return row
+    }
+}
+
 public enum RegistryQueryResponseDecoder {
     public static func decode(_ data: Data) throws -> (rows: [NotionRow], nextCursor: String?) {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -40,7 +63,10 @@ public enum RegistryQueryResponseDecoder {
         } else {
             next = nil
         }
-        return (results.map { RegistryRowDecoder.row(from: $0) }, next)
+        let rows = try results.enumerated().map { index, object in
+            try RegistryRowResponseDecoder.decode(object, context: "Notion query result[\(index)]")
+        }
+        return (rows, next)
     }
 }
 
@@ -116,24 +142,22 @@ public struct LiveRegistryGateway: RegistryNotionGateway {
     public func page(pageId: String, workspace: String?) async throws -> NotionRow {
         let c = try await client(workspace)
         let data = try await limiter.throttled { try await c.getPage(pageId: pageId) }
-        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        return RegistryRowDecoder.row(from: obj)
+        return try RegistryRowResponseDecoder.decode(data, context: "Notion page response")
     }
 
     public func create(dataSourceId: String, workspace: String?, fields: [BoundField]) async throws -> NotionRow {
         let c = try await client(workspace)
         let data = try await limiter.throttled {
-            try await c.createPage(parentId: dataSourceId, parentType: "data_source_id", properties: Self.createBody(fields))
+            try await c.createPage(parentId: dataSourceId, parentType: "data_source_id", properties: try Self.createBody(fields))
         }
-        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        return RegistryRowDecoder.row(from: obj)
+        return try RegistryRowResponseDecoder.decode(data, context: "Notion create response")
     }
 
     public func update(pageId: String, workspace: String?, fields: [BoundField]) async throws -> NotionRow {
         let c = try await client(workspace)
-        let data = try await limiter.throttled { try await c.updatePage(pageId: pageId, properties: Self.updateBody(fields)) }
-        let obj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
-        return RegistryRowDecoder.row(from: obj)
+        let body = try Self.updateBody(fields)
+        let data = try await limiter.throttled { try await c.updatePage(pageId: pageId, properties: body) }
+        return try RegistryRowResponseDecoder.decode(data, context: "Notion update response")
     }
 
     public func archive(pageId: String, workspace: String?) async throws {
@@ -186,15 +210,15 @@ public struct LiveRegistryGateway: RegistryNotionGateway {
     /// The body for `NotionClient.createPage(properties:)`, which WRAPS the
     /// passed dict under `{"parent":…, "properties": <dict>}` itself — so this
     /// passes the RAW property envelope (no `properties` wrapper here).
-    public static func createBody(_ fields: [BoundField]) -> Data {
-        (try? JSONSerialization.data(withJSONObject: encodeEnvelope(fields))) ?? Data("{}".utf8)
+    public static func createBody(_ fields: [BoundField]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: encodeEnvelope(fields))
     }
 
     /// The body for `NotionClient.updatePage(properties:)`, which sends its arg
     /// AS the PATCH body UNWRAPPED — so the `{"properties": …}` wrapper MUST be
     /// added here. (Asymmetry with createPage; a missing wrapper makes Notion
     /// silently ignore the write — the live-smoke bug this fixes.)
-    public static func updateBody(_ fields: [BoundField]) -> Data {
-        (try? JSONSerialization.data(withJSONObject: ["properties": encodeEnvelope(fields)])) ?? Data("{}".utf8)
+    public static func updateBody(_ fields: [BoundField]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["properties": encodeEnvelope(fields)])
     }
 }

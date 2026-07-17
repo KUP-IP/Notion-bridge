@@ -2323,3 +2323,8 @@ set -euo pipefail
 
 # Review-integration replay: recovery hardening adds 6 greens to the combined
 # candidate floor. FLOOR 3254 -> 3260.
+
+- Calendar–Registry single-writer fencing (2026-07-17): upgraded the SQLite recovery ledger into a single-machine transaction coordinator with expiring leases, fencing tokens, monotonic revisions, compare-and-swap saves, stage/identity regression guards, and cancellation-aware ownership. Added typed raw Notion identity reads, strict page/create/update/query row decoding, identity-first EventKit recovery across unsupported shapes, canonical manifest semantics, final Sync Hash/Last Synced At readback, and ledger-corruption refusal. The synchronization matrix now contains 40 scenarios, including same-key independent-engine races, stale fences, lease expiry, ledger-known malformed/missing identity, uncertain create recovery, unsupported existing event shapes, unrelated malformed metadata isolation, final evidence loss, and pre/post-effect cancellation. Measured 3257 passed, 0 failed. FLOOR 3239 -> 3257.
+
+# Review-integration replay: single-writer fencing adds 18 greens to the
+# combined candidate floor. FLOOR 3260 -> 3278.

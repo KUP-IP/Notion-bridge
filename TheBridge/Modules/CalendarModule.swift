@@ -250,9 +250,11 @@ public enum CalendarModuleError: LocalizedError, Equatable {
 /// timezone-qualified strings, naive local wall-clock (`2026-06-03T09:00:00`),
 /// and date-only (`2026-06-03`) anchored to the user's local time zone.
 public enum CalendarISOParsing {
-    private static func makeISO() -> ISO8601DateFormatter {
+    private static func makeISO(fractionalSeconds: Bool = false) -> ISO8601DateFormatter {
         let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
+        f.formatOptions = fractionalSeconds
+            ? [.withInternetDateTime, .withFractionalSeconds]
+            : [.withInternetDateTime]
         return f
     }
 
@@ -273,7 +275,8 @@ public enum CalendarISOParsing {
     }
 
     public static func parse(_ iso: String) throws -> Date {
-        if let date = makeISO().date(from: iso) {
+        if let date = makeISO(fractionalSeconds: true).date(from: iso)
+            ?? makeISO().date(from: iso) {
             return date
         }
         if let date = makeNaiveLocal().date(from: iso) {
