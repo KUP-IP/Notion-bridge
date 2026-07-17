@@ -2290,3 +2290,9 @@ set -euo pipefail
 # mutation, rate-limited unknown-tool audit telemetry, secret-shaped miss
 # redaction, and client name/version attribution. Measured 3207 passed, 0
 # failed on the current origin/main-based worktree. FLOOR 3202 -> 3207.
+# PKT-CALL-001 Wave 1 (2026-07-17): +14 hermetic CallHistory tests cover
+# calls_recent registration/tier/schema/annotations, phone normalization,
+# limit/since/number/direction filters, newest-first ordering, identity-free
+# output, actionable Full Disk Access failure, explicit schema-drift failure,
+# and an incompatible SQLite fixture. Measured 3221 passed, 0 failed on the
+# origin/main-based calls worktree. FLOOR 3207 -> 3221.

@@ -442,7 +442,9 @@ public enum BridgeConstants {
     /// PKT-1120 Tool Ergonomics (2026-07-14): +2
     ///   (voice_memo_settings_get + voice_memo_settings_set; voice family).
     ///   203 + 2 = 205.
-    public static let staticFeatureModuleToolCount = 205
+    /// Bridge v4 stabilization Wave 1 (2026-07-17): +1 calls_recent.
+    ///   205 + 1 = 206.
+    public static let staticFeatureModuleToolCount = 206
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.
@@ -471,5 +473,6 @@ public enum BridgeConstants {
     /// Voice Memos curator (2026-06-24): + voice family = 29.
     /// Local Ollama (2026-06-24): + ollama family = 30.
     /// PKT-1061 (2026-06-29): + commands family = 31.
-    public static let staticFeatureModuleFamilyCount = 31
+    /// Bridge v4 stabilization Wave 1 (2026-07-17): + calls family = 32.
+    public static let staticFeatureModuleFamilyCount = 32
 }
