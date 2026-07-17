@@ -18,6 +18,76 @@ public enum ContactsModule {
 
     public static let moduleName = "contacts"
 
+    public struct HandleAttribution: Sendable, Equatable {
+        public let resolvedName: String?
+        public let source: String
+        public let confidence: String
+        public let failureReason: String?
+
+        public init(resolvedName: String?, source: String, confidence: String, failureReason: String?) {
+            self.resolvedName = resolvedName
+            self.source = source
+            self.confidence = confidence
+            self.failureReason = failureReason
+        }
+    }
+
+    /// Best-effort exact-handle lookup for Messages attribution. It never
+    /// prompts for Contacts access: messages_recent remains a passive read.
+    public static func exactHandleAttributionIfAuthorized(_ handle: String) -> HandleAttribution {
+        guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else {
+            return HandleAttribution(
+                resolvedName: nil,
+                source: "contacts",
+                confidence: "unavailable",
+                failureReason: "contacts_permission_not_authorized"
+            )
+        }
+
+        let store = CNContactStore()
+        let predicate: NSPredicate
+        if handle.contains("@") {
+            predicate = CNContact.predicateForContacts(matchingEmailAddress: handle)
+        } else {
+            predicate = CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: toE164(handle) ?? handle))
+        }
+
+        do {
+            let contacts = try store.unifiedContacts(matching: predicate, keysToFetch: fullKeys)
+            guard contacts.count == 1, let contact = contacts.first else {
+                return HandleAttribution(
+                    resolvedName: nil,
+                    source: "contacts",
+                    confidence: contacts.isEmpty ? "none" : "ambiguous",
+                    failureReason: contacts.isEmpty ? "no_exact_contact_match" : "multiple_exact_contact_matches"
+                )
+            }
+            let name = CNContactFormatter.string(from: contact, style: .fullName)
+                ?? "\(contact.givenName) \(contact.familyName)".trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else {
+                return HandleAttribution(
+                    resolvedName: nil,
+                    source: "contacts",
+                    confidence: "none",
+                    failureReason: "exact_contact_has_no_display_name"
+                )
+            }
+            return HandleAttribution(
+                resolvedName: name,
+                source: "contacts_exact_handle",
+                confidence: "exact",
+                failureReason: nil
+            )
+        } catch {
+            return HandleAttribution(
+                resolvedName: nil,
+                source: "contacts",
+                confidence: "unavailable",
+                failureReason: "contacts_query_failed"
+            )
+        }
+    }
+
     // MARK: - TCC Helper
 
     /// Ensures Contacts access is authorized or limited. Triggers TCC prompt if `.notDetermined`.

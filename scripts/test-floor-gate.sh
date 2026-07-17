@@ -18,6 +18,21 @@ swift build -c debug
 LOG="$(mktemp -t bridge-test-floor.XXXXXX)"
 trap 'rm -f "$LOG"' EXIT
 
+# A failing run is evidence, not disposable noise. Copy the complete log to a
+# stable operator-visible directory before the temporary file is cleaned up,
+# then print both the path and every explicit failure row found anywhere in the
+# log (not merely the tail). Tests/CI may override this location.
+FAILURE_DIR="${BRIDGE_TEST_FAILURE_DIR:-${HOME}/Library/Logs/TheBridge/test-floor-failures}"
+retain_failure_log() {
+  mkdir -p "$FAILURE_DIR"
+  RETAINED_LOG="${FAILURE_DIR}/test-floor-$(date -u +%Y%m%dT%H%M%SZ)-$$.log"
+  cp "$LOG" "$RETAINED_LOG"
+  echo "::notice::test-floor-gate: complete failure log retained at $RETAINED_LOG"
+  echo "--- failure rows from complete test output ---"
+  grep -aE '(^|[[:space:]])❌|::error::|error:' "$RETAINED_LOG" || echo "(no explicit failure row found; inspect the retained complete log)"
+  echo "--- end failure rows ---"
+}
+
 # Watchdog: cap the test binary at DEADLINE seconds (default 1500 = 25 min;
 # local run is ~5 min, CI macos-26 is ~3x slower). Override with
 # TEST_WATCHDOG_SECONDS — a short value (e.g. 5) makes the watchdog testable.
@@ -72,6 +87,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   # kept as a defensive fallback in case a future change reintroduces an alarm.)
   if [ "$RC" -eq 137 ] || [ "$RC" -eq 142 ] || [ "$RC" -eq 14 ]; then
     echo "::error::test-floor-gate: test binary exceeded ${DEADLINE}s watchdog and was killed"
+    retain_failure_log
     echo "--- last 60 lines of test output (so you can see which test hung) ---"
     tail -60 "$LOG" || true
     echo "--- end of test output tail ---"
@@ -79,6 +95,7 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
   fi
   if [ "$RC" -ne 0 ]; then
     echo "::error::test-floor-gate: test binary exited with code $RC (non-zero, non-timeout)"
+    retain_failure_log
     echo "--- last 60 lines of test output ---"
     tail -60 "$LOG" || true
     echo "--- end of test output tail ---"
@@ -95,6 +112,7 @@ done
 LINE="$(tr -d '\000-\010\013\014\016-\037' < "$LOG" | grep -aE 'Results: [0-9]+ passed, [0-9]+ failed, [0-9]+ total' | tail -1 || true)"
 if [ -z "$LINE" ]; then
   echo "::error::test-floor-gate: no 'Results:' summary line after ${ATTEMPTS} attempts"
+  retain_failure_log
   exit 2
 fi
 
@@ -103,11 +121,13 @@ FAILED="$(printf '%s\n' "$LINE" | sed -E 's/^Results: [0-9]+ passed, ([0-9]+) fa
 
 if [ "$FAILED" -ne 0 ]; then
   echo "::error::test-floor-gate: ${FAILED} failing test(s) — green bar broken"
+  retain_failure_log
   exit 1
 fi
 
 if [ "$PASSED" -lt "$FLOOR" ]; then
   echo "::error::test-floor-gate: passed=${PASSED} is BELOW floor=${FLOOR} — tests were removed or disabled. If this drop is intentional, lower the floor in scripts/test-floor-gate.sh in the same change and record why."
+  retain_failure_log
   exit 1
 fi
 

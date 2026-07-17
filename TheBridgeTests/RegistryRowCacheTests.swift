@@ -130,6 +130,21 @@ func runRegistryRowCacheTests() async {
         }
     }
 
+    await test("RowCache: direct Notion write evicts the same page across every entity") {
+        try await withTempHomeRows { _ in
+            let cache = RegistryRowCache()
+            let pageId = "aaaa1111111111111111111111111111"
+            try await cache.write(sampleRow(entity: "skill", pageId: pageId, title: "Skill"))
+            try await cache.write(sampleRow(entity: "packet", pageId: pageId, title: "Packet"))
+            try await cache.write(sampleRow(entity: "contact", pageId: "bbbb1111111111111111111111111111", title: "Other"))
+            let evicted = await cache.evictPageEverywhere(pageId: pageId)
+            try expect(evicted == ["packet", "skill"], "stable entity receipt, got \(evicted)")
+            try expect(await cache.read(entity: "skill", pageId: pageId) == nil)
+            try expect(await cache.read(entity: "packet", pageId: pageId) == nil)
+            try expect(await cache.read(entity: "contact", pageId: "bbbb1111111111111111111111111111") != nil)
+        }
+    }
+
     await test("RowCache: incrementCallCount bumps persisted counter; 0 when absent") {
         try await withTempHomeRows { _ in
             let cache = RegistryRowCache()

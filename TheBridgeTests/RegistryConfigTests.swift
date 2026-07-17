@@ -28,6 +28,36 @@ private func withTempRegistryStore(_ body: (RegistryConfigStore, URL) async thro
 func runRegistryConfigTests() async {
     print("\n\u{1F5C3}\u{FE0F} Data-Source Registry — Config (model + store)")
 
+    await test("RegistryConfig: packet is canonical with session compatibility alias") {
+        let legacy = RegistryEntity(
+            key: "session",
+            displayName: "PACKETS",
+            dataSourceId: "packets-ds",
+            properties: [],
+            cacheTTLSeconds: 3600,
+            hasBody: true
+        )
+        let legacyConfig = RegistryConfig(entities: [legacy])
+        try expect(legacyConfig.entity("packet")?.key == "packet")
+        try expect(legacyConfig.entity("packet")?.dataSourceId == "packets-ds")
+
+        let canonical = RegistryEntity(
+            key: "packet",
+            displayName: legacy.displayName,
+            dataSourceId: legacy.dataSourceId,
+            properties: legacy.properties,
+            cacheTTLSeconds: legacy.cacheTTLSeconds,
+            hasBody: legacy.hasBody
+        )
+        let canonicalConfig = RegistryConfig(entities: [canonical])
+        try expect(canonicalConfig.entity("session")?.key == "session")
+
+        var actualSession = legacy
+        actualSession.displayName = "Sessions"
+        try expect(RegistryConfig(entities: [actualSession]).entity("packet") == nil,
+                   "a real Sessions entity must never be mistaken for PACKETS")
+    }
+
     // MARK: - Seed model
 
     await test("Seed: Skills is entity #1 with the expected shape") {

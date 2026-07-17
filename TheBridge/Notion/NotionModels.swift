@@ -28,6 +28,9 @@ public enum NotionClientError: Error, LocalizedError, Sendable {
         case .maxRetriesExceeded:
             return "Max retries exceeded"
         case .httpError(let code, let body):
+            if code == 401 {
+                return "HTTP 401: Notion authorization failed. Reauthorize or replace the token in The Bridge Settings > Connections, then run notion_token_introspect before retrying the write. Response: \(String(body.prefix(300)))"
+            }
             return "HTTP \(code): \(String(body.prefix(500)))"
         case .decodingError(let msg):
             return "Decoding error: \(msg)"

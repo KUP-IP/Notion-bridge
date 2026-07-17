@@ -19,9 +19,9 @@ extension SkillsModule {
     /// subsection (deeper level) is included in its parent's slice; a
     /// sibling or shallower heading terminates it.
     ///
-    /// Returns `nil` when no heading matches — the caller then falls back
-    /// to the full body and annotates the envelope so the result is never
-    /// silently empty.
+    /// Returns `nil` when no heading matches — callers return a compact
+    /// heading index rather than the full body, so a typo cannot trigger the
+    /// same oversized response the section selector was meant to avoid.
     public static func extractMarkdownSection(_ markdown: String, section rawSection: String) -> String? {
         let target = rawSection
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -93,6 +93,40 @@ extension SkillsModule {
             .joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return slice
+    }
+
+    /// Return addressable markdown headings while ignoring fenced-code lines.
+    /// Used for bounded section-miss responses and by notion_page_markdown_read.
+    public static func markdownHeadings(_ markdown: String) -> [String] {
+        let lines = markdown.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        var headings: [String] = []
+        var inFence = false
+        for rawLine in lines {
+            let line = rawLine.drop(while: { $0 == " " })
+            if line.hasPrefix("```") || line.hasPrefix("~~~") {
+                inFence.toggle()
+                continue
+            }
+            guard !inFence else { continue }
+            var hashes = 0
+            for character in line {
+                if character == "#" { hashes += 1 } else { break }
+            }
+            guard (1...6).contains(hashes) else { continue }
+            let remainder = line.dropFirst(hashes)
+            guard remainder.first == " " else { continue }
+            let title = remainder.trimmingCharacters(in: .whitespaces)
+            if !title.isEmpty { headings.append(title) }
+        }
+        return headings
+    }
+
+    public static func sectionMissMarkdown(requested: String, markdown: String) -> String {
+        let headings = markdownHeadings(markdown)
+        let available = headings.isEmpty
+            ? "(no markdown headings found)"
+            : headings.prefix(100).map { "- \($0)" }.joined(separator: "\n")
+        return "Section not found: \(requested)\n\nAvailable sections:\n\(available)"
     }
 
     // MARK: - cmd-w4: /markdown body retrieval + mention resolution
@@ -332,12 +366,61 @@ extension SkillsModule {
         cachedIdentity: CachedSkillBody? = nil
     ) -> Value {
         guard case .object(var dict) = value else { return value }
+        let version = cachedIdentity?.version ?? CachedSkillBody.propertyString("Version", in: flattenedProperties)
+        let status = cachedIdentity?.status ?? CachedSkillBody.propertyString("Status", in: flattenedProperties)
+        let maturity = cachedIdentity?.maturity ?? CachedSkillBody.propertyString("Maturity", in: flattenedProperties)
         dict["uuid"] = .string(CachedSkillBody.canonicalUUID(pageId))
         dict["slug"] = .string(cachedIdentity?.slug ?? CachedSkillBody.propertyString("Slug", in: flattenedProperties))
-        dict["version"] = .string(cachedIdentity?.version ?? CachedSkillBody.propertyString("Version", in: flattenedProperties))
-        dict["status"] = .string(cachedIdentity?.status ?? CachedSkillBody.propertyString("Status", in: flattenedProperties))
-        dict["maturity"] = .string(cachedIdentity?.maturity ?? CachedSkillBody.propertyString("Maturity", in: flattenedProperties))
+        dict["version"] = .string(version)
+        dict["status"] = .string(status)
+        dict["maturity"] = .string(maturity)
+        dict["authoritativeMetadataSource"] = .string("notion_properties")
+
+        if case .string(let content) = dict["content"] {
+            let propertyValues = ["version": version, "status": status, "maturity": maturity]
+            var fields: [Value] = []
+            for field in ["version", "status", "maturity"] {
+                guard let bodyValue = bodyMetadataValue(field: field, markdown: content),
+                      let propertyValue = propertyValues[field],
+                      !propertyValue.isEmpty,
+                      bodyValue.caseInsensitiveCompare(propertyValue) != .orderedSame else { continue }
+                fields.append(.object([
+                    "field": .string(field),
+                    "body": .string(bodyValue),
+                    "property": .string(propertyValue)
+                ]))
+            }
+            if !fields.isEmpty {
+                dict["metadataDrift"] = .object([
+                    "detected": .bool(true),
+                    "authoritativeSource": .string("notion_properties"),
+                    "fields": .array(fields),
+                    "warning": .string("Skill body metadata differs from Notion properties; routing uses the property-backed envelope values.")
+                ])
+            }
+        }
         return .object(dict)
+    }
+
+    /// Extract a simple `Version:`, `Status:`, or `Maturity:` declaration
+    /// from the first part of a skill body. This is diagnostic only: Notion
+    /// properties remain the routing-authoritative metadata source.
+    public static func bodyMetadataValue(field: String, markdown: String) -> String? {
+        let wanted = field.lowercased() + ":"
+        for rawLine in markdown.split(separator: "\n", omittingEmptySubsequences: false).prefix(120) {
+            var line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+            while let first = line.first, "->*#` ".contains(first) {
+                line.removeFirst()
+                line = line.trimmingCharacters(in: .whitespaces)
+            }
+            line = line.replacingOccurrences(of: "**", with: "")
+                .replacingOccurrences(of: "`", with: "")
+            guard line.lowercased().hasPrefix(wanted) else { continue }
+            let value = String(line.dropFirst(wanted.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
+        return nil
     }
 
     /// Public, network-free entry point mirroring `buildSkillResult` but

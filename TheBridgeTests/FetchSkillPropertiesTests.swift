@@ -443,7 +443,8 @@ func runFetchSkillPropertiesTests() async {
         "summary", "triggerPhrases", "antiTriggerPhrases"
     ]
     let additiveEnvelopeKeys: Set<String> = [
-        "properties", "uuid", "slug", "version", "status", "maturity"
+        "properties", "uuid", "slug", "version", "status", "maturity",
+        "authoritativeMetadataSource"
     ]
 
     await test("cu-sa (d): legacy keys byte-identical empty↔populated; doctrine identity is additive") {
@@ -686,5 +687,28 @@ func runFetchSkillPropertiesTests() async {
             default: throw TestError.assertion("real fixture produced a non-modelled Value for `\(k)`: \(v)")
             }
         }
+    }
+
+    await test("fetch_skill surfaces body/property metadata drift with one authoritative source") {
+        let result = await SkillsModule.buildSkillResultForTesting(
+            name: "close-agent",
+            title: "Close Agent",
+            url: "https://www.notion.so/example",
+            markdownJSONOrText: "**Version:** 3.3.2\n**Status:** Proven\n\n# Closeout",
+            pageProperties: [
+                "Version": richText("3.3.1"),
+                "Status": statusProp("Testing")
+            ]
+        ) { _ in nil }
+        guard case .object(let envelope) = result,
+              case .object(let drift) = envelope["metadataDrift"],
+              case .array(let fields) = drift["fields"] else {
+            throw TestError.assertion("expected structured metadata drift warning")
+        }
+        try expect(envelope["version"] == .string("3.3.1"))
+        try expect(envelope["status"] == .string("Testing"))
+        try expect(envelope["authoritativeMetadataSource"] == .string("notion_properties"))
+        try expect(drift["detected"] == .bool(true))
+        try expect(fields.count == 2)
     }
 }

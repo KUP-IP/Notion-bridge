@@ -448,7 +448,7 @@ func runSchedulerResilienceTests() async {
         try expect(job.actionChain.count == 2, "expected build-report + send-iMessage steps")
     }
 
-    await test("FirstJob: action chain is report-builder → iMessage with $prev_result wiring") {
+    await test("FirstJob: action chain is report-builder → iMessage with $prev_result.stdout wiring") {
         let chain = RunningReportJob.defaultActionChain()
         // Step 0 builds the report text.
         try expect(chain[0].tool == "shell_exec", "step 0 builds the running summary")
@@ -457,11 +457,38 @@ func runSchedulerResilienceTests() async {
         try expect(chain[1].tool == "messages_send", "step 1 delivers via iMessage")
         try expect(chain[1].onFail == .continue, "an un-wired placeholder records a failed send, not an abort")
         if case .string(let body)? = chain[1].arguments["body"] {
-            try expect(body == "$prev_result", "delivery body must read the previous step's report output")
+            try expect(body == "$prev_result.stdout", "delivery body must extract the previous step's stdout")
         } else { try expect(false, "messages_send must have a 'body'") }
         if case .string(let confirm)? = chain[1].arguments["confirm"] {
             try expect(confirm == "SEND", "unattended messages_send requires confirm: SEND")
         } else { try expect(false, "messages_send must carry the SEND gate") }
+    }
+
+    await test("Jobs: previous-result path extracts object fields and array members") {
+        let previous: JSONValue = .object([
+            "stdout": .string("report text"),
+            "content": .array([.object(["text": .string("nested text")])])
+        ])
+        let substituted = try JobsManager.substitutePrev([
+            "body": .string("$prev_result.stdout"),
+            "nested": .string("$prev_result.content[0].text"),
+            "whole": .string("$prev_result")
+        ], prev: previous)
+        try expect(substituted["body"] == .string("report text"))
+        try expect(substituted["nested"] == .string("nested text"))
+        try expect(substituted["whole"] == previous.toMCP())
+    }
+
+    await test("Jobs: unresolved previous-result paths fail closed before dispatch") {
+        do {
+            _ = try JobsManager.substitutePrev(
+                ["body": .string("$prev_result.missing")],
+                prev: .object(["stdout": .string("present")])
+            )
+            throw TestError.assertion("Expected unresolved path failure")
+        } catch let error as JobsModuleError {
+            try expect(String(describing: error).contains("could not resolve"))
+        }
     }
 
     await test("FirstJob: chain passes the same unattended validation as createJob") {

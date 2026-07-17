@@ -466,24 +466,81 @@ public enum MessagesModule {
     /// Convert query result rows to MCP Value, applying extractText fallback on the text column.
     /// The raw `attributedBody` blob is excluded from output.
     private static func rowsToValue(_ rows: [[String: Any]], textKey: String = "text") -> Value {
+        let valueRows = rows.map { rowToValue($0, textKey: textKey) }
+        return .object(["rows": .array(valueRows), "count": .int(valueRows.count)])
+    }
+
+    private static func rowToValue(_ row: [String: Any], textKey: String) -> Value {
+        var result: [String: Value] = [:]
+        for (key, val) in row {
+            if key == "attributedBody" { continue }
+            if key == textKey {
+                let extracted = extractText(row: row, textKey: textKey)
+                result[key] = extracted.map { .string($0) } ?? .null
+            } else if let s = val as? String {
+                result[key] = .string(s)
+            } else if let i = val as? Int {
+                result[key] = .int(i)
+            } else if let d = val as? Double {
+                result[key] = .double(d)
+            } else {
+                result[key] = .null
+            }
+        }
+        return .object(result)
+    }
+
+    public static func attributionFields(
+        messagesDisplayName: String?,
+        handle: String?,
+        contact: ContactsModule.HandleAttribution?
+    ) -> [String: Value] {
+        if let displayName = messagesDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !displayName.isEmpty {
+            return [
+                "resolvedName": .string(displayName),
+                "attributionSource": .string("messages_chat_display_name"),
+                "attributionConfidence": .string("exact_chat_metadata"),
+                "attributionFailureReason": .null
+            ]
+        }
+        if let contact, let resolvedName = contact.resolvedName {
+            return [
+                "resolvedName": .string(resolvedName),
+                "attributionSource": .string(contact.source),
+                "attributionConfidence": .string(contact.confidence),
+                "attributionFailureReason": .null
+            ]
+        }
+        return [
+            "resolvedName": .null,
+            "attributionSource": .string(contact?.source ?? "none"),
+            "attributionConfidence": .string(contact?.confidence ?? "none"),
+            "attributionFailureReason": .string(
+                contact?.failureReason ?? (handle == nil ? "chat_has_no_resolvable_handle" : "no_attribution_available")
+            )
+        ]
+    }
+
+    private static func recentRowsToValue(_ rows: [[String: Any]]) -> Value {
         let valueRows: [Value] = rows.map { row in
-            var result: [String: Value] = [:]
-            for (key, val) in row {
-                // Never expose raw attributedBody blob to caller
-                if key == "attributedBody" { continue }
-                if key == textKey {
-                    // Apply text extraction with attributedBody fallback
-                    let extracted = extractText(row: row, textKey: textKey)
-                    result[key] = extracted.map { .string($0) } ?? .null
-                } else if let s = val as? String {
-                    result[key] = .string(s)
-                } else if let i = val as? Int {
-                    result[key] = .int(i)
-                } else if let d = val as? Double {
-                    result[key] = .double(d)
-                } else {
-                    result[key] = .null
-                }
+            var result: [String: Value]
+            if case .object(let object) = rowToValue(row, textKey: "last_message") {
+                result = object
+            } else {
+                result = [:]
+            }
+            let displayName = row["display_name"] as? String
+            let handle = row["chat_identifier"] as? String
+            let contact = (displayName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                ? nil
+                : handle.map(ContactsModule.exactHandleAttributionIfAuthorized)
+            for (key, value) in attributionFields(
+                messagesDisplayName: displayName,
+                handle: handle,
+                contact: contact
+            ) {
+                result[key] = value
             }
             return .object(result)
         }
@@ -598,7 +655,7 @@ public enum MessagesModule {
             name: "messages_recent",
             module: moduleName,
             tier: .open,
-            description: "List the N most recently active Messages conversations (chats, not individual messages).",
+            description: "List the N most recently active Messages conversations with explicit attribution provenance. Blank chat names get a best-effort exact Contacts lookup when Contacts permission is already granted; loose name inference is never used.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -638,7 +695,7 @@ public enum MessagesModule {
                     LIMIT ?1
                     """
                 let rows = try performQuery(sql, params: [String(limit)])
-                return rowsToValue(rows, textKey: "last_message")
+                return recentRowsToValue(rows)
             }
         ))
 
@@ -693,7 +750,7 @@ public enum MessagesModule {
             name: "messages_content",
             module: moduleName,
             tier: .open,
-            description: "Fetch a single message by its Messages DB ROWID (full text + metadata).",
+            description: "Fetch one message by Messages DB ROWID, including attachment metadata when present. Attachment bytes are not auto-extracted.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -723,7 +780,35 @@ public enum MessagesModule {
                     WHERE m.ROWID = ?1
                     """
                 let rows = try performQuery(sql, params: [String(msgId)])
-                return rowsToValue(rows)
+                guard case .object(var result) = rowsToValue(rows) else {
+                    return rowsToValue(rows)
+                }
+                do {
+                    let attachmentSQL = """
+                        SELECT a.ROWID AS attachment_id,
+                               a.filename AS file_path,
+                               a.mime_type,
+                               a.transfer_name
+                        FROM attachment a
+                        JOIN message_attachment_join maj ON maj.attachment_id = a.ROWID
+                        WHERE maj.message_id = ?1
+                        ORDER BY a.ROWID ASC
+                        """
+                    let attachmentRows = try performQuery(attachmentSQL, params: [String(msgId)])
+                    if case .object(let attachmentResult) = rawRowsToValue(attachmentRows),
+                       case .array(let attachments) = attachmentResult["rows"] {
+                        result["attachments"] = .array(attachments)
+                        result["attachmentCount"] = .int(attachments.count)
+                    }
+                    result["attachmentMode"] = .string("metadata_only")
+                    result["attachmentLimitation"] = .string("Attachment bytes are not returned automatically; file_path is provided when Messages stored one locally.")
+                } catch {
+                    result["attachments"] = .array([])
+                    result["attachmentCount"] = .int(0)
+                    result["attachmentMode"] = .string("metadata_unavailable")
+                    result["attachmentLimitation"] = .string("Attachment metadata query failed: \(error.localizedDescription)")
+                }
+                return .object(result)
             }
         ))
 
