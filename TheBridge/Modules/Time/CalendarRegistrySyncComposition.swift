@@ -11,6 +11,7 @@ public enum CalendarRegistrySyncCompositionError: Error, LocalizedError, Equatab
     case disabled
     case missingBindings([String])
     case missingAllowedCalendars
+    case unsupportedCoordinatorLocation(String)
 
     public var errorDescription: String? {
         switch self {
@@ -20,6 +21,8 @@ public enum CalendarRegistrySyncCompositionError: Error, LocalizedError, Equatab
             return "schedule registry is missing required bindings: \(keys.joined(separator: ", "))"
         case .missingAllowedCalendars:
             return "an explicit private-smoke calendar allowlist is required"
+        case .unsupportedCoordinatorLocation(let path):
+            return "calendar-registry coordinator must use a verified local filesystem: \(path)"
         }
     }
 }
@@ -60,13 +63,21 @@ public enum CalendarRegistrySyncComposition {
         guard !allowlist.isEmpty else {
             throw CalendarRegistrySyncCompositionError.missingAllowedCalendars
         }
+        let standardizedLedger = ledgerURL.standardizedFileURL
+        let parent = standardizedLedger.deletingLastPathComponent()
+        let values = try parent.resourceValues(forKeys: [.volumeIsLocalKey])
+        guard values.volumeIsLocal == true else {
+            throw CalendarRegistrySyncCompositionError.unsupportedCoordinatorLocation(parent.path)
+        }
+        let lockRoot = parent.appendingPathComponent("calendar-registry-locks", isDirectory: true)
         return CalendarRegistrySyncEngine(
             registry: NotionTimeInstanceRegistryStore(entity: entity, gateway: registryGateway),
             calendar: CalendarStoringSyncProvider(
                 store: calendarStore,
                 allowlistedCalendarIds: allowlist
             ),
-            transactions: try SQLiteCalendarRegistryTransactionStore(url: ledgerURL)
+            transactions: try SQLiteCalendarRegistryTransactionStore(url: standardizedLedger),
+            processLocks: try FileCalendarRegistryProcessLockCoordinator(rootURL: lockRoot)
         )
     }
 }

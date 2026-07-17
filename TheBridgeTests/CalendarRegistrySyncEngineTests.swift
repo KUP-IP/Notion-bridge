@@ -1,4 +1,4 @@
-// CalendarRegistrySyncEngineTests.swift — registry-first recovery contract
+// CalendarRegistrySyncEngineTests.swift — fail-closed registry-first smoke contract
 
 import Foundation
 import MCP
@@ -8,47 +8,48 @@ import TheBridgeLib
 private enum SyncTestError: Error, LocalizedError {
     case forcedCalendarCreate
     case forcedRegistrySave
-    case forcedVerificationMiss
     case forcedLedgerSave
+    case forcedVerificationMiss
 
     var errorDescription: String? {
         switch self {
         case .forcedCalendarCreate: return "forced calendar create failure"
         case .forcedRegistrySave: return "forced registry save failure"
-        case .forcedVerificationMiss: return "forced verification miss"
         case .forcedLedgerSave: return "forced ledger save failure"
+        case .forcedVerificationMiss: return "forced verification miss"
         }
     }
 }
 
 private actor SyncTestRegistry: TimeInstanceRegistryStoring {
     private var records: [String: TimeInstanceRecord] = [:]
-    private var partialByKey: [String: (id: String, fingerprint: String)] = [:]
     private var identityOverrides: [String: RegistryRecordIdentityRead] = [:]
-    private var sequence = 0
-    private var failNextCreatePatch = false
-    private var failAllSaves = false
+    private var lookupExtras: [TimeInstanceRecord] = []
+    private var lookupUnresolved: [RegistryUnresolvedIdentity] = []
     private var lookupSource: RegistryLookupSource = .live
+    private var failAllSaves = false
     private var dropFinalSyncHash = false
-    private(set) var createCount = 0
+    private var mutateProviderOnFinalRead = false
+    private var mutateSyncedAtOnFinalRead = false
+    private var syncedReadCount = 0
+    private(set) var saveCount = 0
 
-    func setFailNextCreatePatch(_ value: Bool) { failNextCreatePatch = value }
-    func setFailAllSaves(_ value: Bool) { failAllSaves = value }
-    func setLookupSource(_ source: RegistryLookupSource) { lookupSource = source }
-    func setDropFinalSyncHash(_ value: Bool) { dropFinalSyncHash = value }
     func put(_ record: TimeInstanceRecord) { records[record.id] = record }
     func setIdentityOverride(id: String, value: RegistryRecordIdentityRead?) { identityOverrides[id] = value }
-    func count() -> Int { records.count + partialByKey.count }
-    func createdCount() -> Int { createCount }
-    func allRecords() -> [TimeInstanceRecord] { Array(records.values) }
-    func record(for key: String) -> TimeInstanceRecord? { records.values.first { $0.syncKey == key } }
+    func setLookupExtras(_ values: [TimeInstanceRecord]) { lookupExtras = values }
+    func setLookupUnresolved(_ values: [RegistryUnresolvedIdentity]) { lookupUnresolved = values }
+    func setLookupSource(_ value: RegistryLookupSource) { lookupSource = value }
+    func setFailAllSaves(_ value: Bool) { failAllSaves = value }
+    func setDropFinalSyncHash(_ value: Bool) { dropFinalSyncHash = value }
+    func setMutateProviderOnFinalRead(_ value: Bool) { mutateProviderOnFinalRead = value }
+    func setMutateSyncedAtOnFinalRead(_ value: Bool) { mutateSyncedAtOnFinalRead = value }
+    func record(id: String) -> TimeInstanceRecord? { records[id] }
+    func savedCount() -> Int { saveCount }
 
     func findBySyncKey(_ syncKey: String) async throws -> RegistryIdentityLookup {
         RegistryIdentityLookup(
-            records: records.values.filter { $0.syncKey == syncKey },
-            unresolvedIdentities: partialByKey[syncKey].map {
-                [RegistryUnresolvedIdentity(pageId: $0.id, syncKey: syncKey, operationFingerprint: $0.fingerprint)]
-            } ?? [],
+            records: records.values.filter { $0.syncKey == syncKey } + lookupExtras.filter { $0.syncKey == syncKey },
+            unresolvedIdentities: lookupUnresolved.filter { $0.syncKey == syncKey },
             source: lookupSource
         )
     }
@@ -57,39 +58,22 @@ private actor SyncTestRegistry: TimeInstanceRegistryStoring {
         _ = forceRefresh
         if let override = identityOverrides[id] { return override }
         if let record = records[id] { return .decoded(record) }
-        if let partial = partialByKey.first(where: { $0.value.id == id }) {
-            return .partial(pageId: id, syncKey: partial.key, operationFingerprint: partial.value.fingerprint)
-        }
         return .missing
     }
 
     func get(id: String, forceRefresh: Bool) async throws -> TimeInstanceRecord? {
-        if case .decoded(let record) = try await readIdentity(id: id, forceRefresh: forceRefresh) { return record }
-        return nil
-    }
-
-    func create(_ record: TimeInstanceRecord) async throws -> TimeInstanceRecord {
-        sequence += 1
-        createCount += 1
-        let id = "notion-event-\(sequence)"
-        if failNextCreatePatch {
-            failNextCreatePatch = false
-            partialByKey[record.syncKey] = (id, record.operationFingerprint)
-            throw PartialRegistryCreateError(pageId: id, message: "forced semantic PATCH failure")
+        _ = forceRefresh
+        guard var record = records[id] else { return nil }
+        if record.syncState == .synced {
+            syncedReadCount += 1
+            if mutateProviderOnFinalRead && syncedReadCount >= 1 {
+                record.calendarProvider = "Mutated Provider"
+            }
+            if mutateSyncedAtOnFinalRead && syncedReadCount >= 1 {
+                record.lastSyncedAt = record.lastSyncedAt?.addingTimeInterval(120)
+            }
         }
-        var created = record
-        created.id = id
-        records[id] = created
-        return created
-    }
-
-    func repair(id: String, from record: TimeInstanceRecord) async throws -> TimeInstanceRecord {
-        var repaired = record
-        repaired.id = id
-        partialByKey[record.syncKey] = nil
-        identityOverrides[id] = nil
-        records[id] = repaired
-        return repaired
+        return record
     }
 
     func save(_ record: TimeInstanceRecord) async throws -> TimeInstanceRecord {
@@ -97,32 +81,43 @@ private actor SyncTestRegistry: TimeInstanceRegistryStoring {
         var saved = record
         if dropFinalSyncHash && saved.syncState == .synced { saved.syncHash = "" }
         records[saved.id] = saved
+        saveCount += 1
         return saved
-    }
-
-    func mutateCalendarRange(key: String, start: Date, end: Date) {
-        guard let id = records.first(where: { $0.value.syncKey == key })?.key else { return }
-        records[id]?.scheduledStart = start
-        records[id]?.scheduledEnd = end
     }
 }
 
 private actor SyncTestCalendar: CalendarSyncProviding {
+    enum CreateMode { case normal, throwWithoutPersist, persistThenThrow, persistThenSuspend }
+
     private var items: [String: ExternalCalendarItem] = [:]
     private var sequence = 0
     private var qualified = true
-    private var failNextCreate = false
-    private var nextShape: (recurring: Bool, allDay: Bool, detached: Bool) = (false, false, false)
-    private(set) var createCount = 0
+    private var createMode: CreateMode = .normal
+    private var nextShape: (recurring: Bool, allDay: Bool, detached: Bool, organizer: String?, attendees: [String]) =
+        (false, false, false, nil, [])
+    private var mutateProviderOnFinalRead = false
+    private var mutateURLOnFinalRead = false
+    private var itemReadCount = 0
+    private(set) var createAttempts = 0
+    private(set) var persistedCreates = 0
+    let createEntered = AsyncTestLatch()
 
     func setQualified(_ value: Bool) { qualified = value }
-    func setFailNextCreate(_ value: Bool) { failNextCreate = value }
-    func setNextShape(recurring: Bool = false, allDay: Bool = false, detached: Bool = false) {
-        nextShape = (recurring, allDay, detached)
-    }
-    func createdCount() -> Int { createCount }
+    func setCreateMode(_ value: CreateMode) { createMode = value }
+    func setNextShape(
+        recurring: Bool = false,
+        allDay: Bool = false,
+        detached: Bool = false,
+        organizer: String? = nil,
+        attendees: [String] = []
+    ) { nextShape = (recurring, allDay, detached, organizer, attendees) }
+    func setMutateProviderOnFinalRead(_ value: Bool) { mutateProviderOnFinalRead = value }
+    func setMutateURLOnFinalRead(_ value: Bool) { mutateURLOnFinalRead = value }
+    func seed(_ item: ExternalCalendarItem) { items[item.localEventId] = item }
+    func removeAll() { items.removeAll() }
+    func attempts() -> Int { createAttempts }
+    func persistedCount() -> Int { persistedCreates }
     func count() -> Int { items.count }
-    func allItems() -> [ExternalCalendarItem] { Array(items.values) }
 
     func qualify(calendarId: String) async throws -> CalendarQualification {
         CalendarQualification(
@@ -137,20 +132,19 @@ private actor SyncTestCalendar: CalendarSyncProviding {
     }
 
     func create(_ draft: ExternalCalendarDraft) async throws -> ExternalCalendarItem {
-        if failNextCreate {
-            failNextCreate = false
-            throw SyncTestError.forcedCalendarCreate
-        }
+        createAttempts += 1
+        await createEntered.open()
+        if createMode == .throwWithoutPersist { throw SyncTestError.forcedCalendarCreate }
         sequence += 1
-        createCount += 1
         let id = "calendar-event-\(sequence)"
         let shape = nextShape
-        nextShape = (false, false, false)
+        nextShape = (false, false, false, nil, [])
         let item = ExternalCalendarItem(
             provider: "Fixture Calendar",
             calendarId: draft.calendarId,
             localEventId: id,
             providerExternalId: "provider-\(sequence)",
+            itemURL: "calshow:\(id)",
             syncKey: draft.syncKey,
             operationFingerprint: draft.operationFingerprint,
             title: draft.title,
@@ -159,55 +153,55 @@ private actor SyncTestCalendar: CalendarSyncProviding {
             timeZoneIdentifier: draft.timeZoneIdentifier,
             location: draft.location,
             notes: draft.notes,
+            organizer: shape.organizer,
+            attendees: shape.attendees,
             updatedAt: Date(timeIntervalSince1970: 1_800_000_000),
             isRecurring: shape.recurring,
             isAllDay: shape.allDay,
             isDetached: shape.detached
         )
         items[id] = item
+        persistedCreates += 1
+        if createMode == .persistThenThrow { throw SyncTestError.forcedCalendarCreate }
+        if createMode == .persistThenSuspend {
+            try await Task.sleep(nanoseconds: 10_000_000_000)
+        }
         return item
     }
 
-    func item(id: String) async throws -> ExternalCalendarItem? { items[id] }
+    func item(id: String) async throws -> ExternalCalendarItem? {
+        guard var item = items[id] else { return nil }
+        itemReadCount += 1
+        if mutateProviderOnFinalRead && itemReadCount >= 2 { item.provider = "Mutated Provider" }
+        if mutateURLOnFinalRead && itemReadCount >= 2 { item.itemURL = "calshow:mutated" }
+        return item
+    }
 
     func recover(_ query: CalendarRecoveryQuery) async throws -> [ExternalCalendarItem] {
         if let id = query.localEventId, let direct = items[id] { return [direct] }
-        let byIdentity = items.values.filter {
+        let identity = items.values.filter {
             $0.syncKey == query.syncKey && $0.operationFingerprint == query.operationFingerprint
         }
-        if !byIdentity.isEmpty { return Array(byIdentity) }
+        if !identity.isEmpty { return Array(identity) }
         if let external = query.providerExternalId {
-            let byExternal = items.values.filter { $0.providerExternalId == external }
-            if !byExternal.isEmpty { return Array(byExternal) }
+            let externalMatches = items.values.filter { $0.providerExternalId == external }
+            if !externalMatches.isEmpty { return Array(externalMatches) }
         }
         return items.values.filter {
             $0.calendarId == query.calendarId && $0.title == query.title
-                && $0.start == query.start && $0.end == query.end
+                && abs($0.start.timeIntervalSince(query.start)) < 1
+                && abs($0.end.timeIntervalSince(query.end)) < 1
         }
     }
-
-    func mutateStart(id: String, start: Date, end: Date) {
-        items[id]?.start = start
-        items[id]?.end = end
-    }
-
-    func duplicateIdentity(from id: String) {
-        guard var copy = items[id] else { return }
-        copy.localEventId = id + "-duplicate"
-        items[copy.localEventId] = copy
-    }
 }
-
 
 private actor AsyncTestLatch {
     private var opened = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
-
     func wait() async {
         if opened { return }
         await withCheckedContinuation { waiters.append($0) }
     }
-
     func open() {
         guard !opened else { return }
         opened = true
@@ -215,93 +209,6 @@ private actor AsyncTestLatch {
         waiters.removeAll()
         pending.forEach { $0.resume() }
     }
-}
-
-private actor PausingRegistry: TimeInstanceRegistryStoring {
-    let base: SyncTestRegistry
-    let entered: AsyncTestLatch
-    let release: AsyncTestLatch
-    private var hasPaused = false
-
-    init(base: SyncTestRegistry, entered: AsyncTestLatch, release: AsyncTestLatch) {
-        self.base = base
-        self.entered = entered
-        self.release = release
-    }
-
-    func findBySyncKey(_ syncKey: String) async throws -> RegistryIdentityLookup {
-        if !hasPaused {
-            hasPaused = true
-            await entered.open()
-            await release.wait()
-        }
-        return try await base.findBySyncKey(syncKey)
-    }
-    func readIdentity(id: String, forceRefresh: Bool) async throws -> RegistryRecordIdentityRead {
-        try await base.readIdentity(id: id, forceRefresh: forceRefresh)
-    }
-    func get(id: String, forceRefresh: Bool) async throws -> TimeInstanceRecord? {
-        try await base.get(id: id, forceRefresh: forceRefresh)
-    }
-    func create(_ record: TimeInstanceRecord) async throws -> TimeInstanceRecord { try await base.create(record) }
-    func repair(id: String, from record: TimeInstanceRecord) async throws -> TimeInstanceRecord { try await base.repair(id: id, from: record) }
-    func save(_ record: TimeInstanceRecord) async throws -> TimeInstanceRecord { try await base.save(record) }
-}
-
-
-private actor PausingCalendarBeforeCreate: CalendarSyncProviding {
-    private let base = SyncTestCalendar()
-    let entered = AsyncTestLatch()
-    let release = AsyncTestLatch()
-    private var paused = false
-
-    func qualify(calendarId: String) async throws -> CalendarQualification { try await base.qualify(calendarId: calendarId) }
-    func create(_ draft: ExternalCalendarDraft) async throws -> ExternalCalendarItem { try await base.create(draft) }
-    func item(id: String) async throws -> ExternalCalendarItem? { try await base.item(id: id) }
-    func recover(_ query: CalendarRecoveryQuery) async throws -> [ExternalCalendarItem] {
-        if !paused {
-            paused = true
-            await entered.open()
-            await release.wait()
-        }
-        return try await base.recover(query)
-    }
-    func createdCount() async -> Int { await base.createdCount() }
-}
-
-private actor PostEffectCancellingCalendar: CalendarSyncProviding {
-    private let base = SyncTestCalendar()
-    let created = AsyncTestLatch()
-
-    func qualify(calendarId: String) async throws -> CalendarQualification { try await base.qualify(calendarId: calendarId) }
-    func create(_ draft: ExternalCalendarDraft) async throws -> ExternalCalendarItem {
-        let item = try await base.create(draft)
-        await created.open()
-        try await Task.sleep(nanoseconds: 10_000_000_000)
-        return item
-    }
-    func item(id: String) async throws -> ExternalCalendarItem? { try await base.item(id: id) }
-    func recover(_ query: CalendarRecoveryQuery) async throws -> [ExternalCalendarItem] { try await base.recover(query) }
-    func count() async -> Int { await base.count() }
-}
-
-private func seedTransaction(
-    _ store: any CalendarRegistryTransactionStoring,
-    request: RegistryFirstTimeInstanceRequest,
-    registryEventId: String
-) async throws {
-    var tx = try await store.claim(
-        idempotencyKey: request.idempotencyKey,
-        manifestFingerprint: request.manifest.fingerprint,
-        operationId: "seed-operation",
-        leaseOwner: "seed-owner",
-        leaseToken: "seed-token",
-        leaseDuration: 600
-    )
-    tx.registryEventId = registryEventId
-    tx.stage = .registryCreated
-    tx = try await store.save(tx)
-    _ = try await store.release(tx)
 }
 
 private actor AlwaysFailingTransactionStore: CalendarRegistryTransactionStoring {
@@ -313,8 +220,10 @@ private actor AlwaysFailingTransactionStore: CalendarRegistryTransactionStoring 
         operationId: String,
         leaseOwner: String,
         leaseToken: String,
-        leaseDuration: TimeInterval
+        leaseDuration: TimeInterval,
+        exclusiveProcessLockHeld: Bool
     ) async throws -> CalendarRegistryTransaction {
+        _ = exclusiveProcessLockHeld
         if let transaction { return transaction }
         let now = Date()
         let created = CalendarRegistryTransaction(
@@ -332,28 +241,26 @@ private actor AlwaysFailingTransactionStore: CalendarRegistryTransactionStoring 
         transaction = created
         return created
     }
-
     func renew(_ transaction: CalendarRegistryTransaction, leaseDuration: TimeInterval) async throws -> CalendarRegistryTransaction {
-        _ = leaseDuration
+        _ = transaction; _ = leaseDuration
         throw SyncTestError.forcedLedgerSave
     }
-
     func get(idempotencyKey: String) async throws -> CalendarRegistryTransaction? {
-        guard transaction?.idempotencyKey == idempotencyKey else { return nil }
-        return transaction
+        transaction?.idempotencyKey == idempotencyKey ? transaction : nil
     }
-
     func save(_ transaction: CalendarRegistryTransaction) async throws -> CalendarRegistryTransaction {
+        _ = transaction
         throw SyncTestError.forcedLedgerSave
     }
-
     func release(_ transaction: CalendarRegistryTransaction) async throws -> CalendarRegistryTransaction {
+        _ = transaction
         throw SyncTestError.forcedLedgerSave
     }
 }
 
 private func syncRequest(
     key: String = "operation-lift-2027-01-15",
+    registryEventId: String? = nil,
     title: String = "LIFT",
     start: Date = Date(timeIntervalSince1970: 1_800_010_000),
     end: Date = Date(timeIntervalSince1970: 1_800_013_600),
@@ -362,6 +269,7 @@ private func syncRequest(
 ) -> RegistryFirstTimeInstanceRequest {
     RegistryFirstTimeInstanceRequest(
         idempotencyKey: key,
+        registryEventId: registryEventId ?? "notion-\(key)",
         title: title,
         start: start,
         end: end,
@@ -377,22 +285,85 @@ private func syncRequest(
     )
 }
 
+private func canonicalRecord(_ request: RegistryFirstTimeInstanceRequest) -> TimeInstanceRecord {
+    TimeInstanceRecord(
+        id: request.registryEventId,
+        title: request.title,
+        scheduledStart: request.start,
+        scheduledEnd: request.end,
+        timeZoneIdentifier: request.timeZoneIdentifier,
+        location: request.location,
+        notes: request.notes,
+        syncKey: request.idempotencyKey,
+        operationFingerprint: request.manifest.fingerprint,
+        semantics: request.semantics,
+        schedulingAuthority: .registry,
+        syncState: .pendingCreate,
+        registryUpdatedAt: Date(timeIntervalSince1970: 1_800_000_000)
+    )
+}
+
+private func calendarItem(
+    _ request: RegistryFirstTimeInstanceRequest,
+    id: String = "calendar-existing",
+    provider: String = "Fixture Calendar",
+    external: String? = "provider-existing",
+    url: String? = "calshow:existing",
+    recurring: Bool = false,
+    allDay: Bool = false,
+    detached: Bool = false,
+    organizer: String? = nil,
+    attendees: [String] = [],
+    updatedAt: Date? = Date(timeIntervalSince1970: 1_800_000_000)
+) -> ExternalCalendarItem {
+    ExternalCalendarItem(
+        provider: provider,
+        calendarId: request.calendarId,
+        localEventId: id,
+        providerExternalId: external,
+        itemURL: url,
+        syncKey: request.idempotencyKey,
+        operationFingerprint: request.manifest.fingerprint,
+        title: request.title,
+        start: request.start,
+        end: request.end,
+        timeZoneIdentifier: request.timeZoneIdentifier,
+        location: request.location,
+        notes: request.notes,
+        organizer: organizer,
+        attendees: attendees,
+        updatedAt: updatedAt,
+        isRecurring: recurring,
+        isAllDay: allDay,
+        isDetached: detached
+    )
+}
+
 private func makeSyncEngine(
-    registry: any TimeInstanceRegistryStoring = SyncTestRegistry(),
+    registry: any TimeInstanceRegistryStoring,
     calendar: any CalendarSyncProviding = SyncTestCalendar(),
     transactions: any CalendarRegistryTransactionStoring = InMemoryCalendarRegistryTransactionStore(),
-    operationGate: CalendarRegistryOperationGate = CalendarRegistryOperationGate()
+    processLocks: any CalendarRegistryProcessLocking = InMemoryCalendarRegistryProcessLockCoordinator(),
+    operationGate: CalendarRegistryOperationGate = CalendarRegistryOperationGate(),
+    leaseDuration: TimeInterval = 600
 ) -> CalendarRegistrySyncEngine {
     CalendarRegistrySyncEngine(
         registry: registry,
         calendar: calendar,
         transactions: transactions,
+        processLocks: processLocks,
         operationGate: operationGate,
         clock: { Date(timeIntervalSince1970: 1_800_000_000) },
         makeOperationId: { UUID().uuidString.lowercased() },
         makeLeaseToken: { UUID().uuidString.lowercased() },
-        leaseDuration: 600
+        leaseDuration: leaseDuration
     )
+}
+
+private func seededRegistry(_ request: RegistryFirstTimeInstanceRequest) async -> SyncTestRegistry {
+    let registry = SyncTestRegistry()
+    await registry.put(canonicalRecord(request))
+    return registry
 }
 
 private func withTempDirectory(_ body: (URL) async throws -> Void) async throws {
@@ -403,47 +374,54 @@ private func withTempDirectory(_ body: (URL) async throws -> Void) async throws 
     try await body(directory)
 }
 
-// MARK: - Notion adapter fixture
+private func claim(
+    _ store: any CalendarRegistryTransactionStoring,
+    key: String,
+    fingerprint: String = "fingerprint",
+    operation: String = "operation",
+    token: String = "token",
+    exclusive: Bool = false,
+    duration: TimeInterval = 600
+) async throws -> CalendarRegistryTransaction {
+    try await store.claim(
+        idempotencyKey: key,
+        manifestFingerprint: fingerprint,
+        operationId: operation,
+        leaseOwner: operation,
+        leaseToken: token,
+        leaseDuration: duration,
+        exclusiveProcessLockHeld: exclusive
+    )
+}
+
+// MARK: - Registry gateway fixture
 
 private actor SyncRegistryGateway: RegistryNotionGateway {
     nonisolated var supportsAuthoritativeFiltering: Bool { true }
-    var pages: [String: NotionRow] = [:]
-    var failUpdate = false
-    var failCreateResponseAfterPersist = false
-    var filteredQueryCalls = 0
-    private var sequence = 0
-    private(set) var lastCreatedFields: [BoundField] = []
-    private(set) var lastUpdatedFields: [BoundField] = []
+    private var pages: [String: NotionRow] = [:]
+    private(set) var createCalls = 0
+    private(set) var updateCalls = 0
 
-    func setFailUpdate(_ value: Bool) { failUpdate = value }
-    func setFailCreateResponseAfterPersist(_ value: Bool) { failCreateResponseAfterPersist = value }
-    func pageCount() -> Int { pages.count }
-    func createdFields() -> [BoundField] { lastCreatedFields }
+    func seed(_ row: NotionRow) { pages[row.id] = row }
+    func createCount() -> Int { createCalls }
+    func updateCount() -> Int { updateCalls }
 
     func schema(dataSourceId: String, workspace: String?) async throws -> DataSourceSchema {
         _ = dataSourceId; _ = workspace
         return DataSourceSchema(columnsByName: [:])
     }
-
     func query(dataSourceId: String, workspace: String?, pageSize: Int, startCursor: String?) async throws -> (rows: [NotionRow], nextCursor: String?) {
         _ = dataSourceId; _ = workspace; _ = pageSize; _ = startCursor
         return (Array(pages.values), nil)
     }
-
     func query(dataSourceId: String, workspace: String?, filter: Data, pageSize: Int, startCursor: String?) async throws -> (rows: [NotionRow], nextCursor: String?) {
         _ = dataSourceId; _ = workspace; _ = pageSize; _ = startCursor
-        filteredQueryCalls += 1
-        let object = (try? JSONSerialization.jsonObject(with: filter) as? [String: Any]) ?? [:]
-        let rich = object["rich_text"] as? [String: Any]
-        let wanted = rich?["equals"] as? String
-        let rows = pages.values.filter { row in
-            row.cells.values.contains { cell in
-                cell.type == "rich_text" && cell.value == .string(wanted ?? "")
-            }
-        }
-        return (Array(rows), nil)
+        let object = try JSONSerialization.jsonObject(with: filter) as? [String: Any]
+        let wanted = (object?["rich_text"] as? [String: Any])?["equals"] as? String
+        return (pages.values.filter { row in
+            row.cells.values.contains { $0.type == "rich_text" && $0.value == .string(wanted ?? "") }
+        }, nil)
     }
-
     func page(pageId: String, workspace: String?) async throws -> NotionRow {
         _ = workspace
         guard let row = pages[pageId] ?? pages[CachedRow.normalize(pageId)] else {
@@ -451,43 +429,26 @@ private actor SyncRegistryGateway: RegistryNotionGateway {
         }
         return row
     }
-
     func create(dataSourceId: String, workspace: String?, fields: [BoundField]) async throws -> NotionRow {
-        _ = dataSourceId; _ = workspace
-        sequence += 1
-        let id = String(format: "%032d", sequence)
-        lastCreatedFields = fields
-        let row = Self.row(id: id, existing: nil, fields: fields)
-        pages[id] = row
-        if failCreateResponseAfterPersist {
-            failCreateResponseAfterPersist = false
-            throw RegistryGatewayError.invalidResponse("simulated malformed create response after remote success")
-        }
-        return row
+        _ = dataSourceId; _ = workspace; _ = fields
+        createCalls += 1
+        throw SyncTestError.forcedRegistrySave
     }
-
     func update(pageId: String, workspace: String?, fields: [BoundField]) async throws -> NotionRow {
         _ = workspace
-        if failUpdate {
-            failUpdate = false
-            throw SyncTestError.forcedRegistrySave
-        }
-        lastUpdatedFields = fields
+        updateCalls += 1
         let row = Self.row(id: pageId, existing: pages[pageId], fields: fields)
         pages[pageId] = row
         return row
     }
-
     func archive(pageId: String, workspace: String?) async throws { pages[pageId] = nil }
     func markdown(pageId: String, workspace: String?) async throws -> String { "" }
     func writeMarkdown(pageId: String, workspace: String?, markdown: String) async throws {}
 
-    private static func row(id: String, existing: NotionRow?, fields: [BoundField]) -> NotionRow {
+    static func row(id: String, existing: NotionRow?, fields: [BoundField]) -> NotionRow {
         var cells = existing?.cells ?? [:]
         for field in fields {
-            cells[field.notionName] = NotionCell(
-                id: field.propertyId, type: field.type, value: field.value
-            )
+            cells[field.notionName] = NotionCell(id: field.propertyId, type: field.type, value: field.value)
         }
         return NotionRow(
             id: id,
@@ -544,738 +505,54 @@ private func scheduleEntityForSyncTests() -> RegistryEntity {
     )
 }
 
-private func testRecord(key: String = "adapter-key") -> TimeInstanceRecord {
-    let request = syncRequest(key: key)
-    return TimeInstanceRecord(
-        title: request.title,
-        scheduledStart: request.start,
-        scheduledEnd: request.end,
-        timeZoneIdentifier: request.timeZoneIdentifier,
-        location: request.location,
-        notes: request.notes,
-        syncKey: request.idempotencyKey,
-        operationFingerprint: request.manifest.fingerprint,
-        semantics: request.semantics,
-        schedulingAuthority: .registry,
-        syncState: .pendingCreate,
-        registryUpdatedAt: Date(timeIntervalSince1970: 1_800_000_000)
-    )
+private func notionRow(for record: TimeInstanceRecord, entity: RegistryEntity) throws -> NotionRow {
+    let gateway = SyncRegistryGateway()
+    _ = gateway
+    let store = NotionTimeInstanceRegistryStore(entity: entity, gateway: SyncRegistryGateway())
+    let mirror = Mirror(reflecting: store)
+    _ = mirror
+    let fields: [String: Value] = [
+        "title": .string(record.title),
+        "date": .object([
+            "start": .string(CalendarRegistryISO.string(record.scheduledStart)),
+            "end": .string(CalendarRegistryISO.string(record.scheduledEnd)),
+            "timeZone": .string(record.timeZoneIdentifier)
+        ]),
+        "status": .string(record.lifecycleStatus),
+        "syncKey": .string(record.syncKey),
+        "operationFingerprint": .string(record.operationFingerprint),
+        "eventClass": .string(record.semantics.eventClass.rawValue),
+        "meetingType": record.semantics.meetingType.map(Value.string) ?? .null,
+        "primaryBlock": .array([.string(record.semantics.primaryBlockId)]),
+        "blocks": .array(record.semantics.blockIds.map(Value.string)),
+        "projects": .array(record.semantics.projectIds.map(Value.string)),
+        "contacts": .array(record.semantics.contactIds.map(Value.string)),
+        "schedulingAuthority": .string(record.schedulingAuthority.rawValue),
+        "syncState": .string(record.syncState.rawValue),
+        "registryUpdatedAt": .string(CalendarRegistryISO.string(record.registryUpdatedAt)),
+        "syncHash": .string(record.syncHash),
+        "scheduledDuration": .double(record.scheduledDurationMinutes),
+        "description": record.notes.map(Value.string) ?? .null,
+        "calendarLocation": record.location.map(Value.string) ?? .null,
+        "calendarProvider": record.calendarProvider.map(Value.string) ?? .null,
+        "calendarId": record.calendarId.map(Value.string) ?? .null,
+        "calendarEventId": record.calendarEventId.map(Value.string) ?? .null,
+        "providerExternalId": record.providerExternalId.map(Value.string) ?? .null,
+        "calendarUrl": record.calendarItemURL.map(Value.string) ?? .null,
+        "lastSyncError": record.lastSyncError.map(Value.string) ?? .null,
+        "lastSyncedAt": record.lastSyncedAt.map { .string(CalendarRegistryISO.string($0)) } ?? .null,
+        "calendarUpdatedAt": record.calendarUpdatedAt.map { .string(CalendarRegistryISO.string($0)) } ?? .null
+    ]
+    let bound = RegistryWriter.resolve(fields, entity: entity).fields
+    return SyncRegistryGateway.row(id: record.id, existing: nil, fields: bound)
 }
 
-func runCalendarRegistrySyncEngineTests() async {
-    print("\n🗓 Calendar–Registry Sync — recovery hardening")
-
-    await test("CR1 SQLite ledger survives independent handles") {
-        try await withTempDirectory { directory in
-            let url = directory.appendingPathComponent("ledger.sqlite3")
-            let first = try SQLiteCalendarRegistryTransactionStore(url: url)
-            let created = try await first.claim(
-                idempotencyKey: "same-key",
-                manifestFingerprint: "fingerprint-a",
-                operationId: "op-1",
-                leaseOwner: "worker-1", leaseToken: "token-1", leaseDuration: 600
-            )
-            var updated = created
-            updated.stage = .calendarCreated
-            updated.calendarEventId = "event-1"
-            _ = try await first.save(updated)
-
-            let second = try SQLiteCalendarRegistryTransactionStore(url: url)
-            let loaded = try await second.get(idempotencyKey: "same-key")
-            try expect(loaded?.stage == .calendarCreated)
-            try expect(loaded?.calendarEventId == "event-1")
-        }
-    }
-
-    await test("CR2 SQLite unique key rejects a different manifest across handles") {
-        try await withTempDirectory { directory in
-            let url = directory.appendingPathComponent("ledger.sqlite3")
-            let first = try SQLiteCalendarRegistryTransactionStore(url: url)
-            let second = try SQLiteCalendarRegistryTransactionStore(url: url)
-            _ = try await first.claim(
-                idempotencyKey: "same-key",
-                manifestFingerprint: "fingerprint-a",
-                operationId: "op-a",
-                leaseOwner: "worker-a", leaseToken: "token-a", leaseDuration: 600
-            )
-            do {
-                _ = try await second.claim(
-                    idempotencyKey: "same-key",
-                    manifestFingerprint: "fingerprint-b",
-                    operationId: "op-b",
-                    leaseOwner: "worker-b", leaseToken: "token-b", leaseDuration: 600
-                )
-                throw TestError.assertion("expected idempotency conflict")
-            } catch CalendarRegistryTransactionStoreError.idempotencyConflict("same-key") {
-                // expected
-            }
-        }
-    }
-
-    await test("CR3 concurrent different-key SQLite writes preserve all rows") {
-        try await withTempDirectory { directory in
-            let url = directory.appendingPathComponent("ledger.sqlite3")
-            let first = try SQLiteCalendarRegistryTransactionStore(url: url)
-            let second = try SQLiteCalendarRegistryTransactionStore(url: url)
-            async let a = first.claim(
-                idempotencyKey: "key-a", manifestFingerprint: "fp-a",
-                operationId: "op-a", leaseOwner: "worker-a", leaseToken: "token-a", leaseDuration: 600
-            )
-            async let b = second.claim(
-                idempotencyKey: "key-b", manifestFingerprint: "fp-b",
-                operationId: "op-b", leaseOwner: "worker-b", leaseToken: "token-b", leaseDuration: 600
-            )
-            _ = try await [a, b]
-            try expect(try await first.get(idempotencyKey: "key-a") != nil)
-            try expect(try await second.get(idempotencyKey: "key-b") != nil)
-        }
-    }
-
-    await test("CR4 ten retries create one pair") {
-        let registry = SyncTestRegistry()
-        let calendar = SyncTestCalendar()
-        let engine = makeSyncEngine(registry: registry, calendar: calendar)
-        for _ in 0..<10 {
-            let receipt = try await engine.registryFirstCreate(syncRequest())
-            try expect(receipt.succeeded)
-        }
-        try expect(await registry.createdCount() == 1)
-        try expect(await calendar.createdCount() == 1)
-    }
-
-    await test("CR5 partial Notion create repairs one page on retry") {
-        let registry = SyncTestRegistry()
-        await registry.setFailNextCreatePatch(true)
-        let calendar = SyncTestCalendar()
-        let transactions = InMemoryCalendarRegistryTransactionStore()
-        let engine = makeSyncEngine(registry: registry, calendar: calendar, transactions: transactions)
-        let first = try await engine.registryFirstCreate(syncRequest())
-        try expect(!first.succeeded)
-        let second = try await engine.registryFirstCreate(syncRequest())
-        try expect(second.succeeded)
-        try expect(await registry.count() == 1)
-        try expect(await registry.createdCount() == 1)
-        try expect(await calendar.createdCount() == 1)
-    }
-
-    await test("CR6 ledger loss reconstructs the same manifest from external fingerprints") {
-        let registry = SyncTestRegistry()
-        let calendar = SyncTestCalendar()
-        let first = makeSyncEngine(registry: registry, calendar: calendar)
-        try expect(try await first.registryFirstCreate(syncRequest()).succeeded)
-        let restarted = makeSyncEngine(
-            registry: registry,
-            calendar: calendar,
-            transactions: InMemoryCalendarRegistryTransactionStore()
-        )
-        let receipt = try await restarted.registryFirstCreate(syncRequest())
-        try expect(receipt.succeeded)
-        try expect(await registry.createdCount() == 1)
-        try expect(await calendar.createdCount() == 1)
-    }
-
-    await test("CR7 ledger loss plus different manifest conflicts") {
-        let registry = SyncTestRegistry()
-        let calendar = SyncTestCalendar()
-        try expect(try await makeSyncEngine(registry: registry, calendar: calendar)
-            .registryFirstCreate(syncRequest()).succeeded)
-        let restarted = makeSyncEngine(
-            registry: registry,
-            calendar: calendar,
-            transactions: InMemoryCalendarRegistryTransactionStore()
-        )
-        let receipt = try await restarted.registryFirstCreate(syncRequest(title: "Different"))
-        try expect(!receipt.succeeded)
-        try expect(receipt.stageAfter == .conflict)
-        try expect(await registry.createdCount() == 1)
-        try expect(await calendar.createdCount() == 1)
-    }
-
-    await test("CR8 calendar drift conflicts without overwriting registry schedule") {
-        let registry = SyncTestRegistry()
-        let calendar = SyncTestCalendar()
-        let engine = makeSyncEngine(registry: registry, calendar: calendar)
-        let first = try await engine.registryFirstCreate(syncRequest())
-        guard let id = first.calendarItem?.localEventId else {
-            throw TestError.assertion("calendar item missing")
-        }
-        let driftedStart = syncRequest().start.addingTimeInterval(7_200)
-        let driftedEnd = syncRequest().end.addingTimeInterval(7_200)
-        await calendar.mutateStart(id: id, start: driftedStart, end: driftedEnd)
-        let receipt = try await engine.registryFirstCreate(syncRequest())
-        try expect(!receipt.succeeded)
-        try expect(receipt.stageAfter == .conflict)
-        let record = await registry.record(for: syncRequest().idempotencyKey)
-        try expect(record?.scheduledStart == syncRequest().start)
-        try expect(record?.scheduledEnd == syncRequest().end)
-    }
-
-    await test("CR9 non-local timezone survives full transaction") {
-        let request = syncRequest(timeZone: "Pacific/Honolulu")
-        let receipt = try await makeSyncEngine().registryFirstCreate(request)
-        try expect(receipt.succeeded)
-        try expect(receipt.record?.timeZoneIdentifier == "Pacific/Honolulu")
-        try expect(receipt.calendarItem?.timeZoneIdentifier == "Pacific/Honolulu")
-    }
-
-    await test("CR10 invalid timezone and injected keys are rejected before writes") {
-        let registry = SyncTestRegistry()
-        let calendar = SyncTestCalendar()
-        let engine = makeSyncEngine(registry: registry, calendar: calendar)
-        do {
-            _ = try await engine.registryFirstCreate(syncRequest(timeZone: "Mars/Olympus"))
-            throw TestError.assertion("invalid timezone should fail")
-        } catch CalendarRegistrySyncError.invalidTimeZone("Mars/Olympus") {}
-        do {
-            _ = try await engine.registryFirstCreate(syncRequest(key: "bad\nkey"))
-            throw TestError.assertion("invalid key should fail")
-        } catch CalendarRegistrySyncError.invalidIdempotencyKey {}
-        try expect(await registry.count() == 0)
-        try expect(await calendar.count() == 0)
-    }
-
-    await test("CR11 recurring, all-day, and detached items fail closed") {
-        for shape in [(true, false, false), (false, true, false), (false, false, true)] {
-            let registry = SyncTestRegistry()
-            let calendar = SyncTestCalendar()
-            await calendar.setNextShape(recurring: shape.0, allDay: shape.1, detached: shape.2)
-            let receipt = try await makeSyncEngine(registry: registry, calendar: calendar)
-                .registryFirstCreate(syncRequest(key: "shape-\(shape.0)-\(shape.1)-\(shape.2)"))
-            try expect(!receipt.succeeded)
-            try expect(receipt.stageAfter == .conflict)
-        }
-    }
-
-    await test("CR12 unqualified calendar refuses all writes") {
-        let registry = SyncTestRegistry()
-        let calendar = SyncTestCalendar()
-        await calendar.setQualified(false)
-        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar)
-            .registryFirstCreate(syncRequest())
-        try expect(!receipt.succeeded)
-        try expect(await registry.count() == 0)
-        try expect(await calendar.count() == 0)
-    }
-
-    await test("CR13 unpersisted ledger failure is an infrastructure fault") {
-        let registry = SyncTestRegistry()
-        let calendar = SyncTestCalendar()
-        let receipt = try await makeSyncEngine(
-            registry: registry,
-            calendar: calendar,
-            transactions: AlwaysFailingTransactionStore()
-        ).registryFirstCreate(syncRequest())
-        try expect(!receipt.succeeded)
-        try expect(receipt.infrastructureFault)
-        try expect(!receipt.recoveryStatePersisted)
-        try expect(receipt.recoveryAction?.contains("do not retry automatically") == true)
-    }
-
-    await test("CR14 registry failure-state write is reported separately") {
-        let registry = SyncTestRegistry()
-        await registry.setFailAllSaves(true)
-        let receipt = try await makeSyncEngine(registry: registry)
-            .registryFirstCreate(syncRequest())
-        try expect(!receipt.succeeded)
-        try expect(receipt.recoveryStatePersisted)
-        try expect(!receipt.registryFailureStatePersisted)
-        try expect(receipt.discrepancy?.contains("registry failure-state write failed") == true)
-    }
-
-    await test("CR15 versioned metadata rejects duplicates and round-trips identity") {
-        let identity = CalendarRegistryCalendarMetadata.Identity(
-            syncKey: "safe-key",
-            operationFingerprint: String(repeating: "a", count: 64)
-        )
-        let notes = try CalendarRegistryCalendarMetadata.append(to: "hello", identity: identity)
-        try expect(try CalendarRegistryCalendarMetadata.parse(notes) == identity)
-        do {
-            _ = try CalendarRegistryCalendarMetadata.parse(notes + "\n" + notes)
-            throw TestError.assertion("duplicate metadata should conflict")
-        } catch CalendarRegistrySyncError.identityConflict {}
-    }
-
-    await test("CR16 live registry gateway advertises authoritative filtering") {
-        try expect(LiveRegistryGateway().supportsAuthoritativeFiltering)
-    }
-
-    await test("CR17 strict query decoder rejects malformed or broken pagination") {
-        do {
-            _ = try RegistryQueryResponseDecoder.decode(Data("{}".utf8))
-            throw TestError.assertion("missing results should fail")
-        } catch RegistryGatewayError.invalidResponse {}
-        do {
-            let data = try JSONSerialization.data(withJSONObject: [
-                "results": [], "has_more": true, "next_cursor": NSNull()
-            ])
-            _ = try RegistryQueryResponseDecoder.decode(data)
-            throw TestError.assertion("missing cursor should fail")
-        } catch RegistryGatewayError.invalidResponse {}
-        let valid = try JSONSerialization.data(withJSONObject: [
-            "results": [], "has_more": false, "next_cursor": NSNull()
-        ])
-        let decoded = try RegistryQueryResponseDecoder.decode(valid)
-        try expect(decoded.rows.isEmpty && decoded.nextCursor == nil)
-    }
-
-    await test("CR18 Notion identity envelope contains four critical fields") {
-        let gateway = SyncRegistryGateway()
-        let store = NotionTimeInstanceRegistryStore(
-            entity: scheduleEntityForSyncTests(), gateway: gateway
-        )
-        _ = try await store.create(testRecord())
-        let names = Set(await gateway.createdFields().map(\.notionName))
-        try expect(names == Set(["EVENT TITLE", "Sync Key", "Operation Fingerprint", "Sync State"]))
-    }
-
-    await test("CR19 real Notion adapter partial create can be found and repaired") {
-        let gateway = SyncRegistryGateway()
-        await gateway.setFailUpdate(true)
-        let store = NotionTimeInstanceRegistryStore(
-            entity: scheduleEntityForSyncTests(), gateway: gateway
-        )
-        let record = testRecord(key: "partial-key")
-        do {
-            _ = try await store.create(record)
-            throw TestError.assertion("expected partial create")
-        } catch let partial as PartialRegistryCreateError {
-            let lookup = try await store.findBySyncKey("partial-key")
-            try expect(lookup.records.isEmpty)
-            try expect(lookup.unresolvedIdentities.map(\.pageId) == [partial.pageId])
-            try expect(lookup.unresolvedIdentities.first?.operationFingerprint == record.operationFingerprint)
-            let repaired = try await store.repair(id: partial.pageId, from: record)
-            try expect(repaired.syncKey == "partial-key")
-            try expect(await gateway.pageCount() == 1)
-        }
-    }
-
-    await test("CR20 migration artifact decodes against registry roles") {
-        let root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let url = root.appendingPathComponent("docs/migrations/calendar-registry-v1/registry-entity-patch.json")
-        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
-        try expect(object?["schemaVersion"] as? Int == 2)
-        let additions = object?["additiveProperties"] as? [[String: Any]] ?? []
-        try expect(Set(additions.compactMap { $0["key"] as? String }) == Set(["providerExternalId", "operationFingerprint"]))
-        for addition in additions {
-            guard let role = addition["role"] as? String,
-                  RegistryPropertyRole(rawValue: role) != nil else {
-                throw TestError.assertion("migration role does not decode")
-            }
-        }
-    }
-
-    await test("CR21 composition remains disabled and requires an allowlist") {
-        let entity = scheduleEntityForSyncTests()
-        let gateway = SyncRegistryGateway()
-        do {
-            _ = try CalendarRegistrySyncComposition.build(
-                entity: entity,
-                registryGateway: gateway,
-                calendarStore: PersistentCalendarStore(),
-                environment: [:]
-            )
-            throw TestError.assertion("composition should be disabled")
-        } catch CalendarRegistrySyncCompositionError.disabled {}
-        do {
-            _ = try CalendarRegistrySyncComposition.build(
-                entity: entity,
-                registryGateway: gateway,
-                calendarStore: PersistentCalendarStore(),
-                environment: [CalendarRegistrySyncComposition.enableEnvironmentKey: "1"]
-            )
-            throw TestError.assertion("allowlist should be required")
-        } catch CalendarRegistrySyncCompositionError.missingAllowedCalendars {}
-    }
-
-
-    await test("CR22 same-key independent engines permit one external writer") {
-        try await withTempDirectory { directory in
-            let url = directory.appendingPathComponent("race.sqlite3")
-            let firstStore = try SQLiteCalendarRegistryTransactionStore(url: url)
-            let secondStore = try SQLiteCalendarRegistryTransactionStore(url: url)
-            let baseRegistry = SyncTestRegistry()
-            let entered = AsyncTestLatch()
-            let release = AsyncTestLatch()
-            let registry = PausingRegistry(base: baseRegistry, entered: entered, release: release)
-            let calendar = SyncTestCalendar()
-            let firstEngine = makeSyncEngine(registry: registry, calendar: calendar, transactions: firstStore)
-            let secondEngine = makeSyncEngine(registry: registry, calendar: calendar, transactions: secondStore)
-
-            let first = Task { try await firstEngine.registryFirstCreate(syncRequest(key: "race-key")) }
-            await entered.wait()
-            let second = Task { try await secondEngine.registryFirstCreate(syncRequest(key: "race-key")) }
-            try await Task.sleep(nanoseconds: 50_000_000)
-            await release.open()
-            let receipts = try await [first.value, second.value]
-            try expect(receipts.filter(\.succeeded).count == 1)
-            try expect(receipts.contains { $0.discrepancy?.contains("already active") == true })
-            try expect(await baseRegistry.createdCount() == 1)
-            try expect(await calendar.createdCount() == 1)
-        }
-    }
-
-    await test("CR23 stale revisions, fencing tokens, stage regression, and identity clearing are refused") {
-        try await withTempDirectory { directory in
-            let store = try SQLiteCalendarRegistryTransactionStore(url: directory.appendingPathComponent("cas.sqlite3"))
-            let claimed = try await store.claim(
-                idempotencyKey: "cas-key", manifestFingerprint: "fingerprint",
-                operationId: "op", leaseOwner: "worker", leaseToken: "fence-a", leaseDuration: 600
-            )
-            var progressed = claimed
-            progressed.stage = .calendarCreated
-            progressed.calendarEventId = "event-1"
-            let saved = try await store.save(progressed)
-
-            var stale = claimed
-            stale.stage = .registryCreated
-            do { _ = try await store.save(stale); throw TestError.assertion("stale revision should fail") }
-            catch CalendarRegistryTransactionStoreError.staleRevision("cas-key") {}
-
-            var wrongFence = saved
-            wrongFence.leaseToken = "fence-b"
-            do { _ = try await store.save(wrongFence); throw TestError.assertion("wrong fence should fail") }
-            catch CalendarRegistryTransactionStoreError.leaseLost("cas-key") {}
-
-            var regressed = saved
-            regressed.stage = .registryCreated
-            do { _ = try await store.save(regressed); throw TestError.assertion("stage regression should fail") }
-            catch CalendarRegistryTransactionStoreError.stageRegression {}
-
-            var cleared = saved
-            cleared.stage = .pairPersisted
-            cleared.calendarEventId = nil
-            do { _ = try await store.save(cleared); throw TestError.assertion("identity clearing should fail") }
-            catch CalendarRegistryTransactionStoreError.identityRegression {}
-        }
-    }
-
-    await test("CR24 expired lease can be fenced and resumed once") {
-        try await withTempDirectory { directory in
-            let url = directory.appendingPathComponent("expiry.sqlite3")
-            let first = try SQLiteCalendarRegistryTransactionStore(url: url)
-            let second = try SQLiteCalendarRegistryTransactionStore(url: url)
-            let original = try await first.claim(
-                idempotencyKey: "expiry-key", manifestFingerprint: "fingerprint",
-                operationId: "op-a", leaseOwner: "worker-a", leaseToken: "token-a", leaseDuration: 0.1
-            )
-            try await Task.sleep(nanoseconds: 1_100_000_000)
-            let resumed = try await second.claim(
-                idempotencyKey: "expiry-key", manifestFingerprint: "fingerprint",
-                operationId: "op-b", leaseOwner: "worker-b", leaseToken: "token-b", leaseDuration: 600
-            )
-            try expect(resumed.leaseToken == "token-b")
-            try expect(resumed.revision > original.revision)
-            do { _ = try await first.save(original); throw TestError.assertion("expired worker should be fenced") }
-            catch CalendarRegistryTransactionStoreError.staleRevision("expiry-key") {}
-        }
-    }
-
-    await test("CR25 canonical manifest normalizes relations, primary block, and empty optionals") {
-        let requestA = RegistryFirstTimeInstanceRequest(
-            idempotencyKey: "canonical-key", title: "  LIFT  ",
-            start: syncRequest().start, end: syncRequest().end,
-            timeZoneIdentifier: " America/Chicago ", calendarId: " cal-private ",
-            location: "   ", notes: " note ",
-            semantics: TimeInstanceSemantics(
-                eventClass: .focus, meetingType: " ", primaryBlockId: " block-primary ",
-                blockIds: ["block-b", "block-primary", "block-b"],
-                projectIds: ["project-b", "project-a", "project-b"],
-                contactIds: ["contact-b", "contact-a"]
-            )
-        ).canonicalized
-        let requestB = RegistryFirstTimeInstanceRequest(
-            idempotencyKey: "canonical-key", title: "LIFT",
-            start: syncRequest().start, end: syncRequest().end,
-            timeZoneIdentifier: "America/Chicago", calendarId: "cal-private",
-            location: nil, notes: "note",
-            semantics: TimeInstanceSemantics(
-                eventClass: .focus, primaryBlockId: "block-primary",
-                blockIds: ["block-primary", "block-b"],
-                projectIds: ["project-a", "project-b"],
-                contactIds: ["contact-a", "contact-b"]
-            )
-        ).canonicalized
-        try expect(requestA == requestB)
-        try expect(requestA.manifest.fingerprint == requestB.manifest.fingerprint)
-        try expect(requestA.semantics.blockIds == ["block-b", "block-primary"])
-        try expect(requestA.location == nil && requestA.semantics.meetingType == nil)
-    }
-
-    await test("CR26 final success verifies Sync Hash and Last Synced At") {
-        let receipt = try await makeSyncEngine().registryFirstCreate(syncRequest(key: "evidence-key"))
-        try expect(receipt.succeeded)
-        try expect(receipt.verifiedSyncHash?.count == 64)
-        try expect(receipt.record?.syncHash == receipt.verifiedSyncHash)
-        try expect(receipt.record?.lastSyncedAt == receipt.verifiedAt)
-        try expect(receipt.fencingToken?.isEmpty == false)
-        try expect((receipt.ledgerRevision ?? 0) > 1)
-    }
-
-    await test("CR27 a dropped final Sync Hash prevents success") {
-        let registry = SyncTestRegistry()
-        await registry.setDropFinalSyncHash(true)
-        let receipt = try await makeSyncEngine(registry: registry)
-            .registryFirstCreate(syncRequest(key: "dropped-hash"))
-        try expect(!receipt.succeeded)
-        try expect(receipt.discrepancy?.contains("Synced evidence") == true)
-    }
-
-    await test("CR28 ledger-known matching partial page repairs; mismatched, malformed, and missing pages do not") {
-        for mode in ["matching", "mismatch", "malformed", "missing"] {
-            let request = syncRequest(key: "known-\(mode)")
-            let registry = SyncTestRegistry()
-            let calendar = SyncTestCalendar()
-            let store = InMemoryCalendarRegistryTransactionStore()
-            let id = "known-page-\(mode)"
-            switch mode {
-            case "matching":
-                await registry.setIdentityOverride(id: id, value: .partial(
-                    pageId: id, syncKey: request.idempotencyKey,
-                    operationFingerprint: request.manifest.fingerprint
-                ))
-            case "mismatch":
-                await registry.setIdentityOverride(id: id, value: .partial(
-                    pageId: id, syncKey: request.idempotencyKey,
-                    operationFingerprint: String(repeating: "b", count: 64)
-                ))
-            case "malformed":
-                await registry.setIdentityOverride(id: id, value: .malformed(pageId: id, reason: "broken relation"))
-            default:
-                await registry.setIdentityOverride(id: id, value: .missing)
-            }
-            try await seedTransaction(store, request: request, registryEventId: id)
-            let receipt = try await makeSyncEngine(registry: registry, calendar: calendar, transactions: store)
-                .registryFirstCreate(request)
-            if mode == "matching" {
-                try expect(receipt.succeeded)
-                try expect(await registry.createdCount() == 0)
-                try expect(await calendar.createdCount() == 1)
-            } else {
-                try expect(!receipt.succeeded)
-                try expect(receipt.stageAfter == .conflict)
-                try expect(await registry.createdCount() == 0)
-                try expect(await calendar.createdCount() == 0)
-            }
-        }
-    }
-
-    await test("CR29 remotely successful Notion create with invalid response recovers without duplication") {
-        let gateway = SyncRegistryGateway()
-        await gateway.setFailCreateResponseAfterPersist(true)
-        let registry = NotionTimeInstanceRegistryStore(entity: scheduleEntityForSyncTests(), gateway: gateway)
-        let calendar = SyncTestCalendar()
-        let transactions = InMemoryCalendarRegistryTransactionStore()
-        let engine = makeSyncEngine(registry: registry, calendar: calendar, transactions: transactions)
-        let request = syncRequest(key: "uncertain-create")
-        let first = try await engine.registryFirstCreate(request)
-        try expect(!first.succeeded)
-        let second = try await engine.registryFirstCreate(request)
-        try expect(second.succeeded)
-        try expect(await gateway.pageCount() == 1)
-        try expect(await calendar.createdCount() == 1)
-    }
-
-    await test("CR30 strict row decoders reject malformed synchronization responses") {
-        for data in [Data("{}".utf8), Data("{\"id\":\"page\"}".utf8)] {
-            do {
-                _ = try RegistryRowResponseDecoder.decode(data, context: "test")
-                throw TestError.assertion("malformed row should fail")
-            } catch RegistryGatewayError.invalidResponse {}
-        }
-        let malformedResult = try JSONSerialization.data(withJSONObject: [
-            "results": [["id": "page-without-properties"]], "has_more": false
-        ])
-        do {
-            _ = try RegistryQueryResponseDecoder.decode(malformedResult)
-            throw TestError.assertion("malformed query row should fail")
-        } catch RegistryGatewayError.invalidResponse {}
-    }
-
-    await test("CR31 identity-bearing unsupported calendar shapes conflict instead of duplicating") {
-        for shape in ["recurring", "all-day", "detached", "participant"] {
-            let request = syncRequest(key: "shape-existing-\(shape)")
-            let store = PersistentCalendarStore()
-            let identity = CalendarRegistryCalendarMetadata.Identity(
-                syncKey: request.idempotencyKey,
-                operationFingerprint: request.manifest.fingerprint
-            )
-            let notes = try CalendarRegistryCalendarMetadata.append(to: request.notes, identity: identity)
-            await store.seed(CalendarEvent(
-                id: "existing-\(shape)", title: request.title,
-                start: CalendarRegistryISO.string(request.start), end: CalendarRegistryISO.string(request.end),
-                allDay: shape == "all-day", calendarId: request.calendarId,
-                calendarTitle: "Private Smoke", location: request.location, notes: notes,
-                timeZoneIdentifier: request.timeZoneIdentifier, externalId: "external-\(shape)",
-                organizer: shape == "participant" ? "owner@example.com" : nil,
-                attendees: shape == "participant" ? ["person@example.com"] : [],
-                lastModified: CalendarRegistryISO.string(Date()),
-                isRecurring: shape == "recurring", isDetached: shape == "detached"
-            ))
-            let provider = CalendarStoringSyncProvider(store: store, allowlistedCalendarIds: [request.calendarId])
-            let receipt = try await makeSyncEngine(registry: SyncTestRegistry(), calendar: provider)
-                .registryFirstCreate(request)
-            try expect(!receipt.succeeded)
-            try expect(receipt.stageAfter == .conflict)
-            try expect(await store.count() == 1)
-        }
-    }
-
-    await test("CR32 unrelated malformed calendar metadata does not poison target recovery") {
-        let request = syncRequest(key: "target-metadata")
-        let store = PersistentCalendarStore()
-        await store.seed(CalendarEvent(
-            id: "unrelated", title: "Other", start: CalendarRegistryISO.string(request.start),
-            end: CalendarRegistryISO.string(request.end), allDay: false,
-            calendarId: request.calendarId, calendarTitle: "Private Smoke", location: nil,
-            notes: CalendarRegistryCalendarMetadata.beginMarker + "\ninvalid",
-            timeZoneIdentifier: request.timeZoneIdentifier
-        ))
-        let identity = CalendarRegistryCalendarMetadata.Identity(
-            syncKey: request.idempotencyKey, operationFingerprint: request.manifest.fingerprint
-        )
-        await store.seed(CalendarEvent(
-            id: "target", title: request.title, start: CalendarRegistryISO.string(request.start),
-            end: CalendarRegistryISO.string(request.end), allDay: false,
-            calendarId: request.calendarId, calendarTitle: "Private Smoke", location: request.location,
-            notes: try CalendarRegistryCalendarMetadata.append(to: request.notes, identity: identity),
-            timeZoneIdentifier: request.timeZoneIdentifier, externalId: "target-external"
-        ))
-        let provider = CalendarStoringSyncProvider(store: store, allowlistedCalendarIds: [request.calendarId])
-        let recovered = try await provider.recover(CalendarRecoveryQuery(
-            syncKey: request.idempotencyKey, operationFingerprint: request.manifest.fingerprint,
-            calendarId: request.calendarId, title: request.title, start: request.start, end: request.end
-        ))
-        try expect(recovered.map(\.localEventId) == ["target"])
-    }
-
-    await test("CR33 invalid partial-effect JSON is ledger corruption") {
-        try await withTempDirectory { directory in
-            let url = directory.appendingPathComponent("corrupt.sqlite3")
-            let store = try SQLiteCalendarRegistryTransactionStore(url: url)
-            _ = try await store.claim(
-                idempotencyKey: "corrupt-key", manifestFingerprint: "fingerprint",
-                operationId: "op", leaseOwner: "worker", leaseToken: "token", leaseDuration: 600
-            )
-            var db: OpaquePointer?
-            try expect(sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK)
-            defer { if let db { sqlite3_close_v2(db) } }
-            try expect(sqlite3_exec(db, "UPDATE calendar_registry_transactions SET partial_effects_json='not-json' WHERE idempotency_key='corrupt-key';", nil, nil, nil) == SQLITE_OK)
-            do {
-                _ = try await store.get(idempotencyKey: "corrupt-key")
-                throw TestError.assertion("corrupt effects should fail")
-            } catch CalendarRegistryTransactionStoreError.corruptLedger {}
-        }
-    }
-
-    await test("CR34 cancelled gate waiter never acquires later") {
-        let gate = CalendarRegistryOperationGate()
-        try await gate.acquire("cancel-key")
-        let waiter = Task { try await gate.acquire("cancel-key") }
-        try await Task.sleep(nanoseconds: 20_000_000)
-        waiter.cancel()
-        await gate.release("cancel-key")
-        do { try await waiter.value; throw TestError.assertion("cancelled waiter should fail") }
-        catch is CancellationError {}
-        try await gate.acquire("cancel-key")
-        await gate.release("cancel-key")
-    }
-
-    await test("CR35 cancellation before Notion create produces no external write") {
-        let base = SyncTestRegistry()
-        let entered = AsyncTestLatch()
-        let release = AsyncTestLatch()
-        let registry = PausingRegistry(base: base, entered: entered, release: release)
-        let calendar = SyncTestCalendar()
-        let engine = makeSyncEngine(registry: registry, calendar: calendar)
-        let task = Task { try await engine.registryFirstCreate(syncRequest(key: "cancel-before-create")) }
-        await entered.wait()
-        task.cancel()
-        await release.open()
-        let receipt = try await task.value
-        try expect(!receipt.succeeded)
-        try expect(await base.createdCount() == 0)
-        try expect(await calendar.createdCount() == 0)
-    }
-
-    await test("CR36 cancellation after calendar side effect persists recovery evidence") {
-        let registry = SyncTestRegistry()
-        let calendar = PostEffectCancellingCalendar()
-        let engine = makeSyncEngine(registry: registry, calendar: calendar)
-        let task = Task { try await engine.registryFirstCreate(syncRequest(key: "cancel-after-calendar")) }
-        await calendar.created.wait()
-        task.cancel()
-        let receipt = try await task.value
-        try expect(!receipt.succeeded)
-        try expect(receipt.recoveryStatePersisted)
-        try expect(await calendar.count() == 1)
-    }
-
-
-    await test("CR37 cancellation before EventKit create produces no calendar write") {
-        let registry = SyncTestRegistry()
-        let calendar = PausingCalendarBeforeCreate()
-        let engine = makeSyncEngine(registry: registry, calendar: calendar)
-        let task = Task { try await engine.registryFirstCreate(syncRequest(key: "cancel-before-calendar")) }
-        await calendar.entered.wait()
-        task.cancel()
-        await calendar.release.open()
-        let receipt = try await task.value
-        try expect(!receipt.succeeded)
-        try expect(receipt.recoveryStatePersisted)
-        try expect(await registry.createdCount() == 1)
-        try expect(await calendar.createdCount() == 0)
-    }
-
-    await test("CR38 target-related malformed calendar metadata conflicts") {
-        let request = syncRequest(key: "target-malformed")
-        let store = PersistentCalendarStore()
-        await store.seed(CalendarEvent(
-            id: "target-malformed-event", title: request.title,
-            start: CalendarRegistryISO.string(request.start), end: CalendarRegistryISO.string(request.end),
-            allDay: false, calendarId: request.calendarId, calendarTitle: "Private Smoke",
-            location: request.location,
-            notes: CalendarRegistryCalendarMetadata.beginMarker + "\nSync-Key: \(request.idempotencyKey)",
-            timeZoneIdentifier: request.timeZoneIdentifier
-        ))
-        let provider = CalendarStoringSyncProvider(store: store, allowlistedCalendarIds: [request.calendarId])
-        do {
-            _ = try await provider.recover(CalendarRecoveryQuery(
-                syncKey: request.idempotencyKey, operationFingerprint: request.manifest.fingerprint,
-                calendarId: request.calendarId, title: request.title, start: request.start, end: request.end
-            ))
-            throw TestError.assertion("target-related malformed metadata should conflict")
-        } catch CalendarRegistrySyncError.identityConflict {}
-    }
-
-    await test("CR39 unknown future ledger schema is refused without downgrade") {
-        try await withTempDirectory { directory in
-            let url = directory.appendingPathComponent("future.sqlite3")
-            var db: OpaquePointer?
-            try expect(sqlite3_open_v2(url.path, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE, nil) == SQLITE_OK)
-            try expect(sqlite3_exec(db, "CREATE TABLE calendar_registry_schema (id INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO calendar_registry_schema(id,version) VALUES(1,99);", nil, nil, nil) == SQLITE_OK)
-            if let db { sqlite3_close_v2(db) }
-            do {
-                _ = try SQLiteCalendarRegistryTransactionStore(url: url)
-                throw TestError.assertion("future schema should be refused")
-            } catch CalendarRegistryTransactionStoreError.corruptLedger(let reason) {
-                try expect(reason.contains("unsupported schema version 99"))
-            }
-        }
-    }
-
-    await test("CR40 route ownership remains explicit") {
-        try expect(CalendarRegistryRouteClassifier.owner(for: .semanticScheduling) == .timeKeepr)
-        try expect(CalendarRegistryRouteClassifier.owner(for: .calendarMechanics) == .macKeepr)
-        try expect(CalendarRegistryRouteClassifier.owner(for: .schemaChange) == .notionKeepr)
-    }
-}
+// MARK: - Calendar store fixture
 
 private actor PersistentCalendarStore: CalendarStoring {
     private var eventsById: [String: CalendarEvent] = [:]
-
     func seed(_ event: CalendarEvent) { eventsById[event.id] = event }
     func count() -> Int { eventsById.count }
-
     nonisolated func authorizationStatus() -> CalendarAuthStatus { .authorized }
     func ensureAccess() async throws {}
     func calendars() async throws -> [CalendarInfo] {
@@ -1308,7 +585,7 @@ private actor PersistentCalendarStore: CalendarStoring {
             notes: draft.notes,
             timeZoneIdentifier: draft.timeZoneIdentifier,
             externalId: "external-\(id)",
-            lastModified: "2027-01-15T08:00:00Z"
+            lastModified: nil
         )
         eventsById[id] = event
         return event
@@ -1323,4 +600,851 @@ private actor PersistentCalendarStore: CalendarStoring {
         return event
     }
     func delete(id: String) async throws { eventsById[id] = nil }
+}
+
+// MARK: - Tests
+
+func runCalendarRegistrySyncEngineTests() async {
+    await test("CR1 SQLite ledger survives independent handles") {
+        try await withTempDirectory { directory in
+            let url = directory.appendingPathComponent("ledger.sqlite3")
+            let first = try SQLiteCalendarRegistryTransactionStore(url: url)
+            let tx = try await claim(first, key: "same-key", exclusive: true)
+            _ = try await first.release(tx)
+            let second = try SQLiteCalendarRegistryTransactionStore(url: url)
+            try expect(try await second.get(idempotencyKey: "same-key") != nil)
+        }
+    }
+
+    await test("CR2 SQLite key rejects a different manifest") {
+        try await withTempDirectory { directory in
+            let store = try SQLiteCalendarRegistryTransactionStore(url: directory.appendingPathComponent("ledger.sqlite3"))
+            let tx = try await claim(store, key: "same-key", fingerprint: "a", exclusive: true)
+            _ = try await store.release(tx)
+            do {
+                _ = try await claim(store, key: "same-key", fingerprint: "b", exclusive: true)
+                throw TestError.assertion("different manifest should conflict")
+            } catch CalendarRegistryTransactionStoreError.idempotencyConflict("same-key") {}
+        }
+    }
+
+    await test("CR3 SQLite preserves concurrent different-key rows") {
+        try await withTempDirectory { directory in
+            let url = directory.appendingPathComponent("ledger.sqlite3")
+            let first = try SQLiteCalendarRegistryTransactionStore(url: url)
+            let second = try SQLiteCalendarRegistryTransactionStore(url: url)
+            async let a = claim(first, key: "a", operation: "a", token: "a", exclusive: true)
+            async let b = claim(second, key: "b", operation: "b", token: "b", exclusive: true)
+            _ = try await (a, b)
+            try expect(try await first.get(idempotencyKey: "a") != nil)
+            try expect(try await second.get(idempotencyKey: "b") != nil)
+        }
+    }
+
+    await test("CR4 process lock path is deterministic and key-safe") {
+        try await withTempDirectory { directory in
+            let locks = try FileCalendarRegistryProcessLockCoordinator(rootURL: directory)
+            let a = locks.lockURL(idempotencyKey: "a/b")
+            let b = locks.lockURL(idempotencyKey: "a:b")
+            try expect(a != b)
+            try expect(a.lastPathComponent.count == 69)
+            try expect(!a.lastPathComponent.contains("/"))
+        }
+    }
+
+    await test("CR5 in-memory process lock refuses a second owner") {
+        let locks = InMemoryCalendarRegistryProcessLockCoordinator()
+        let first = try locks.acquire(idempotencyKey: "key")
+        do {
+            _ = try locks.acquire(idempotencyKey: "key")
+            throw TestError.assertion("second owner should fail")
+        } catch CalendarRegistryProcessLockError.operationActive("key") {}
+        try first.release()
+        let second = try locks.acquire(idempotencyKey: "key")
+        try second.release()
+    }
+
+    await test("CR6 file process lock refuses a second owner") {
+        try await withTempDirectory { directory in
+            let locks = try FileCalendarRegistryProcessLockCoordinator(rootURL: directory)
+            let first = try locks.acquire(idempotencyKey: "key")
+            do {
+                _ = try locks.acquire(idempotencyKey: "key")
+                throw TestError.assertion("second file owner should fail")
+            } catch CalendarRegistryProcessLockError.operationActive("key") {}
+            try first.release()
+        }
+    }
+
+    await test("CR7 missing supplied EVENT fails before calendar write") {
+        let request = syncRequest(key: "missing")
+        let registry = SyncTestRegistry()
+        let calendar = SyncTestCalendar()
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+        try expect(!receipt.succeeded && receipt.stageAfter == .conflict)
+        try expect(await calendar.attempts() == 0)
+    }
+
+    await test("CR8 partial supplied EVENT fails without repair") {
+        let request = syncRequest(key: "partial")
+        let registry = SyncTestRegistry()
+        await registry.setIdentityOverride(id: request.registryEventId, value: .partial(
+            pageId: request.registryEventId,
+            syncKey: request.idempotencyKey,
+            operationFingerprint: request.manifest.fingerprint
+        ))
+        let calendar = SyncTestCalendar()
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+        try expect(!receipt.succeeded && receipt.stageAfter == .conflict)
+        try expect(await calendar.attempts() == 0)
+    }
+
+    await test("CR9 malformed supplied EVENT fails without repair") {
+        let request = syncRequest(key: "malformed")
+        let registry = SyncTestRegistry()
+        await registry.setIdentityOverride(id: request.registryEventId, value: .malformed(
+            pageId: request.registryEventId, reason: "broken relation"
+        ))
+        let receipt = try await makeSyncEngine(registry: registry).registryFirstCreate(request)
+        try expect(!receipt.succeeded && receipt.stageAfter == .conflict)
+    }
+
+    await test("CR10 duplicate Sync Key query fails before calendar write") {
+        let request = syncRequest(key: "duplicate")
+        let registry = await seededRegistry(request)
+        var duplicate = canonicalRecord(request)
+        duplicate.id = "other-page"
+        await registry.setLookupExtras([duplicate])
+        let calendar = SyncTestCalendar()
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+        try expect(!receipt.succeeded && receipt.stageAfter == .conflict)
+        try expect(await calendar.attempts() == 0)
+    }
+
+    await test("CR11 supplied page must equal the unique Sync Key result") {
+        let request = syncRequest(key: "wrong-page")
+        let registry = SyncTestRegistry()
+        var other = canonicalRecord(request)
+        other.id = "different-page"
+        await registry.put(other)
+        await registry.setIdentityOverride(id: request.registryEventId, value: .decoded(canonicalRecord(request)))
+        let receipt = try await makeSyncEngine(registry: registry).registryFirstCreate(request)
+        try expect(!receipt.succeeded && receipt.stageAfter == .conflict)
+    }
+
+    await test("CR12 degraded registry lookup refuses calendar creation") {
+        let request = syncRequest(key: "stale")
+        let registry = await seededRegistry(request)
+        await registry.setLookupSource(.staleCache)
+        let calendar = SyncTestCalendar()
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+        try expect(!receipt.succeeded)
+        try expect(await calendar.attempts() == 0)
+    }
+
+    await test("CR13 canonical pre-existing EVENT pairs successfully") {
+        let request = syncRequest(key: "happy")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+        try expect(receipt.succeeded)
+        try expect(await calendar.persistedCount() == 1)
+        try expect(receipt.record?.id == request.registryEventId)
+    }
+
+    await test("CR14 smoke path performs no Notion create") {
+        let request = syncRequest(key: "no-notion-create", registryEventId: "00000000000000000000000000000014")
+        let entity = scheduleEntityForSyncTests()
+        let gateway = SyncRegistryGateway()
+        await gateway.seed(try notionRow(for: canonicalRecord(request), entity: entity))
+        let store = NotionTimeInstanceRegistryStore(entity: entity, gateway: gateway)
+        let receipt = try await makeSyncEngine(registry: store).registryFirstCreate(request)
+        try expect(receipt.succeeded)
+        try expect(await gateway.createCount() == 0)
+        try expect(await gateway.updateCount() >= 2)
+    }
+
+    await test("CR15 ten retries create one calendar item") {
+        let request = syncRequest(key: "retries")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        let engine = makeSyncEngine(registry: registry, calendar: calendar)
+        for _ in 0..<10 {
+            let receipt = try await engine.registryFirstCreate(request)
+            try expect(receipt.succeeded)
+        }
+        try expect(await calendar.persistedCount() == 1)
+    }
+
+    await test("CR16 calendar create intent is persisted before provider failure") {
+        let request = syncRequest(key: "intent")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        await calendar.setCreateMode(.throwWithoutPersist)
+        let store = InMemoryCalendarRegistryTransactionStore()
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar, transactions: store)
+            .registryFirstCreate(request)
+        let tx = try await store.get(idempotencyKey: request.idempotencyKey)
+        try expect(!receipt.succeeded && receipt.stageAfter == .calendarEffectUnknown)
+        try expect(tx?.partialEffects.contains("persisted EventKit create intent") == true)
+    }
+
+    await test("CR17 provider persist-then-error records unknown effect") {
+        let request = syncRequest(key: "persist-error")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        await calendar.setCreateMode(.persistThenThrow)
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+        try expect(!receipt.succeeded && receipt.stageAfter == .calendarEffectUnknown)
+        try expect(await calendar.persistedCount() == 1)
+        try expect(receipt.recoveryAction?.contains("recovery only") == true)
+    }
+
+    await test("CR18 unknown effect retry recovers the existing calendar item") {
+        let request = syncRequest(key: "recover-unknown")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        await calendar.setCreateMode(.persistThenThrow)
+        let store = InMemoryCalendarRegistryTransactionStore()
+        let engine = makeSyncEngine(registry: registry, calendar: calendar, transactions: store)
+        let first = try await engine.registryFirstCreate(request)
+        try expect(first.stageAfter == .calendarEffectUnknown)
+        await calendar.setCreateMode(.normal)
+        let second = try await engine.registryFirstCreate(request)
+        try expect(second.succeeded)
+        try expect(await calendar.attempts() == 1)
+        try expect(await calendar.persistedCount() == 1)
+    }
+
+    await test("CR19 unknown effect with zero candidates never recreates") {
+        let request = syncRequest(key: "unknown-zero")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        await calendar.setCreateMode(.throwWithoutPersist)
+        let store = InMemoryCalendarRegistryTransactionStore()
+        let engine = makeSyncEngine(registry: registry, calendar: calendar, transactions: store)
+        let first = try await engine.registryFirstCreate(request)
+        try expect(first.stageAfter == .calendarEffectUnknown)
+        await calendar.setCreateMode(.normal)
+        let second = try await engine.registryFirstCreate(request)
+        try expect(!second.succeeded && second.stageAfter == .calendarEffectUnknown)
+        try expect(await calendar.attempts() == 1)
+    }
+
+    await test("CR20 restart after create intent is recovery-only") {
+        let request = syncRequest(key: "intent-restart")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        let store = InMemoryCalendarRegistryTransactionStore()
+        var tx = try await claim(
+            store,
+            key: request.idempotencyKey,
+            fingerprint: request.manifest.fingerprint,
+            exclusive: true
+        )
+        tx.registryEventId = request.registryEventId
+        tx.stage = .registryVerified
+        tx = try await store.save(tx)
+        tx.stage = .calendarCreateIntent
+        tx = try await store.save(tx)
+        _ = try await store.release(tx)
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar, transactions: store)
+            .registryFirstCreate(request)
+        try expect(!receipt.succeeded && receipt.stageAfter == .calendarEffectUnknown)
+        try expect(await calendar.attempts() == 0)
+    }
+
+    await test("CR21 multiple recovered calendar identities conflict") {
+        let request = syncRequest(key: "ambiguous-calendar")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        await calendar.seed(calendarItem(request, id: "one"))
+        await calendar.seed(calendarItem(request, id: "two"))
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+        try expect(!receipt.succeeded && receipt.stageAfter == .conflict)
+        try expect(await calendar.attempts() == 0)
+    }
+
+    await test("CR22 identity-bearing unsupported shapes conflict") {
+        for shape in ["recurring", "all-day", "detached", "participant"] {
+            let request = syncRequest(key: "shape-\(shape)")
+            let registry = await seededRegistry(request)
+            let calendar = SyncTestCalendar()
+            await calendar.seed(calendarItem(
+                request,
+                recurring: shape == "recurring",
+                allDay: shape == "all-day",
+                detached: shape == "detached",
+                organizer: shape == "participant" ? "owner@example.com" : nil,
+                attendees: shape == "participant" ? ["person@example.com"] : []
+            ))
+            let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+            try expect(!receipt.succeeded && receipt.stageAfter == .conflict)
+            try expect(await calendar.attempts() == 0)
+        }
+    }
+
+    await test("CR23 established registry EVENT id cannot be substituted") {
+        let store = InMemoryCalendarRegistryTransactionStore()
+        var tx = try await claim(store, key: "immutable-registry", exclusive: true)
+        tx.registryEventId = "page-a"
+        tx.stage = .registryVerified
+        tx = try await store.save(tx)
+        tx.registryEventId = "page-b"
+        do { _ = try await store.save(tx); throw TestError.assertion("substitution should fail") }
+        catch CalendarRegistryTransactionStoreError.identityRegression {}
+    }
+
+    await test("CR24 established calendar event id cannot be substituted") {
+        let store = InMemoryCalendarRegistryTransactionStore()
+        var tx = try await claim(store, key: "immutable-event", exclusive: true)
+        tx.registryEventId = "page"
+        tx.stage = .registryVerified
+        tx = try await store.save(tx)
+        tx.stage = .calendarCreated
+        tx.calendarEventId = "event-a"
+        tx.calendarId = "cal"
+        tx = try await store.save(tx)
+        tx.calendarEventId = "event-b"
+        do { _ = try await store.save(tx); throw TestError.assertion("substitution should fail") }
+        catch CalendarRegistryTransactionStoreError.identityRegression {}
+    }
+
+    await test("CR25 established calendar id cannot be substituted") {
+        let store = InMemoryCalendarRegistryTransactionStore()
+        var tx = try await claim(store, key: "immutable-cal", exclusive: true)
+        tx.registryEventId = "page"
+        tx.stage = .registryVerified
+        tx = try await store.save(tx)
+        tx.stage = .calendarCreated
+        tx.calendarEventId = "event"
+        tx.calendarId = "cal-a"
+        tx = try await store.save(tx)
+        tx.calendarId = "cal-b"
+        do { _ = try await store.save(tx); throw TestError.assertion("substitution should fail") }
+        catch CalendarRegistryTransactionStoreError.identityRegression {}
+    }
+
+    await test("CR26 established provider external id cannot be substituted") {
+        let store = InMemoryCalendarRegistryTransactionStore()
+        var tx = try await claim(store, key: "immutable-provider", exclusive: true)
+        tx.registryEventId = "page"
+        tx.stage = .registryVerified
+        tx = try await store.save(tx)
+        tx.stage = .calendarCreated
+        tx.calendarEventId = "event"
+        tx.calendarId = "cal"
+        tx.providerExternalId = "external-a"
+        tx = try await store.save(tx)
+        tx.providerExternalId = "external-b"
+        do { _ = try await store.save(tx); throw TestError.assertion("substitution should fail") }
+        catch CalendarRegistryTransactionStoreError.identityRegression {}
+    }
+
+    await test("CR27 established identifiers cannot be cleared") {
+        let store = InMemoryCalendarRegistryTransactionStore()
+        var tx = try await claim(store, key: "immutable-clear", exclusive: true)
+        tx.registryEventId = "page"
+        tx.stage = .registryVerified
+        tx = try await store.save(tx)
+        tx.registryEventId = nil
+        do { _ = try await store.save(tx); throw TestError.assertion("clearing should fail") }
+        catch CalendarRegistryTransactionStoreError.identityRegression {}
+    }
+
+    await test("CR28 final success recomputes Sync Hash") {
+        let request = syncRequest(key: "final-hash")
+        let registry = await seededRegistry(request)
+        let receipt = try await makeSyncEngine(registry: registry).registryFirstCreate(request)
+        try expect(receipt.succeeded)
+        try expect(receipt.verifiedSyncHash?.count == 64)
+        try expect(receipt.record?.syncHash == receipt.verifiedSyncHash)
+    }
+
+    await test("CR29 dropped final Sync Hash prevents success") {
+        let request = syncRequest(key: "drop-hash")
+        let registry = await seededRegistry(request)
+        await registry.setDropFinalSyncHash(true)
+        let receipt = try await makeSyncEngine(registry: registry).registryFirstCreate(request)
+        try expect(!receipt.succeeded)
+        try expect(receipt.discrepancy?.contains("recomputed Synced evidence") == true)
+    }
+
+    await test("CR30 final provider mutation prevents success") {
+        let request = syncRequest(key: "mutate-provider")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        await calendar.setMutateProviderOnFinalRead(true)
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+        try expect(!receipt.succeeded)
+    }
+
+    await test("CR31 observational Calendar URL mutation does not change pair identity") {
+        let request = syncRequest(key: "mutate-url")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        await calendar.setMutateURLOnFinalRead(true)
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+        try expect(receipt.succeeded)
+    }
+
+    await test("CR32 final Last Synced At mutation prevents success") {
+        let request = syncRequest(key: "mutate-synced-at")
+        let registry = await seededRegistry(request)
+        await registry.setMutateSyncedAtOnFinalRead(true)
+        let receipt = try await makeSyncEngine(registry: registry).registryFirstCreate(request)
+        try expect(!receipt.succeeded)
+    }
+
+    await test("CR33 conflict receipt prohibits automatic retry") {
+        let request = syncRequest(key: "conflict-action")
+        let registry = await seededRegistry(request)
+        var duplicate = canonicalRecord(request)
+        duplicate.id = "duplicate"
+        await registry.setLookupExtras([duplicate])
+        let receipt = try await makeSyncEngine(registry: registry).registryFirstCreate(request)
+        try expect(receipt.stageAfter == .conflict)
+        try expect(receipt.recoveryAction?.contains("automatic retry is prohibited") == true)
+    }
+
+    await test("CR34 unknown-effect receipt is recovery-only") {
+        let request = syncRequest(key: "unknown-action")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        await calendar.setCreateMode(.throwWithoutPersist)
+        let receipt = try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request)
+        try expect(receipt.stageAfter == .calendarEffectUnknown)
+        try expect(receipt.recoveryAction?.contains("automatic recreation is prohibited") == true)
+    }
+
+    await test("CR35 cancellation before EventKit create produces no calendar item") {
+        let request = syncRequest(key: "cancel-before-calendar")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        let locks = InMemoryCalendarRegistryProcessLockCoordinator()
+        let gate = CalendarRegistryOperationGate()
+        try await gate.acquire(request.idempotencyKey)
+        let engine = makeSyncEngine(registry: registry, calendar: calendar, processLocks: locks, operationGate: gate)
+        let task = Task { try await engine.registryFirstCreate(request) }
+        try await Task.sleep(nanoseconds: 20_000_000)
+        task.cancel()
+        await gate.release(request.idempotencyKey)
+        do { _ = try await task.value } catch is CancellationError {}
+        try expect(await calendar.persistedCount() == 0)
+    }
+
+    await test("CR36 cancellation after calendar side effect records unknown state") {
+        let request = syncRequest(key: "cancel-after-effect")
+        let registry = await seededRegistry(request)
+        let calendar = SyncTestCalendar()
+        await calendar.setCreateMode(.persistThenSuspend)
+        let task = Task { try await makeSyncEngine(registry: registry, calendar: calendar).registryFirstCreate(request) }
+        await calendar.createEntered.wait()
+        task.cancel()
+        let receipt = try await task.value
+        try expect(!receipt.succeeded && receipt.stageAfter == .calendarEffectUnknown)
+        try expect(await calendar.persistedCount() == 1)
+    }
+
+    await test("CR37 exact malformed metadata target conflicts") {
+        let request = syncRequest(key: "malformed-target")
+        let store = PersistentCalendarStore()
+        await store.seed(CalendarEvent(
+            id: "target", title: request.title,
+            start: CalendarRegistryISO.string(request.start), end: CalendarRegistryISO.string(request.end),
+            allDay: false, calendarId: request.calendarId, calendarTitle: "Private Smoke",
+            location: request.location,
+            notes: CalendarRegistryCalendarMetadata.beginMarker + "\nSync-Key: \(request.idempotencyKey)",
+            timeZoneIdentifier: request.timeZoneIdentifier
+        ))
+        let provider = CalendarStoringSyncProvider(store: store, allowlistedCalendarIds: [request.calendarId])
+        do {
+            _ = try await provider.recover(CalendarRecoveryQuery(
+                syncKey: request.idempotencyKey,
+                operationFingerprint: request.manifest.fingerprint,
+                calendarId: request.calendarId,
+                title: request.title,
+                start: request.start,
+                end: request.end
+            ))
+            throw TestError.assertion("target metadata should conflict")
+        } catch CalendarRegistrySyncError.identityConflict {}
+    }
+
+    await test("CR38 arbitrary user-note substring does not poison recovery") {
+        let request = syncRequest(key: "substring-key")
+        let store = PersistentCalendarStore()
+        await store.seed(CalendarEvent(
+            id: "unrelated", title: "Other",
+            start: CalendarRegistryISO.string(request.start), end: CalendarRegistryISO.string(request.end),
+            allDay: false, calendarId: request.calendarId, calendarTitle: "Private Smoke",
+            location: nil,
+            notes: "Discuss \(request.idempotencyKey)\n" + CalendarRegistryCalendarMetadata.beginMarker + "\ninvalid",
+            timeZoneIdentifier: request.timeZoneIdentifier
+        ))
+        let provider = CalendarStoringSyncProvider(store: store, allowlistedCalendarIds: [request.calendarId])
+        let recovered = try await provider.recover(CalendarRecoveryQuery(
+            syncKey: request.idempotencyKey,
+            operationFingerprint: request.manifest.fingerprint,
+            calendarId: request.calendarId,
+            title: request.title,
+            start: request.start,
+            end: request.end
+        ))
+        try expect(recovered.isEmpty)
+    }
+
+    await test("CR39 absent provider modification time remains nil") {
+        let request = syncRequest(key: "provider-time")
+        let store = PersistentCalendarStore()
+        let provider = CalendarStoringSyncProvider(store: store, allowlistedCalendarIds: [request.calendarId])
+        let created = try await provider.create(ExternalCalendarDraft(
+            title: request.title,
+            start: request.start,
+            end: request.end,
+            timeZoneIdentifier: request.timeZoneIdentifier,
+            calendarId: request.calendarId,
+            location: request.location,
+            notes: request.notes,
+            syncKey: request.idempotencyKey,
+            operationFingerprint: request.manifest.fingerprint
+        ))
+        try expect(created.updatedAt == nil)
+    }
+
+    await test("CR40 composition remains disabled by default") {
+        do {
+            _ = try CalendarRegistrySyncComposition.build(
+                entity: scheduleEntityForSyncTests(),
+                registryGateway: SyncRegistryGateway(),
+                calendarStore: PersistentCalendarStore(),
+                environment: [:]
+            )
+            throw TestError.assertion("composition should be disabled")
+        } catch CalendarRegistrySyncCompositionError.disabled {}
+    }
+
+    await test("CR41 composition builds only with local canonical coordinator") {
+        try await withTempDirectory { directory in
+            let engine = try CalendarRegistrySyncComposition.build(
+                entity: scheduleEntityForSyncTests(),
+                registryGateway: SyncRegistryGateway(),
+                calendarStore: PersistentCalendarStore(),
+                environment: [CalendarRegistrySyncComposition.enableEnvironmentKey: "1"],
+                allowedCalendarIds: ["cal-private"],
+                ledgerURL: directory.appendingPathComponent("ledger.sqlite3")
+            )
+            _ = engine
+            let lockRoot = directory.appendingPathComponent("calendar-registry-locks")
+            try expect(FileManager.default.fileExists(atPath: lockRoot.path))
+        }
+    }
+
+    await test("CR42 migration artifact decodes against registry roles") {
+        let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("docs/migrations/calendar-registry-v1/registry-entity-patch.json")
+        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        let properties = object?["additiveProperties"] as? [[String: Any]] ?? []
+        try expect(object?["schemaVersion"] as? Int == 2)
+        try expect(properties.count == 2)
+        for property in properties {
+            let role = property["role"] as? String
+            try expect(role == RegistryPropertyRole.generic.rawValue)
+        }
+    }
+
+    await test("CR43 strict query decoder rejects malformed rows") {
+        let malformed = try JSONSerialization.data(withJSONObject: [
+            "results": [["id": "page-without-properties"]], "has_more": false
+        ])
+        do {
+            _ = try RegistryQueryResponseDecoder.decode(malformed)
+            throw TestError.assertion("malformed query row should fail")
+        } catch RegistryGatewayError.invalidResponse {}
+    }
+
+    await test("CR44 schema v2 registry-created rows migrate to registry-verified") {
+        try await withTempDirectory { directory in
+            let url = directory.appendingPathComponent("migration.sqlite3")
+            var db: OpaquePointer?
+            try expect(sqlite3_open_v2(url.path, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE, nil) == SQLITE_OK)
+            defer { if let db { sqlite3_close_v2(db) } }
+            let sql = """
+            CREATE TABLE calendar_registry_schema (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
+            INSERT INTO calendar_registry_schema(id,version) VALUES(1,2);
+            CREATE TABLE calendar_registry_transactions (
+              idempotency_key TEXT PRIMARY KEY NOT NULL, operation_id TEXT NOT NULL,
+              manifest_fingerprint TEXT NOT NULL, stage TEXT NOT NULL, registry_event_id TEXT,
+              calendar_event_id TEXT, calendar_id TEXT, provider_external_id TEXT,
+              created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_verified_at TEXT,
+              last_error TEXT, partial_effects_json TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+              lease_owner TEXT, lease_token TEXT, lease_expires_at REAL, heartbeat_at REAL
+            );
+            INSERT INTO calendar_registry_transactions VALUES(
+              'legacy','op','fingerprint','registryCreated','page',NULL,NULL,NULL,
+              '2027-01-01T00:00:00.000Z','2027-01-01T00:00:00.000Z',NULL,NULL,'[]',1,NULL,NULL,NULL,NULL
+            );
+            """
+            try expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+            if let db { sqlite3_close_v2(db) }
+            db = nil
+            let store = try SQLiteCalendarRegistryTransactionStore(url: url)
+            let migrated = try await store.get(idempotencyKey: "legacy")
+            try expect(migrated?.stage == .registryVerified)
+        }
+    }
+
+    await test("CR45 unknown future ledger schema is refused") {
+        try await withTempDirectory { directory in
+            let url = directory.appendingPathComponent("future.sqlite3")
+            var db: OpaquePointer?
+            try expect(sqlite3_open_v2(url.path, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE, nil) == SQLITE_OK)
+            try expect(sqlite3_exec(db, "CREATE TABLE calendar_registry_schema (id INTEGER PRIMARY KEY, version INTEGER NOT NULL); INSERT INTO calendar_registry_schema(id,version) VALUES(1,99);", nil, nil, nil) == SQLITE_OK)
+            if let db { sqlite3_close_v2(db) }
+            do {
+                _ = try SQLiteCalendarRegistryTransactionStore(url: url)
+                throw TestError.assertion("future schema should fail")
+            } catch CalendarRegistryTransactionStoreError.corruptLedger {}
+        }
+    }
+
+    await test("CR46 corrupted partial-effect evidence is refused") {
+        try await withTempDirectory { directory in
+            let url = directory.appendingPathComponent("corrupt.sqlite3")
+            let store = try SQLiteCalendarRegistryTransactionStore(url: url)
+            _ = try await claim(store, key: "corrupt", exclusive: true)
+            var db: OpaquePointer?
+            try expect(sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK)
+            defer { if let db { sqlite3_close_v2(db) } }
+            try expect(sqlite3_exec(db, "UPDATE calendar_registry_transactions SET partial_effects_json='bad' WHERE idempotency_key='corrupt';", nil, nil, nil) == SQLITE_OK)
+            do {
+                _ = try await store.get(idempotencyKey: "corrupt")
+                throw TestError.assertion("corrupt evidence should fail")
+            } catch CalendarRegistryTransactionStoreError.corruptLedger {}
+        }
+    }
+
+    await test("CR47 OS lock permits exclusive takeover despite stale SQLite lease") {
+        try await withTempDirectory { directory in
+            let store = try SQLiteCalendarRegistryTransactionStore(url: directory.appendingPathComponent("ledger.sqlite3"))
+            let first = try await claim(store, key: "takeover", operation: "first", token: "first", exclusive: false, duration: 600)
+            let second = try await claim(store, key: "takeover", operation: "second", token: "second", exclusive: true, duration: 600)
+            try expect(second.revision > first.revision)
+            try expect(second.leaseToken == "second")
+        }
+    }
+
+    await test("CR48 expired lease alone does not authorize a second writer") {
+        try await withTempDirectory { directory in
+            let store = try SQLiteCalendarRegistryTransactionStore(url: directory.appendingPathComponent("ledger.sqlite3"))
+            _ = try await claim(store, key: "no-exclusive", operation: "first", token: "first", exclusive: false, duration: 600)
+            do {
+                _ = try await claim(store, key: "no-exclusive", operation: "second", token: "second", exclusive: false, duration: 600)
+                throw TestError.assertion("active lease should fail without OS ownership")
+            } catch CalendarRegistryTransactionStoreError.operationActive {}
+        }
+    }
+
+    await test("CR49 route ownership remains explicit") {
+        try expect(CalendarRegistryRouteClassifier.owner(for: .semanticScheduling) == .timeKeepr)
+        try expect(CalendarRegistryRouteClassifier.owner(for: .calendarMechanics) == .macKeepr)
+        try expect(CalendarRegistryRouteClassifier.owner(for: .schemaChange) == .notionKeepr)
+    }
+
+    await test("CR50 child processes hold one external writer beyond lease duration") {
+        try await withTempDirectory { directory in
+            let binary = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+            let key = "child-process-lock"
+            let first = Process()
+            first.executableURL = binary
+            first.arguments = ["--calendar-registry-process-probe", directory.path, key, "1500"]
+            try first.run()
+
+            let entered = directory.appendingPathComponent("provider-entered")
+            let deadline = Date().addingTimeInterval(10)
+            while !FileManager.default.fileExists(atPath: entered.path), Date() < deadline {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            try expect(FileManager.default.fileExists(atPath: entered.path), "first child did not enter provider create")
+
+            let second = Process()
+            second.executableURL = binary
+            second.arguments = ["--calendar-registry-process-probe", directory.path, key, "0"]
+            try second.run()
+            second.waitUntilExit()
+            first.waitUntilExit()
+
+            try expect(first.terminationStatus == 0)
+            try expect(second.terminationStatus == 42)
+            let countURL = directory.appendingPathComponent("calendar-create-count")
+            let count = Int((try String(contentsOf: countURL, encoding: .utf8)).trimmingCharacters(in: .whitespacesAndNewlines))
+            try expect(count == 1)
+        }
+    }
+}
+
+// MARK: - Child-process probe
+
+func calendarRegistryProcessProbeExitCodeIfRequested() -> Int32? {
+    let args = CommandLine.arguments
+    guard let index = args.firstIndex(of: "--calendar-registry-process-probe"), args.count >= index + 4 else {
+        return nil
+    }
+    let root = URL(fileURLWithPath: args[index + 1], isDirectory: true)
+    let key = args[index + 2]
+    let holdMilliseconds = UInt64(args[index + 3]) ?? 0
+    let semaphore = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var result: Int32 = 1
+    Task.detached {
+        do {
+            let request = RegistryFirstTimeInstanceRequest(
+                idempotencyKey: key,
+                registryEventId: "probe-event",
+                title: "Probe",
+                start: Date(timeIntervalSince1970: 1_800_010_000),
+                end: Date(timeIntervalSince1970: 1_800_013_600),
+                timeZoneIdentifier: "America/Chicago",
+                calendarId: "cal-private",
+                notes: "Probe",
+                semantics: TimeInstanceSemantics(eventClass: .focus, primaryBlockId: "block-probe")
+            )
+            let registry = ProbeRegistry(request: request)
+            let calendar = ProbeCalendar(root: root, holdMilliseconds: holdMilliseconds)
+            let ledger = try SQLiteCalendarRegistryTransactionStore(url: root.appendingPathComponent("probe.sqlite3"))
+            let locks = try FileCalendarRegistryProcessLockCoordinator(
+                rootURL: root.appendingPathComponent("locks", isDirectory: true)
+            )
+            let engine = CalendarRegistrySyncEngine(
+                registry: registry,
+                calendar: calendar,
+                transactions: ledger,
+                processLocks: locks,
+                operationGate: CalendarRegistryOperationGate(),
+                clock: { Date(timeIntervalSince1970: 1_800_000_000) },
+                leaseDuration: 0.1
+            )
+            let receipt = try await engine.registryFirstCreate(request)
+            if receipt.succeeded { result = 0 }
+            else if receipt.discrepancy?.contains("already active in another process") == true { result = 42 }
+            else { result = 2 }
+        } catch {
+            fputs("probe failed: \(error)\n", stderr)
+            result = 3
+        }
+        semaphore.signal()
+    }
+    semaphore.wait()
+    return result
+}
+
+private actor ProbeRegistry: TimeInstanceRegistryStoring {
+    private var record: TimeInstanceRecord
+    init(request: RegistryFirstTimeInstanceRequest) { record = canonicalRecord(request) }
+    func findBySyncKey(_ syncKey: String) async throws -> RegistryIdentityLookup {
+        RegistryIdentityLookup(records: record.syncKey == syncKey ? [record] : [], source: .live)
+    }
+    func readIdentity(id: String, forceRefresh: Bool) async throws -> RegistryRecordIdentityRead {
+        _ = forceRefresh
+        return id == record.id ? .decoded(record) : .missing
+    }
+    func get(id: String, forceRefresh: Bool) async throws -> TimeInstanceRecord? {
+        _ = forceRefresh
+        return id == record.id ? record : nil
+    }
+    func save(_ record: TimeInstanceRecord) async throws -> TimeInstanceRecord {
+        self.record = record
+        return record
+    }
+}
+
+private actor ProbeCalendar: CalendarSyncProviding {
+    private let root: URL
+    private let holdMilliseconds: UInt64
+    init(root: URL, holdMilliseconds: UInt64) {
+        self.root = root
+        self.holdMilliseconds = holdMilliseconds
+    }
+    func qualify(calendarId: String) async throws -> CalendarQualification {
+        CalendarQualification(
+            calendarId: calendarId, title: "Private", allowsModify: true,
+            explicitlyAllowlisted: true, calendarType: "local", sourceType: "local",
+            qualifiedForPrivateSmoke: true
+        )
+    }
+    func create(_ draft: ExternalCalendarDraft) async throws -> ExternalCalendarItem {
+        let item = ExternalCalendarItem(
+            provider: "Probe Calendar",
+            calendarId: draft.calendarId,
+            localEventId: "probe-calendar-event",
+            providerExternalId: "probe-external",
+            syncKey: draft.syncKey,
+            operationFingerprint: draft.operationFingerprint,
+            title: draft.title,
+            start: draft.start,
+            end: draft.end,
+            timeZoneIdentifier: draft.timeZoneIdentifier,
+            location: draft.location,
+            notes: draft.notes,
+            updatedAt: nil
+        )
+        let payload: [String: Any] = [
+            "syncKey": draft.syncKey,
+            "fingerprint": draft.operationFingerprint,
+            "title": draft.title,
+            "start": CalendarRegistryISO.string(draft.start),
+            "end": CalendarRegistryISO.string(draft.end),
+            "timezone": draft.timeZoneIdentifier,
+            "calendarId": draft.calendarId,
+            "location": draft.location as Any,
+            "notes": draft.notes as Any
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: root.appendingPathComponent("calendar-item.json"), options: .atomic)
+        let countURL = root.appendingPathComponent("calendar-create-count")
+        let old = (try? String(contentsOf: countURL, encoding: .utf8)).flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+        try String(old + 1).write(to: countURL, atomically: true, encoding: .utf8)
+        try Data().write(to: root.appendingPathComponent("provider-entered"), options: .atomic)
+        if holdMilliseconds > 0 {
+            try await Task.sleep(nanoseconds: holdMilliseconds * 1_000_000)
+        }
+        return item
+    }
+    func item(id: String) async throws -> ExternalCalendarItem? {
+        guard id == "probe-calendar-event" else { return nil }
+        return try load()
+    }
+    func recover(_ query: CalendarRecoveryQuery) async throws -> [ExternalCalendarItem] {
+        guard let item = try load() else { return [] }
+        return item.syncKey == query.syncKey && item.operationFingerprint == query.operationFingerprint ? [item] : []
+    }
+    private func load() throws -> ExternalCalendarItem? {
+        let url = root.appendingPathComponent("calendar-item.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        guard let object,
+              let key = object["syncKey"] as? String,
+              let fingerprint = object["fingerprint"] as? String,
+              let title = object["title"] as? String,
+              let startRaw = object["start"] as? String,
+              let endRaw = object["end"] as? String,
+              let start = CalendarRegistryISO.date(startRaw),
+              let end = CalendarRegistryISO.date(endRaw),
+              let timezone = object["timezone"] as? String,
+              let calendarId = object["calendarId"] as? String else { return nil }
+        return ExternalCalendarItem(
+            provider: "Probe Calendar",
+            calendarId: calendarId,
+            localEventId: "probe-calendar-event",
+            providerExternalId: "probe-external",
+            syncKey: key,
+            operationFingerprint: fingerprint,
+            title: title,
+            start: start,
+            end: end,
+            timeZoneIdentifier: timezone,
+            location: object["location"] as? String,
+            notes: object["notes"] as? String,
+            updatedAt: nil
+        )
+    }
 }

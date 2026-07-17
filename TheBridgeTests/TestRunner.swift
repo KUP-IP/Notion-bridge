@@ -125,6 +125,10 @@ struct TheBridgeTestRunner {
     // a live run loop (that was the teardown SIGTRAP / hang). `runAllTests()` is
     // `nonisolated` so its body inherits the detached (non-main) executor.
     static func main() {
+        if let probeExitCode = calendarRegistryProcessProbeExitCodeIfRequested() {
+            exit(probeExitCode)
+        }
+
         // Line-buffer stdout. When this runner's output is a pipe (CI: `… | tee`),
         // stdout defaults to FULL buffering, so on an intermittent hang the buffered
         // tail never flushes and the CI log's last line is NOT where it actually hung —
@@ -661,7 +665,7 @@ await runNotesModuleTests()
 await runSystemModuleTests()
 await runRemindersModuleTests()   // PKT-957 (v3.7·D): reminders_* EventKit module (mock seam)
 await runCalendarModuleTests()    // PKT-962 (v3.7·I): calendar_* EventKit module (mock seam; reuses v3.7·D store + entitlement)
-await runCalendarRegistrySyncEngineTests() // Calendar–Registry Sync reduced durability matrix
+await runCalendarRegistrySyncEngineTests() // Calendar–Registry Sync fail-closed hermetic recovery matrix
 await runPermissionsModuleTests() // fb-permissions: unified permissions_status TCC probe (pure assembler — no live TCC)
 await runNotionModuleTests()
 await runAccessibilityModuleTests()

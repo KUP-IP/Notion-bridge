@@ -2328,3 +2328,8 @@ set -euo pipefail
 
 # Review-integration replay: single-writer fencing adds 18 greens to the
 # combined candidate floor. FLOOR 3260 -> 3278.
+
+- Calendar–Registry fail-closed smoke narrowing (2026-07-17): replaced lease-expiry-based external-effect ownership with a per-idempotency-key OS advisory lock held across the complete registry/EventKit transaction. Narrowed the smoke path to one pre-existing canonical Notion EVENT; automatic Notion creation and partial repair are no longer reachable. Added durable EventKit create-intent / calendar-effect-unknown recovery-only stages, immutable established pair identifiers, final-read Sync Hash recomputation, exact delimited metadata attribution, optional provider modification timestamps, local-filesystem composition enforcement, and schema-v3 stage migration. The hermetic recovery matrix now contains 50 scenarios, including real child-process contention with a provider call held beyond SQLite lease duration, unknown-effect no-recreate behavior, production Notion adapter no-create proof, final identity/evidence mutation, and state-specific recovery receipts. Measured 3267 passed, 0 failed. FLOOR 3257 -> 3267.
+
+# Review-integration replay: fail-closed smoke narrowing adds 10 greens to the
+# combined candidate floor. FLOOR 3278 -> 3288.

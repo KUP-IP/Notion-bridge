@@ -10,7 +10,9 @@ private let calendarRegistrySQLiteTransient = unsafeBitCast(
 
 public enum CalendarRegistryTransactionStage: String, Codable, Sendable, CaseIterable {
     case prepared
-    case registryCreated
+    case registryVerified
+    case calendarCreateIntent
+    case calendarEffectUnknown
     case calendarCreated
     case pairPersisted
     case verified
@@ -22,24 +24,31 @@ public enum CalendarRegistryTransactionStage: String, Codable, Sendable, CaseIte
     fileprivate var progressRank: Int? {
         switch self {
         case .prepared: return 0
-        case .registryCreated: return 1
-        case .calendarCreated: return 2
-        case .pairPersisted: return 3
-        case .verified: return 4
-        case .synced: return 5
-        case .recoverableError, .conflict, .abandoned: return nil
+        case .registryVerified: return 1
+        case .calendarCreateIntent: return 2
+        case .calendarCreated: return 3
+        case .pairPersisted: return 4
+        case .verified: return 5
+        case .synced: return 6
+        case .calendarEffectUnknown, .recoverableError, .conflict, .abandoned: return nil
         }
     }
 
     fileprivate func permitsTransition(to next: Self) -> Bool {
         if self == next { return true }
-        if next == .recoverableError || next == .conflict || next == .abandoned { return true }
+        if next == .conflict || next == .abandoned { return true }
         switch self {
         case .conflict, .abandoned:
             return false
+        case .calendarCreateIntent:
+            return next == .calendarEffectUnknown || next == .calendarCreated
+                || next == .recoverableError || next == .conflict || next == .abandoned
+        case .calendarEffectUnknown:
+            return next == .calendarCreated || next == .conflict || next == .abandoned
         case .recoverableError:
-            return next.progressRank != nil
+            return next == .registryVerified || next == .conflict || next == .abandoned
         default:
+            if next == .recoverableError { return true }
             guard let current = progressRank, let target = next.progressRank else { return false }
             return target >= current
         }
@@ -205,7 +214,8 @@ public protocol CalendarRegistryTransactionStoring: Sendable {
         operationId: String,
         leaseOwner: String,
         leaseToken: String,
-        leaseDuration: TimeInterval
+        leaseDuration: TimeInterval,
+        exclusiveProcessLockHeld: Bool
     ) async throws -> CalendarRegistryTransaction
     func renew(_ transaction: CalendarRegistryTransaction, leaseDuration: TimeInterval) async throws -> CalendarRegistryTransaction
     func get(idempotencyKey: String) async throws -> CalendarRegistryTransaction?
@@ -213,11 +223,12 @@ public protocol CalendarRegistryTransactionStoring: Sendable {
     func release(_ transaction: CalendarRegistryTransaction) async throws -> CalendarRegistryTransaction
 }
 
-/// SQLite-backed single-machine transaction coordinator. The unique key,
-/// lease/fencing token, monotonic revision, and compare-and-swap saves are the
-/// correctness boundary across actors and processes sharing this local file.
+/// SQLite-backed single-machine recovery ledger. The unique key, lease metadata,
+/// monotonic revision, and compare-and-swap saves preserve transaction evidence.
+/// Cross-process external-effect exclusion is provided by the separate OS advisory
+/// lock; callers may override a stale SQLite lease only while holding that lock.
 public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransactionStoring {
-    public static let schemaVersion = 2
+    public static let schemaVersion = 3
 
     private let url: URL
     nonisolated(unsafe) private var db: OpaquePointer?
@@ -300,9 +311,9 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
             }
             if schemaRows == 1 {
                 let existingVersion = try scalarInt("SELECT version FROM calendar_registry_schema LIMIT 1;") ?? -1
-                guard existingVersion == 1 || existingVersion == Self.schemaVersion else {
+                guard (1...Self.schemaVersion).contains(existingVersion) else {
                     throw CalendarRegistryTransactionStoreError.corruptLedger(
-                        "unsupported schema version \(existingVersion); expected 1 or \(Self.schemaVersion)"
+                        "unsupported schema version \(existingVersion); expected 1...\(Self.schemaVersion)"
                     )
                 }
             }
@@ -340,6 +351,7 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
                 try exec("ALTER TABLE calendar_registry_transactions ADD COLUMN \(name) \(definition);")
             }
             try exec("UPDATE calendar_registry_transactions SET revision=1 WHERE revision IS NULL OR revision < 1;")
+            try exec("UPDATE calendar_registry_transactions SET stage='registryVerified' WHERE stage='registryCreated';")
 
             try exec("DROP TABLE IF EXISTS calendar_registry_schema_new;")
             try exec("CREATE TABLE calendar_registry_schema_new (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);")
@@ -359,7 +371,8 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
         operationId: String,
         leaseOwner: String,
         leaseToken: String,
-        leaseDuration: TimeInterval
+        leaseDuration: TimeInterval,
+        exclusiveProcessLockHeld: Bool
     ) throws -> CalendarRegistryTransaction {
         try validateIdentity(idempotencyKey, manifestFingerprint, operationId, leaseOwner, leaseToken)
         guard leaseDuration > 0 else { throw CalendarRegistryTransactionStoreError.storageFailure("lease duration must be positive") }
@@ -370,7 +383,8 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
                 guard existing.manifestFingerprint == manifestFingerprint else {
                     throw CalendarRegistryTransactionStoreError.idempotencyConflict(idempotencyKey)
                 }
-                if let expiry = existing.leaseExpiresAt?.timeIntervalSince1970,
+                if !exclusiveProcessLockHeld,
+                   let expiry = existing.leaseExpiresAt?.timeIntervalSince1970,
                    existing.leaseToken?.isEmpty == false,
                    expiry > now {
                     throw CalendarRegistryTransactionStoreError.operationActive(
@@ -429,8 +443,7 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
             let sql = """
             UPDATE calendar_registry_transactions SET
                 lease_expires_at=?, heartbeat_at=?, updated_at=?, revision=revision+1
-            WHERE idempotency_key=? AND revision=? AND lease_token=? AND lease_owner=?
-              AND lease_expires_at > CAST(strftime('%s','now') AS REAL);
+            WHERE idempotency_key=? AND revision=? AND lease_token=? AND lease_owner=?;
             """
             try withStatement(sql) { stmt in
                 try bindDouble(stmt, 1, now + leaseDuration)
@@ -469,8 +482,7 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
                 calendar_event_id=?, calendar_id=?, provider_external_id=?, created_at=?,
                 updated_at=?, last_verified_at=?, last_error=?, partial_effects_json=?,
                 heartbeat_at=?, revision=revision+1
-            WHERE idempotency_key=? AND revision=? AND lease_token=? AND lease_owner=?
-              AND lease_expires_at > CAST(strftime('%s','now') AS REAL);
+            WHERE idempotency_key=? AND revision=? AND lease_token=? AND lease_owner=?;
             """
             try withStatement(sql) { stmt in
                 try bindText(stmt, 1, transaction.operationId)
@@ -555,20 +567,17 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
             ("calendar event id", existing.calendarEventId, incoming.calendarEventId),
             ("calendar id", existing.calendarId, incoming.calendarId),
             ("provider external id", existing.providerExternalId, incoming.providerExternalId)
-        ] where old?.isEmpty == false && new?.isEmpty != false {
-            throw CalendarRegistryTransactionStoreError.identityRegression("\(name) cannot be cleared")
+        ] where old?.isEmpty == false && new != old {
+            throw CalendarRegistryTransactionStoreError.identityRegression("\(name) is immutable once established")
         }
     }
 
-    private func ownershipError(for transaction: CalendarRegistryTransaction, requireUnexpired: Bool = true) throws -> CalendarRegistryTransactionStoreError {
+    private func ownershipError(for transaction: CalendarRegistryTransaction, requireUnexpired _: Bool = true) throws -> CalendarRegistryTransactionStoreError {
         guard let current = try select(idempotencyKey: transaction.idempotencyKey) else {
             return .missingTransaction(transaction.idempotencyKey)
         }
         if current.revision != transaction.revision { return .staleRevision(transaction.idempotencyKey) }
         if current.leaseToken != transaction.leaseToken || current.leaseOwner != transaction.leaseOwner {
-            return .leaseLost(transaction.idempotencyKey)
-        }
-        if requireUnexpired, let expiry = current.leaseExpiresAt, expiry.timeIntervalSince1970 <= (try currentEpoch()) {
             return .leaseLost(transaction.idempotencyKey)
         }
         return .storageFailure("compare-and-swap update changed no rows")
@@ -757,12 +766,14 @@ public actor InMemoryCalendarRegistryTransactionStore: CalendarRegistryTransacti
         operationId: String,
         leaseOwner: String,
         leaseToken: String,
-        leaseDuration: TimeInterval
+        leaseDuration: TimeInterval,
+        exclusiveProcessLockHeld: Bool
     ) throws -> CalendarRegistryTransaction {
         let now = Date()
         if var existing = transactions[idempotencyKey] {
             guard existing.manifestFingerprint == manifestFingerprint else { throw CalendarRegistryTransactionStoreError.idempotencyConflict(idempotencyKey) }
-            if let expiry = existing.leaseExpiresAt, existing.leaseToken != nil, expiry > now {
+            if !exclusiveProcessLockHeld,
+               let expiry = existing.leaseExpiresAt, existing.leaseToken != nil, expiry > now {
                 throw CalendarRegistryTransactionStoreError.operationActive(idempotencyKey, expiry)
             }
             existing.operationId = operationId
@@ -817,8 +828,8 @@ public actor InMemoryCalendarRegistryTransactionStore: CalendarRegistryTransacti
             ("calendar event id", current.calendarEventId, transaction.calendarEventId),
             ("calendar id", current.calendarId, transaction.calendarId),
             ("provider external id", current.providerExternalId, transaction.providerExternalId)
-        ] where old?.isEmpty == false && new?.isEmpty != false {
-            throw CalendarRegistryTransactionStoreError.identityRegression("\(name) cannot be cleared")
+        ] where old?.isEmpty == false && new != old {
+            throw CalendarRegistryTransactionStoreError.identityRegression("\(name) is immutable once established")
         }
         var saved = transaction
         saved.revision += 1
@@ -840,12 +851,11 @@ public actor InMemoryCalendarRegistryTransactionStore: CalendarRegistryTransacti
         return current
     }
 
-    private func owned(_ transaction: CalendarRegistryTransaction, requireUnexpired: Bool = true) throws -> CalendarRegistryTransaction {
+    private func owned(_ transaction: CalendarRegistryTransaction, requireUnexpired _: Bool = true) throws -> CalendarRegistryTransaction {
         guard let current = transactions[transaction.idempotencyKey] else { throw CalendarRegistryTransactionStoreError.missingTransaction(transaction.idempotencyKey) }
         guard current.revision == transaction.revision else { throw CalendarRegistryTransactionStoreError.staleRevision(transaction.idempotencyKey) }
         guard current.leaseToken == transaction.leaseToken, current.leaseOwner == transaction.leaseOwner,
               transaction.leaseToken?.isEmpty == false else { throw CalendarRegistryTransactionStoreError.leaseLost(transaction.idempotencyKey) }
-        if requireUnexpired, let expiry = current.leaseExpiresAt, expiry <= Date() { throw CalendarRegistryTransactionStoreError.leaseLost(transaction.idempotencyKey) }
         return current
     }
 }
