@@ -2,7 +2,7 @@
 # test-floor-gate.sh — WS-C (v2.3, PKT-798)
 #
 # Locks the green test baseline as a CI gate. The custom harness
-# (.build/debug/TheBridgeTests) already exits non-zero on any failing
+# (`swift build --show-bin-path -c debug`/TheBridgeTests) already exits non-zero on any failing
 # test, but that does NOT catch tests being silently deleted or disabled —
 # a suite that shrinks from 710 → 600 with 0 failures would otherwise pass
 # CI unnoticed. This gate fails the build if the passing count drops below
@@ -10,10 +10,14 @@
 #
 # Full append-only FLOOR provenance: scripts/test-floor-gate-history.md
 FLOOR="${BRIDGE_TEST_FLOOR:-3342}"
-BIN=".build/debug/TheBridgeTests"
 
 echo "🧪 test-floor-gate: building debug + running suite (floor=${FLOOR})..."
 swift build -c debug
+BIN="$(swift build --show-bin-path -c debug)/TheBridgeTests"
+if [ ! -x "$BIN" ]; then
+  echo "::error::test-floor-gate: compiled test binary is missing or not executable at $BIN"
+  exit 127
+fi
 
 LOG="$(mktemp -t bridge-test-floor.XXXXXX)"
 trap 'rm -f "$LOG"' EXIT

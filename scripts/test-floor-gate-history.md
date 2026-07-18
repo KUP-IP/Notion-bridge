@@ -2356,3 +2356,7 @@ set -euo pipefail
 # mutation fix after the review-integration + Calendar candidate. Adds 8 greens
 # covering parent/specialist mutation targeting, specialist body-cache eviction,
 # and shared cache refresh. Measured 3355 passed, 0 failed. FLOOR 3334 -> 3342.
+
+# CI portability hardening (2026-07-18): resolve TheBridgeTests through
+# SwiftPM's architecture-aware `swift build --show-bin-path -c debug` output
+# instead of assuming the convenience `.build/debug` symlink exists. Floor unchanged.
