@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "entity": "schedule",
   "additiveProperties": [
     {
@@ -12,6 +12,24 @@
       "key": "operationFingerprint",
       "notionName": "Operation Fingerprint",
       "type": "rich_text",
+      "role": "generic"
+    },
+    {
+      "key": "createInvocationId",
+      "notionName": "Calendar Create Invocation ID",
+      "type": "rich_text",
+      "role": "generic"
+    },
+    {
+      "key": "syncWriterToken",
+      "notionName": "Sync Writer Token",
+      "type": "rich_text",
+      "role": "generic"
+    },
+    {
+      "key": "syncRevision",
+      "notionName": "Sync Revision",
+      "type": "number",
       "role": "generic"
     }
   ],

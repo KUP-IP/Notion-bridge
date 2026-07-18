@@ -79,47 +79,12 @@ public struct FileCalendarRegistryProcessLockCoordinator: CalendarRegistryProces
     public let coordinatorNamespace: String
 
     public init(rootURL: URL) throws {
-        let standardized = rootURL.standardizedFileURL
-        self.rootURL = standardized
-        self.coordinatorNamespace = "local-" + SHA256.hash(data: Data(standardized.path.utf8))
-            .prefix(12).map { String(format: "%02x", $0) }.joined()
-        try FileManager.default.createDirectory(
-            at: standardized,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        try Self.validateRoot(standardized)
-        var values = URLResourceValues()
-        values.isExcludedFromBackup = true
-        var mutable = standardized
-        try? mutable.setResourceValues(values)
-    }
-
-    private static func validateRoot(_ url: URL) throws {
-        var info = stat()
-        guard lstat(url.path, &info) == 0 else {
-            throw CalendarRegistryProcessLockError.storageFailure(
-                "lstat \(url.path) errno=\(errno): \(String(cString: strerror(errno)))"
-            )
-        }
-        guard (info.st_mode & S_IFMT) == S_IFDIR else {
-            throw CalendarRegistryProcessLockError.storageFailure("lock root is not a directory: \(url.path)")
-        }
-        guard info.st_uid == geteuid() else {
-            throw CalendarRegistryProcessLockError.storageFailure("lock root is not owned by the current user: \(url.path)")
-        }
-        if (info.st_mode & 0o077) != 0 {
-            guard chmod(url.path, mode_t(S_IRWXU)) == 0 else {
-                throw CalendarRegistryProcessLockError.storageFailure(
-                    "chmod lock root errno=\(errno): \(String(cString: strerror(errno)))"
-                )
-            }
-            var repaired = stat()
-            guard lstat(url.path, &repaired) == 0, (repaired.st_mode & 0o077) == 0 else {
-                throw CalendarRegistryProcessLockError.storageFailure(
-                    "lock root permissions remain unsafe after repair: \(url.path)"
-                )
-            }
+        do {
+            let prepared = try CalendarRegistryCoordinatorTrust.prepareDirectory(rootURL)
+            self.rootURL = prepared.url
+            self.coordinatorNamespace = prepared.identity.namespace
+        } catch {
+            throw CalendarRegistryProcessLockError.storageFailure(error.localizedDescription)
         }
     }
 
@@ -171,22 +136,55 @@ public struct FileCalendarRegistryProcessLockCoordinator: CalendarRegistryProces
             )
         }
 
-        let owner = "pid=\(ProcessInfo.processInfo.processIdentifier) key=\(idempotencyKey)\n"
-        if ftruncate(fd, 0) != 0 || owner.withCString({ write(fd, $0, strlen($0)) }) < 0 {
+        guard ftruncate(fd, 0) == 0, lseek(fd, 0, SEEK_SET) >= 0 else {
             let captured = errno
+            _ = flock(fd, LOCK_UN)
+            _ = close(fd)
+            throw CalendarRegistryProcessLockError.storageFailure(
+                "reset lock owner file errno=\(captured): \(String(cString: strerror(captured)))"
+            )
+        }
+        let owner = "pid=\(ProcessInfo.processInfo.processIdentifier) lock=\(url.lastPathComponent)\n"
+        var writeError: Int32 = 0
+        let wroteAll = owner.utf8CString.withUnsafeBytes { raw -> Bool in
+            guard let base = raw.baseAddress else { return false }
+            var offset = 0
+            let count = max(0, raw.count - 1)
+            while offset < count {
+                let written = Darwin.write(fd, base.advanced(by: offset), count - offset)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    writeError = errno
+                    return false
+                }
+                if written == 0 {
+                    writeError = EIO
+                    return false
+                }
+                offset += written
+            }
+            return true
+        }
+        if !wroteAll {
+            let captured = writeError == 0 ? EIO : writeError
             _ = flock(fd, LOCK_UN)
             _ = close(fd)
             throw CalendarRegistryProcessLockError.storageFailure(
                 "write lock owner errno=\(captured): \(String(cString: strerror(captured)))"
             )
         }
-        guard fsync(fd) == 0 else {
-            let captured = errno
+        do {
+            guard fsync(fd) == 0 else {
+                throw CalendarRegistryProcessLockError.storageFailure(
+                    "fsync lock owner errno=\(errno): \(String(cString: strerror(errno)))"
+                )
+            }
+            try CalendarRegistryCoordinatorTrust.syncDirectory(rootURL)
+        } catch {
             _ = flock(fd, LOCK_UN)
             _ = close(fd)
-            throw CalendarRegistryProcessLockError.storageFailure(
-                "fsync lock owner errno=\(captured): \(String(cString: strerror(captured)))"
-            )
+            if let lockError = error as? CalendarRegistryProcessLockError { throw lockError }
+            throw CalendarRegistryProcessLockError.storageFailure(error.localizedDescription)
         }
         return FileCalendarRegistryProcessLockHandle(
             idempotencyKey: idempotencyKey,

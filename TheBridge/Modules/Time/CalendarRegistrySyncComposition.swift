@@ -31,8 +31,9 @@ public enum CalendarRegistrySyncComposition {
     public static let enableEnvironmentKey = "BRIDGE_INTERNAL_CALENDAR_REGISTRY_SYNC"
     public static let allowedCalendarsEnvironmentKey = "BRIDGE_INTERNAL_CALENDAR_REGISTRY_ALLOWED_CALENDARS"
     public static let canonicalCoordinatorDirectory = BridgePaths.applicationSupport(.registry)
+        .appendingPathComponent("calendar-registry-coordinator", isDirectory: true)
     public static let canonicalLedgerURL = canonicalCoordinatorDirectory
-        .appendingPathComponent("calendar-registry-transactions.sqlite3")
+        .appendingPathComponent("transactions.sqlite3")
 
     public static func featureState(environment: [String: String]) -> CalendarRegistrySyncFeatureState {
         environment[enableEnvironmentKey] == "1"
@@ -64,13 +65,18 @@ public enum CalendarRegistrySyncComposition {
         guard !allowlist.isEmpty else {
             throw CalendarRegistrySyncCompositionError.missingAllowedCalendars
         }
-        let standardizedLedger = canonicalLedgerURL.standardizedFileURL
-        let parent = canonicalCoordinatorDirectory.standardizedFileURL
-        let values = try parent.resourceValues(forKeys: [.volumeIsLocalKey])
-        guard values.volumeIsLocal == true else {
-            throw CalendarRegistrySyncCompositionError.unsupportedCoordinatorLocation(parent.path)
+        let parent: URL
+        do {
+            parent = try CalendarRegistryCoordinatorTrust.prepareDirectory(
+                canonicalCoordinatorDirectory
+            ).url
+        } catch {
+            throw CalendarRegistrySyncCompositionError.unsupportedCoordinatorLocation(
+                "\(canonicalCoordinatorDirectory.path): \(error.localizedDescription)"
+            )
         }
-        let lockRoot = parent.appendingPathComponent("calendar-registry-locks", isDirectory: true)
+        let standardizedLedger = parent.appendingPathComponent("transactions.sqlite3")
+        let lockRoot = parent.appendingPathComponent("locks", isDirectory: true)
         return CalendarRegistrySyncEngine(
             registry: NotionTimeInstanceRegistryStore(entity: entity, gateway: registryGateway),
             calendar: CalendarStoringSyncProvider(

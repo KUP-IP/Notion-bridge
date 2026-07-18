@@ -2338,3 +2338,8 @@ set -euo pipefail
 
 # Review-integration replay: authority and uniqueness hardening adds 11 greens
 # to the combined candidate floor. FLOOR 3288 -> 3299.
+
+- Calendar–Registry vNext forward-only pairing (2026-07-18): replaced the procedural recovery path with stage-directed forward-only continuation; added a durable Calendar Create Invocation ID that permanently closes automatic recreation after uncertainty, strict production Notion authority/state/revision decoding, synchronization writer tokens and monotonic Sync Revision readback, EventKit metadata v2, bounded owned-identity search receipts, and Operator Review terminal semantics. Hardened a dedicated local coordinator across lock, SQLite, WAL, and SHM files with symlink, owner, mode, link-count, stable device/inode, partial-write, and directory-fsync checks. Expanded the hermetic and production-adapter recovery matrix from 61 to 80 scenarios, including ledger-loss no-recreate, late-stage crash resumption, zero EventKit access before registry authorization, malformed revision refusal, writer-token loss, bounded-search truth, and coordinator attack cases. Measured 3297 passed, 0 failed. FLOOR 3278 -> 3297.
+
+# Review-integration replay: forward-only pairing adds 19 greens to the
+# combined candidate floor. FLOOR 3299 -> 3318.

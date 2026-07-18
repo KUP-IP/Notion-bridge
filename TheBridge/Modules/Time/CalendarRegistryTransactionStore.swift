@@ -9,46 +9,43 @@ private let calendarRegistrySQLiteTransient = unsafeBitCast(
 )
 
 public enum CalendarRegistryTransactionStage: String, Codable, Sendable, CaseIterable {
-    case prepared
-    case registryVerified
-    case calendarCreateIntent
+    case claimed
+    case registryAuthorized
+    case createInvocationPersisted
     case calendarEffectUnknown
-    case calendarCreated
-    case pairPersisted
-    case verified
-    case synced
-    case recoverableError
+    case calendarIdentified
+    case pairIdentityPersisted
+    case syncEvidencePersisted
+    case complete
     case conflict
+    case operatorReview
     case abandoned
 
     fileprivate var progressRank: Int? {
         switch self {
-        case .prepared: return 0
-        case .registryVerified: return 1
-        case .calendarCreateIntent: return 2
-        case .calendarCreated: return 3
-        case .pairPersisted: return 4
-        case .verified: return 5
-        case .synced: return 6
-        case .calendarEffectUnknown, .recoverableError, .conflict, .abandoned: return nil
+        case .claimed: return 0
+        case .registryAuthorized: return 1
+        case .createInvocationPersisted: return 2
+        case .calendarIdentified: return 3
+        case .pairIdentityPersisted: return 4
+        case .syncEvidencePersisted: return 5
+        case .complete: return 6
+        case .calendarEffectUnknown, .conflict, .operatorReview, .abandoned: return nil
         }
     }
 
     fileprivate func permitsTransition(to next: Self) -> Bool {
         if self == next { return true }
-        if next == .conflict || next == .abandoned { return true }
+        if next == .conflict || next == .operatorReview || next == .abandoned { return true }
         switch self {
-        case .conflict, .abandoned:
+        case .conflict, .operatorReview, .abandoned:
             return false
-        case .calendarCreateIntent:
-            return next == .calendarEffectUnknown || next == .calendarCreated
-                || next == .recoverableError || next == .conflict || next == .abandoned
+        case .createInvocationPersisted:
+            return next == .calendarEffectUnknown || next == .calendarIdentified
+                || next == .conflict || next == .operatorReview || next == .abandoned
         case .calendarEffectUnknown:
-            return next == .calendarCreated || next == .conflict || next == .abandoned
-        case .recoverableError:
-            return next == .registryVerified || next == .conflict || next == .abandoned
+            return next == .calendarIdentified || next == .conflict || next == .operatorReview || next == .abandoned
         default:
-            if next == .recoverableError { return true }
             guard let current = progressRank, let target = next.progressRank else { return false }
             return target >= current
         }
@@ -135,6 +132,9 @@ public struct CalendarRegistryTransaction: Codable, Sendable, Equatable {
     public var calendarEventId: String?
     public var calendarId: String?
     public var providerExternalId: String?
+    public var createInvocationId: String?
+    public var syncWriterToken: String?
+    public var syncRevision: Int
     public var createdAt: Date
     public var updatedAt: Date
     public var lastVerifiedAt: Date?
@@ -150,11 +150,14 @@ public struct CalendarRegistryTransaction: Codable, Sendable, Equatable {
         operationId: String,
         idempotencyKey: String,
         manifestFingerprint: String,
-        stage: CalendarRegistryTransactionStage = .prepared,
+        stage: CalendarRegistryTransactionStage = .claimed,
         registryEventId: String? = nil,
         calendarEventId: String? = nil,
         calendarId: String? = nil,
         providerExternalId: String? = nil,
+        createInvocationId: String? = nil,
+        syncWriterToken: String? = nil,
+        syncRevision: Int = 0,
         createdAt: Date,
         updatedAt: Date,
         lastVerifiedAt: Date? = nil,
@@ -174,6 +177,9 @@ public struct CalendarRegistryTransaction: Codable, Sendable, Equatable {
         self.calendarEventId = calendarEventId
         self.calendarId = calendarId
         self.providerExternalId = providerExternalId
+        self.createInvocationId = createInvocationId
+        self.syncWriterToken = syncWriterToken
+        self.syncRevision = syncRevision
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.lastVerifiedAt = lastVerifiedAt
@@ -234,18 +240,31 @@ public protocol CalendarRegistryTransactionStoring: Sendable {
 /// Cross-process external-effect exclusion is provided by the separate OS advisory
 /// lock; callers may override a stale SQLite lease only while holding that lock.
 public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransactionStoring {
-    public static let schemaVersion = 3
+    public static let schemaVersion = 4
 
     private let url: URL
+    private let ledgerIdentity: CalendarRegistryFilesystemIdentity
     nonisolated(unsafe) private var db: OpaquePointer?
 
-    public init(url: URL) throws {
-        self.url = url
-        let parent = url.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+    public init(url requestedURL: URL) throws {
+        let parent: URL
+        let resolvedURL: URL
+        let initialIdentity: CalendarRegistryFilesystemIdentity
+        do {
+            let prepared = try CalendarRegistryCoordinatorTrust.prepareDirectory(
+                requestedURL.deletingLastPathComponent()
+            )
+            parent = prepared.url
+            resolvedURL = parent.appendingPathComponent(requestedURL.lastPathComponent, isDirectory: false)
+            initialIdentity = try CalendarRegistryCoordinatorTrust.prepareRegularFile(resolvedURL)
+        } catch {
+            throw CalendarRegistryTransactionStoreError.storageFailure(error.localizedDescription)
+        }
+        self.url = resolvedURL
+        self.ledgerIdentity = initialIdentity
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
-        let rc = sqlite3_open_v2(url.path, &handle, flags, nil)
+        let rc = sqlite3_open_v2(resolvedURL.path, &handle, flags, nil)
         guard rc == SQLITE_OK, let handle else {
             let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "sqlite3_open_v2 rc=\(rc)"
             if let handle { sqlite3_close_v2(handle) }
@@ -253,8 +272,11 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
         }
         self.db = handle
         sqlite3_busy_timeout(handle, 10_000)
-        do { try Self.bootstrap(handle) }
-        catch {
+        do {
+            try Self.bootstrap(handle)
+            try validateStorageFiles()
+            try CalendarRegistryCoordinatorTrust.syncDirectory(parent)
+        } catch {
             sqlite3_close_v2(handle)
             self.db = nil
             throw error
@@ -342,7 +364,10 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
                 lease_owner TEXT,
                 lease_token TEXT,
                 lease_expires_at REAL,
-                heartbeat_at REAL
+                heartbeat_at REAL,
+                create_invocation_id TEXT,
+                sync_writer_token TEXT,
+                sync_revision INTEGER NOT NULL DEFAULT 0
             );
             """)
             let existingColumns = try columns("calendar_registry_transactions")
@@ -351,13 +376,23 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
                 ("lease_owner", "TEXT"),
                 ("lease_token", "TEXT"),
                 ("lease_expires_at", "REAL"),
-                ("heartbeat_at", "REAL")
+                ("heartbeat_at", "REAL"),
+                ("create_invocation_id", "TEXT"),
+                ("sync_writer_token", "TEXT"),
+                ("sync_revision", "INTEGER NOT NULL DEFAULT 0")
             ]
             for (name, definition) in additions where !existingColumns.contains(name) {
                 try exec("ALTER TABLE calendar_registry_transactions ADD COLUMN \(name) \(definition);")
             }
             try exec("UPDATE calendar_registry_transactions SET revision=1 WHERE revision IS NULL OR revision < 1;")
-            try exec("UPDATE calendar_registry_transactions SET stage='registryVerified' WHERE stage='registryCreated';")
+            try exec("UPDATE calendar_registry_transactions SET sync_revision=0 WHERE sync_revision IS NULL OR sync_revision < 0;")
+            try exec("UPDATE calendar_registry_transactions SET stage='claimed' WHERE stage IN ('prepared','recoverableError');")
+            try exec("UPDATE calendar_registry_transactions SET stage='registryAuthorized' WHERE stage IN ('registryCreated','registryVerified');")
+            try exec("UPDATE calendar_registry_transactions SET stage='createInvocationPersisted' WHERE stage='calendarCreateIntent';")
+            try exec("UPDATE calendar_registry_transactions SET stage='calendarIdentified' WHERE stage='calendarCreated';")
+            try exec("UPDATE calendar_registry_transactions SET stage='pairIdentityPersisted' WHERE stage='pairPersisted';")
+            try exec("UPDATE calendar_registry_transactions SET stage='syncEvidencePersisted' WHERE stage='verified';")
+            try exec("UPDATE calendar_registry_transactions SET stage='complete' WHERE stage='synced';")
 
             try exec("DROP TABLE IF EXISTS calendar_registry_schema_new;")
             try exec("CREATE TABLE calendar_registry_schema_new (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);")
@@ -470,7 +505,8 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
     }
 
     public func get(idempotencyKey: String) throws -> CalendarRegistryTransaction? {
-        try select(idempotencyKey: idempotencyKey)
+        try validateStorageFiles()
+        return try select(idempotencyKey: idempotencyKey)
     }
 
     public func save(_ transaction: CalendarRegistryTransaction) throws -> CalendarRegistryTransaction {
@@ -486,7 +522,7 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
                 operation_id=?, manifest_fingerprint=?, stage=?, registry_event_id=?,
                 calendar_event_id=?, calendar_id=?, provider_external_id=?, created_at=?,
                 updated_at=?, last_verified_at=?, last_error=?, partial_effects_json=?,
-                heartbeat_at=?, revision=revision+1
+                heartbeat_at=?, create_invocation_id=?, sync_writer_token=?, sync_revision=?, revision=revision+1
             WHERE idempotency_key=? AND revision=? AND lease_token=? AND lease_owner=?;
             """
             try withStatement(sql) { stmt in
@@ -503,10 +539,13 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
                 try bindOptionalText(stmt, 11, transaction.lastError)
                 try bindText(stmt, 12, try partialEffectsJSON(transaction.partialEffects))
                 try bindDouble(stmt, 13, now)
-                try bindText(stmt, 14, transaction.idempotencyKey)
-                try bindInt(stmt, 15, transaction.revision)
-                try bindText(stmt, 16, transaction.leaseToken ?? "")
-                try bindText(stmt, 17, transaction.leaseOwner ?? "")
+                try bindOptionalText(stmt, 14, transaction.createInvocationId)
+                try bindOptionalText(stmt, 15, transaction.syncWriterToken)
+                try bindInt(stmt, 16, transaction.syncRevision)
+                try bindText(stmt, 17, transaction.idempotencyKey)
+                try bindInt(stmt, 18, transaction.revision)
+                try bindText(stmt, 19, transaction.leaseToken ?? "")
+                try bindText(stmt, 20, transaction.leaseOwner ?? "")
                 try stepDone(stmt)
             }
             guard sqlite3_changes(db) == 1 else { throw try ownershipError(for: transaction) }
@@ -571,9 +610,13 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
             ("registry event id", existing.registryEventId, incoming.registryEventId),
             ("calendar event id", existing.calendarEventId, incoming.calendarEventId),
             ("calendar id", existing.calendarId, incoming.calendarId),
-            ("provider external id", existing.providerExternalId, incoming.providerExternalId)
+            ("provider external id", existing.providerExternalId, incoming.providerExternalId),
+            ("create invocation id", existing.createInvocationId, incoming.createInvocationId)
         ] where old?.isEmpty == false && new != old {
             throw CalendarRegistryTransactionStoreError.identityRegression("\(name) is immutable once established")
+        }
+        guard incoming.syncRevision >= existing.syncRevision else {
+            throw CalendarRegistryTransactionStoreError.identityRegression("sync revision cannot decrease")
         }
     }
 
@@ -594,8 +637,9 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
             idempotency_key, operation_id, manifest_fingerprint, stage,
             registry_event_id, calendar_event_id, calendar_id, provider_external_id,
             created_at, updated_at, last_verified_at, last_error, partial_effects_json,
-            revision, lease_owner, lease_token, lease_expires_at, heartbeat_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            revision, lease_owner, lease_token, lease_expires_at, heartbeat_at,
+            create_invocation_id, sync_writer_token, sync_revision
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         try withStatement(sql) { stmt in try bind(transaction, to: stmt); try stepDone(stmt) }
     }
@@ -619,6 +663,9 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
         try bindOptionalText(stmt, 16, transaction.leaseToken)
         try bindOptionalDouble(stmt, 17, transaction.leaseExpiresAt?.timeIntervalSince1970)
         try bindOptionalDouble(stmt, 18, transaction.heartbeatAt?.timeIntervalSince1970)
+        try bindOptionalText(stmt, 19, transaction.createInvocationId)
+        try bindOptionalText(stmt, 20, transaction.syncWriterToken)
+        try bindInt(stmt, 21, transaction.syncRevision)
     }
 
     private func requiredSelect(_ key: String) throws -> CalendarRegistryTransaction {
@@ -631,7 +678,8 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
         SELECT operation_id, idempotency_key, manifest_fingerprint, stage,
                registry_event_id, calendar_event_id, calendar_id, provider_external_id,
                created_at, updated_at, last_verified_at, last_error, partial_effects_json,
-               revision, lease_owner, lease_token, lease_expires_at, heartbeat_at
+               revision, lease_owner, lease_token, lease_expires_at, heartbeat_at,
+               create_invocation_id, sync_writer_token, sync_revision
         FROM calendar_registry_transactions WHERE idempotency_key=? LIMIT 1;
         """
         return try withStatement(sql) { stmt in
@@ -654,6 +702,8 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
             guard revision >= 1 else { throw CalendarRegistryTransactionStoreError.corruptLedger("invalid revision for \(idempotencyKey)") }
             let leaseExpiry = optionalDouble(stmt, 16).map(Date.init(timeIntervalSince1970:))
             let heartbeat = optionalDouble(stmt, 17).map(Date.init(timeIntervalSince1970:))
+            let syncRevision = Int(sqlite3_column_int64(stmt, 20))
+            guard syncRevision >= 0 else { throw CalendarRegistryTransactionStoreError.corruptLedger("invalid sync revision for \(idempotencyKey)") }
             return CalendarRegistryTransaction(
                 operationId: operationId,
                 idempotencyKey: storedKey,
@@ -663,6 +713,9 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
                 calendarEventId: text(stmt, 5),
                 calendarId: text(stmt, 6),
                 providerExternalId: text(stmt, 7),
+                createInvocationId: text(stmt, 18),
+                syncWriterToken: text(stmt, 19),
+                syncRevision: syncRevision,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 lastVerifiedAt: text(stmt, 10).flatMap(CalendarRegistryISO.date),
@@ -688,8 +741,38 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
         }
     }
 
-    private func beginImmediate() throws { try execute("BEGIN IMMEDIATE;") }
-    private func commit() throws { try execute("COMMIT;") }
+
+    nonisolated private func validateStorageFiles() throws {
+        do {
+            guard let main = try CalendarRegistryCoordinatorTrust.validateRegularFileIfPresent(url) else {
+                throw CalendarRegistryCoordinatorTrustError.unsafe("SQLite ledger disappeared: \(url.path)")
+            }
+            try CalendarRegistryCoordinatorTrust.requireStable(
+                ledgerIdentity, actual: main, label: "SQLite ledger"
+            )
+            _ = try CalendarRegistryCoordinatorTrust.validateRegularFileIfPresent(
+                URL(fileURLWithPath: url.path + "-wal")
+            )
+            _ = try CalendarRegistryCoordinatorTrust.validateRegularFileIfPresent(
+                URL(fileURLWithPath: url.path + "-shm")
+            )
+        } catch {
+            throw CalendarRegistryTransactionStoreError.storageFailure(error.localizedDescription)
+        }
+    }
+    private func beginImmediate() throws {
+        try validateStorageFiles()
+        try execute("BEGIN IMMEDIATE;")
+    }
+    private func commit() throws {
+        try execute("COMMIT;")
+        try validateStorageFiles()
+        do {
+            try CalendarRegistryCoordinatorTrust.syncDirectory(url.deletingLastPathComponent())
+        } catch {
+            throw CalendarRegistryTransactionStoreError.storageFailure(error.localizedDescription)
+        }
+    }
     private func rollback() throws { try execute("ROLLBACK;") }
 
     private func execute(_ sql: String) throws {
@@ -831,9 +914,13 @@ public actor InMemoryCalendarRegistryTransactionStore: CalendarRegistryTransacti
             ("registry event id", current.registryEventId, transaction.registryEventId),
             ("calendar event id", current.calendarEventId, transaction.calendarEventId),
             ("calendar id", current.calendarId, transaction.calendarId),
-            ("provider external id", current.providerExternalId, transaction.providerExternalId)
+            ("provider external id", current.providerExternalId, transaction.providerExternalId),
+            ("create invocation id", current.createInvocationId, transaction.createInvocationId)
         ] where old?.isEmpty == false && new != old {
             throw CalendarRegistryTransactionStoreError.identityRegression("\(name) is immutable once established")
+        }
+        guard transaction.syncRevision >= current.syncRevision else {
+            throw CalendarRegistryTransactionStoreError.identityRegression("sync revision cannot decrease")
         }
         var saved = transaction
         saved.revision += 1
