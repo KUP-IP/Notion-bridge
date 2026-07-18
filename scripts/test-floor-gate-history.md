@@ -2359,4 +2359,6 @@ set -euo pipefail
 
 # CI portability hardening (2026-07-18): resolve TheBridgeTests through
 # SwiftPM's architecture-aware `swift build --show-bin-path -c debug` output
-# instead of assuming the convenience `.build/debug` symlink exists. Floor unchanged.
+# instead of assuming the convenience `.build/debug` symlink exists, and request
+# the `TheBridgeTests` executable product explicitly so a clean SwiftPM build
+# cannot stop after compiling target objects without linking the harness. Floor unchanged.

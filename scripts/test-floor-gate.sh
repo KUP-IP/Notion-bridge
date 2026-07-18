@@ -11,8 +11,8 @@
 # Full append-only FLOOR provenance: scripts/test-floor-gate-history.md
 FLOOR="${BRIDGE_TEST_FLOOR:-3342}"
 
-echo "🧪 test-floor-gate: building debug + running suite (floor=${FLOOR})..."
-swift build -c debug
+echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
+swift build -c debug --product TheBridgeTests
 BIN="$(swift build --show-bin-path -c debug)/TheBridgeTests"
 if [ ! -x "$BIN" ]; then
   echo "::error::test-floor-gate: compiled test binary is missing or not executable at $BIN"
