@@ -1,6 +1,7 @@
 // CalendarRegistrySyncEngineTests.swift — forward-only registry-first pairing contract
 
 import Foundation
+import Darwin
 import MCP
 import SQLite3
 import TheBridgeLib
@@ -1925,12 +1926,75 @@ func runCalendarRegistrySyncEngineTests() async {
         }
     }
 
+    let crashCheckpoints = CalendarRegistryDurableCheckpoint.allCases
+    for (offset, checkpoint) in crashCheckpoints.enumerated() {
+        await test("CR\(81 + offset) process termination after \(checkpoint.rawValue) remains at-most-once") {
+            try await withTempDirectory { directory in
+                let binary = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+                let key = "crash-\(checkpoint.rawValue)"
+
+                let crashed = Process()
+                crashed.executableURL = binary
+                crashed.arguments = [
+                    "--calendar-registry-crash-probe", directory.path, key, checkpoint.rawValue
+                ]
+                try crashed.run()
+                crashed.waitUntilExit()
+                try expect(
+                    crashed.terminationReason == .exit && crashed.terminationStatus == 86,
+                    "checkpoint child did not terminate at \(checkpoint.rawValue): reason=\(crashed.terminationReason) status=\(crashed.terminationStatus)"
+                )
+
+                for attempt in 1...2 {
+                    let recovery = Process()
+                    recovery.executableURL = binary
+                    recovery.arguments = [
+                        "--calendar-registry-crash-probe", directory.path, key, "recover"
+                    ]
+                    try recovery.run()
+                    recovery.waitUntilExit()
+                    try expect(
+                        recovery.terminationReason == .exit && recovery.terminationStatus == 0,
+                        "recovery \(attempt) failed after \(checkpoint.rawValue): reason=\(recovery.terminationReason) status=\(recovery.terminationStatus)"
+                    )
+                }
+
+                let outcomeURL = directory.appendingPathComponent("crash-probe-outcome.json")
+                let outcome = try JSONDecoder().decode(
+                    CrashProbeOutcome.self, from: Data(contentsOf: outcomeURL)
+                )
+                let reviewOnly = checkpoint == .createInvocationRegistryPersisted
+                    || checkpoint == .createInvocationLedgerPersisted
+                try expect(outcome.calendarCreateCount == (reviewOnly ? 0 : 1))
+                try expect(outcome.succeeded == !reviewOnly)
+                try expect(outcome.stage == (reviewOnly
+                    ? CalendarRegistryTransactionStage.operatorReview.rawValue
+                    : CalendarRegistryTransactionStage.complete.rawValue))
+            }
+        }
+    }
+
+    await test("CR96 legacy procedural recovery helpers are absent") {
+        let sourceURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent("TheBridge/Modules/Time/CalendarRegistrySyncEngine.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        try expect(!source.contains("func resolveOrCreateCalendar("))
+        try expect(!source.contains("func adoptExistingCalendarIdentity("))
+    }
+
 }
 
 // MARK: - Child-process probe
 
 func calendarRegistryProcessProbeExitCodeIfRequested() -> Int32? {
     let args = CommandLine.arguments
+    if let index = args.firstIndex(of: "--calendar-registry-crash-probe"), args.count >= index + 4 {
+        return calendarRegistryCrashProbeExitCode(
+            root: URL(fileURLWithPath: args[index + 1], isDirectory: true),
+            key: args[index + 2],
+            checkpointRawValue: args[index + 3]
+        )
+    }
     guard let index = args.firstIndex(of: "--calendar-registry-process-probe"), args.count >= index + 4 else {
         return nil
     }
@@ -1979,6 +2043,208 @@ func calendarRegistryProcessProbeExitCodeIfRequested() -> Int32? {
     }
     semaphore.wait()
     return result
+}
+
+private struct CrashProbeOutcome: Codable {
+    var succeeded: Bool
+    var stage: String
+    var calendarCreateCount: Int
+}
+
+private struct CrashRegistryState: Codable {
+    var calendarProvider: String?
+    var calendarId: String?
+    var calendarEventId: String?
+    var providerExternalId: String?
+    var calendarItemURL: String?
+    var createInvocationId: String?
+    var syncWriterToken: String?
+    var syncRevision: Int
+    var syncState: TimeInstanceSyncState
+    var lastSyncedAt: Date?
+    var registryUpdatedAt: Date
+    var calendarUpdatedAt: Date?
+    var syncHash: String
+    var lastSyncError: String?
+    var registryRevision: String?
+
+    init(_ record: TimeInstanceRecord) {
+        calendarProvider = record.calendarProvider
+        calendarId = record.calendarId
+        calendarEventId = record.calendarEventId
+        providerExternalId = record.providerExternalId
+        calendarItemURL = record.calendarItemURL
+        createInvocationId = record.createInvocationId
+        syncWriterToken = record.syncWriterToken
+        syncRevision = record.syncRevision
+        syncState = record.syncState
+        lastSyncedAt = record.lastSyncedAt
+        registryUpdatedAt = record.registryUpdatedAt
+        calendarUpdatedAt = record.calendarUpdatedAt
+        syncHash = record.syncHash
+        lastSyncError = record.lastSyncError
+        registryRevision = record.registryRevision
+    }
+
+    func applying(to base: TimeInstanceRecord) -> TimeInstanceRecord {
+        var record = base
+        record.calendarProvider = calendarProvider
+        record.calendarId = calendarId
+        record.calendarEventId = calendarEventId
+        record.providerExternalId = providerExternalId
+        record.calendarItemURL = calendarItemURL
+        record.createInvocationId = createInvocationId
+        record.syncWriterToken = syncWriterToken
+        record.syncRevision = syncRevision
+        record.syncState = syncState
+        record.lastSyncedAt = lastSyncedAt
+        record.registryUpdatedAt = registryUpdatedAt
+        record.calendarUpdatedAt = calendarUpdatedAt
+        record.syncHash = syncHash
+        record.lastSyncError = lastSyncError
+        record.registryRevision = registryRevision
+        return record
+    }
+}
+
+private func calendarRegistryCrashProbeExitCode(
+    root: URL,
+    key: String,
+    checkpointRawValue: String
+) -> Int32 {
+    let semaphore = DispatchSemaphore(value: 0)
+    nonisolated(unsafe) var result: Int32 = 1
+    Task.detached {
+        do {
+            let request = RegistryFirstTimeInstanceRequest(
+                idempotencyKey: key,
+                registryEventId: "crash-probe-event",
+                title: "Crash Probe",
+                start: Date(timeIntervalSince1970: 1_800_020_000),
+                end: Date(timeIntervalSince1970: 1_800_023_600),
+                timeZoneIdentifier: "America/Chicago",
+                calendarId: "cal-private",
+                notes: "Crash Probe",
+                semantics: TimeInstanceSemantics(eventClass: .focus, primaryBlockId: "block-crash-probe")
+            )
+            let registry = try CrashProbeRegistry(root: root, request: request)
+            let calendar = ProbeCalendar(root: root, holdMilliseconds: 0)
+            let ledger = try SQLiteCalendarRegistryTransactionStore(
+                url: root.appendingPathComponent("crash-ledger.sqlite3")
+            )
+            let locks = try FileCalendarRegistryProcessLockCoordinator(
+                rootURL: root.appendingPathComponent("crash-locks", isDirectory: true)
+            )
+            let selected = CalendarRegistryDurableCheckpoint(rawValue: checkpointRawValue)
+            let engine = CalendarRegistrySyncEngine(
+                registry: registry,
+                calendar: calendar,
+                transactions: ledger,
+                processLocks: locks,
+                operationGate: CalendarRegistryOperationGate(),
+                clock: { Date(timeIntervalSince1970: 1_800_000_000) },
+                durableCheckpoint: { observed in
+                    if observed == selected { _exit(86) }
+                },
+                leaseDuration: 0.1
+            )
+            let receipt = try await engine.registryFirstCreate(request)
+            let count = crashProbeCalendarCreateCount(root: root)
+            let outcome = CrashProbeOutcome(
+                succeeded: receipt.succeeded,
+                stage: receipt.stageAfter.rawValue,
+                calendarCreateCount: count
+            )
+            try JSONEncoder().encode(outcome).write(
+                to: root.appendingPathComponent("crash-probe-outcome.json"), options: .atomic
+            )
+            if selected != nil {
+                result = 4
+            } else if receipt.succeeded || receipt.stageAfter == .operatorReview {
+                result = count <= 1 ? 0 : 5
+            } else {
+                result = 6
+            }
+        } catch {
+            fputs("crash probe failed: \(error)\n", stderr)
+            result = 7
+        }
+        semaphore.signal()
+    }
+    semaphore.wait()
+    return result
+}
+
+private func crashProbeCalendarCreateCount(root: URL) -> Int {
+    let url = root.appendingPathComponent("calendar-create-count")
+    return (try? String(contentsOf: url, encoding: .utf8))
+        .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) } ?? 0
+}
+
+private actor CrashProbeRegistry: TimeInstanceRegistryStoring {
+    private let stateURL: URL
+    private let request: RegistryFirstTimeInstanceRequest
+
+    init(root: URL, request: RegistryFirstTimeInstanceRequest) throws {
+        self.stateURL = root.appendingPathComponent("crash-registry-state.json")
+        self.request = request
+        if !FileManager.default.fileExists(atPath: stateURL.path) {
+            try JSONEncoder().encode(CrashRegistryState(canonicalRecord(request)))
+                .write(to: stateURL, options: .atomic)
+        }
+    }
+
+    private func load() throws -> TimeInstanceRecord {
+        let state = try JSONDecoder().decode(
+            CrashRegistryState.self, from: Data(contentsOf: stateURL)
+        )
+        return state.applying(to: canonicalRecord(request))
+    }
+
+    private func persist(_ record: TimeInstanceRecord) throws {
+        try JSONEncoder().encode(CrashRegistryState(record)).write(to: stateURL, options: .atomic)
+    }
+
+    func findBySyncKey(_ syncKey: String) async throws -> RegistryIdentityLookup {
+        let record = try load()
+        return RegistryIdentityLookup(records: record.syncKey == syncKey ? [record] : [], source: .live)
+    }
+
+    func readIdentity(id: String, forceRefresh: Bool) async throws -> RegistryRecordIdentityRead {
+        _ = forceRefresh
+        let record = try load()
+        return id == record.id ? .decoded(record) : .missing
+    }
+
+    func get(id: String, forceRefresh: Bool) async throws -> TimeInstanceRecord? {
+        _ = forceRefresh
+        let record = try load()
+        return id == record.id ? record : nil
+    }
+
+    func savePairing(_ proposed: TimeInstanceRecord, expectedRevision: String?) async throws -> TimeInstanceRecord {
+        var saved = try load()
+        guard saved.registryRevision == expectedRevision else {
+            throw CalendarRegistrySyncError.identityConflict("crash probe revision mismatch")
+        }
+        saved.calendarProvider = proposed.calendarProvider
+        saved.calendarId = proposed.calendarId
+        saved.calendarEventId = proposed.calendarEventId
+        saved.providerExternalId = proposed.providerExternalId
+        saved.calendarItemURL = proposed.calendarItemURL
+        saved.createInvocationId = proposed.createInvocationId
+        saved.syncWriterToken = proposed.syncWriterToken
+        saved.syncRevision = proposed.syncRevision
+        saved.syncState = proposed.syncState
+        saved.registryUpdatedAt = proposed.registryUpdatedAt
+        saved.syncHash = proposed.syncHash
+        saved.lastSyncError = proposed.lastSyncError
+        saved.lastSyncedAt = proposed.lastSyncedAt
+        saved.calendarUpdatedAt = proposed.calendarUpdatedAt
+        saved.registryRevision = "crash-revision-\(UUID().uuidString.lowercased())"
+        try persist(saved)
+        return saved
+    }
 }
 
 private actor ProbeRegistry: TimeInstanceRegistryStoring {

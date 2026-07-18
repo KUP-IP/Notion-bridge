@@ -575,6 +575,27 @@ public enum CalendarRegistryRouteClassifier {
     }
 }
 
+/// Package-scoped crash-injection seam for proving forward recovery across
+/// durable writes and the EventKit external effect. Production composition uses
+/// the no-op default; no public tool or runtime setting can select a checkpoint.
+package enum CalendarRegistryDurableCheckpoint: String, CaseIterable, Sendable {
+    case claimPersisted
+    case registryAuthorizationPersisted
+    case createInvocationHeartbeatPersisted
+    case createInvocationRegistryPersisted
+    case createInvocationLedgerPersisted
+    case calendarCreateReturned
+    case calendarIdentityLedgerPersisted
+    case pairIdentityHeartbeatPersisted
+    case pairIdentityRegistryPersisted
+    case pairIdentityLedgerPersisted
+    case syncEvidenceHeartbeatPersisted
+    case syncEvidenceRegistryPersisted
+    case syncEvidenceLedgerPersisted
+    case completionLedgerPersisted
+    case completionLeaseReleased
+}
+
 public actor CalendarRegistrySyncEngine {
     private let registry: any TimeInstanceRegistryStoring
     private let calendar: any CalendarSyncProviding
@@ -586,6 +607,7 @@ public actor CalendarRegistrySyncEngine {
     private let makeLeaseToken: @Sendable () -> String
     private let makeCreateInvocationId: @Sendable () -> String
     private let makeSyncWriterToken: @Sendable () -> String
+    private let durableCheckpoint: @Sendable (CalendarRegistryDurableCheckpoint) -> Void
     private let leaseDuration: TimeInterval
 
     package init(
@@ -599,6 +621,7 @@ public actor CalendarRegistrySyncEngine {
         makeLeaseToken: @Sendable @escaping () -> String = { UUID().uuidString.lowercased() },
         makeCreateInvocationId: @Sendable @escaping () -> String = { UUID().uuidString.lowercased() },
         makeSyncWriterToken: @Sendable @escaping () -> String = { UUID().uuidString.lowercased() },
+        durableCheckpoint: @Sendable @escaping (CalendarRegistryDurableCheckpoint) -> Void = { _ in },
         leaseDuration: TimeInterval = 600
     ) {
         self.registry = registry
@@ -611,6 +634,7 @@ public actor CalendarRegistrySyncEngine {
         self.makeLeaseToken = makeLeaseToken
         self.makeCreateInvocationId = makeCreateInvocationId
         self.makeSyncWriterToken = makeSyncWriterToken
+        self.durableCheckpoint = durableCheckpoint
         self.leaseDuration = leaseDuration
     }
 
@@ -697,6 +721,7 @@ public actor CalendarRegistrySyncEngine {
             leaseDuration: leaseDuration,
             exclusiveProcessLockHeld: true
         )
+        durableCheckpoint(.claimPersisted)
         let stageBefore = transaction.stage
         let fencingToken = transaction.leaseToken
         var record: TimeInstanceRecord?
@@ -736,6 +761,7 @@ public actor CalendarRegistrySyncEngine {
                     transaction.lastError = nil
                     transaction.partialEffects.append("strictly authorized pre-existing Notion EVENT \(request.registryEventId)")
                     transaction = try await transactions.save(transaction)
+                    durableCheckpoint(.registryAuthorizationPersisted)
                     evidence.append("Notion authority and admissibility were proven before EventKit access")
 
                 case .registryAuthorized:
@@ -767,7 +793,9 @@ public actor CalendarRegistrySyncEngine {
                     authorized.syncWriterToken = writerToken
                     authorized.registryUpdatedAt = clock()
                     try await heartbeat(&transaction)
+                    durableCheckpoint(.createInvocationHeartbeatPersisted)
                     authorized = try await registry.savePairing(authorized, expectedRevision: authorized.registryRevision)
+                    durableCheckpoint(.createInvocationRegistryPersisted)
                     try assertWriterEvidence(
                         authorized, expectedInvocationId: invocationId,
                         expectedWriterToken: writerToken, expectedSyncRevision: authorized.syncRevision
@@ -781,6 +809,7 @@ public actor CalendarRegistrySyncEngine {
                     transaction.stage = .createInvocationPersisted
                     transaction.partialEffects.append("persisted Create Invocation ID \(invocationId) before EventKit create")
                     transaction = try await transactions.save(transaction)
+                    durableCheckpoint(.createInvocationLedgerPersisted)
                     createAuthorizedThisAttempt = true
 
                 case .createInvocationPersisted, .calendarEffectUnknown:
@@ -826,6 +855,7 @@ public actor CalendarRegistrySyncEngine {
                             operationFingerprint: request.manifest.fingerprint,
                             createInvocationId: invocationId
                         ))
+                        durableCheckpoint(.calendarCreateReturned)
                         try assertCalendarMatchesManifest(created, request: request, createInvocationId: invocationId)
                         try setCalendarIdentity(created, on: &transaction)
                         calendarItem = created
@@ -833,6 +863,7 @@ public actor CalendarRegistrySyncEngine {
                         transaction.lastError = nil
                         transaction.partialEffects.append("invoked EventKit create once for \(invocationId) and identified \(created.localEventId)")
                         transaction = try await transactions.save(transaction)
+                        durableCheckpoint(.calendarIdentityLedgerPersisted)
                         calendarFields.append(contentsOf: [
                             "title", "start", "end", "timeZone", "calendarId", "location", "notes",
                             "syncKey", "operationFingerprint", "createInvocationId"
@@ -858,7 +889,9 @@ public actor CalendarRegistrySyncEngine {
                     pair.syncWriterToken = makeSyncWriterToken()
                     pair.registryUpdatedAt = clock()
                     try await heartbeat(&transaction)
+                    durableCheckpoint(.pairIdentityHeartbeatPersisted)
                     pair = try await registry.savePairing(pair, expectedRevision: record?.registryRevision)
+                    durableCheckpoint(.pairIdentityRegistryPersisted)
                     try assertWriterEvidence(
                         pair, expectedInvocationId: transaction.createInvocationId,
                         expectedWriterToken: pair.syncWriterToken, expectedSyncRevision: pair.syncRevision
@@ -872,6 +905,7 @@ public actor CalendarRegistrySyncEngine {
                     transaction.stage = .pairIdentityPersisted
                     transaction.partialEffects.append("persisted immutable pair identity to Notion")
                     transaction = try await transactions.save(transaction)
+                    durableCheckpoint(.pairIdentityLedgerPersisted)
                     pairPersisted = true
 
                 case .pairIdentityPersisted:
@@ -910,9 +944,11 @@ public actor CalendarRegistrySyncEngine {
                     syncedRecord.syncRevision += 1
                     syncedRecord.syncWriterToken = makeSyncWriterToken()
                     try await heartbeat(&transaction)
+                    durableCheckpoint(.syncEvidenceHeartbeatPersisted)
                     syncedRecord = try await registry.savePairing(
                         syncedRecord, expectedRevision: preliminary.record.registryRevision
                     )
+                    durableCheckpoint(.syncEvidenceRegistryPersisted)
                     try assertWriterEvidence(
                         syncedRecord, expectedInvocationId: transaction.createInvocationId,
                         expectedWriterToken: syncedRecord.syncWriterToken,
@@ -926,6 +962,7 @@ public actor CalendarRegistrySyncEngine {
                     transaction.stage = .syncEvidencePersisted
                     transaction.lastError = nil
                     transaction = try await transactions.save(transaction)
+                    durableCheckpoint(.syncEvidenceLedgerPersisted)
 
                 case .syncEvidencePersisted:
                     guard let recordId = transaction.registryEventId,
@@ -945,6 +982,7 @@ public actor CalendarRegistrySyncEngine {
                     transaction.lastVerifiedAt = final.record.lastSyncedAt
                     transaction.lastError = nil
                     transaction = try await transactions.save(transaction)
+                    durableCheckpoint(.completionLedgerPersisted)
 
                 case .complete:
                     guard let recordId = transaction.registryEventId,
@@ -957,6 +995,7 @@ public actor CalendarRegistrySyncEngine {
                         expectedCreateInvocationId: transaction.createInvocationId
                     )
                     let released = try await transactions.release(transaction)
+                    durableCheckpoint(.completionLeaseReleased)
                     return makeReceipt(
                         succeeded: true, infrastructureFault: false, ledgerPersisted: true,
                         notionPersisted: notionOutcomePersisted, pairPersisted: true,
@@ -1208,116 +1247,6 @@ public actor CalendarRegistrySyncEngine {
         }
         try assertCalendarMatchesManifest(item, request: request, createInvocationId: transaction.createInvocationId)
         return item
-    }
-
-    private func adoptExistingCalendarIdentity(
-        from record: TimeInstanceRecord,
-        into transaction: inout CalendarRegistryTransaction
-    ) throws {
-        for (name, existing, candidate) in [
-            ("calendar event id", transaction.calendarEventId, record.calendarEventId),
-            ("calendar id", transaction.calendarId, record.calendarId),
-            ("provider external id", transaction.providerExternalId, record.providerExternalId)
-        ] where existing?.isEmpty == false && candidate?.isEmpty == false && existing != candidate {
-            throw CalendarRegistrySyncError.identityConflict("ledger and Notion \(name) differ")
-        }
-        transaction.calendarEventId = transaction.calendarEventId ?? record.calendarEventId
-        transaction.calendarId = transaction.calendarId ?? record.calendarId
-        transaction.providerExternalId = transaction.providerExternalId ?? record.providerExternalId
-    }
-
-    private func resolveOrCreateCalendar(
-        request: RegistryFirstTimeInstanceRequest,
-        record: TimeInstanceRecord,
-        transaction: inout CalendarRegistryTransaction,
-        fieldsWritten: inout [String]
-    ) async throws -> ExternalCalendarItem {
-        let priorEvidence = [
-            transaction.calendarEventId, transaction.providerExternalId,
-            record.calendarEventId, record.providerExternalId
-        ].contains { $0?.isEmpty == false }
-        let query = CalendarRecoveryQuery(
-            localEventId: transaction.calendarEventId ?? record.calendarEventId,
-            providerExternalId: transaction.providerExternalId ?? record.providerExternalId,
-            syncKey: request.idempotencyKey,
-            operationFingerprint: request.manifest.fingerprint,
-            calendarId: request.calendarId,
-            title: request.title,
-            start: request.start,
-            end: request.end
-        )
-        let recovered = try await calendar.recover(query)
-        if recovered.count > 1 {
-            throw CalendarRegistrySyncError.ambiguousCalendarIdentity(recovered.map { $0.localEventId })
-        }
-        if let existing = recovered.first {
-            try assertCalendarMatchesManifest(existing, request: request)
-            try setCalendarIdentity(existing, on: &transaction)
-            transaction.stage = .calendarIdentified
-            if !transaction.partialEffects.contains("recovered calendar event \(existing.localEventId)") {
-                transaction.partialEffects.append("recovered calendar event \(existing.localEventId)")
-            }
-            transaction = try await transactions.save(transaction)
-            return existing
-        }
-
-        if transaction.stage == .createInvocationPersisted || transaction.stage == .calendarEffectUnknown {
-            if transaction.stage == .createInvocationPersisted {
-                transaction.stage = .calendarEffectUnknown
-                transaction.lastError = "calendar create intent exists but recovery found no unique item"
-                transaction = try await transactions.save(transaction)
-            }
-            throw CalendarRegistrySyncError.calendarEffectUnknown(
-                "no unique EventKit item was recovered; automatic recreation is prohibited"
-            )
-        }
-        if priorEvidence {
-            throw CalendarRegistrySyncError.identityConflict(
-                "prior calendar identity exists but no unique provider item could be recovered"
-            )
-        }
-        guard transaction.stage == .registryAuthorized else {
-            throw CalendarRegistrySyncError.identityConflict(
-                "calendar create is allowed only immediately after registry verification"
-            )
-        }
-
-        transaction.stage = .createInvocationPersisted
-        transaction.lastError = nil
-        transaction.partialEffects.append("persisted EventKit create intent")
-        transaction = try await transactions.save(transaction)
-        try Task.checkCancellation()
-
-        do {
-            let created = try await calendar.create(ExternalCalendarDraft(
-                title: request.title,
-                start: request.start,
-                end: request.end,
-                timeZoneIdentifier: request.timeZoneIdentifier,
-                calendarId: request.calendarId,
-                location: request.location,
-                notes: request.notes,
-                syncKey: request.idempotencyKey,
-                operationFingerprint: request.manifest.fingerprint,
-                createInvocationId: transaction.createInvocationId ?? ""
-            ))
-            try assertCalendarMatchesManifest(created, request: request)
-            try setCalendarIdentity(created, on: &transaction)
-            transaction.stage = .calendarIdentified
-            transaction.partialEffects.append("created calendar event \(created.localEventId)")
-            transaction = try await transactions.save(transaction)
-            fieldsWritten.append(contentsOf: [
-                "title", "start", "end", "timeZone", "calendarId", "location", "notes",
-                "syncKey", "operationFingerprint"
-            ])
-            return created
-        } catch {
-            transaction.stage = .calendarEffectUnknown
-            transaction.lastError = error.localizedDescription
-            do { transaction = try await transactions.save(transaction) }
-            catch { throw error }
-            throw CalendarRegistrySyncError.calendarEffectUnknown(error.localizedDescription)
-        }
     }
 
     private func setCalendarIdentity(

@@ -2343,3 +2343,11 @@ set -euo pipefail
 
 # Review-integration replay: forward-only pairing adds 19 greens to the
 # combined candidate floor. FLOOR 3299 -> 3318.
+
+# Calendar–Registry literal crash matrix (2026-07-18): +16 tests. CR81–CR95
+# terminate a real child process after each material durable-write or EventKit
+# effect boundary, then run two fresh-process recoveries. All paths prove at
+# most one automatic create: 13 recover to Complete with exactly one item; the
+# two Create Invocation registry/ledger gaps stop at Operator Review with zero
+# creates. CR96 locks removal of the unreachable legacy procedural recovery
+# helpers. FLOOR 3318 -> 3334.
