@@ -27,15 +27,24 @@ Candidate readiness requires all of the following on one clean commit:
 2. `make test-floor` passes without lowering the inherited floor.
 3. `swift build -c release -Xswiftc -strict-concurrency=complete` succeeds.
 4. `git diff --check` is clean and the unique skills fix is present exactly once on the candidate graph.
-5. The installed application and live EVENTS schema remain unchanged.
+5. The installed application remains unchanged; the live EVENTS schema has all
+   five additive fields bound through the `schedule` registry with zero drift.
 
 The exact commit, assertion count, and command results belong in the final execution receipt because embedding a commit SHA in its own commit is self-referential.
 
 The first integrated-source run measured 3,355 passed and 0 failed. The locked floor advances by the eight net-new specialist-mutation tests, from 3,334 to 3,342; the final release SHA must rerun the gate.
 
+## Live migration receipt — 2026-07-18
+
+- EVENTS data source `898f03a6-abb2-486a-861e-3086466a0d06` received the five
+  additive properties with their declared types; no existing property changed.
+- `registry_introspect(entity: "schedule")` reported 41/41 canonical bindings,
+  `fullyBound: true`, and an empty drift list.
+- The internal composition remains disabled. No EVENT row or EventKit item was
+  created, updated, or deleted.
+
 ## Deferred ship gates
 
-- Apply and bind the five-field EVENTS migration.
 - Build, sign, install, or activate the candidate.
 - Run an installed disposable Notion/EventKit smoke.
 - Register a public MCP operation or recurring/background job.

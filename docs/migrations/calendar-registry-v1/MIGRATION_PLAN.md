@@ -1,6 +1,6 @@
 # Calendar–Registry vNext registry migration
 
-Status: prepared and source-validated; not applied to the live EVENTS data source by this branch.
+Status: applied and verified on 2026-07-18; activation remains disabled.
 
 ## Purpose
 
@@ -18,7 +18,7 @@ These fields are independent of the local SQLite ledger. The Create Invocation I
 
 ## Apply
 
-Applying this migration is a separate Ship Gate action.
+The live migration followed this Ship Gate sequence:
 
 1. Read the live EVENTS schema and current `schedule` registry entity.
 2. Confirm every `requiredExistingKeys` entry in `registry-entity-patch.json` is bound with its expected type.
@@ -39,9 +39,8 @@ Removing a populated property destroys identity or synchronization evidence. No 
 
 ## Activation boundary
 
-This artifact does not:
+Applying the migration did not:
 
-- Apply a Notion schema change.
 - Register a public MCP operation.
 - Install or activate a Bridge build.
 - Create or modify an EVENT row.
