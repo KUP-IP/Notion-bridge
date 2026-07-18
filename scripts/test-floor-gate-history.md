@@ -2351,3 +2351,8 @@ set -euo pipefail
 # two Create Invocation registry/ledger gaps stop at Operator Review with zero
 # creates. CR96 locks removal of the unreachable legacy procedural recovery
 # helpers. FLOOR 3318 -> 3334.
+
+# Bridge v4 integration (2026-07-18): replayed the unique specialist-metadata
+# mutation fix after the review-integration + Calendar candidate. Adds 8 greens
+# covering parent/specialist mutation targeting, specialist body-cache eviction,
+# and shared cache refresh. Measured 3355 passed, 0 failed. FLOOR 3334 -> 3342.
