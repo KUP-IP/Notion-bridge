@@ -125,6 +125,10 @@ struct TheBridgeTestRunner {
     // a live run loop (that was the teardown SIGTRAP / hang). `runAllTests()` is
     // `nonisolated` so its body inherits the detached (non-main) executor.
     static func main() {
+        if let probeExitCode = calendarRegistryProcessProbeExitCodeIfRequested() {
+            exit(probeExitCode)
+        }
+
         // Line-buffer stdout. When this runner's output is a pipe (CI: `… | tee`),
         // stdout defaults to FULL buffering, so on an intermittent hang the buffered
         // tail never flushes and the CI log's last line is NOT where it actually hung —
@@ -642,10 +646,12 @@ await runRegistryDataPathTests()     // Data-Source Registry W2: live data path 
 await runRegistryModuleTests()       // Data-Source Registry W3: MCP tool surface (13 tools: generic CRUD + resolve_and_update + add/remove_entity + introspect + possess + hydrate, registration + handler behavior)
 await runRegistryAppendMergeTests()  // PKT-MEM-135: RegistryAppendMerge shared append-merge primitive (ported from VoiceMemoProcessor.mergeAppendRegistryFields)
 await runFieldsFilterTests()         // PKT: fields Param Across Registry Tools + fetch_skill — shared FieldsFilter primitive (parse + project), hermetic synthetic-Value fixtures
+await runVoiceMemoListQueryTests()   // Voice Memo Reliability: list date/transcript filters + cursor pagination
 await runDataSourcesViewModelTests() // Data-Source Registry W4: Settings pane scenarios (propose→confirm, TTL, drift, errors) + BE↔FE alignment
 await runRegistryEdgeCaseTests()     // Data-Source Registry: adversarial edge cases (codec chunking, pagination, cache concurrency, config race, writer)
 await runRegistryHydrationTests()    // Packet Runner v1 (FR-1/§8.3): packet-registry-v1 one-hop hydration envelope (primary+body+relations+provenance+warnings)
 await runMessagesModuleTests()
+await runCallHistoryModuleTests()      // Bridge v4 Wave 1: calls_recent filters, schema/FDA errors, annotations
 await runMessagesSuiteAuditTests()   // Messages-suite every-angle-of-attack audit
 await runVoiceMemoSuiteAuditTests()  // Voice memo suite audit (PKT-MEM-122)
 await runMailModuleTests()           // PKT-961 (v3.7·H): mail_* Apple Mail module (mock seam; send-guard)
@@ -659,6 +665,7 @@ await runNotesModuleTests()
 await runSystemModuleTests()
 await runRemindersModuleTests()   // PKT-957 (v3.7·D): reminders_* EventKit module (mock seam)
 await runCalendarModuleTests()    // PKT-962 (v3.7·I): calendar_* EventKit module (mock seam; reuses v3.7·D store + entitlement)
+await runCalendarRegistrySyncEngineTests() // Calendar–Registry Sync fail-closed hermetic recovery matrix
 await runPermissionsModuleTests() // fb-permissions: unified permissions_status TCC probe (pure assembler — no live TCC)
 await runNotionModuleTests()
 await runAccessibilityModuleTests()
@@ -854,6 +861,7 @@ await runSkillsCacheTests()
 // envelope-equivalence between the cache-hit and network paths.
 await runSkillBodyCacheTests()
 await runSkillBodyCacheEvictionTests()
+await runSkillMutationTargetResolverTests()
 await runToolRouterListToolsReadyTests()
 await runAgentSurfaceReliabilityTests()
 

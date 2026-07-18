@@ -106,6 +106,35 @@ public enum NotionModule {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// Block-level write responses include their parent when the touched block
+    /// is directly under a page. Evict both the explicit target (which may be a
+    /// page id for top-level appends) and any returned page/block parent; the
+    /// eviction helper itself ignores ids that are not configured skill pages.
+    public static func skillCacheEvictionCandidates(
+        targetId: String,
+        responseJSON: [String: Any]? = nil
+    ) -> [String] {
+        var candidates = [targetId]
+        guard let parent = responseJSON?["parent"] as? [String: Any] else { return candidates }
+        for key in ["page_id", "block_id"] {
+            if let parentId = parent[key] as? String {
+                candidates.append(parentId)
+            }
+        }
+        var seen: Set<String> = []
+        return candidates.filter { seen.insert($0).inserted }
+    }
+
+    private static func evictSkillBodyCache(
+        targetId: String,
+        responseJSON: [String: Any]? = nil
+    ) async {
+        for candidate in skillCacheEvictionCandidates(targetId: targetId, responseJSON: responseJSON) {
+            await SkillBodyCacheEviction.evictIfConfiguredSkillPage(candidate)
+            await RegistryRowCache.shared.evictPageEverywhere(pageId: candidate)
+        }
+    }
+
     /// Register all NotionModule tools on the given router.
     /// Lazily initializes NotionClientRegistry on first tool invocation.
     public static func register(on router: ToolRouter) async {
@@ -130,7 +159,7 @@ public enum NotionModule {
             name: "notion_search",
             module: moduleName,
             tier: .open,
-            description: "Keyword-search a Notion workspace for pages and data sources. Returns IDs + titles; no semantic ranking.",
+            description: "Keyword-search a Notion workspace for pages and data sources. Returns IDs + titles; no semantic ranking. Under Notion-Version 2026-03-11 the search filter object type (not exposed here) accepts only page or data_source — not database.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -352,6 +381,7 @@ public enum NotionModule {
                 let url = resultJSON["url"] as? String ?? ""
 
                 await SkillBodyCacheEviction.evictIfConfiguredSkillPage(pageId)
+                await RegistryRowCache.shared.evictPageEverywhere(pageId: pageId)
 
                 return .object([
                     "success": .bool(true),
@@ -712,6 +742,8 @@ public enum NotionModule {
                         return .object(["error": .string("Failed to parse append response")])
                     }
 
+                    await Self.evictSkillBodyCache(targetId: blockId, responseJSON: results.first)
+
                     var resultItems: [Value] = []
                     for block in results {
                         let bid = block["id"] as? String ?? ""
@@ -742,6 +774,8 @@ public enum NotionModule {
                     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                         return .object(["error": .string("Failed to parse append response")])
                     }
+
+                    await Self.evictSkillBodyCache(targetId: blockId, responseJSON: json)
 
                     // The markdown endpoint doesn't return a per-block results
                     // array like PATCH /blocks/{id}/children does; report what
@@ -809,6 +843,7 @@ public enum NotionModule {
                     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                         return .object(["error": .string("Failed to parse delete response")])
                     }
+                    await Self.evictSkillBodyCache(targetId: blockId, responseJSON: json)
                     return .object([
                         "success": .bool(true),
                         "id": .string(json["id"] as? String ?? blockId),
@@ -824,6 +859,7 @@ public enum NotionModule {
                     do {
                         let data = try await client.deleteBlock(blockId: blockId)
                         let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+                        await Self.evictSkillBodyCache(targetId: blockId, responseJSON: json)
                         deleted += 1
                         results.append(.object([
                             "id": .string((json?["id"] as? String) ?? blockId),
@@ -855,11 +891,12 @@ public enum NotionModule {
             name: "notion_page_markdown_read",
             module: moduleName,
             tier: .open,
-            description: "Read a Notion page body as plain markdown only — no properties, no block IDs. Use when you just need the text.",
+            description: "Read a Notion page body as plain markdown only — no properties or block IDs. Optional section returns one heading slice; a miss returns a compact heading index instead of the full page.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "pageId": .object(["type": .string("string"), "description": .string("Notion page ID")]),
+                    "section": .object(["type": .string("string"), "description": .string("Optional markdown heading to return, case-insensitive and without # markers.")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("pageId")])
@@ -873,12 +910,24 @@ public enum NotionModule {
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
                 let data = try await client.getPageMarkdown(pageId: pageId)
 
-                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    let text = String(data: data, encoding: .utf8) ?? ""
-                    return .object(["markdown": .string(text)])
+                let markdown = SkillsModule.skillMarkdownString(fromMarkdownJSON: data)
+                if case .string(let section)? = args["section"] {
+                    if let slice = SkillsModule.extractMarkdownSection(markdown, section: section) {
+                        return .object([
+                            "markdown": .string(slice),
+                            "section": .string(section),
+                            "sectionMatched": .bool(true)
+                        ])
+                    }
+                    let headings = SkillsModule.markdownHeadings(markdown)
+                    return .object([
+                        "markdown": .string(SkillsModule.sectionMissMarkdown(requested: section, markdown: markdown)),
+                        "section": .string(section),
+                        "sectionMatched": .bool(false),
+                        "annotation": .string("section-not-found"),
+                        "availableSections": .array(headings.prefix(100).map(Value.string))
+                    ])
                 }
-
-                let markdown = json["markdown"] as? String ?? String(data: data, encoding: .utf8) ?? ""
                 return .object(["markdown": .string(markdown)])
             }
         ))
@@ -981,6 +1030,7 @@ public enum NotionModule {
                 _ = try await client.replacePageMarkdown(pageId: pageId, markdown: editedMarkdown)
 
                 await SkillBodyCacheEviction.evictIfConfiguredSkillPage(pageId)
+                await RegistryRowCache.shared.evictPageEverywhere(pageId: pageId)
 
                 let totalReplacements = editResults.reduce(0) { $0 + $1.replacements }
                 return .object([
@@ -1052,57 +1102,70 @@ public enum NotionModule {
             name: "notion_comment_create",
             module: moduleName,
             tier: .notify,
-            description: "Post a top-level inline-only markdown comment on a Notion page. Text over Notion's 2000-character per-run limit is auto-chunked into sequential comments preserving order. For threaded replies use notion_discussion_create.",
+            description: "Post an inline-only comment on a Notion page (pageId) OR reply in an existing discussion thread (discussionId). Exactly one of pageId/discussionId. Text over Notion's 2000-character per-run limit is auto-chunked into sequential comments preserving order (replies re-use the same discussionId).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "pageId": .object(["type": .string("string"), "description": .string("Page ID to comment on")]),
+                    "pageId": .object(["type": .string("string"), "description": .string("Page ID for a new top-level page comment. Mutually exclusive with discussionId.")]),
+                    "discussionId": .object(["type": .string("string"), "description": .string("Existing discussion thread ID for a reply. Mutually exclusive with pageId. Obtain from notion_comments_list or a prior create's discussionId.")]),
                     "text": .object(["type": .string("string"), "description": .string("Comment text content")]),
                     "content": .object(["type": .string("string"), "description": .string("Alias for 'text' — comment text content. If both are supplied, 'text' wins.")]),
                     "workspace": workspaceParam
                 ]),
-                "required": .array([.string("pageId")])
+                "required": .array([.string("text")])
             ]),
             metadata: ToolMetadata(
                 title: "Notion: Create Comment",
-                whenToUse: ["posting a short inline comment on a page"],
-                whenNotToUse: ["threaded replies (use notion_discussion_create)",
+                whenToUse: ["posting a short inline comment on a page",
+                            "replying to an existing discussion via discussionId"],
+                whenNotToUse: ["starting a named new thread (use notion_discussion_create for the same page-level start, or pageId here)",
                                "long code/text (use notion_blocks_append with autoChunk:true)"],
                 relatedTools: ["notion_discussion_create", "notion_comments_list"]
             ),
             handler: { arguments in
-                guard case .object(let args) = arguments,
-                      case .string(let pageId) = args["pageId"] else {
-                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_create", reason: "missing 'pageId' or 'text'")
+                guard case .object(let args) = arguments else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_create", reason: "missing arguments")
+                }
+                let pageId: String? = { if case .string(let p) = args["pageId"] { return p }; return nil }()
+                let discussionIdArg: String? = {
+                    if case .string(let d) = args["discussionId"] { return d }
+                    return nil
+                }()
+                let hasPage = !(pageId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                let hasDiscussion = !(discussionIdArg?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                guard hasPage != hasDiscussion else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "notion_comment_create",
+                        reason: "exactly one of 'pageId' or 'discussionId' is required"
+                    )
                 }
                 // 'content' is an alias for 'text' — agents reach for 'content'
-                // as the generic term first (documented friction: schema
-                // mismatch cost a failed call before the correct 'text' shape
-                // was discovered). 'text' wins if both are supplied.
+                // as the generic term first. 'text' wins if both are supplied.
                 let text: String
                 if case .string(let t) = args["text"] {
                     text = t
                 } else if case .string(let c) = args["content"] {
                     text = c
                 } else {
-                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_create", reason: "missing 'pageId' or 'text'")
+                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_create", reason: "missing 'text'")
                 }
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
 
-                // FB-3: Auto-chunk into sequential <=2000-char comments preserving order,
-                // instead of hard-rejecting. Notion enforces a 2000-character per-run limit;
-                // post one comment per chunk and report all created IDs in order.
+                // FB-3: Auto-chunk into sequential <=2000-char comments preserving order.
+                // For replies, every chunk uses the same discussionId so they stay in-thread.
                 let chunks = NotionModule.chunkCommentText(text, maxChars: 2000)
 
                 var ids: [Value] = []
-                // PKT-MEM-136: surface the Notion `discussion_id` the first posted chunk
-                // started, so callers (e.g. VoiceMemoProcessor.executeComment) can log it
-                // to a durable ledger without a second round trip. Additive — every other
-                // key/shape is byte-for-byte unchanged.
-                var discussionId = ""
+                // PKT-MEM-136: surface discussion_id so VoiceMemoProcessor can ledger it.
+                var discussionIdOut = discussionIdArg ?? ""
                 for chunk in chunks {
-                    let data = try await client.createComment(pageId: pageId, text: chunk)
+                    let data: Data
+                    if hasDiscussion {
+                        data = try await client.createComment(pageId: nil, discussionId: discussionIdArg, text: chunk)
+                    } else {
+                        data = try await client.createComment(pageId: pageId, discussionId: nil, text: chunk)
+                    }
                     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                         return .object([
                             "success": .bool(false),
@@ -1113,8 +1176,8 @@ public enum NotionModule {
                         ])
                     }
                     ids.append(.string(json["id"] as? String ?? ""))
-                    if discussionId.isEmpty {
-                        discussionId = json["discussion_id"] as? String ?? ""
+                    if discussionIdOut.isEmpty {
+                        discussionIdOut = json["discussion_id"] as? String ?? ""
                     }
                 }
 
@@ -1124,7 +1187,7 @@ public enum NotionModule {
                     "id": ids.first ?? .string(""),
                     "ids": .array(ids),
                     "chunks": .int(chunks.count),
-                    "discussionId": .string(discussionId)
+                    "discussionId": .string(discussionIdOut)
                 ])
             }
         ))
@@ -1390,6 +1453,8 @@ public enum NotionModule {
                 guard let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] else {
                     return .object(["error": .string("Failed to parse update response")])
                 }
+
+                await Self.evictSkillBodyCache(targetId: blockId, responseJSON: json)
 
                 let id = json["id"] as? String ?? ""
                 let type = json["type"] as? String ?? ""
@@ -1705,7 +1770,7 @@ public enum NotionModule {
             name: "notion_discussion_create",
             module: moduleName,
             tier: .notify,
-            description: "Start a new threaded discussion on a Notion page (accepts compressed URLs, UUIDs, or full Notion URLs). Initial comment is inline-only markdown and preflights Notion's 2000-character rich_text run limit.",
+            description: "Start a NEW top-level discussion on a Notion page (same as notion_comment_create with pageId — not a reply). For replies, pass discussionId to notion_comment_create. Accepts compressed URLs, UUIDs, or full Notion URLs. Initial comment is inline-only markdown and preflights Notion's 2000-character rich_text run limit.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1747,6 +1812,133 @@ public enum NotionModule {
                     "success": .bool(true),
                     "id": .string(id),
                     "discussionId": .string(discussionId)
+                ])
+            }
+        ))
+
+        // MARK: 24. notion_views_list – open (Views API)
+        await router.register(ToolRegistration(
+            name: "notion_views_list",
+            module: moduleName,
+            tier: .open,
+            description: "List database views for a database_id and/or data_source_id (Notion Views API). List results are often id-only references — use notion_view_get for filter/sorts/configuration. At least one of databaseId or dataSourceId is required.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "databaseId": .object(["type": .string("string"), "description": .string("Database container ID — lists views on that database.")]),
+                    "dataSourceId": .object(["type": .string("string"), "description": .string("Data source ID — lists views over that collection (including linked views).")]),
+                    "pageSize": .object(["type": .string("integer"), "description": .string("Max results (default 100, max 100).")]),
+                    "startCursor": .object(["type": .string("string"), "description": .string("Pagination cursor from a prior next_cursor.")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([])
+            ]),
+            metadata: ToolMetadata(
+                title: "Notion: List Views",
+                whenToUse: ["discovering board/table/chart views on a database or data source"],
+                whenNotToUse: ["reading one view's filter/sorts (use notion_view_get)",
+                               "querying rows (use notion_query)"],
+                relatedTools: ["notion_view_get", "notion_database_get", "notion_datasource_get", "notion_query"]
+            ),
+            handler: { arguments in
+                guard case .object(let args) = arguments else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_views_list", reason: "missing arguments")
+                }
+                let databaseId: String? = { if case .string(let d) = args["databaseId"] { return d }; return nil }()
+                let dataSourceId: String? = { if case .string(let d) = args["dataSourceId"] { return d }; return nil }()
+                let hasDB = !(databaseId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                let hasDS = !(dataSourceId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                guard hasDB || hasDS else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "notion_views_list",
+                        reason: "at least one of 'databaseId' or 'dataSourceId' is required"
+                    )
+                }
+                let pageSize: Int = { if case .int(let ps) = args["pageSize"] { return min(max(ps, 1), 100) }; return 100 }()
+                let startCursor: String? = { if case .string(let c) = args["startCursor"] { return c }; return nil }()
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.listViews(
+                    databaseId: hasDB ? databaseId : nil,
+                    dataSourceId: hasDS ? dataSourceId : nil,
+                    startCursor: startCursor,
+                    pageSize: pageSize
+                )
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse views list response")])
+                }
+                let results = (json["results"] as? [[String: Any]]) ?? []
+                var items: [Value] = []
+                for row in results {
+                    let id = row["id"] as? String ?? ""
+                    let object = row["object"] as? String ?? "view"
+                    let name = row["name"] as? String
+                    let type = row["type"] as? String
+                    var entry: [String: Value] = [
+                        "id": .string(id),
+                        "object": .string(object)
+                    ]
+                    if let name { entry["name"] = .string(name) }
+                    if let type { entry["type"] = .string(type) }
+                    items.append(.object(entry))
+                }
+                let hasMore = json["has_more"] as? Bool ?? false
+                var out: [String: Value] = [
+                    "success": .bool(true),
+                    "count": .int(items.count),
+                    "has_more": .bool(hasMore),
+                    "results": .array(items)
+                ]
+                if let next = json["next_cursor"] as? String {
+                    out["next_cursor"] = .string(next)
+                }
+                return .object(out)
+            }
+        ))
+
+        // MARK: 25. notion_view_get – open (Views API)
+        await router.register(ToolRegistration(
+            name: "notion_view_get",
+            module: moduleName,
+            tier: .open,
+            description: "Retrieve one Notion database view by ID — name, type, filter, sorts, quick_filters, and configuration (table/board/chart/etc.). Use after notion_views_list.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "viewId": .object(["type": .string("string"), "description": .string("View ID (with or without dashes).")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("viewId")])
+            ]),
+            metadata: ToolMetadata(
+                title: "Notion: Get View",
+                whenToUse: ["reading a view's filters, sorts, and layout configuration"],
+                whenNotToUse: ["listing views (use notion_views_list)",
+                               "querying rows of a data source (use notion_query)"],
+                relatedTools: ["notion_views_list", "notion_query", "notion_database_get"]
+            ),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let viewId) = args["viewId"], !viewId.isEmpty else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_view_get", reason: "missing 'viewId'")
+                }
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.getView(viewId: viewId)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse view response")])
+                }
+                // Pass through the full view object as JSON string for nested filter/config fidelity,
+                // plus a few top-level convenience fields.
+                let raw = String(data: data, encoding: .utf8) ?? "{}"
+                return .object([
+                    "success": .bool(true),
+                    "id": .string(json["id"] as? String ?? viewId),
+                    "object": .string(json["object"] as? String ?? "view"),
+                    "name": .string(json["name"] as? String ?? ""),
+                    "type": .string(json["type"] as? String ?? ""),
+                    "data_source_id": .string(json["data_source_id"] as? String ?? ""),
+                    "url": .string(json["url"] as? String ?? ""),
+                    "view": .string(raw)
                 ])
             }
         ))

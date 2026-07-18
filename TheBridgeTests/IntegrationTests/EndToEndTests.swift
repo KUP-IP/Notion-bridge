@@ -366,7 +366,8 @@ func runEndToEndTests() async {
         try expect(contacts.count == 4, "ContactsModule: expected 4")
         // Sprint A · mcp-builder #1: notion_block_read removed (24 → 23).
         // FB-notionwrite: notion_page_edit added (23 → 24).
-        try expect(notion.count == 22, "NotionModule: expected 22 (FB-notionwrite)")
+        // 2026-07-15: notion_views_list + notion_view_get (22 → 24).
+        try expect(notion.count == 24, "NotionModule: expected 24 (views list/get)")
         try expect(screen.count == 4, "ScreenModule: expected 4")
         // v3.7.11 resurface: the ax_query deprecation alias was removed. Live set:
         // ax_tree, ax_inspect, ax_focused_app, ax_perform_action = 4.

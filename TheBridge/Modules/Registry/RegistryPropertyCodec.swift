@@ -81,6 +81,14 @@ public enum RegistryPropertyCodec {
         case "date":
             guard let d = property["date"] as? [String: Any],
                   let start = d["start"] as? String else { return .null }
+            let end = d["end"] as? String
+            let timeZone = d["time_zone"] as? String
+            if end != nil || timeZone != nil {
+                var range: [String: Value] = ["start": .string(start)]
+                if let end { range["end"] = .string(end) }
+                if let timeZone { range["timeZone"] = .string(timeZone) }
+                return .object(range)
+            }
             return .string(start)
 
         case "checkbox":
@@ -217,6 +225,17 @@ public enum RegistryPropertyCodec {
 
         case "date":
             if case .null = value { return ["date": NSNull()] }
+            if case .object(let range) = value,
+               case .string(let start)? = range["start"], !start.isEmpty {
+                var payload: [String: Any] = ["start": start]
+                if case .string(let end)? = range["end"], !end.isEmpty {
+                    payload["end"] = end
+                }
+                if case .string(let timeZone)? = range["timeZone"], !timeZone.isEmpty {
+                    payload["time_zone"] = timeZone
+                }
+                return ["date": payload]
+            }
             guard let s = stringy(value), !s.isEmpty else { return ["date": NSNull()] }
             return ["date": ["start": s]]
 

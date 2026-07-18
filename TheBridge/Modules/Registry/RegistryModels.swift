@@ -211,7 +211,41 @@ public struct RegistryConfig: Codable, Sendable, Equatable {
 
     /// Entity lookup by key.
     public func entity(_ key: String) -> RegistryEntity? {
-        entities.first { $0.key == key }
+        if let direct = entities.first(where: { $0.key == key }) { return direct }
+
+        // PACKETS was historically registered as `session` on some installs,
+        // while packet contracts and registry_hydrate call it `packet`.
+        // Prefer `packet`; preserve `session` as a compatibility alias only
+        // when the entity's display name proves it is the PACKETS source.
+        if key == "packet",
+           let legacy = entities.first(where: {
+               $0.key == "session" && $0.displayName.lowercased().contains("packet")
+           }) {
+            return RegistryEntity(
+                key: "packet",
+                displayName: legacy.displayName,
+                dataSourceId: legacy.dataSourceId,
+                workspace: legacy.workspace,
+                properties: legacy.properties,
+                cacheTTLSeconds: legacy.cacheTTLSeconds,
+                hasBody: legacy.hasBody
+            )
+        }
+        if key == "session",
+           let canonical = entities.first(where: {
+               $0.key == "packet" && $0.displayName.lowercased().contains("packet")
+           }) {
+            return RegistryEntity(
+                key: "session",
+                displayName: canonical.displayName,
+                dataSourceId: canonical.dataSourceId,
+                workspace: canonical.workspace,
+                properties: canonical.properties,
+                cacheTTLSeconds: canonical.cacheTTLSeconds,
+                hasBody: canonical.hasBody
+            )
+        }
+        return nil
     }
 
     /// Upsert an entity by key (replace-in-place or append).

@@ -34,6 +34,10 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
         ]
     }
 
+    func seed(_ event: CalendarEvent) {
+        items[event.id] = event
+    }
+
     func authorizationStatus() -> CalendarAuthStatus { authStatus }
 
     func ensureAccess() async throws {
@@ -51,6 +55,11 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
 
     private func calTitle(_ id: String) -> String {
         cals.first(where: { $0.id == id })?.title ?? ""
+    }
+
+    func event(id: String) async throws -> CalendarEvent? {
+        try await ensureAccess()
+        return items[id]
     }
 
     func events(_ query: CalendarEventQuery) async throws -> [CalendarEvent] {
@@ -87,7 +96,8 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
             calendarId: calId,
             calendarTitle: calTitle(calId),
             location: draft.location,
-            notes: draft.notes
+            notes: draft.notes,
+            timeZoneIdentifier: draft.timeZoneIdentifier
         )
         items[id] = event
         return event
@@ -102,6 +112,7 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
         if let a = draft.allDay { event.allDay = a }
         if let loc = draft.location { event.location = loc }
         if let n = draft.notes { event.notes = n }
+        if let tz = draft.timeZoneIdentifier { event.timeZoneIdentifier = tz }
         if let c = draft.calendarId {
             guard cals.contains(where: { $0.id == c }) else {
                 throw CalendarModuleError.calendarNotFound(c)
@@ -313,6 +324,45 @@ func runCalendarModuleTests() async {
             ]))
             throw TestError.assertion("expected invalidArguments for missing end")
         } catch is ToolRouterError { /* expected */ }
+    }
+
+    await test("calendar full event output exposes provider identity and participant context") {
+        let store = MockCalendarStore()
+        store.seed(CalendarEvent(
+            id: "evt-meta",
+            title: "Partner meeting",
+            start: "2026-06-05T09:00:00Z",
+            end: "2026-06-05T10:00:00Z",
+            allDay: false,
+            calendarId: "cal-work",
+            calendarTitle: "Work",
+            location: "Conference Room",
+            notes: "Agenda",
+            externalId: "google-ical-uid@example.com",
+            organizer: "mailto:owner@example.com",
+            attendees: ["mailto:one@example.com", "mailto:two@example.com"],
+            conferenceURL: "https://meet.example.com/abc",
+            lastModified: "2026-06-04T18:00:00Z",
+            isRecurring: true,
+            isDetached: false
+        ))
+        let router = await makeCalendarRouter(store)
+        let result = try await callCalendarHandler(router, "calendar_events", .object([
+            "start": .string("2026-06-05T00:00:00Z"),
+            "end": .string("2026-06-06T00:00:00Z")
+        ]))
+        guard case .array(let events)? = calField(result, "events"), let value = events.first else {
+            throw TestError.assertion("full event output missing")
+        }
+        try expect(calField(value, "providerExternalId") == .string("google-ical-uid@example.com"))
+        try expect(calField(value, "organizer") == .string("mailto:owner@example.com"))
+        try expect(calField(value, "attendees") == .array([
+            .string("mailto:one@example.com"), .string("mailto:two@example.com")
+        ]))
+        try expect(calField(value, "itemURL") == .string("https://meet.example.com/abc"))
+        try expect(calField(value, "lastModified") == .string("2026-06-04T18:00:00Z"))
+        try expect(calField(value, "isRecurring") == .bool(true))
+        try expect(calField(value, "isDetached") == .bool(false))
     }
 
     // MARK: naive ISO parsing (CalendarISOParsing)

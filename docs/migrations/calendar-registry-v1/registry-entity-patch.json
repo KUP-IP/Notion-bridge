@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 3,
+  "entity": "schedule",
+  "additiveProperties": [
+    {
+      "key": "providerExternalId",
+      "notionName": "Provider External ID",
+      "type": "rich_text",
+      "role": "generic"
+    },
+    {
+      "key": "operationFingerprint",
+      "notionName": "Operation Fingerprint",
+      "type": "rich_text",
+      "role": "generic"
+    },
+    {
+      "key": "createInvocationId",
+      "notionName": "Calendar Create Invocation ID",
+      "type": "rich_text",
+      "role": "generic"
+    },
+    {
+      "key": "syncWriterToken",
+      "notionName": "Sync Writer Token",
+      "type": "rich_text",
+      "role": "generic"
+    },
+    {
+      "key": "syncRevision",
+      "notionName": "Sync Revision",
+      "type": "number",
+      "role": "generic"
+    }
+  ],
+  "requiredExistingKeys": [
+    "title",
+    "date",
+    "status",
+    "syncKey",
+    "calendarProvider",
+    "calendarId",
+    "calendarEventId",
+    "calendarUrl",
+    "eventClass",
+    "meetingType",
+    "primaryBlock",
+    "blocks",
+    "projects",
+    "contacts",
+    "schedulingAuthority",
+    "syncState",
+    "lastSyncedAt",
+    "registryUpdatedAt",
+    "calendarUpdatedAt",
+    "syncHash",
+    "lastSyncError",
+    "scheduledDuration",
+    "calendarLocation"
+  ]
+}

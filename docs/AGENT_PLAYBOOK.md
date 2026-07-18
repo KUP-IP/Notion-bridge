@@ -125,21 +125,18 @@ Source: `TheBridge/Modules/GitModule.swift`.
 
 ---
 
-## Not yet available
-
-These were referenced in friction reports as *proposals*. They are **not registered in
-the codebase** as of this writing — do not call them. Confirm with a fresh grep before
-relying on any of them later.
+## Availability notes
 
 - **`swift_build` / `swift_test`** — a first-class build/test wrapper has been *requested*
-  (`AGENT_FEEDBACK.md` 2026-05-10) but has **not landed**. Until it does, use
-  `bg_process_start` with `swift build` / `make test`.
-- **`bridge_settings_navigate(section)` / `bridge_focus_settings`** — proposed in
-  `AGENT_FEEDBACK.md` (2026-06-04) to make on-device Settings verification deterministic.
-  They **do not exist**. Today, on-device verification of the menu-bar app requires a
-  System Events re-`set frontmost` + `AXRaise` before each `screen_capture`, and note the
-  coordinate-space mismatch (AX reports logical points; `screen_capture` returns device
-  pixels) when computing `mouse_click` targets.
+  (`AGENT_FEEDBACK.md` 2026-05-10) but is intentionally replaced by the current
+  `bg_run` → `bg_poll` → optional `bg_kill` surface for long builds and tests.
+- **`bridge_settings_navigate(section)` / `bridge_open_settings` /
+  `bridge_focus_settings` are registered.** Use the open/focus helpers before
+  Settings screenshots; they verify the target app/window rather than reporting
+  coordinate-only success.
+- After changing branches across tool-surface commits, run **`make test-clean`**.
+  After any install/relaunch, reconnect MCP clients so they re-run initialize and
+  `tools/list`; an already-open client's descriptor cache is not live proof.
 
 ---
 

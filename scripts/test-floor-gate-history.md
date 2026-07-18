@@ -2290,3 +2290,75 @@ set -euo pipefail
 # mutation, rate-limited unknown-tool audit telemetry, secret-shaped miss
 # redaction, and client name/version attribution. Measured 3207 passed, 0
 # failed on the current origin/main-based worktree. FLOOR 3202 -> 3207.
+
+# 2026-07-15 Notion views list/get + comment discussionId reply. FLOOR 3207→3213 (+6 greens; hermetic body/schema tests). staticFeatureModuleToolCount 205→207.
+# 2026-07-15 Voice Memo Reliability (list filters/pagination/health + commit receipts + FieldsFilter identity keys). FLOOR 3207→3214 (+7).
+# PKT-CALL-001 Wave 1 (2026-07-17): +14 hermetic CallHistory tests cover
+# calls_recent registration/tier/schema/annotations, phone normalization,
+# limit/since/number/direction filters, newest-first ordering, identity-free
+# output, actionable Full Disk Access failure, explicit schema-drift failure,
+# and an incompatible SQLite fixture. Measured 3221 passed, 0 failed on the
+# origin/main-based calls worktree. FLOOR 3207 -> 3221.
+# Agent-feedback reconciliation (2026-07-17): +11 net-new tests cover job
+# previous-result paths and fail-closed misses, Messages attribution provenance,
+# bounded skill/Notion section misses, skill metadata drift, block/page cache
+# eviction, cross-entity registry cache eviction, packet/session compatibility,
+# and actionable Notion 401 guidance. Measured 3218 passed, 0 failed on the
+# origin/main-based feedback worktree. FLOOR 3207 -> 3218. A deliberately
+# failing precursor also proved complete-log retention to the stable evidence
+# directory before its assertion was corrected.
+
+# Review integration proof (2026-07-17): PR #106 Notion views/comment replies,
+# PR #107 Voice Memo reliability, PKT-CALL-001 Wave 1, and the agent-feedback
+# reconciliation coexist on one origin/main-based worktree. Measured 3249 passed,
+# 0 failed. FLOOR 3221 -> 3249 for the review integration candidate.
+
+# Calendar–Registry hardening (2026-07-17): +26 net-new hermetic tests across two independently reviewable units. The skill-mutation unit covers parent/specialist resolution, specialist body eviction, metadata convergence, and separate routing-refresh evidence. The reduced sync unit covers atomic transaction-journal restart, sequential and concurrent idempotency, calendar-create and post-calendar-write recovery, false-Synced prevention, fresh EventKit-provider recovery, ambiguous identity conflict, degraded lookup refusal, full date-range/timezone round-trip, authoritative filtered Notion lookup, explicit nullable clears, recoverable partial Notion creation, disabled composition, and route ownership. Measured 3232 before the final cache-evidence test; expected final floor 3233. FLOOR 3228 -> 3233.
+
+# Calendar–Registry review-integration replay (2026-07-18): the reduced sync
+# unit adds 5 greens to the 3249 review-integration floor while the unrelated
+# skill-mutation commit remains excluded. FLOOR 3249 -> 3254.
+
+- Calendar–Registry recovery hardening (2026-07-17): replaced the process-local JSON correctness boundary with a SQLite recovery ledger and immutable operation fingerprint persisted on Notion and EventKit; added production gateway truth/strict decoding, identity-envelope repair, manifest-authority verification, timezone/event-shape/calendar-qualification gates, durable failure receipts, and migration-model validation. The recovery matrix now contains 22 scenarios, including independent SQLite handles, ledger-loss reconstruction/conflict, partial-page retry, drift refusal, invalid timezone/key, shape rejection, unqualified calendar refusal, and unpersisted recovery evidence. Measured 3239 passed, 0 failed. FLOOR 3233 -> 3239.
+
+# Review-integration replay: recovery hardening adds 6 greens to the combined
+# candidate floor. FLOOR 3254 -> 3260.
+
+- Calendar–Registry single-writer fencing (2026-07-17): upgraded the SQLite recovery ledger into a single-machine transaction coordinator with expiring leases, fencing tokens, monotonic revisions, compare-and-swap saves, stage/identity regression guards, and cancellation-aware ownership. Added typed raw Notion identity reads, strict page/create/update/query row decoding, identity-first EventKit recovery across unsupported shapes, canonical manifest semantics, final Sync Hash/Last Synced At readback, and ledger-corruption refusal. The synchronization matrix now contains 40 scenarios, including same-key independent-engine races, stale fences, lease expiry, ledger-known malformed/missing identity, uncertain create recovery, unsupported existing event shapes, unrelated malformed metadata isolation, final evidence loss, and pre/post-effect cancellation. Measured 3257 passed, 0 failed. FLOOR 3239 -> 3257.
+
+# Review-integration replay: single-writer fencing adds 18 greens to the
+# combined candidate floor. FLOOR 3260 -> 3278.
+
+- Calendar–Registry fail-closed smoke narrowing (2026-07-17): replaced lease-expiry-based external-effect ownership with a per-idempotency-key OS advisory lock held across the complete registry/EventKit transaction. Narrowed the smoke path to one pre-existing canonical Notion EVENT; automatic Notion creation and partial repair are no longer reachable. Added durable EventKit create-intent / calendar-effect-unknown recovery-only stages, immutable established pair identifiers, final-read Sync Hash recomputation, exact delimited metadata attribution, optional provider modification timestamps, local-filesystem composition enforcement, and schema-v3 stage migration. The hermetic recovery matrix now contains 50 scenarios, including real child-process contention with a provider call held beyond SQLite lease duration, unknown-effect no-recreate behavior, production Notion adapter no-create proof, final identity/evidence mutation, and state-specific recovery receipts. Measured 3267 passed, 0 failed. FLOOR 3257 -> 3267.
+
+# Review-integration replay: fail-closed smoke narrowing adds 10 greens to the
+# combined candidate floor. FLOOR 3278 -> 3288.
+
+- Calendar–Registry authority and uniqueness hardening (2026-07-17): final verification now re-proves exactly one live Notion EVENT and one EventKit identity; registry-first execution requires Registry authority and an admissible clean-or-complete pairing state before calendar access; Notion writes are revision-checked and limited to pairing-owned fields so concurrent semantic edits are preserved; production uses one canonical local coordinator with hardened lock-root/file validation; receipts separate stable transaction ID from attempt ID and report coordinator namespace, final registry revision, and uniqueness counts. The hermetic recovery matrix now contains 61 scenarios. Measured 3278 passed, 0 failed. FLOOR 3267 -> 3278.
+
+# Review-integration replay: authority and uniqueness hardening adds 11 greens
+# to the combined candidate floor. FLOOR 3288 -> 3299.
+
+- Calendar–Registry vNext forward-only pairing (2026-07-18): replaced the procedural recovery path with stage-directed forward-only continuation; added a durable Calendar Create Invocation ID that permanently closes automatic recreation after uncertainty, strict production Notion authority/state/revision decoding, synchronization writer tokens and monotonic Sync Revision readback, EventKit metadata v2, bounded owned-identity search receipts, and Operator Review terminal semantics. Hardened a dedicated local coordinator across lock, SQLite, WAL, and SHM files with symlink, owner, mode, link-count, stable device/inode, partial-write, and directory-fsync checks. Expanded the hermetic and production-adapter recovery matrix from 61 to 80 scenarios, including ledger-loss no-recreate, late-stage crash resumption, zero EventKit access before registry authorization, malformed revision refusal, writer-token loss, bounded-search truth, and coordinator attack cases. Measured 3297 passed, 0 failed. FLOOR 3278 -> 3297.
+
+# Review-integration replay: forward-only pairing adds 19 greens to the
+# combined candidate floor. FLOOR 3299 -> 3318.
+
+# Calendar–Registry literal crash matrix (2026-07-18): +16 tests. CR81–CR95
+# terminate a real child process after each material durable-write or EventKit
+# effect boundary, then run two fresh-process recoveries. All paths prove at
+# most one automatic create: 13 recover to Complete with exactly one item; the
+# two Create Invocation registry/ledger gaps stop at Operator Review with zero
+# creates. CR96 locks removal of the unreachable legacy procedural recovery
+# helpers. FLOOR 3318 -> 3334.
+
+# Bridge v4 integration (2026-07-18): replayed the unique specialist-metadata
+# mutation fix after the review-integration + Calendar candidate. Adds 8 greens
+# covering parent/specialist mutation targeting, specialist body-cache eviction,
+# and shared cache refresh. Measured 3355 passed, 0 failed. FLOOR 3334 -> 3342.
+
+# CI portability hardening (2026-07-18): resolve TheBridgeTests through
+# SwiftPM's architecture-aware `swift build --show-bin-path -c debug` output
+# instead of assuming the convenience `.build/debug` symlink exists, and request
+# the `TheBridgeTests` executable product explicitly so a clean SwiftPM build
+# cannot stop after compiling target objects without linking the harness. Floor unchanged.

@@ -248,40 +248,111 @@ extension SkillsModule {
                         ])
                     }
                 } else if dict["summary"] != nil || dict["triggerPhrases"] != nil || dict["antiTriggerPhrases"] != nil {
-                    let hasSummary = dict["summary"] != nil
-                    let hasTrig = dict["triggerPhrases"] != nil
-                    let hasAnti = dict["antiTriggerPhrases"] != nil
-                    guard hasSummary || hasTrig || hasAnti else {
-                        throw ToolRouterError.invalidArguments(
-                            toolName: "skill_update",
-                            reason: "set_metadata requires at least one of: summary, triggerPhrases, antiTriggerPhrases"
+                    let resolution = await resolveMutationTarget(named: name)
+                    switch resolution {
+                    case .notFound:
+                        return .object([
+                            "success": .bool(false), "action": .string("set_metadata"),
+                            "message": .string("Skill not found in configured parents or the curated specialist routing cache.")
+                        ])
+                    case .ambiguous(let candidates):
+                        return .object([
+                            "success": .bool(false), "action": .string("set_metadata"),
+                            "message": .string("Skill name is ambiguous; use an explicit parent/specialist path."),
+                            "candidates": .array(candidates.map(Value.string))
+                        ])
+                    case .found(let target) where target.kind == .configuredParent:
+                        var skills = readAllSkills()
+                        let wanted = CachedSkillBody.normalize(target.pageId)
+                        guard let idx = skills.firstIndex(where: {
+                            CachedSkillBody.normalize($0.notionPageId) == wanted
+                        }) else {
+                            return .object(["success": .bool(false), "action": .string("set_metadata"), "message": .string("Configured skill row not found.")])
+                        }
+                        let cur = skills[idx]
+                        let newSummary: String = {
+                            if case .string(let value) = dict["summary"] {
+                                return SkillMetadataLimits.clampedSummary(value)
+                            }
+                            return cur.summary
+                        }()
+                        let newTrig: [String] = {
+                            if let value = dict["triggerPhrases"] {
+                                return SkillMetadataLimits.clampedPhraseList(Self.parseStringArrayValue(value))
+                            }
+                            return cur.triggerPhrases
+                        }()
+                        let newAnti: [String] = {
+                            if let value = dict["antiTriggerPhrases"] {
+                                return SkillMetadataLimits.clampedPhraseList(Self.parseStringArrayValue(value))
+                            }
+                            return cur.antiTriggerPhrases
+                        }()
+                        skills[idx] = SkillConfig(
+                            name: cur.name, source: cur.source, enabled: cur.enabled,
+                            routingDiscoverable: cur.routingDiscoverable, inCommandPalette: cur.inCommandPalette,
+                            summary: newSummary, triggerPhrases: newTrig, antiTriggerPhrases: newAnti,
+                            url: cur.url, platform: cur.platform
                         )
+                        writeSkills(skills)
+                        return .object([
+                            "success": .bool(true), "action": .string("set_metadata"),
+                            "name": .string(target.name), "targetKind": .string(target.kind.rawValue),
+                            "message": .string("Configured skill metadata updated locally. Use skill_sync_notion push to publish it to Notion.")
+                        ])
+                    case .found(let target):
+                        do {
+                            let client = try NotionClient()
+                            let pageData = try await client.getPage(pageId: target.pageId)
+                            guard let pageJSON = try? JSONSerialization.jsonObject(with: pageData) as? [String: Any],
+                                  let properties = pageJSON["properties"] as? [String: Any] else {
+                                return .object(["success": .bool(false), "action": .string("set_metadata"), "message": .string("Failed to parse specialist Notion page.")])
+                            }
+                            let current = SkillNotionMetadata.parsePulledMetadata(properties: properties)
+                            let summary: String = {
+                                if case .string(let value) = dict["summary"] {
+                                    return SkillMetadataLimits.clampedSummary(value)
+                                }
+                                return current.summary
+                            }()
+                            let triggers: [String] = {
+                                if let value = dict["triggerPhrases"] {
+                                    return SkillMetadataLimits.clampedPhraseList(Self.parseStringArrayValue(value))
+                                }
+                                return current.triggerPhrases
+                            }()
+                            let antiTriggers: [String] = {
+                                if let value = dict["antiTriggerPhrases"] {
+                                    return SkillMetadataLimits.clampedPhraseList(Self.parseStringArrayValue(value))
+                                }
+                                return current.antiTriggerPhrases
+                            }()
+                            let patch = try SkillNotionMetadata.buildPagePropertiesPatchData(
+                                summary: summary,
+                                triggerPhrases: triggers,
+                                antiTriggerPhrases: antiTriggers
+                            )
+                            _ = try await client.updatePage(pageId: target.pageId, properties: patch)
+                            let cache = await SkillBodyCacheEviction.refreshReceipt(target.pageId)
+                            let resolvedPath = [target.parentName, target.name].compactMap { $0 }.joined(separator: "/")
+                            return .object([
+                                "success": .bool(true), "action": .string("set_metadata"),
+                                "name": .string(target.name), "targetKind": .string(target.kind.rawValue),
+                                "resolvedPath": .string(resolvedPath),
+                                "bodyEvicted": .bool(cache.bodyEvicted),
+                                "routingRefreshAttempted": .bool(cache.routingRefreshAttempted),
+                                "routingRefreshSucceeded": .bool(cache.routingRefreshSucceeded),
+                                "routingParentsExpected": .int(cache.routingParentsExpected),
+                                "routingParentsRefreshed": .int(cache.routingParentsRefreshed),
+                                "message": .string("Specialist metadata updated in Notion; cache evidence is reported separately.")
+                            ])
+                        } catch {
+                            return .object([
+                                "success": .bool(false), "action": .string("set_metadata"),
+                                "error": .string(error.localizedDescription)
+                            ])
+                        }
                     }
-                    var skills = readAllSkills()
-                    guard let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) else {
-                        return .object(["success": .bool(false), "action": .string("set_metadata"), "message": .string("Skill not found.")])
-                    }
-                    let cur = skills[idx]
-                    let newSummary: String = {
-                        if case .string(let s) = dict["summary"] { return SkillMetadataLimits.clampedSummary(s) }
-                        return cur.summary
-                    }()
-                    let newTrig: [String] = {
-                        if let v = dict["triggerPhrases"] { return SkillMetadataLimits.clampedPhraseList(Self.parseStringArrayValue(v)) }
-                        return cur.triggerPhrases
-                    }()
-                    let newAnti: [String] = {
-                        if let v = dict["antiTriggerPhrases"] { return SkillMetadataLimits.clampedPhraseList(Self.parseStringArrayValue(v)) }
-                        return cur.antiTriggerPhrases
-                    }()
-                    skills[idx] = SkillConfig(
-                        name: cur.name, source: cur.source, enabled: cur.enabled,
-                        routingDiscoverable: cur.routingDiscoverable, inCommandPalette: cur.inCommandPalette,
-                        summary: newSummary, triggerPhrases: newTrig, antiTriggerPhrases: newAnti,
-                        url: cur.url, platform: cur.platform
-                    )
-                    writeSkills(skills)
-                    return .object(["success": .bool(true), "action": .string("set_metadata"), "name": .string(name), "message": .string("Metadata updated.")])
                 } else if dict["visibility"] != nil {
                     guard let vis = parseVisibilityArg(dict) else {
                         throw ToolRouterError.invalidArguments(
@@ -383,15 +454,80 @@ extension SkillsModule {
                         toolName: "skill_sync_notion"
                     )
                 }
-                guard let skill = lookupSkill(named: name) else {
-                    return .object(["success": .bool(false), "action": .string(actionLabel), "message": .string("Skill not found.")])
+                let resolution = await resolveMutationTarget(named: name)
+                let target: SkillMutationTarget
+                switch resolution {
+                case .notFound:
+                    return .object([
+                        "success": .bool(false), "action": .string(actionLabel),
+                        "message": .string("Skill not found in configured parents or the curated specialist routing cache.")
+                    ])
+                case .ambiguous(let candidates):
+                    return .object([
+                        "success": .bool(false), "action": .string(actionLabel),
+                        "message": .string("Skill name is ambiguous; use an explicit parent/specialist path."),
+                        "candidates": .array(candidates.map { .string($0) })
+                    ])
+                case .found(let resolved):
+                    target = resolved
                 }
-                let pageId = skill.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                let pageId = target.pageId.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard NotionPageRef.isValidStoredPageId(pageId) else {
-                    return .object(["success": .bool(false), "action": .string(actionLabel), "message": .string("Skill has an invalid Notion page id — fix in Settings → Skills.")])
+                    return .object([
+                        "success": .bool(false), "action": .string(actionLabel),
+                        "message": .string("Skill has an invalid Notion page id — fix the parent routing relation or Settings → Skills.")
+                    ])
                 }
                 do {
                     let client = try NotionClient()
+                    if target.kind == .cachedSpecialist {
+                        if isPush {
+                            return .object([
+                                "success": .bool(false), "action": .string(actionLabel),
+                                "name": .string(target.name), "targetKind": .string(target.kind.rawValue),
+                                "message": .string("Cached specialists have no independent local metadata row to push. Use skill_update with the explicit parent/specialist path; it writes the child page directly and refreshes both caches.")
+                            ])
+                        }
+
+                        let pageData = try await client.getPage(pageId: pageId)
+                        guard let pageJSON = try? JSONSerialization.jsonObject(with: pageData) as? [String: Any],
+                              let properties = pageJSON["properties"] as? [String: Any] else {
+                            return .object([
+                                "success": .bool(false), "action": .string(actionLabel),
+                                "message": .string("Failed to parse specialist Notion page.")
+                            ])
+                        }
+                        let pulled = SkillNotionMetadata.parsePulledMetadata(properties: properties)
+                        let cache = await SkillBodyCacheEviction.refreshReceipt(pageId)
+                        let resolvedPath = [target.parentName, target.name].compactMap { $0 }.joined(separator: "/")
+                        return .object([
+                            "success": .bool(true), "action": .string(actionLabel),
+                            "name": .string(target.name), "targetKind": .string(target.kind.rawValue),
+                            "resolvedPath": .string(resolvedPath),
+                            "summary": .string(pulled.summary),
+                            "triggerPhrases": .array(pulled.triggerPhrases.map { .string($0) }),
+                            "antiTriggerPhrases": .array(pulled.antiTriggerPhrases.map { .string($0) }),
+                            "bodyEvicted": .bool(cache.bodyEvicted),
+                            "routingRefreshAttempted": .bool(cache.routingRefreshAttempted),
+                            "routingRefreshSucceeded": .bool(cache.routingRefreshSucceeded),
+                            "routingParentsExpected": .int(cache.routingParentsExpected),
+                            "routingParentsRefreshed": .int(cache.routingParentsRefreshed),
+                            "message": .string("Specialist metadata read from Notion; cache evidence is reported separately.")
+                        ])
+                    }
+
+                    var skills = readAllSkills()
+                    let wanted = CachedSkillBody.normalize(pageId)
+                    guard let idx = skills.firstIndex(where: {
+                        CachedSkillBody.normalize($0.notionPageId) == wanted
+                    }) else {
+                        return .object([
+                            "success": .bool(false), "action": .string(actionLabel),
+                            "message": .string("Configured skill row not found.")
+                        ])
+                    }
+                    let skill = skills[idx]
                     if isPush {
                         let patch = try SkillNotionMetadata.buildPagePropertiesPatchData(
                             summary: skill.summary,
@@ -399,42 +535,53 @@ extension SkillsModule {
                             antiTriggerPhrases: skill.antiTriggerPhrases
                         )
                         _ = try await client.updatePage(pageId: pageId, properties: patch)
-                        return .object(["success": .bool(true), "action": .string(actionLabel), "name": .string(name), "message": .string("Notion page properties updated from MCP metadata.")])
+                        let cache = await SkillBodyCacheEviction.refreshReceipt(pageId)
+                        return .object([
+                            "success": .bool(true), "action": .string(actionLabel),
+                            "name": .string(target.name), "targetKind": .string(target.kind.rawValue),
+                            "bodyEvicted": .bool(cache.bodyEvicted),
+                            "routingRefreshAttempted": .bool(cache.routingRefreshAttempted),
+                            "routingRefreshSucceeded": .bool(cache.routingRefreshSucceeded),
+                            "routingParentsExpected": .int(cache.routingParentsExpected),
+                            "routingParentsRefreshed": .int(cache.routingParentsRefreshed),
+                            "message": .string("Notion page properties updated; cache evidence is reported separately.")
+                        ])
                     } else {
                         let pageData = try await client.getPage(pageId: pageId)
                         guard let pageJSON = try? JSONSerialization.jsonObject(with: pageData) as? [String: Any],
                               let properties = pageJSON["properties"] as? [String: Any] else {
-                            return .object(["success": .bool(false), "action": .string(actionLabel), "message": .string("Failed to parse Notion page.")])
+                            return .object([
+                                "success": .bool(false), "action": .string(actionLabel),
+                                "message": .string("Failed to parse Notion page.")
+                            ])
                         }
                         // SSOT = Notion. Read the REAL columns
                         // (Description, Activation Examples, Anti-Triggers).
-                        // GATE-SAFE: an empty Notion value never
-                        // overwrites a non-empty local value, so a pull can no
-                        // longer blank metadata (the historical phantom-column
-                        // bug). See SkillNotionMetadata.parsePulledMetadata.
+                        // Empty values remain gate-safe no-ops for configured
+                        // parent rows.
                         let pulled = SkillNotionMetadata.parsePulledMetadata(properties: properties)
-                        var skills = readAllSkills()
-                        guard let idx = skills.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) else {
-                            return .object(["success": .bool(false), "action": .string(actionLabel), "message": .string("Skill not found.")])
-                        }
-                        let cur = skills[idx]
                         let newSummary = pulled.summary.isEmpty
-                            ? cur.summary
+                            ? skill.summary
                             : SkillMetadataLimits.clampedSummary(pulled.summary)
                         let trig = pulled.triggerPhrases.isEmpty
-                            ? cur.triggerPhrases
+                            ? skill.triggerPhrases
                             : SkillMetadataLimits.clampedPhraseList(pulled.triggerPhrases)
                         let anti = pulled.antiTriggerPhrases.isEmpty
-                            ? cur.antiTriggerPhrases
+                            ? skill.antiTriggerPhrases
                             : SkillMetadataLimits.clampedPhraseList(pulled.antiTriggerPhrases)
                         skills[idx] = SkillConfig(
-                            name: cur.name, source: cur.source, enabled: cur.enabled,
-                            routingDiscoverable: cur.routingDiscoverable, inCommandPalette: cur.inCommandPalette,
+                            name: skill.name, source: skill.source, enabled: skill.enabled,
+                            routingDiscoverable: skill.routingDiscoverable, inCommandPalette: skill.inCommandPalette,
                             summary: newSummary, triggerPhrases: trig, antiTriggerPhrases: anti,
-                            url: cur.url, platform: cur.platform
+                            url: skill.url, platform: skill.platform
                         )
                         writeSkills(skills)
-                        return .object(["success": .bool(true), "action": .string(actionLabel), "name": .string(name), "message": .string("MCP metadata updated from Notion (Description-sourced; empty fields preserved).")])
+                        await SkillBodyCacheStore.shared.evict(pageId: pageId)
+                        return .object([
+                            "success": .bool(true), "action": .string(actionLabel),
+                            "name": .string(target.name), "targetKind": .string(target.kind.rawValue),
+                            "message": .string("MCP metadata updated from Notion (Description-sourced; empty fields preserved); body cache evicted.")
+                        ])
                     }
                 } catch let error as NotionClientError {
                     return .object(["success": .bool(false), "action": .string(actionLabel), "error": .string(error.localizedDescription)])

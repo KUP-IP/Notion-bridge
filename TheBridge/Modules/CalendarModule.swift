@@ -57,12 +57,29 @@ public struct CalendarInfo: Sendable, Equatable {
     public let title: String
     public let isDefault: Bool
     public let allowsModify: Bool
+    public let calendarType: String
+    public let sourceIdentifier: String?
+    public let sourceTitle: String?
+    public let sourceType: String?
 
-    public init(id: String, title: String, isDefault: Bool, allowsModify: Bool) {
+    public init(
+        id: String,
+        title: String,
+        isDefault: Bool,
+        allowsModify: Bool,
+        calendarType: String = "unknown",
+        sourceIdentifier: String? = nil,
+        sourceTitle: String? = nil,
+        sourceType: String? = nil
+    ) {
         self.id = id
         self.title = title
         self.isDefault = isDefault
         self.allowsModify = allowsModify
+        self.calendarType = calendarType
+        self.sourceIdentifier = sourceIdentifier
+        self.sourceTitle = sourceTitle
+        self.sourceType = sourceType
     }
 }
 
@@ -78,6 +95,14 @@ public struct CalendarEvent: Sendable, Equatable {
     public var calendarTitle: String
     public var location: String?
     public var notes: String?
+    public var timeZoneIdentifier: String?
+    public var externalId: String?
+    public var organizer: String?
+    public var attendees: [String]
+    public var conferenceURL: String?
+    public var lastModified: String?
+    public var isRecurring: Bool
+    public var isDetached: Bool
 
     public init(
         id: String,
@@ -88,7 +113,15 @@ public struct CalendarEvent: Sendable, Equatable {
         calendarId: String,
         calendarTitle: String,
         location: String?,
-        notes: String?
+        notes: String?,
+        timeZoneIdentifier: String? = nil,
+        externalId: String? = nil,
+        organizer: String? = nil,
+        attendees: [String] = [],
+        conferenceURL: String? = nil,
+        lastModified: String? = nil,
+        isRecurring: Bool = false,
+        isDetached: Bool = false
     ) {
         self.id = id
         self.title = title
@@ -99,6 +132,14 @@ public struct CalendarEvent: Sendable, Equatable {
         self.calendarTitle = calendarTitle
         self.location = location
         self.notes = notes
+        self.timeZoneIdentifier = timeZoneIdentifier
+        self.externalId = externalId
+        self.organizer = organizer
+        self.attendees = attendees
+        self.conferenceURL = conferenceURL
+        self.lastModified = lastModified
+        self.isRecurring = isRecurring
+        self.isDetached = isDetached
     }
 }
 
@@ -127,6 +168,7 @@ public struct CalendarEventDraft: Sendable {
     public var calendarId: String?
     public var location: String?
     public var notes: String?
+    public var timeZoneIdentifier: String?
 
     public init(
         title: String? = nil,
@@ -135,7 +177,8 @@ public struct CalendarEventDraft: Sendable {
         allDay: Bool? = nil,
         calendarId: String? = nil,
         location: String? = nil,
-        notes: String? = nil
+        notes: String? = nil,
+        timeZoneIdentifier: String? = nil
     ) {
         self.title = title
         self.start = start
@@ -144,6 +187,7 @@ public struct CalendarEventDraft: Sendable {
         self.calendarId = calendarId
         self.location = location
         self.notes = notes
+        self.timeZoneIdentifier = timeZoneIdentifier
     }
 }
 
@@ -157,9 +201,19 @@ public protocol CalendarStoring: Sendable {
     func ensureAccess() async throws
     func calendars() async throws -> [CalendarInfo]
     func events(_ query: CalendarEventQuery) async throws -> [CalendarEvent]
+    /// Provider-backed direct lookup. Implementations must query their durable
+    /// calendar store; process-local caches are not authoritative.
+    func event(id: String) async throws -> CalendarEvent?
     func create(_ draft: CalendarEventDraft) async throws -> CalendarEvent
     func update(id: String, _ draft: CalendarEventDraft) async throws -> CalendarEvent
     func delete(id: String) async throws
+}
+
+
+public extension CalendarStoring {
+    /// Compatibility default for non-production test seams. Production EventKit
+    /// overrides this with `EKEventStore.event(withIdentifier:)`.
+    func event(id: String) async throws -> CalendarEvent? { nil }
 }
 
 // MARK: - Errors
@@ -196,9 +250,11 @@ public enum CalendarModuleError: LocalizedError, Equatable {
 /// timezone-qualified strings, naive local wall-clock (`2026-06-03T09:00:00`),
 /// and date-only (`2026-06-03`) anchored to the user's local time zone.
 public enum CalendarISOParsing {
-    private static func makeISO() -> ISO8601DateFormatter {
+    private static func makeISO(fractionalSeconds: Bool = false) -> ISO8601DateFormatter {
         let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime]
+        f.formatOptions = fractionalSeconds
+            ? [.withInternetDateTime, .withFractionalSeconds]
+            : [.withInternetDateTime]
         return f
     }
 
@@ -219,7 +275,8 @@ public enum CalendarISOParsing {
     }
 
     public static func parse(_ iso: String) throws -> Date {
-        if let date = makeISO().date(from: iso) {
+        if let date = makeISO(fractionalSeconds: true).date(from: iso)
+            ?? makeISO().date(from: iso) {
             return date
         }
         if let date = makeNaiveLocal().date(from: iso) {
@@ -305,6 +362,14 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
         try CalendarISOParsing.parse(iso)
     }
 
+    private func participantLabel(_ participant: EKParticipant?) -> String? {
+        guard let participant else { return nil }
+        let url = participant.url.absoluteString
+        if !url.isEmpty { return url }
+        if let name = participant.name, !name.isEmpty { return name }
+        return nil
+    }
+
     private func toEvent(_ e: EKEvent) -> CalendarEvent {
         CalendarEvent(
             id: e.eventIdentifier ?? "",
@@ -315,8 +380,40 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
             calendarId: e.calendar?.calendarIdentifier ?? "",
             calendarTitle: e.calendar?.title ?? "",
             location: e.location,
-            notes: e.notes
+            notes: e.notes,
+            timeZoneIdentifier: e.timeZone?.identifier,
+            externalId: e.calendarItemExternalIdentifier,
+            organizer: participantLabel(e.organizer),
+            attendees: (e.attendees ?? []).compactMap(participantLabel),
+            conferenceURL: e.url?.absoluteString,
+            lastModified: dateToISO(e.lastModifiedDate),
+            isRecurring: !(e.recurrenceRules ?? []).isEmpty,
+            isDetached: e.isDetached
         )
+    }
+
+
+    private static func calendarTypeName(_ type: EKCalendarType) -> String {
+        switch type {
+        case .local: return "local"
+        case .calDAV: return "caldav"
+        case .exchange: return "exchange"
+        case .subscription: return "subscription"
+        case .birthday: return "birthday"
+        @unknown default: return "unknown"
+        }
+    }
+
+    private static func sourceTypeName(_ type: EKSourceType) -> String {
+        switch type {
+        case .local: return "local"
+        case .exchange: return "exchange"
+        case .calDAV: return "caldav"
+        case .mobileMe: return "mobileme"
+        case .subscribed: return "subscribed"
+        case .birthdays: return "birthdays"
+        @unknown default: return "unknown"
+        }
     }
 
     public func calendars() async throws -> [CalendarInfo] {
@@ -327,9 +424,19 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
                 title: cal.title,
                 isDefault: cal.calendarIdentifier
                     == store.defaultCalendarForNewEvents?.calendarIdentifier,
-                allowsModify: cal.allowsContentModifications
+                allowsModify: cal.allowsContentModifications,
+                calendarType: Self.calendarTypeName(cal.type),
+                sourceIdentifier: cal.source?.sourceIdentifier,
+                sourceTitle: cal.source?.title,
+                sourceType: cal.source.map { Self.sourceTypeName($0.sourceType) }
             )
         }
+    }
+
+    public func event(id: String) async throws -> CalendarEvent? {
+        try await ensureAccess()
+        guard let event = store.event(withIdentifier: id) else { return nil }
+        return toEvent(event)
     }
 
     public func events(_ query: CalendarEventQuery) async throws -> [CalendarEvent] {
@@ -378,6 +485,7 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
         if let allDay = draft.allDay { event.isAllDay = allDay }
         if let location = draft.location { event.location = location }
         if let notes = draft.notes { event.notes = notes }
+        if let identifier = draft.timeZoneIdentifier { event.timeZone = TimeZone(identifier: identifier) }
         try store.save(event, span: .thisEvent, commit: true)
         return toEvent(event)
     }
@@ -398,6 +506,7 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
         if let allDay = draft.allDay { event.isAllDay = allDay }
         if let location = draft.location { event.location = location }
         if let notes = draft.notes { event.notes = notes }
+        if let identifier = draft.timeZoneIdentifier { event.timeZone = TimeZone(identifier: identifier) }
         if let calendarId = draft.calendarId {
             event.calendar = try resolveCalendar(calendarId)
         }
@@ -451,7 +560,7 @@ public enum CalendarModule {
             name: "calendar_events",
             module: moduleName,
             tier: .open,
-            description: "List calendar events within a date range. Requires start + end (ISO-8601); optional calendarId scopes to one calendar (default: all). Returns id, title, start, end, allDay, calendar, location, notes. `compact: true` trims each event to id/title/start/end; `limit` caps the count (default 50) to stay under token caps — `has_more`/`truncated` flag when the range held more. Read-only.",
+            description: "List calendar events within a date range. Requires start + end (ISO-8601); optional calendarId scopes to one calendar (default: all). Returns local event identity plus providerExternalId and itemURL when available. `compact: true` trims each event to id/title/start/end; `limit` caps the count (default 50) to stay under token caps — `has_more`/`truncated` flag when the range held more. Read-only.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -639,6 +748,14 @@ public enum CalendarModule {
         ]
         if let location = event.location { entry["location"] = .string(location) }
         if let notes = event.notes { entry["notes"] = .string(notes) }
+        if let timeZone = event.timeZoneIdentifier { entry["timeZone"] = .string(timeZone) }
+        if let externalId = event.externalId { entry["providerExternalId"] = .string(externalId) }
+        if let organizer = event.organizer { entry["organizer"] = .string(organizer) }
+        if !event.attendees.isEmpty { entry["attendees"] = .array(event.attendees.map(Value.string)) }
+        if let url = event.conferenceURL { entry["itemURL"] = .string(url) }
+        if let modified = event.lastModified { entry["lastModified"] = .string(modified) }
+        entry["isRecurring"] = .bool(event.isRecurring)
+        entry["isDetached"] = .bool(event.isDetached)
         return .object(entry)
     }
 
