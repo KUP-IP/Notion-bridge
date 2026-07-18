@@ -1,29 +1,35 @@
 # The Bridge v4 — Release-Gate Runbook (the path to first sale)
 
-**Status:** everything *code-side* for v4 is merged to `main` (PRs #43/#44/#45 · floor 2250/0 · security audit clean — `docs/audits/v4-security-audit-2026-06-23.md`). What remains is **operator-only**: set secrets, prove the durable identity on-device, publish legal + submit the connector, then cut the release. **No code changes are required below.**
+**Status:** code-side v4 is consolidated in integration PR #110 (floor
+3355/0; security audit clean — `docs/audits/v4-security-audit-2026-06-23.md`).
+The Apple agreement and `ServerManager` gates are resolved. What remains is
+**operator-owned**: production license-key custody, live payment fulfillment,
+durable identity proof without the env agent, legal/submission, and the release.
 
 The committed defaults are all **fail-closed** (empty license key → no activation; empty OAuth identity → placeholder AS that now *fails loud*), so nothing ships insecure if a step is skipped — it just won't activate/connect until configured.
 
 ## At a glance (ordered; **0 blocks everything**, 1–3 gate the release build, 7 triggers it)
-0. **Apple Developer legal agreement signed** — notarization (and the published build) fails until then
+0. **Apple Developer legal agreement signed** — RESOLVED; notary history is healthy
 1. Licensing keypair + CI secret
 2. Stripe live price + Payment Link + fulfillment + `STRIPE_PAYMENT_LINK`
 3. Remote-Access: 5 OAuth/WorkOS CI secrets → on-device PRM proof → retire env agent
 4. Connector: privacy/ToS published + Anthropic Directory submission
 5. Legal sign-off (TERMS / refund)
-6. Decide the `ServerManager.swift` one-liner
+6. Decide the `ServerManager.swift` one-liner — RESOLVED; committed on both startup paths
 7. Version bump → push the `v4.0.0` tag (the release trigger)
 
 ---
 
 ## 0 · Apple Developer legal agreement — notarization prerequisite ⚠️ (blocks the release)
-**Discovered 2026-06-24** running `make install`: code-signing succeeds, but the Apple notary service rejects the upload —
+**Discovered 2026-06-24** running `make install`: code-signing succeeded, but the Apple notary service rejected the upload —
 > HTTP 403 — "A required agreement is missing or has expired. … Ensure your team has signed the necessary legal agreements and that they are not expired."
 
 Notarization is REQUIRED for the published DMG (gate 7 · `release.yml` → `notarize`), so this blocks the v4 release **ahead of everything below**. It is an Apple-account action, not a code change.
-- [ ] As the **Account Holder**, sign in at [developer.apple.com/account](https://developer.apple.com/account) **and** App Store Connect; accept any pending agreements (updated **Apple Developer Program License Agreement**, **Paid Apps Agreement**, etc.).
-- [ ] Confirm a clean notarize: re-run `make install` (or `xcrun notarytool submit … --keychain-profile "notarytool-profile" --wait`) → no 403.
-- [ ] Until then, `make install-copy` (signed, no notarize) deploys to *this* Mac for local use — but the build is **not distributable / auto-updatable** without notarization.
+- [x] Agreement issue resolved. On 2026-07-18, `xcrun notarytool history
+  --keychain-profile notarytool-profile` succeeded; the most recent v3.9.9 app
+  archive and DMG entries are both `Accepted` (2026-07-09).
+- [ ] The v4 release still needs its own notarized artifact and clean-install /
+  Sparkle proof; prior accepted submissions prove account access, not v4.
 
 ## 1 · Licensing (Packet B) — first-sale activation
 - [ ] Generate the **prod Ed25519 keypair** under your custody: `swift run license-cli keygen` (details: `docs/operator/license-ops-runbook.md`). **The private key NEVER enters the repo** — store it in your password manager / secure store.
@@ -61,7 +67,8 @@ Set these 5 `release.yml` secrets so `make inject-remote-access` bakes the IdP i
 - [ ] Sign off on the **TERMS / refund policy** (refund window 7→14d is already in the copy).
 
 ## 6 · `ServerManager.swift` one-liner
-- [ ] Decide the uncommitted `_ = await manager.enable()` line in `TheBridge/Server/ServerManager.swift` (cloud-enabled block): **include** (commit it), **revert**, or **leave**. Not authored this sprint — your call before the release build.
+- [x] Included and committed on both server startup paths. Verified in source on
+  2026-07-18; no uncommitted decision remains.
 
 ## 7 · Cut the release (the trigger)
 - [ ] Bump `TheBridge/Config/Version.swift` (marketing → **4.0.0**) **and** root `Info.plist` (`CFBundleShortVersionString` / `CFBundleVersion`) in sync; +1 build number.
