@@ -30,6 +30,9 @@ public enum CalendarRegistrySyncCompositionError: Error, LocalizedError, Equatab
 public enum CalendarRegistrySyncComposition {
     public static let enableEnvironmentKey = "BRIDGE_INTERNAL_CALENDAR_REGISTRY_SYNC"
     public static let allowedCalendarsEnvironmentKey = "BRIDGE_INTERNAL_CALENDAR_REGISTRY_ALLOWED_CALENDARS"
+    public static let canonicalCoordinatorDirectory = BridgePaths.applicationSupport(.registry)
+    public static let canonicalLedgerURL = canonicalCoordinatorDirectory
+        .appendingPathComponent("calendar-registry-transactions.sqlite3")
 
     public static func featureState(environment: [String: String]) -> CalendarRegistrySyncFeatureState {
         environment[enableEnvironmentKey] == "1"
@@ -42,9 +45,7 @@ public enum CalendarRegistrySyncComposition {
         registryGateway: any RegistryNotionGateway,
         calendarStore: any CalendarStoring,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        allowedCalendarIds: Set<String>? = nil,
-        ledgerURL: URL = BridgePaths.applicationSupport(.registry)
-            .appendingPathComponent("calendar-registry-transactions.sqlite3")
+        allowedCalendarIds: Set<String>? = nil
     ) throws -> CalendarRegistrySyncEngine {
         guard featureState(environment: environment) == .enabledForPrivateSmoke else {
             throw CalendarRegistrySyncCompositionError.disabled
@@ -63,8 +64,8 @@ public enum CalendarRegistrySyncComposition {
         guard !allowlist.isEmpty else {
             throw CalendarRegistrySyncCompositionError.missingAllowedCalendars
         }
-        let standardizedLedger = ledgerURL.standardizedFileURL
-        let parent = standardizedLedger.deletingLastPathComponent()
+        let standardizedLedger = canonicalLedgerURL.standardizedFileURL
+        let parent = canonicalCoordinatorDirectory.standardizedFileURL
         let values = try parent.resourceValues(forKeys: [.volumeIsLocalKey])
         guard values.volumeIsLocal == true else {
             throw CalendarRegistrySyncCompositionError.unsupportedCoordinatorLocation(parent.path)

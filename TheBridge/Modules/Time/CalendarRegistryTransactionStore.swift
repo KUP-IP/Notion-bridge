@@ -65,6 +65,8 @@ public struct CalendarRegistryOperationManifest: Codable, Sendable, Equatable {
     public var notes: String?
     public var eventClass: String
     public var meetingType: String?
+    public var schedulingAuthority: String
+    public var expectedInitialSyncState: String
     public var primaryBlockId: String
     public var blockIds: [String]
     public var projectIds: [String]
@@ -86,6 +88,8 @@ public struct CalendarRegistryOperationManifest: Codable, Sendable, Equatable {
         copy.notes = Self.normalizedOptional(notes)
         copy.eventClass = eventClass.trimmingCharacters(in: .whitespacesAndNewlines)
         copy.meetingType = Self.normalizedOptional(meetingType)
+        copy.schedulingAuthority = schedulingAuthority.trimmingCharacters(in: .whitespacesAndNewlines)
+        copy.expectedInitialSyncState = expectedInitialSyncState.trimmingCharacters(in: .whitespacesAndNewlines)
         copy.primaryBlockId = primaryBlockId.trimmingCharacters(in: .whitespacesAndNewlines)
         copy.blockIds = Array(Set(blockIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty } + [copy.primaryBlockId].filter { !$0.isEmpty })).sorted()
@@ -111,6 +115,8 @@ public struct CalendarRegistryOperationManifest: Codable, Sendable, Equatable {
             optional(value.notes),
             field(value.eventClass),
             optional(value.meetingType),
+            field(value.schedulingAuthority),
+            field(value.expectedInitialSyncState),
             field(value.primaryBlockId),
             list(value.blockIds),
             list(value.projectIds),
@@ -393,19 +399,18 @@ public actor SQLiteCalendarRegistryTransactionStore: CalendarRegistryTransaction
                 }
                 let sql = """
                 UPDATE calendar_registry_transactions SET
-                    operation_id=?, lease_owner=?, lease_token=?, lease_expires_at=?, heartbeat_at=?,
+                    lease_owner=?, lease_token=?, lease_expires_at=?, heartbeat_at=?,
                     updated_at=?, revision=revision+1
                 WHERE idempotency_key=? AND revision=?;
                 """
                 try withStatement(sql) { stmt in
-                    try bindText(stmt, 1, operationId)
-                    try bindText(stmt, 2, leaseOwner)
-                    try bindText(stmt, 3, leaseToken)
-                    try bindDouble(stmt, 4, now + leaseDuration)
-                    try bindDouble(stmt, 5, now)
-                    try bindText(stmt, 6, CalendarRegistryISO.string(Date(timeIntervalSince1970: now)))
-                    try bindText(stmt, 7, idempotencyKey)
-                    try bindInt(stmt, 8, existing.revision)
+                    try bindText(stmt, 1, leaseOwner)
+                    try bindText(stmt, 2, leaseToken)
+                    try bindDouble(stmt, 3, now + leaseDuration)
+                    try bindDouble(stmt, 4, now)
+                    try bindText(stmt, 5, CalendarRegistryISO.string(Date(timeIntervalSince1970: now)))
+                    try bindText(stmt, 6, idempotencyKey)
+                    try bindInt(stmt, 7, existing.revision)
                     try stepDone(stmt)
                 }
                 guard sqlite3_changes(db) == 1 else { throw CalendarRegistryTransactionStoreError.staleRevision(idempotencyKey) }
@@ -776,7 +781,6 @@ public actor InMemoryCalendarRegistryTransactionStore: CalendarRegistryTransacti
                let expiry = existing.leaseExpiresAt, existing.leaseToken != nil, expiry > now {
                 throw CalendarRegistryTransactionStoreError.operationActive(idempotencyKey, expiry)
             }
-            existing.operationId = operationId
             existing.leaseOwner = leaseOwner
             existing.leaseToken = leaseToken
             existing.leaseExpiresAt = now.addingTimeInterval(leaseDuration)

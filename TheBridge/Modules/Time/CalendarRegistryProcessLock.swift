@@ -27,6 +27,7 @@ public protocol CalendarRegistryProcessLockHandle: AnyObject, Sendable {
 }
 
 public protocol CalendarRegistryProcessLocking: Sendable {
+    var coordinatorNamespace: String { get }
     func acquire(idempotencyKey: String) throws -> any CalendarRegistryProcessLockHandle
 }
 
@@ -75,18 +76,51 @@ public final class FileCalendarRegistryProcessLockHandle: CalendarRegistryProces
 
 public struct FileCalendarRegistryProcessLockCoordinator: CalendarRegistryProcessLocking, Sendable {
     public let rootURL: URL
+    public let coordinatorNamespace: String
 
     public init(rootURL: URL) throws {
-        self.rootURL = rootURL.standardizedFileURL
+        let standardized = rootURL.standardizedFileURL
+        self.rootURL = standardized
+        self.coordinatorNamespace = "local-" + SHA256.hash(data: Data(standardized.path.utf8))
+            .prefix(12).map { String(format: "%02x", $0) }.joined()
         try FileManager.default.createDirectory(
-            at: self.rootURL,
+            at: standardized,
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
+        try Self.validateRoot(standardized)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
-        var mutable = self.rootURL
+        var mutable = standardized
         try? mutable.setResourceValues(values)
+    }
+
+    private static func validateRoot(_ url: URL) throws {
+        var info = stat()
+        guard lstat(url.path, &info) == 0 else {
+            throw CalendarRegistryProcessLockError.storageFailure(
+                "lstat \(url.path) errno=\(errno): \(String(cString: strerror(errno)))"
+            )
+        }
+        guard (info.st_mode & S_IFMT) == S_IFDIR else {
+            throw CalendarRegistryProcessLockError.storageFailure("lock root is not a directory: \(url.path)")
+        }
+        guard info.st_uid == geteuid() else {
+            throw CalendarRegistryProcessLockError.storageFailure("lock root is not owned by the current user: \(url.path)")
+        }
+        if (info.st_mode & 0o077) != 0 {
+            guard chmod(url.path, mode_t(S_IRWXU)) == 0 else {
+                throw CalendarRegistryProcessLockError.storageFailure(
+                    "chmod lock root errno=\(errno): \(String(cString: strerror(errno)))"
+                )
+            }
+            var repaired = stat()
+            guard lstat(url.path, &repaired) == 0, (repaired.st_mode & 0o077) == 0 else {
+                throw CalendarRegistryProcessLockError.storageFailure(
+                    "lock root permissions remain unsafe after repair: \(url.path)"
+                )
+            }
+        }
     }
 
     public func lockURL(idempotencyKey: String) -> URL {
@@ -106,6 +140,24 @@ public struct FileCalendarRegistryProcessLockCoordinator: CalendarRegistryProces
         guard fd >= 0 else {
             throw CalendarRegistryProcessLockError.storageFailure(
                 "open \(url.path) errno=\(errno): \(String(cString: strerror(errno)))"
+            )
+        }
+        var info = stat()
+        guard fstat(fd, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_uid == geteuid(),
+              info.st_nlink == 1 else {
+            let captured = errno
+            _ = close(fd)
+            throw CalendarRegistryProcessLockError.storageFailure(
+                "unsafe lock file \(url.path) errno=\(captured): \(String(cString: strerror(captured)))"
+            )
+        }
+        guard fchmod(fd, mode_t(S_IRUSR | S_IWUSR)) == 0 else {
+            let captured = errno
+            _ = close(fd)
+            throw CalendarRegistryProcessLockError.storageFailure(
+                "chmod lock file errno=\(captured): \(String(cString: strerror(captured)))"
             )
         }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
@@ -128,7 +180,14 @@ public struct FileCalendarRegistryProcessLockCoordinator: CalendarRegistryProces
                 "write lock owner errno=\(captured): \(String(cString: strerror(captured)))"
             )
         }
-        _ = fsync(fd)
+        guard fsync(fd) == 0 else {
+            let captured = errno
+            _ = flock(fd, LOCK_UN)
+            _ = close(fd)
+            throw CalendarRegistryProcessLockError.storageFailure(
+                "fsync lock owner errno=\(captured): \(String(cString: strerror(captured)))"
+            )
+        }
         return FileCalendarRegistryProcessLockHandle(
             idempotencyKey: idempotencyKey,
             fileURL: url,
@@ -140,10 +199,13 @@ public struct FileCalendarRegistryProcessLockCoordinator: CalendarRegistryProces
 public final class InMemoryCalendarRegistryProcessLockCoordinator: CalendarRegistryProcessLocking, @unchecked Sendable {
     public static let shared = InMemoryCalendarRegistryProcessLockCoordinator()
 
+    public let coordinatorNamespace: String
     private let stateLock = NSLock()
     private var active: Set<String> = []
 
-    public init() {}
+    public init(coordinatorNamespace: String = "in-memory-test") {
+        self.coordinatorNamespace = coordinatorNamespace
+    }
 
     public func acquire(idempotencyKey: String) throws -> any CalendarRegistryProcessLockHandle {
         stateLock.lock()

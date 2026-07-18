@@ -2333,3 +2333,8 @@ set -euo pipefail
 
 # Review-integration replay: fail-closed smoke narrowing adds 10 greens to the
 # combined candidate floor. FLOOR 3278 -> 3288.
+
+- Calendar–Registry authority and uniqueness hardening (2026-07-17): final verification now re-proves exactly one live Notion EVENT and one EventKit identity; registry-first execution requires Registry authority and an admissible clean-or-complete pairing state before calendar access; Notion writes are revision-checked and limited to pairing-owned fields so concurrent semantic edits are preserved; production uses one canonical local coordinator with hardened lock-root/file validation; receipts separate stable transaction ID from attempt ID and report coordinator namespace, final registry revision, and uniqueness counts. The hermetic recovery matrix now contains 61 scenarios. Measured 3278 passed, 0 failed. FLOOR 3267 -> 3278.
+
+# Review-integration replay: authority and uniqueness hardening adds 11 greens
+# to the combined candidate floor. FLOOR 3288 -> 3299.

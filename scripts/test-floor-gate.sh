@@ -9,7 +9,7 @@
 # the floor OR any test fails.
 #
 # Full append-only FLOOR provenance: scripts/test-floor-gate-history.md
-FLOOR="${BRIDGE_TEST_FLOOR:-3288}"
+FLOOR="${BRIDGE_TEST_FLOOR:-3299}"
 BIN=".build/debug/TheBridgeTests"
 
 echo "🧪 test-floor-gate: building debug + running suite (floor=${FLOOR})..."
