@@ -4,6 +4,7 @@ import Foundation
 import Darwin
 import MCP
 import SQLite3
+import Synchronization
 import TheBridgeLib
 
 private enum SyncTestError: Error, LocalizedError {
@@ -2002,7 +2003,7 @@ func calendarRegistryProcessProbeExitCodeIfRequested() -> Int32? {
     let key = args[index + 2]
     let holdMilliseconds = UInt64(args[index + 3]) ?? 0
     let semaphore = DispatchSemaphore(value: 0)
-    nonisolated(unsafe) var result: Int32 = 1
+    let result = Mutex<Int32>(1)
     Task.detached {
         do {
             let request = RegistryFirstTimeInstanceRequest(
@@ -2032,17 +2033,19 @@ func calendarRegistryProcessProbeExitCodeIfRequested() -> Int32? {
                 leaseDuration: 0.1
             )
             let receipt = try await engine.registryFirstCreate(request)
-            if receipt.succeeded { result = 0 }
-            else if receipt.discrepancy?.contains("already active in another process") == true { result = 42 }
-            else { result = 2 }
+            result.withLock { value in
+                if receipt.succeeded { value = 0 }
+                else if receipt.discrepancy?.contains("already active in another process") == true { value = 42 }
+                else { value = 2 }
+            }
         } catch {
             fputs("probe failed: \(error)\n", stderr)
-            result = 3
+            result.withLock { $0 = 3 }
         }
         semaphore.signal()
     }
     semaphore.wait()
-    return result
+    return result.withLock { $0 }
 }
 
 private struct CrashProbeOutcome: Codable {
@@ -2113,7 +2116,7 @@ private func calendarRegistryCrashProbeExitCode(
     checkpointRawValue: String
 ) -> Int32 {
     let semaphore = DispatchSemaphore(value: 0)
-    nonisolated(unsafe) var result: Int32 = 1
+    let result = Mutex<Int32>(1)
     Task.detached {
         do {
             let request = RegistryFirstTimeInstanceRequest(
@@ -2158,21 +2161,23 @@ private func calendarRegistryCrashProbeExitCode(
             try JSONEncoder().encode(outcome).write(
                 to: root.appendingPathComponent("crash-probe-outcome.json"), options: .atomic
             )
-            if selected != nil {
-                result = 4
-            } else if receipt.succeeded || receipt.stageAfter == .operatorReview {
-                result = count <= 1 ? 0 : 5
-            } else {
-                result = 6
+            result.withLock { value in
+                if selected != nil {
+                    value = 4
+                } else if receipt.succeeded || receipt.stageAfter == .operatorReview {
+                    value = count <= 1 ? 0 : 5
+                } else {
+                    value = 6
+                }
             }
         } catch {
             fputs("crash probe failed: \(error)\n", stderr)
-            result = 7
+            result.withLock { $0 = 7 }
         }
         semaphore.signal()
     }
     semaphore.wait()
-    return result
+    return result.withLock { $0 }
 }
 
 private func crashProbeCalendarCreateCount(root: URL) -> Int {
