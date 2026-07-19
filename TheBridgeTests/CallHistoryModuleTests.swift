@@ -219,4 +219,126 @@ func runCallHistoryModuleTests() async {
             try expect(missing.contains("ZADDRESS"))
         }
     }
+
+    await test("missing database is distinguishable from Full Disk Access denial") {
+        let missingPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("calls-recent-missing-\(UUID().uuidString)/CallHistory.storedata")
+            .path
+        let missing = try CallHistoryModule.response(
+            arguments: .object([:]),
+            databasePath: missingPath
+        )
+        let missingResult = try object(missing)
+        try expect(missingResult["success"] == .bool(false))
+        guard case .object(let missingError) = missingResult["error"] else {
+            throw TestError.assertion("Missing database_missing error")
+        }
+        try expect(missingError["code"] == .string("database_missing"))
+
+        let denied = try CallHistoryModule.response(
+            arguments: .object([:]),
+            databasePath: "/denied",
+            reader: { _ in throw CallHistoryReadError.unavailable("authorization denied") }
+        )
+        let deniedResult = try object(denied)
+        guard case .object(let deniedError) = deniedResult["error"] else {
+            throw TestError.assertion("Missing full_disk_access_required error")
+        }
+        try expect(deniedError["code"] == .string("full_disk_access_required"))
+        try expect(missingError["code"] != deniedError["code"])
+    }
+
+    await test("query failure returns a distinct structured error code") {
+        let value = try CallHistoryModule.response(
+            arguments: .object([:]),
+            databasePath: "/fixture",
+            reader: { _ in throw CallHistoryReadError.queryFailed("sqlite prepare failed") }
+        )
+        let result = try object(value)
+        try expect(result["success"] == .bool(false))
+        try expect(result["calls"] == nil)
+        guard case .object(let error) = result["error"] else {
+            throw TestError.assertion("Missing query failed error")
+        }
+        try expect(error["code"] == .string("call_history_query_failed"))
+    }
+
+    await test("stable call ID prefers uniqueID and falls back to primary key") {
+        try expect(CallHistoryModule.stableCallID(uniqueID: "754D6E7D-3764-49FC-823E-8710CFD8AA76", primaryKey: 42)
+            == "754D6E7D-3764-49FC-823E-8710CFD8AA76")
+        try expect(CallHistoryModule.stableCallID(uniqueID: "", primaryKey: 42) == "42")
+        try expect(CallHistoryModule.stableCallID(uniqueID: nil, primaryKey: 7) == "7")
+    }
+
+    await test("compatible SQLite fixture exercises adapter date decoding and durable ids") {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("calls-recent-compatible-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("CallHistory.storedata").path
+
+        var database: OpaquePointer?
+        try expect(sqlite3_open(path, &database) == SQLITE_OK)
+        guard let database else { throw TestError.assertion("Failed to open fixture DB") }
+        defer { sqlite3_close(database) }
+
+        let createSQL = """
+            CREATE TABLE ZCALLRECORD (
+                Z_PK INTEGER PRIMARY KEY,
+                ZUNIQUE_ID TEXT,
+                ZDATE REAL,
+                ZDURATION REAL,
+                ZADDRESS TEXT,
+                ZORIGINATED INTEGER,
+                ZANSWERED INTEGER,
+                ZCALLTYPE INTEGER,
+                ZSERVICE_PROVIDER TEXT
+            );
+            """
+        try expect(sqlite3_exec(database, createSQL, nil, nil, nil) == SQLITE_OK)
+
+        let startedAt = ISO8601DateFormatter().date(from: "2026-07-17T12:00:00Z")!
+        let zDate = startedAt.timeIntervalSinceReferenceDate
+        let insertWithID = """
+            INSERT INTO ZCALLRECORD
+            (Z_PK, ZUNIQUE_ID, ZDATE, ZDURATION, ZADDRESS, ZORIGINATED, ZANSWERED, ZCALLTYPE, ZSERVICE_PROVIDER)
+            VALUES (1, 'AAAA1111-BBBB-CCCC-DDDD-EEEEEEEEEEEE', \(zDate), 12.5, '+16055550123', 1, 1, 1, 'com.apple.Telephony');
+            """
+        let insertFallback = """
+            INSERT INTO ZCALLRECORD
+            (Z_PK, ZUNIQUE_ID, ZDATE, ZDURATION, ZADDRESS, ZORIGINATED, ZANSWERED, ZCALLTYPE, ZSERVICE_PROVIDER)
+            VALUES (2, NULL, \(zDate - 60), 0, '6055550199', 0, 0, 1, 'com.apple.Telephony');
+            """
+        try expect(sqlite3_exec(database, insertWithID, nil, nil, nil) == SQLITE_OK)
+        try expect(sqlite3_exec(database, insertFallback, nil, nil, nil) == SQLITE_OK)
+
+        let firstRead = try CallHistoryModule.readDatabase(at: path)
+        try expect(firstRead.count == 2)
+        try expect(firstRead[0].uniqueID == "AAAA1111-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
+        try expect(abs(firstRead[0].date.timeIntervalSince(startedAt)) < 0.001)
+
+        let secondRead = try CallHistoryModule.readDatabase(at: path)
+        try expect(firstRead.map(\.uniqueID) == secondRead.map(\.uniqueID))
+        try expect(firstRead.map(\.primaryKey) == secondRead.map(\.primaryKey))
+
+        let value = try CallHistoryModule.response(
+            arguments: .object(["limit": .int(10)]),
+            databasePath: path
+        )
+        let result = try object(value)
+        try expect(result["success"] == .bool(true))
+        guard case .array(let calls) = result["calls"],
+              case .object(let newest) = calls.first,
+              case .object(let oldest) = calls.last else {
+            throw TestError.assertion("Expected two structured calls from fixture")
+        }
+        try expect(newest["id"] == .string("AAAA1111-BBBB-CCCC-DDDD-EEEEEEEEEEEE"))
+        try expect(oldest["id"] == .string("2"))
+        try expect(newest["normalizedNumber"] == .string("16055550123"))
+        try expect(newest["direction"] == .string("outbound"))
+        guard case .string(let startedAtString) = newest["startedAt"] else {
+            throw TestError.assertion("Missing startedAt")
+        }
+        try expect(startedAtString.hasPrefix("2026-07-17T12:00:00"))
+    }
 }

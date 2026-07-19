@@ -2362,3 +2362,8 @@ set -euo pipefail
 # instead of assuming the convenience `.build/debug` symlink exists, and request
 # the `TheBridgeTests` executable product explicitly so a clean SwiftPM build
 # cannot stop after compiling target objects without linking the harness. Floor unchanged.
+
+# PKT-CALL-001 Wave 1R (2026-07-19): compatible CallHistory SQLite fixture +
+# Apple reference-date decoding; distinguishable database_missing vs FDA vs
+# schema vs query errors; durable call-id helper (ZUNIQUE_ID / Z_PK fallback)
+# with docs sync. Measured 3359 passed, 0 failed. FLOOR 3342 -> 3359.
