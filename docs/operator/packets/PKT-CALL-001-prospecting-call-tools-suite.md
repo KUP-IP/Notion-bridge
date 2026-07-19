@@ -2,7 +2,7 @@
 
 **Slug:** `pkt-call-001-prospecting-call-tools`
 **Execution Class:** REVIEW-FIRST
-**Status:** REVIEW — Wave 1 + W1R hardening on `fix/pkt-call-001-w1r`; Waves 2–3 deliberately deferred; W1R success ≠ W2 authorized
+**Status:** REVIEW — Wave 1R merged via PR #111 (`6d8bd96`); Waves 2–3 deliberately deferred; W1R ≠ W2 authorized
 **Priority:** 80
 **Classification:** Standard (suite) · sequential waves inside one packet
 **SKILLS:** orchestrator · executor · mac-keepr · people-keepr (consumer contract)
@@ -170,7 +170,7 @@ Ship seven Bridge MCP tools (`calls_recent`, `log_call_touch`, `prospect_execute
 - [x] Stable call ID is proven and documented, including fallback
 - [x] Canonical contract, tip evidence, and smoke evidence agree (PR #109 retired; tip via #110 + W1R branch)
 - [x] Test suite + floor + live read-only smoke are green (3359 passed, floor 3359; live MCP UUID ids)
-- [ ] Reviewer decision recorded *(Approve / Request changes / Park — operator only; merge OUT)*
+- [x] Reviewer decision recorded — Approve 2026-07-19; merged PR #111 (`6d8bd96`)
 
 ### Wave 2
 - [ ] `log_call_touch` dryRun + write paths
@@ -314,21 +314,18 @@ tier: open
 `calls_recent` is on `origin/main` via PR **#110** (merged 2026-07-18; tip
 `4fb9b03`). Draft PR **#109** is CLOSED and is not live evidence.
 
-Wave 1R hardening lands on branch `fix/pkt-call-001-w1r` (2026-07-19):
+Wave 1R merged to `main` via PR **#111** (2026-07-19, merge `6d8bd96`):
 
 - Compatible SQLite fixture exercises real `readDatabase` + Apple reference-date
   decoding and durable `id` (uniqueID preferred; `Z_PK` string fallback).
 - Distinguishable errors: `database_missing`, `full_disk_access_required`,
   `unsupported_call_history_schema`, `call_history_query_failed`.
 - Operator guide `docs/operator/calls-recent.md` documents `id` + error taxonomy.
-- Live MCP smoke on installed Bridge (still 3.9.9/81): `calls_recent` returns
-  UUID `id` values with `identityResolved: false`.
+- Live MCP smoke on install SHA `3f60f85`: UUID `id` values, `identityResolved: false`.
+- Hermetic suite: 3359 passed; floor 3359.
 
 **W1R complete ≠ W2 authorized.** Schema mutation / `log_call_touch` remain
-blocked pending separate GO + registry reconcile.
-
-Merge to main, tag, and release are OUT of Execute — reviewer decides
-Approve / Request changes / Park.
+blocked pending separate GO + registry reconcile. Tag/release still OUT.
 
 ### Artifact Manifest
 
