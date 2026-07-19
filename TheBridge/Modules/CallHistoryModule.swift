@@ -65,6 +65,9 @@ public struct CallHistoryRawRecord: Sendable, Equatable {
 }
 
 public enum CallHistoryReadError: Error, Sendable, Equatable {
+    /// Path does not exist on disk (distinguish from FDA / open denial).
+    case missing(String)
+    /// Database exists but cannot be opened (typically Full Disk Access).
     case unavailable(String)
     case unsupportedSchema(missingColumns: [String])
     case queryFailed(String)
@@ -94,6 +97,15 @@ public enum CallHistoryModule {
 
     public static func normalizePhoneNumber(_ value: String) -> String {
         String(value.unicodeScalars.filter { CharacterSet.decimalDigits.contains($0) })
+    }
+
+    /// Durable call identity for idempotent follow-on tools.
+    /// Prefer `ZUNIQUE_ID` when present; fall back to `Z_PK` as a string.
+    public static func stableCallID(uniqueID: String?, primaryKey: Int64) -> String {
+        if let uniqueID, !uniqueID.isEmpty {
+            return uniqueID
+        }
+        return String(primaryKey)
     }
 
     public static func parseQuery(_ arguments: Value) throws -> CallHistoryQuery {
@@ -214,7 +226,7 @@ public enum CallHistoryModule {
             let records = filteredRecords(try reader(databasePath), query: query)
             let iso = makeISO8601()
             let calls: [Value] = records.map { record in
-                let identifier = record.uniqueID.flatMap { $0.isEmpty ? nil : $0 } ?? String(record.primaryKey)
+                let identifier = stableCallID(uniqueID: record.uniqueID, primaryKey: record.primaryKey)
                 return .object([
                     "id": .string(identifier),
                     "startedAt": .string(iso.string(from: record.date)),
@@ -243,6 +255,13 @@ public enum CallHistoryModule {
                 "count": .int(calls.count),
                 "calls": .array(calls)
             ])
+        } catch CallHistoryReadError.missing(let detail) {
+            return errorResponse(
+                code: "database_missing",
+                message: "The local CallHistory database was not found.",
+                remediation: "Confirm macOS Call History exists for this user, then retry. If the path is unexpected, report it to The Bridge developer.",
+                details: detail
+            )
         } catch CallHistoryReadError.unavailable(let detail) {
             return errorResponse(
                 code: "full_disk_access_required",
@@ -293,6 +312,10 @@ public enum CallHistoryModule {
     }
 
     public static func readDatabase(at path: String) throws -> [CallHistoryRawRecord] {
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw CallHistoryReadError.missing("CallHistory database not found at \(path)")
+        }
+
         var database: OpaquePointer?
         let openResult = sqlite3_open_v2(path, &database, SQLITE_OPEN_READONLY, nil)
         guard openResult == SQLITE_OK, let database else {

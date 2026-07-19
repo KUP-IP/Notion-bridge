@@ -20,23 +20,59 @@ Every field is optional. `limit` defaults to 20 and is capped at 100.
 non-decimal characters and then requires an exact normalized match. Results are
 newest-first.
 
-The response includes `identityResolved: false`. Call direction, answered
-state, duration, and service-provider metadata are call facts only; none proves
-who owns the number.
+Successful response shape (field names are authoritative):
 
-## Full Disk Access
+```json
+{
+  "success": true,
+  "source": "CallHistoryDB",
+  "identityResolved": false,
+  "count": 1,
+  "calls": [
+    {
+      "id": "754D6E7D-3764-49FC-823E-8710CFD8AA76",
+      "startedAt": "2026-07-19T04:37:51.072Z",
+      "durationSeconds": 0,
+      "number": "+15073847875",
+      "normalizedNumber": "15073847875",
+      "direction": "inbound",
+      "answered": false,
+      "callType": 1,
+      "serviceProvider": "com.apple.Telephony"
+    }
+  ]
+}
+```
 
-If the database cannot be opened, the tool returns
-`full_disk_access_required` with remediation instead of an empty list. Grant
-Full Disk Access to The Bridge in **System Settings > Privacy & Security > Full
-Disk Access**, relaunch The Bridge, reconnect MCP clients, and retry.
+Call direction, answered state, duration, and service-provider metadata are call
+facts only; none proves who owns the number.
 
-An incompatible database returns `unsupported_call_history_schema` with the
-missing columns. Do not treat that response as evidence that there were no
-calls.
+## Durable call `id`
+
+- Prefer CallHistory `ZUNIQUE_ID` when present (UUID string observed on macOS).
+- If `ZUNIQUE_ID` is null/empty, fall back to `Z_PK` as a decimal string.
+- The same source row yields the same `id` across repeated reads on an unchanged
+  database. Follow-on tools (e.g. future `log_call_touch`) must treat `id` as
+  the idempotency key and must not invent a second identity scheme.
+
+## Error taxonomy
+
+Failures never degrade to an empty-success list. Codes are distinguishable:
+
+| Code | When |
+|---|---|
+| `database_missing` | Path does not exist on disk |
+| `full_disk_access_required` | DB exists but open is denied (typically FDA) |
+| `unsupported_call_history_schema` | Required `ZCALLRECORD` columns missing |
+| `call_history_query_failed` | Open succeeded; prepare/step failed |
+
+Grant Full Disk Access to The Bridge in **System Settings > Privacy & Security >
+Full Disk Access**, relaunch The Bridge, reconnect MCP clients, and retry when
+you see `full_disk_access_required`.
 
 ## Scope boundary
 
-Wave 1 intentionally stops at read-only call truth. Prospect matching, outreach
+Wave 1 / Wave 1R stop at read-only call truth. Prospect matching, outreach
 writes, dialing, message drafts, and next-action recommendations belong to later
-reviewed waves in `PKT-CALL-001`; they are not implied by this tool.
+reviewed waves in `PKT-CALL-001`; they are not implied by this tool. W1R success
+does not authorize Wave 2 schema or `log_call_touch`.

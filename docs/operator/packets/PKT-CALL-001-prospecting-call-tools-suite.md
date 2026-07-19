@@ -2,7 +2,7 @@
 
 **Slug:** `pkt-call-001-prospecting-call-tools`
 **Execution Class:** REVIEW-FIRST
-**Status:** REVIEW — Wave 1 implemented; Waves 2–3 deliberately deferred
+**Status:** REVIEW — Wave 1 + W1R hardening on `fix/pkt-call-001-w1r`; Waves 2–3 deliberately deferred; W1R success ≠ W2 authorized
 **Priority:** 80
 **Classification:** Standard (suite) · sequential waves inside one packet
 **SKILLS:** orchestrator · executor · mac-keepr · people-keepr (consumer contract)
@@ -164,6 +164,14 @@ Ship seven Bridge MCP tools (`calls_recent`, `log_call_touch`, `prospect_execute
 - [x] Unreadable DB → structured error with FDA hint
 - [x] Tests + floor bump
 
+### Wave 1R
+- [x] Compatible SQLite fixture exercises adapter/date decoding
+- [x] Permission, missing, corrupt/schema, and query errors are distinguishable
+- [x] Stable call ID is proven and documented, including fallback
+- [x] Canonical contract, tip evidence, and smoke evidence agree (PR #109 retired; tip via #110 + W1R branch)
+- [x] Test suite + floor + live read-only smoke are green (3359 passed, floor 3359; live MCP UUID ids)
+- [ ] Reviewer decision recorded *(Approve / Request changes / Park — operator only; merge OUT)*
+
 ### Wave 2
 - [ ] `log_call_touch` dryRun + write paths
 - [ ] OUTREACH linked to PROSPECT when relation exists
@@ -249,7 +257,9 @@ Ship seven Bridge MCP tools (`calls_recent`, `log_call_touch`, `prospect_execute
 ### 1. `calls_recent`
 ```
 in:  { limit?: number, since?: ISO8601, number?: string, direction?: "inbound"|"outbound"|"all" }
-out: { calls: [{ id, at, number, name?, originated, answered, durationSec, service?, device? }], source: "CallHistoryDB" }
+out: { success, source: "CallHistoryDB", identityResolved: false, count, calls: [{ id, startedAt, durationSeconds, number, normalizedNumber, direction, answered, callType, serviceProvider }], filters }
+errors: database_missing | full_disk_access_required | unsupported_call_history_schema | call_history_query_failed
+id: ZUNIQUE_ID preferred; fallback String(Z_PK)
 tier: open | notify
 ```
 
@@ -301,26 +311,24 @@ tier: open
 
 ### Current Canonical Result
 
-Wave 1 is implemented on `codex/calls-recent` for review. `calls_recent` reads
-CallHistoryDB through a read-only SQLite connection, supports the four locked
-filters, returns newest-first structured records, and explicitly reports that
-no contact identity was resolved. It does not select or expose CallHistory's
-name column.
+`calls_recent` is on `origin/main` via PR **#110** (merged 2026-07-18; tip
+`4fb9b03`). Draft PR **#109** is CLOSED and is not live evidence.
 
-Verification on 2026-07-17:
+Wave 1R hardening lands on branch `fix/pkt-call-001-w1r` (2026-07-19):
 
-- Operator DB preflight: read-only open, required schema, and sample SELECT all
-  succeeded under The Bridge's installed FDA identity.
-- Hermetic suite: 3221 passed, 0 failed; floor 3207 → 3221.
-- Structured error tests: FDA denial and unsupported schema both fail visibly;
-  neither degrades to an empty-success result.
-- Live installed MCP smoke remains the final review-integration gate because
-  the currently installed app predates this branch.
+- Compatible SQLite fixture exercises real `readDatabase` + Apple reference-date
+  decoding and durable `id` (uniqueID preferred; `Z_PK` string fallback).
+- Distinguishable errors: `database_missing`, `full_disk_access_required`,
+  `unsupported_call_history_schema`, `call_history_query_failed`.
+- Operator guide `docs/operator/calls-recent.md` documents `id` + error taxonomy.
+- Live MCP smoke on installed Bridge (still 3.9.9/81): `calls_recent` returns
+  UUID `id` values with `identityResolved: false`.
 
-Waves 2–3 are not part of the approved stabilization scope and remain unchecked.
-Recommended next step after Wave 1 review: extract the normalized-number helper
-into a shared Calls primitive, then implement `log_call_touch` with dry-run and
-ambiguous-prospect fail-closed behavior before adding any higher-level loop.
+**W1R complete ≠ W2 authorized.** Schema mutation / `log_call_touch` remain
+blocked pending separate GO + registry reconcile.
+
+Merge to main, tag, and release are OUT of Execute — reviewer decides
+Approve / Request changes / Park.
 
 ### Artifact Manifest
 
