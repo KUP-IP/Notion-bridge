@@ -2382,3 +2382,8 @@ set -euo pipefail
 # returns offset ISO datetimes with time_zone=null; store decode + manifest
 # match accept empty IANA zone when absolute instants agree (CR97). Measured
 # 3367 passed, 0 failed. FLOOR 3366 -> 3367.
+
+# Calendar–Registry sprint W3 Last Synced At (2026-07-20): ledger anchors
+# lastVerifiedAt to Notion read-back after sync-evidence write so minute-
+# truncated date properties do not false-conflict (CR98). Measured 3368
+# passed, 0 failed. FLOOR 3367 -> 3368.

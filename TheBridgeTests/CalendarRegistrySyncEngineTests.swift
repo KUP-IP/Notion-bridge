@@ -473,6 +473,7 @@ private actor SyncRegistryGateway: RegistryNotionGateway {
     private(set) var updateCalls = 0
     private var lastUpdateNames: [String] = []
     private var dropWriterTokenOnUpdate = false
+    private var truncateSyncedAtToMinute = false
     private var revisionSequence = 1
 
     func seed(_ row: NotionRow) {
@@ -483,6 +484,7 @@ private actor SyncRegistryGateway: RegistryNotionGateway {
     func updateCount() -> Int { updateCalls }
     func updatedFieldNames() -> [String] { lastUpdateNames }
     func setDropWriterTokenOnUpdate(_ value: Bool) { dropWriterTokenOnUpdate = value }
+    func setTruncateSyncedAtToMinute(_ value: Bool) { truncateSyncedAtToMinute = value }
 
     func schema(dataSourceId: String, workspace: String?) async throws -> DataSourceSchema {
         _ = dataSourceId; _ = workspace
@@ -516,9 +518,24 @@ private actor SyncRegistryGateway: RegistryNotionGateway {
         _ = workspace
         updateCalls += 1
         lastUpdateNames = fields.map(\.notionName).sorted()
-        let applied = dropWriterTokenOnUpdate
+        var applied = dropWriterTokenOnUpdate
             ? fields.filter { $0.notionName != "Sync Writer Token" }
             : fields
+        if truncateSyncedAtToMinute {
+            applied = applied.map { field in
+                guard ["Last Synced At", "Registry Updated At"].contains(field.notionName),
+                      case .string(let raw) = field.value,
+                      let date = CalendarRegistryISO.date(raw) else { return field }
+                let truncated = Date(timeIntervalSince1970: (date.timeIntervalSince1970 / 60).rounded(.down) * 60)
+                return BoundField(
+                    propertyId: field.propertyId,
+                    notionName: field.notionName,
+                    type: field.type,
+                    value: .string(CalendarRegistryISO.string(truncated)),
+                    isTitle: field.isTitle
+                )
+            }
+        }
         revisionSequence += 1
         let row = Self.row(
             id: pageId, existing: pages[pageId], fields: applied,
@@ -2003,6 +2020,37 @@ func runCalendarRegistrySyncEngineTests() async {
         let receipt = try await makeSyncEngine(registry: store, calendar: calendar).registryFirstCreate(request)
         try expect(receipt.succeeded)
         try expect(await calendar.persistedCount() == 1)
+    }
+
+    await test("CR98 Notion minute-truncated Last Synced At still completes") {
+        let request = syncRequest(
+            key: "minute-truncated-synced-at",
+            registryEventId: "00000000000000000000000000000098"
+        )
+        let entity = scheduleEntityForSyncTests()
+        let gateway = SyncRegistryGateway()
+        await gateway.setTruncateSyncedAtToMinute(true)
+        await gateway.seed(try notionRow(for: canonicalRecord(request), entity: entity))
+        let calendar = SyncTestCalendar()
+        let store = NotionTimeInstanceRegistryStore(entity: entity, gateway: gateway)
+        // Sub-minute clock; gateway truncates Last Synced At to :00 like live Notion.
+        let engine = CalendarRegistrySyncEngine(
+            registry: store,
+            calendar: calendar,
+            transactions: InMemoryCalendarRegistryTransactionStore(),
+            processLocks: InMemoryCalendarRegistryProcessLockCoordinator(),
+            operationGate: CalendarRegistryOperationGate(),
+            clock: { Date(timeIntervalSince1970: 1_800_000_045) },
+            makeOperationId: { UUID().uuidString.lowercased() },
+            makeLeaseToken: { UUID().uuidString.lowercased() },
+            makeCreateInvocationId: { "create-invocation" },
+            makeSyncWriterToken: { UUID().uuidString.lowercased() },
+            leaseDuration: 600
+        )
+        let receipt = try await engine.registryFirstCreate(request)
+        try expect(receipt.succeeded)
+        try expect(await calendar.persistedCount() == 1)
+        try expect(receipt.stageAfter == .complete)
     }
 
 }

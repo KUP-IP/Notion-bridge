@@ -956,7 +956,10 @@ public actor CalendarRegistrySyncEngine {
                     )
                     notionOutcomePersisted = true
                     record = syncedRecord
-                    transaction.lastVerifiedAt = verifiedAt
+                    // Notion date properties commonly truncate sub-minute precision on
+                    // write-back. Anchor the ledger to the authoritative read, not the
+                    // pre-write clock, so final verification compares like-for-like.
+                    transaction.lastVerifiedAt = syncedRecord.lastSyncedAt ?? verifiedAt
                     transaction.syncWriterToken = syncedRecord.syncWriterToken
                     transaction.syncRevision = syncedRecord.syncRevision
                     transaction.stage = .syncEvidencePersisted
