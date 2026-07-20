@@ -49,10 +49,10 @@ Pre-seed required by engine: Sync Key = idempotency key, Operation Fingerprint =
 
 ## EventKit / EVENT leftover policy
 
-- **Keep Notion EVENT** `3a3cbb58889e8166ba5fc30451086e14` with sync identity for evidence (do not strip Sync Key / fingerprint / calendar ids unless intentionally retiring the receipt).
-- **Delete disposable EventKit item** when convenient via `calendar_delete` (Request-tier approval) or Calendar.app:
-  - `305A17D8-38F0-4A51-B0CF-B44DB346A65A:C8F7C880-B051-4ECB-A468-AD52E4E9775E` (Aug 2 success)
-- Earlier abort fixture left a separate EventKit item from conflicted key `smoke-2026-07-20-pair-2` on EVENT `3a3cbb58889e8137a5fac7d1885d06cf` (“Bridge Registry Smoke Disposable”, Aug 1) — also safe to delete; that ledger key remains conflict and must not be retried.
+- **Keep Notion EVENT** `3a3cbb58889e8166ba5fc30451086e14` (and conflicted sibling `3a3cbb58889e8137a5fac7d1885d06cf`) with sync identity for evidence (do not strip Sync Key / fingerprint / calendar ids unless intentionally retiring the receipt).
+- **EventKit cleanup done (2026-07-20 closeout):** both disposable items deleted via `calendar_delete`; FOCUS calendar Aug 1–2 query returned 0 events.
+  - Deleted success pair: `305A17D8-38F0-4A51-B0CF-B44DB346A65A:C8F7C880-B051-4ECB-A468-AD52E4E9775E`
+  - Conflicted key `smoke-2026-07-20-pair-2` must not be retried (ledger remains conflict).
 
 ## Live learnings folded into tip
 
