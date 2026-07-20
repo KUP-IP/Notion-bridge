@@ -956,7 +956,10 @@ public actor CalendarRegistrySyncEngine {
                     )
                     notionOutcomePersisted = true
                     record = syncedRecord
-                    transaction.lastVerifiedAt = verifiedAt
+                    // Notion date properties commonly truncate sub-minute precision on
+                    // write-back. Anchor the ledger to the authoritative read, not the
+                    // pre-write clock, so final verification compares like-for-like.
+                    transaction.lastVerifiedAt = syncedRecord.lastSyncedAt ?? verifiedAt
                     transaction.syncWriterToken = syncedRecord.syncWriterToken
                     transaction.syncRevision = syncedRecord.syncRevision
                     transaction.stage = .syncEvidencePersisted
@@ -1384,10 +1387,13 @@ public actor CalendarRegistrySyncEngine {
         guard record.schedulingAuthority == .registry else {
             throw CalendarRegistrySyncError.identityConflict("Notion Scheduling Authority is not Registry")
         }
+        // Notion often returns offset-bearing EVENT DATE values with time_zone=null.
+        // Absolute instants must match; IANA zone is required only when Notion preserved it.
         guard record.title == request.title,
               abs(record.scheduledStart.timeIntervalSince(request.start)) < 1,
               abs(record.scheduledEnd.timeIntervalSince(request.end)) < 1,
-              record.timeZoneIdentifier == request.timeZoneIdentifier,
+              record.timeZoneIdentifier.isEmpty
+                || record.timeZoneIdentifier == request.timeZoneIdentifier,
               record.location == request.location,
               record.notes == request.notes,
               record.semantics == request.semantics else {
@@ -1809,7 +1815,15 @@ public actor CalendarStoringSyncProvider: CalendarSyncProviding {
             throw CalendarModuleError.calendarNotFound(calendarId)
         }
         let allowlisted = allowlistedCalendarIds.contains(calendarId)
-        let local = info.calendarType == "local" && (info.sourceType == nil || info.sourceType == "local")
+        // Private smoke: allowlisted + writable + non-subscribed. Prefer On My Mac
+        // (local) when present; many Macs only expose private CalDAV/iCloud calendars
+        // with no EK local source — those remain admissible when explicitly allowlisted.
+        let subscribedFamily =
+            info.calendarType == "subscription"
+            || info.calendarType == "birthday"
+            || info.sourceType == "subscribed"
+            || info.sourceType == "birthdays"
+        let privateWritable = info.allowsModify && !subscribedFamily
         return CalendarQualification(
             calendarId: info.id,
             title: info.title,
@@ -1817,7 +1831,7 @@ public actor CalendarStoringSyncProvider: CalendarSyncProviding {
             explicitlyAllowlisted: allowlisted,
             calendarType: info.calendarType,
             sourceType: info.sourceType,
-            qualifiedForPrivateSmoke: allowlisted && info.allowsModify && local
+            qualifiedForPrivateSmoke: allowlisted && privateWritable
         )
     }
 
@@ -2239,7 +2253,6 @@ public struct NotionTimeInstanceRegistryStore: TimeInstanceRegistryStoring {
         guard case .object(let properties) = row.properties,
               let registryRevisionDate = CalendarRegistryISO.date(row.lastEditedTime),
               let range = dateRange(properties["date"]),
-              TimeZone(identifier: range.timeZone) != nil,
               let syncKey = string(properties["syncKey"]),
               let fingerprint = string(properties["operationFingerprint"]),
               let primaryBlock = strings(properties["primaryBlock"]).first,
@@ -2324,10 +2337,14 @@ public struct NotionTimeInstanceRegistryStore: TimeInstanceRegistryStoring {
         guard case .object(let object)? = value,
               case .string(let startString)? = object["start"],
               case .string(let endString)? = object["end"],
-              case .string(let timeZone)? = object["timeZone"],
               let start = CalendarRegistryISO.date(startString),
               let end = CalendarRegistryISO.date(endString) else { return nil }
-        return (start, end, timeZone)
+        if case .string(let timeZone)? = object["timeZone"], !timeZone.isEmpty {
+            guard TimeZone(identifier: timeZone) != nil else { return nil }
+            return (start, end, timeZone)
+        }
+        // Live Notion commonly echoes offset ISO datetimes with time_zone=null.
+        return (start, end, "")
     }
 }
 

@@ -282,7 +282,7 @@ public actor ServerManager {
         // 5. Wire ListTools handler — PKT-350: filter disabled tools
         let isCloudRequest = self.isCloudRequest
         await server.withMethodHandler(ListTools.self) { [router, toolAllowlist, isCloudRequest] _ in
-            let disabledNames = CredentialsFeature.mergedDisabledToolNames()
+            let disabledNames = ToolListingGates.mergedDisabledToolNames()
             var registrations = await router.registrationsForListTools(disabledNames: disabledNames)
 
             if let allowlist = toolAllowlist {

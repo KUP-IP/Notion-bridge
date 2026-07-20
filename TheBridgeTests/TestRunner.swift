@@ -666,6 +666,7 @@ await runSystemModuleTests()
 await runRemindersModuleTests()   // PKT-957 (v3.7·D): reminders_* EventKit module (mock seam)
 await runCalendarModuleTests()    // PKT-962 (v3.7·I): calendar_* EventKit module (mock seam; reuses v3.7·D store + entitlement)
 await runCalendarRegistrySyncEngineTests() // Calendar–Registry Sync fail-closed hermetic recovery matrix
+await runCalendarRegistryModuleTests() // env-filtered calendar_registry_pair MCP seam
 await runPermissionsModuleTests() // fb-permissions: unified permissions_status TCC probe (pure assembler — no live TCC)
 await runNotionModuleTests()
 await runAccessibilityModuleTests()

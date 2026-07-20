@@ -2367,3 +2367,23 @@ set -euo pipefail
 # Apple reference-date decoding; distinguishable database_missing vs FDA vs
 # schema vs query errors; durable call-id helper (ZUNIQUE_ID / Z_PK fallback)
 # with docs sync. Measured 3359 passed, 0 failed. FLOOR 3342 -> 3359.
+
+# Calendar–Registry sprint W2 (2026-07-20): env-filtered `calendar_registry_pair`
+# MCP tool (CalendarRegistryModule + ListTools/dispatch gate), hermetic seam
+# tests (env off omit/fail-closed, missing allowlist, fake success receipt),
+# and private-smoke calendar qualification for allowlisted writable
+# non-subscribed CalDAV (no On My Mac source required). Measured 3365 passed,
+# 0 failed. FLOOR 3359 -> 3365.
+
+# Calendar–Registry sprint W3 hatch (2026-07-20): private-smoke AUTO_APPROVE
+# env is inert unless sync enable is on (+1 hermetic). FLOOR 3365 -> 3366.
+
+# Calendar–Registry sprint W3 live decode (2026-07-20): Notion EVENT DATE often
+# returns offset ISO datetimes with time_zone=null; store decode + manifest
+# match accept empty IANA zone when absolute instants agree (CR97). Measured
+# 3367 passed, 0 failed. FLOOR 3366 -> 3367.
+
+# Calendar–Registry sprint W3 Last Synced At (2026-07-20): ledger anchors
+# lastVerifiedAt to Notion read-back after sync-evidence write so minute-
+# truncated date properties do not false-conflict (CR98). Measured 3368
+# passed, 0 failed. FLOOR 3367 -> 3368.
