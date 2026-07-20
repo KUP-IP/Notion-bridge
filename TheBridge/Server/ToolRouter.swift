@@ -468,11 +468,23 @@ public actor ToolRouter {
         // The per-module override is written when the user picks "Always Allow"
         // on a Request-tier tool, so the grant covers sibling tools in the same
         // module rather than only the one that was prompted.
+        //
+        // Calendar–Registry private-smoke hatch: with sync env + AUTO_APPROVE=1,
+        // downgrade Request→Notify for the attended automation window only.
+        let registeredTier: SecurityTier
+        let neverAutoApprove: Bool
+        if toolName == CalendarRegistryModule.toolName && CalendarRegistryFeature.autoApproveEnabled {
+            registeredTier = .notify
+            neverAutoApprove = false
+        } else {
+            registeredTier = tool.tier
+            neverAutoApprove = tool.neverAutoApprove
+        }
         let effectiveTier = ToolRouter.resolveEffectiveTier(
             toolName: toolName,
             module: tool.module,
-            registeredTier: tool.tier,
-            neverAutoApprove: tool.neverAutoApprove
+            registeredTier: registeredTier,
+            neverAutoApprove: neverAutoApprove
         )
 
         if context.origin == .remote,

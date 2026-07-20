@@ -88,6 +88,20 @@ func runCalendarRegistryModuleTests() async {
         )
     }
 
+    await test("auto-approve hatch requires sync env") {
+        defer { clearSeams() }
+        CalendarRegistryFeature.environmentOverride = [
+            CalendarRegistryFeature.autoApproveEnvironmentKey: "1",
+        ]
+        try expect(CalendarRegistryFeature.autoApproveEnabled == false, "auto-approve inert when sync off")
+        CalendarRegistryFeature.environmentOverride = [
+            CalendarRegistrySyncComposition.enableEnvironmentKey: "1",
+            CalendarRegistrySyncComposition.allowedCalendarsEnvironmentKey: "cal-smoke",
+            CalendarRegistryFeature.autoApproveEnvironmentKey: "1",
+        ]
+        try expect(CalendarRegistryFeature.autoApproveEnabled == true, "auto-approve only with sync on")
+    }
+
     await test("env off → dispatch fail-closed") {
         defer { clearSeams() }
         CalendarRegistryFeature.environmentOverride = [:]

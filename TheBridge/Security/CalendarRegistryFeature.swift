@@ -24,6 +24,15 @@ public enum CalendarRegistryFeature: Sendable {
         ) == .enabledForPrivateSmoke
     }
 
+    /// Private-smoke only: when set with the sync enable flag, Request-tier
+    /// approval is downgraded to Notify so an attended automation window can
+    /// complete without a notification click. Never meaningful when sync env is off.
+    public static let autoApproveEnvironmentKey = "BRIDGE_INTERNAL_CALENDAR_REGISTRY_AUTO_APPROVE"
+
+    public static var autoApproveEnabled: Bool {
+        isEnabled && currentEnvironment[autoApproveEnvironmentKey] == "1"
+    }
+
     /// Tool names to hide from ListTools when the private-smoke env is off.
     public static func disabledToolNamesIfGated(
         environment: [String: String]? = nil

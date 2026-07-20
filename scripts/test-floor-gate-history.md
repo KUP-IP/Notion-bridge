@@ -2374,3 +2374,6 @@ set -euo pipefail
 # and private-smoke calendar qualification for allowlisted writable
 # non-subscribed CalDAV (no On My Mac source required). Measured 3365 passed,
 # 0 failed. FLOOR 3359 -> 3365.
+
+# Calendar–Registry sprint W3 hatch (2026-07-20): private-smoke AUTO_APPROVE
+# env is inert unless sync enable is on (+1 hermetic). FLOOR 3365 -> 3366.
