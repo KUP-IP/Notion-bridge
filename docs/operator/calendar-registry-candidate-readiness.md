@@ -1,6 +1,6 @@
 # Calendar–Registry Candidate-Readiness Receipt
 
-Status: **Integrated Candidate-Ready Source** — migration applied (2026-07-18); activation pending env-filtered MCP + disposable live smoke. Composition remains disabled by default. This is not an always-on sync receipt.
+Status: **Smoke-complete candidate** — migration applied (2026-07-18); env-filtered MCP tool `calendar_registry_pair` landed; one disposable live Notion↔EventKit smoke succeeded (2026-07-20) with env off-ramp proved. Composition remains disabled by default. This is not an always-on sync receipt. See [`calendar-registry-live-smoke.md`](calendar-registry-live-smoke.md).
 
 ## Integrated source
 
@@ -42,12 +42,14 @@ The first integrated-source run measured 3,355 passed and 0 failed. The locked f
 - The internal composition remains disabled by default. No EVENT row or EventKit item was
   created, updated, or deleted by the migration itself.
 
-## Activation posture (next)
+## Activation posture (current)
 
-- Env-filtered MCP registration for a private-smoke pairing path (composition still requires
-  `BRIDGE_INTERNAL_CALENDAR_REGISTRY_SYNC=1` plus an explicit calendar allowlist).
-- One disposable live Notion↔EventKit smoke with sticky-env off-ramp after the window.
-- Tool name and smoke receipt are recorded only after those waves land.
+- MCP tool `calendar_registry_pair` is registered in family `calendar` but **omitted from ListTools**
+  unless `BRIDGE_INTERNAL_CALENDAR_REGISTRY_SYNC=1` (dispatch also fail-closes without env + allowlist).
+- Private-smoke session may also set `BRIDGE_INTERNAL_CALENDAR_REGISTRY_ALLOWED_CALENDARS` and, for
+  attended automation only, `BRIDGE_INTERNAL_CALENDAR_REGISTRY_AUTO_APPROVE=1`.
+- Live smoke receipt: [`calendar-registry-live-smoke.md`](calendar-registry-live-smoke.md) (tip
+  `903c0ee`, floor 3368, env off-ramp proved).
 
 ## Deferred ship gates
 
