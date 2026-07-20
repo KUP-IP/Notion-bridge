@@ -219,6 +219,27 @@ public enum BridgeDefaults {
     /// Voice memo curator Understand routing: auto | heuristics | local | agent | cloud.
     public static let voiceMemoCuratorMode = "com.notionbridge.voiceMemo.curatorMode"
 
+    /// When Notion Memory `memory_keep` fails: `off` | `review` | `agentMemory`.
+    /// Default (absent) = `review` — never silently substitute agent memory (SC8).
+    public static let voiceMemoMemoryFallbackPolicy = "com.notionbridge.voiceMemo.memoryFallbackPolicy"
+
+    public enum VoiceMemoMemoryFallbackPolicy: String, Sendable {
+        case off
+        case review
+        case agentMemory
+    }
+
+    public static var voiceMemoMemoryFallbackPolicyEffective: VoiceMemoMemoryFallbackPolicy {
+        let raw = UserDefaults.standard.string(forKey: voiceMemoMemoryFallbackPolicy)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        switch raw {
+        case "off", "none", "fail": return .off
+        case "agentmemory", "agent_memory", "agent-memory": return .agentMemory
+        default: return .review
+        }
+    }
+
     /// Default operational model for routing, tool-oriented classification, and structured output.
     public static let ollamaRoutingModelDefault = "qwen3.5:9b"
 
