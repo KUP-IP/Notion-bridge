@@ -447,7 +447,7 @@ public enum BridgeConstants {
     ///   gains discussionId reply (no new tool). 205 + 2 = 207.
     /// Bridge v4 stabilization Wave 1 (2026-07-17): +1 calls_recent.
     ///   207 + 1 = 208.
-    public static let staticFeatureModuleToolCount = 208
+    public static let staticFeatureModuleToolCount = 209
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.

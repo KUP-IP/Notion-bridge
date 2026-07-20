@@ -2367,3 +2367,10 @@ set -euo pipefail
 # Apple reference-date decoding; distinguishable database_missing vs FDA vs
 # schema vs query errors; durable call-id helper (ZUNIQUE_ID / Z_PK fallback)
 # with docs sync. Measured 3359 passed, 0 failed. FLOOR 3342 -> 3359.
+
+# Calendar–Registry sprint W2 (2026-07-20): env-filtered `calendar_registry_pair`
+# MCP tool (CalendarRegistryModule + ListTools/dispatch gate), hermetic seam
+# tests (env off omit/fail-closed, missing allowlist, fake success receipt),
+# and private-smoke calendar qualification for allowlisted writable
+# non-subscribed CalDAV (no On My Mac source required). Measured 3365 passed,
+# 0 failed. FLOOR 3359 -> 3365.

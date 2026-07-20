@@ -1029,7 +1029,7 @@ public actor SSEServer {
             return .accepted(headers: headers)
 
         case "tools/list":
-            let disabledNames = CredentialsFeature.mergedDisabledToolNames()
+            let disabledNames = ToolListingGates.mergedDisabledToolNames()
             var regs = await router.registrationsForListTools(disabledNames: disabledNames)
             if let allowlist = toolAllowlist {
                 regs = regs.filter { allowlist.contains($0.name) }
@@ -1282,7 +1282,7 @@ public actor SSEServer {
         }
 
         await server.withMethodHandler(ListTools.self) { _ in
-            let disabledNames = CredentialsFeature.mergedDisabledToolNames()
+            let disabledNames = ToolListingGates.mergedDisabledToolNames()
             var registrations = await router.registrationsForListTools(disabledNames: disabledNames)
             if let allowlist = toolAllowlist {
                 registrations = registrations.filter { allowlist.contains($0.name) }
@@ -1463,7 +1463,7 @@ public actor SSEServer {
             return nil
 
         case "tools/list":
-            let disabledNames = CredentialsFeature.mergedDisabledToolNames()
+            let disabledNames = ToolListingGates.mergedDisabledToolNames()
             var regs = await router.registrationsForListTools(disabledNames: disabledNames)
             if let allowlist = toolAllowlist {
                 regs = regs.filter { allowlist.contains($0.name) }

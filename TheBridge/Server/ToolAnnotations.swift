@@ -336,6 +336,7 @@ public enum ToolAnnotationCatalog {
         "calendar_delete": .init(readOnlyHint: false, destructiveHint: true, idempotentHint: true, requiresConfirmation: true, openWorld: true),
         "calendar_events": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),
         "calendar_list": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),
+        "calendar_registry_pair": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: true, requiresConfirmation: true, openWorld: true),
         "calendar_update": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),
         // PKT-957 (v3.7·D): Reminders family over EventKit. lists/list are
         // read-only (.open); create/update non-destructive but writing;

@@ -1809,7 +1809,15 @@ public actor CalendarStoringSyncProvider: CalendarSyncProviding {
             throw CalendarModuleError.calendarNotFound(calendarId)
         }
         let allowlisted = allowlistedCalendarIds.contains(calendarId)
-        let local = info.calendarType == "local" && (info.sourceType == nil || info.sourceType == "local")
+        // Private smoke: allowlisted + writable + non-subscribed. Prefer On My Mac
+        // (local) when present; many Macs only expose private CalDAV/iCloud calendars
+        // with no EK local source — those remain admissible when explicitly allowlisted.
+        let subscribedFamily =
+            info.calendarType == "subscription"
+            || info.calendarType == "birthday"
+            || info.sourceType == "subscribed"
+            || info.sourceType == "birthdays"
+        let privateWritable = info.allowsModify && !subscribedFamily
         return CalendarQualification(
             calendarId: info.id,
             title: info.title,
@@ -1817,7 +1825,7 @@ public actor CalendarStoringSyncProvider: CalendarSyncProviding {
             explicitlyAllowlisted: allowlisted,
             calendarType: info.calendarType,
             sourceType: info.sourceType,
-            qualifiedForPrivateSmoke: allowlisted && info.allowsModify && local
+            qualifiedForPrivateSmoke: allowlisted && privateWritable
         )
     }
 

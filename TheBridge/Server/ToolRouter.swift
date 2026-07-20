@@ -453,6 +453,13 @@ public actor ToolRouter {
             )
         }
 
+        if toolName == CalendarRegistryModule.toolName && !CalendarRegistryFeature.isEnabled {
+            throw ToolRouterError.invalidArguments(
+                toolName: toolName,
+                reason: "Calendar–Registry pairing is disabled. Set BRIDGE_INTERNAL_CALENDAR_REGISTRY_SYNC=1 and an allowlist for a private smoke session only."
+            )
+        }
+
         // F1: Resolve effective tier — user override takes precedence over registered default.
         // Overrides are stored as [String: String] in UserDefaults by ToolRegistryView.
         //
