@@ -2377,3 +2377,8 @@ set -euo pipefail
 
 # Calendar–Registry sprint W3 hatch (2026-07-20): private-smoke AUTO_APPROVE
 # env is inert unless sync enable is on (+1 hermetic). FLOOR 3365 -> 3366.
+
+# Calendar–Registry sprint W3 live decode (2026-07-20): Notion EVENT DATE often
+# returns offset ISO datetimes with time_zone=null; store decode + manifest
+# match accept empty IANA zone when absolute instants agree (CR97). Measured
+# 3367 passed, 0 failed. FLOOR 3366 -> 3367.

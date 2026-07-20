@@ -1983,6 +1983,28 @@ func runCalendarRegistrySyncEngineTests() async {
         try expect(!source.contains("func adoptExistingCalendarIdentity("))
     }
 
+    await test("CR97 offset-only Notion date without timeZone still pairs") {
+        let request = syncRequest(
+            key: "offset-only-date",
+            registryEventId: "00000000000000000000000000000097"
+        )
+        let entity = scheduleEntityForSyncTests()
+        let base = try notionRow(for: canonicalRecord(request), entity: entity)
+        // Live Notion often returns offset ISO datetimes with time_zone=null.
+        let offsetOnlyDate = Value.object([
+            "start": .string(CalendarRegistryISO.string(request.start)),
+            "end": .string(CalendarRegistryISO.string(request.end))
+        ])
+        let row = mutateNotionRow(base, cellName: "EVENT DATE", value: offsetOnlyDate)
+        let gateway = SyncRegistryGateway()
+        await gateway.seed(row)
+        let calendar = SyncTestCalendar()
+        let store = NotionTimeInstanceRegistryStore(entity: entity, gateway: gateway)
+        let receipt = try await makeSyncEngine(registry: store, calendar: calendar).registryFirstCreate(request)
+        try expect(receipt.succeeded)
+        try expect(await calendar.persistedCount() == 1)
+    }
+
 }
 
 // MARK: - Child-process probe

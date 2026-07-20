@@ -1384,10 +1384,13 @@ public actor CalendarRegistrySyncEngine {
         guard record.schedulingAuthority == .registry else {
             throw CalendarRegistrySyncError.identityConflict("Notion Scheduling Authority is not Registry")
         }
+        // Notion often returns offset-bearing EVENT DATE values with time_zone=null.
+        // Absolute instants must match; IANA zone is required only when Notion preserved it.
         guard record.title == request.title,
               abs(record.scheduledStart.timeIntervalSince(request.start)) < 1,
               abs(record.scheduledEnd.timeIntervalSince(request.end)) < 1,
-              record.timeZoneIdentifier == request.timeZoneIdentifier,
+              record.timeZoneIdentifier.isEmpty
+                || record.timeZoneIdentifier == request.timeZoneIdentifier,
               record.location == request.location,
               record.notes == request.notes,
               record.semantics == request.semantics else {
@@ -2247,7 +2250,6 @@ public struct NotionTimeInstanceRegistryStore: TimeInstanceRegistryStoring {
         guard case .object(let properties) = row.properties,
               let registryRevisionDate = CalendarRegistryISO.date(row.lastEditedTime),
               let range = dateRange(properties["date"]),
-              TimeZone(identifier: range.timeZone) != nil,
               let syncKey = string(properties["syncKey"]),
               let fingerprint = string(properties["operationFingerprint"]),
               let primaryBlock = strings(properties["primaryBlock"]).first,
@@ -2332,10 +2334,14 @@ public struct NotionTimeInstanceRegistryStore: TimeInstanceRegistryStoring {
         guard case .object(let object)? = value,
               case .string(let startString)? = object["start"],
               case .string(let endString)? = object["end"],
-              case .string(let timeZone)? = object["timeZone"],
               let start = CalendarRegistryISO.date(startString),
               let end = CalendarRegistryISO.date(endString) else { return nil }
-        return (start, end, timeZone)
+        if case .string(let timeZone)? = object["timeZone"], !timeZone.isEmpty {
+            guard TimeZone(identifier: timeZone) != nil else { return nil }
+            return (start, end, timeZone)
+        }
+        // Live Notion commonly echoes offset ISO datetimes with time_zone=null.
+        return (start, end, "")
     }
 }
 
