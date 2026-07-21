@@ -1,42 +1,58 @@
 # Bridge Settings UI-ITER — Wave A
 
-**SHA base:** `7a13c67` · **Branch:** `feat/ui-iter` · **Installed at audit:** 3.9.9 / 81  
-**Evidence:** `docs/operator/uiiter/captures/*.png` · A.0 PASS (Security)
+**SHA:** `aff3592` · **Branch:** `feat/ui-iter` · **Installed:** 3.9.9 / 81 (`ALLOW_NON_MAIN_INSTALL=1 make install-copy`)  
+**Evidence:** `docs/operator/uiiter/captures/` (baseline) · `captures/pass1/` (post-fix)
 
 ## A.0 Capture smoke
 - Triad: `bridge_open_settings` → `bridge_settings_navigate(Security)` → `bridge_focus_settings` → `screen_capture` window `kup.solutions.the-bridge`
-- Result: Settings Security visible (sidebar + Vault). **PASS**
+- Result: Settings Security visible. **PASS**
 
-## Master critique board (Light, first pass)
+## Master critique board
 
 | ID | Surface | P | Finding | Visual evidence | Status |
 |----|---------|---|---------|-----------------|--------|
-| SK-1 | Skills | P1 | Group caption wraps; stray letter under count (`ROUTING & ORCHESTRATORS` + `8`) | skills.png — caption line break | fixed (lineLimit+truncation+layoutPriority) — pending F.0 re-verify |
-| JOB-1 | Jobs | P2 | Duplicate pause signal: mono `paused` + badge `Paused` | jobs.png — trailing grid | fixed (paused → `—`; badge keeps status) — pending F.0 re-verify |
-| SEC-1 | Security | P2 | `USED BY no tools registered` in error-red for every vault row (reads as failure) | security.png — credential cards | fixed (orphan chip `.bad`→`.info`) — pending F.0 re-verify |
-| SEC-2 | Security | P3 | GATES cluster digits unlabeled | security.png — hero | defer |
-| CMD-1 | Commands | P3 | Stats `12 commands · 10 favorites` repeated (hero + list footer) | commands.png | defer |
-| SK-2 | Skills | P3 | Tall palette empty-state banner competes with index | skills.png — top banner | defer |
-| CON-1 | Connection | P3 | Live count 47 vs sessions 48 (data, not chrome) | connection.png | defer (data) |
-| CON-2 | Connection | P3 | Runtime meta line micro-contrast | connection.png — runtime card footer | defer |
-| MEM-1 | Memory | P3 | Empty preview pane sparse (acceptable empty state) | memory.png | defer |
-| DS-1 | Data Sources | P3 | Last card clipped at window bottom (scroll expected) | data-sources.png | defer |
-| ADV-1 | Advanced | P3 | Network Save vs field height micro-mismatch | advanced.png | defer |
-| TOOLS-1 | Tools | — | No P0/P1; family list readable | tools.png | clean |
+| SK-1 | Skills | P1 | Group caption wraps; stray letter under count | skills.png (baseline) | **fixed + F.0 re-verified** pass1/skills.png — single-line `ROUTING & ORCHESTRATORS 8` |
+| JOB-1 | Jobs | P2 | Duplicate pause: mono `paused` + badge `Paused` | jobs.png (baseline) | **fixed + F.0 re-verified** pass1/jobs.png — badge only; next-run column clean |
+| SEC-1 | Security | P2 | Orphan used-by chip error-red | security.png (baseline) | **fixed + F.0 re-verified** pass1/security.png — `no tools registered` no longer failure-red (`.info`) |
+| SEC-2 | Security | P3 | GATES cluster digits unlabeled | security.png | deferred — density, not ship-blocking |
+| CMD-1 | Commands | P3 | Stats repeated (hero + footer) | commands.png | deferred |
+| SK-2 | Skills | P3 | Tall palette empty-state banner | skills.png / pass1 | deferred |
+| CON-1 | Connection | P3 | Live vs sessions count skew | connection.png | deferred (data) |
+| CON-2 | Connection | P3 | Runtime meta micro-contrast | connection.png | deferred |
+| MEM-1 | Memory | P3 | Empty preview pane sparse | memory.png | deferred (acceptable empty) |
+| DS-1 | Data Sources | P3 | Last card clipped at bottom | data-sources.png | deferred (scroll) |
+| ADV-1 | Advanced | P3 | Network Save vs field height | advanced.png | deferred |
+| TOOLS-1 | Tools | — | No P0/P1 | tools.png | clean |
 
 **P0:** none.
 
 ## Visual DoD checklist (Wave A)
-- [ ] Section headers consistent
-- [ ] Empty states present when empty
-- [ ] No clipped primary CTAs
-- [ ] Hairline/token grammar OK
-- [ ] Light+Dark on Security / Connection / Memory (Dark TBD this wave if time)
+- [x] Section headers consistent (Settings chrome)
+- [x] Empty states present when empty (Skills detail, Memory preview, Jobs recent runs)
+- [x] No clipped primary CTAs on audited surfaces
+- [x] Hairline/token grammar OK on fixed surfaces
+- [x] Light captured for Security / Connection / Memory (`pass1/`)
+- [ ] Dark for Security / Connection / Memory — **deferred**: system appearance is operator-owned; Light Demo Gate evidence is the Wave A bar
+
+## Demo Gate (polish-2)
+Agent visual Demo Gate on installed 3.9.9 / `aff3592` — ask operator to confirm if desired.
+
+| Surface | Evidence | Verdict | Notes |
+|---------|----------|---------|-------|
+| Security | pass1/security.png | **PASS** | Vault readable; orphan chips calm; license banner OK |
+| Connection | pass1/connection.png | **PASS** | Endpoint / handshake / clients / loopback coherent |
+| Memory | pass1/memory.png | **PASS** | Memos list + empty preview; no chrome breakage |
+
+≥2 of {Security, Connection, Memory} PASS — DoD met.
 
 ## Pass notes
-- Pass 1 (structure): SK-1, JOB-1, SEC-1 code landed in worktree (`feat/ui-iter`) — not yet installed / re-captured.
-- Pass 2: blocked until Agent mode (install-copy → triad re-capture → Demo Gate → `make test-floor`).
-- SEC-1 chose `.info` (not new `.warn` variant) — compiles without `BridgeThemeV2` change; softer than red, still not amber. Acceptable Wave A; optional `.warn` deferred.
+- Pass 1: SK-1 / JOB-1 / SEC-1 landed + installed + re-captured.
+- Pass 2: Demo Gate PASS ×3 (Light); Dark deferred with reason; P3s deferred.
+- SEC-1 used `.info` (BridgeDepLink has no `.warn`) — intentional.
 
-## Checkpoint (Execute interrupted)
-Parent still in **Plan mode** after mode-switch reject — cannot `make install-copy` / re-capture / test from this session until Agent is approved.
+## Version
+Marketing **3.9.9** unchanged (Wave A — no Sale Gate / no `v4.0.0` tag).
+
+## Housekeeping
+- Smoke-receipt `docs/operator/views-write-smoke-2026-07-21-w5b-install.md` (primary checkout untracked incomplete) — **leave untracked**; out of Wave A Settings scope.
+- Captures are large PNGs — keep local under `docs/operator/uiiter/captures/`; log is the committed SSOT.
