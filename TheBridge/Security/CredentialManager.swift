@@ -158,22 +158,23 @@ public final class CredentialManager: Sendable {
     /// Access groups that still count as "ours" after the W5B bundle-id cutover.
     /// Items written under `kup.solutions.notion-bridge` keep that implicit group
     /// forever; new writes use `kup.solutions.the-bridge`.
+    /// Pure helper — testable without a real app bundle.
+    public static func accessGroupsOwned(prefix: String, currentBundleID: String?) -> [String] {
+        var ids: [String] = []
+        if let current = currentBundleID {
+            ids.append(current)
+        }
+        for id in ["kup.solutions.notion-bridge", "kup.solutions.the-bridge"] where !ids.contains(id) {
+            ids.append(id)
+        }
+        return ids.map { "\(prefix)\($0)" }
+    }
+
     private static func keychainAccessGroupsOwnedByThisApp() -> [String] {
         guard let prefix = Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String else {
             return []
         }
-        var ids: [String] = []
-        if let current = Bundle.main.bundleIdentifier {
-            ids.append(current)
-        }
-        // Prior CFBundleIdentifier — keep readable after cutover.
-        if !ids.contains("kup.solutions.notion-bridge") {
-            ids.append("kup.solutions.notion-bridge")
-        }
-        if !ids.contains("kup.solutions.the-bridge") {
-            ids.append("kup.solutions.the-bridge")
-        }
-        return ids.map { "\(prefix)\($0)" }
+        return accessGroupsOwned(prefix: prefix, currentBundleID: Bundle.main.bundleIdentifier)
     }
 
     /// `true` when the keychain item belongs to this app's default access group.

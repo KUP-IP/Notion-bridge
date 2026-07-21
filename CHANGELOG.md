@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — W5B cutover continuity (defaults + ACL heal) — 2026-07-21
+
+- **Fix** — One-shot `BundleIDDefaultsMigration` copies UserDefaults from prior
+  `kup.solutions.notion-bridge` suite so credentials/tunnel/flags survive the id flip.
+- **Fix** — Keychain ACL heal sets its sentinel *before* walking items; cutover
+  launch suppresses the automatic heal storm (on-demand Settings path remains).
+- **Tests** — +10 hermetic (defaults migration + access-group allowlist + ACL sentinel).
+  Floor 3381 → 3391.
+
 ## Unreleased — W5B bundle-id cutover — 2026-07-21
 
 - **Cutover** — `CFBundleIdentifier` → `kup.solutions.the-bridge` (extension

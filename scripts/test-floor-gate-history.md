@@ -2399,3 +2399,7 @@ set -euo pipefail
 # PASS for width/visible/wrap/frozen; capability matrix + W5B prep runbook.
 # Rebased onto Voice Memo #113. Measured 3381 passed, 0 failed.
 # FLOOR 3374 -> 3381.
+
+# W5B cutover continuity (2026-07-21): BundleIDDefaultsMigration (+4) +
+# ACL heal sentinel-first / access-group allowlist (+6). Measured 3391
+# passed, 0 failed. FLOOR 3381 -> 3391.

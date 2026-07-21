@@ -317,8 +317,27 @@ public final class KeychainManager: @unchecked Sendable {
 
     // MARK: - One-time ACL re-authorization (prompt heal)
 
-    /// UserDefaults flag marking that the one-time ACL heal has run.
-    private static let aclHealedKey = "kup.solutions.the-bridge.keychainACLHealedV1"
+    /// UserDefaults flag marking that the one-time ACL heal has run (or was
+    /// suppressed after W5B cutover). Public so launch / migration / tests share
+    /// one key.
+    public static let aclHealedKey = "kup.solutions.the-bridge.keychainACLHealedV1"
+
+    /// Returns `true` when the caller should perform the heal walk.
+    /// Sets the sentinel **before** returning true so a force-quit mid-walk
+    /// cannot restart the full password-prompt storm on next launch.
+    @discardableResult
+    public static func beginACLHealIfNeeded(defaults: UserDefaults = .standard) -> Bool {
+        if defaults.bool(forKey: aclHealedKey) { return false }
+        defaults.set(true, forKey: aclHealedKey)
+        defaults.synchronize()
+        return true
+    }
+
+    /// Mark heal complete/suppressed without walking items (W5B cutover path).
+    public static func suppressACLHeal(defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: aclHealedKey)
+        defaults.synchronize()
+    }
 
     /// One-time heal for the recurring access-prompt issue. Items created by
     /// older builds carry a default ACL that macOS re-confirms on each read;
@@ -326,11 +345,16 @@ public final class KeychainManager: @unchecked Sendable {
     /// `makeSelfTrustAccess`). Reading each stale item surfaces ONE prompt
     /// (unavoidable — the value must be read to be re-written), after which all
     /// future reads are silent. Idempotent, UserDefaults-guarded → runs once.
+    ///
+    /// W5B: the sentinel is set **before** the walk. A force-quit mid-heal used
+    /// to leave the flag clear, so the next launch restarted the full prompt
+    /// storm (canonical + legacy services × every account). Partial heal is
+    /// recoverable via the Settings "Re-authorize" affordance; a relaunch storm
+    /// is not.
     public func reauthorizeIfNeeded() {
         guard keychainEnabled else { return }
-        guard !UserDefaults.standard.bool(forKey: Self.aclHealedKey) else { return }
+        guard Self.beginACLHealIfNeeded() else { return }
         reauthorizeAllItems()
-        UserDefaults.standard.set(true, forKey: Self.aclHealedKey)
     }
 
     /// Re-save every stored item under the clean always-allow-self ACL. Public +
