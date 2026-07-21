@@ -155,6 +155,27 @@ public final class CredentialManager: Sendable {
         return "\(prefix)\(bundleID)"
     }
 
+    /// Access groups that still count as "ours" after the W5B bundle-id cutover.
+    /// Items written under `kup.solutions.notion-bridge` keep that implicit group
+    /// forever; new writes use `kup.solutions.the-bridge`.
+    private static func keychainAccessGroupsOwnedByThisApp() -> [String] {
+        guard let prefix = Bundle.main.object(forInfoDictionaryKey: "AppIdentifierPrefix") as? String else {
+            return []
+        }
+        var ids: [String] = []
+        if let current = Bundle.main.bundleIdentifier {
+            ids.append(current)
+        }
+        // Prior CFBundleIdentifier — keep readable after cutover.
+        if !ids.contains("kup.solutions.notion-bridge") {
+            ids.append("kup.solutions.notion-bridge")
+        }
+        if !ids.contains("kup.solutions.the-bridge") {
+            ids.append("kup.solutions.the-bridge")
+        }
+        return ids.map { "\(prefix)\($0)" }
+    }
+
     /// `true` when the keychain item belongs to this app's default access group.
     /// v3.6 fix: missing-access-group no longer counts as "ours" — that defaulted-true
     /// path surfaced every system keychain item (Apple system services, Chrome, Spark,
@@ -162,7 +183,8 @@ public final class CredentialManager: Sendable {
     /// fallback paths in `shouldSurfaceCredentialFromKeychainItem` (metadata flag or
     /// `com.notionbridge` infrastructure service).
     public static func isKeychainItemManagedByThisApp(_ item: [String: Any]) -> Bool {
-        guard let expected = defaultKeychainAccessGroupForThisApp() else {
+        let owned = keychainAccessGroupsOwnedByThisApp()
+        guard !owned.isEmpty else {
             // v3.7 hotfix: if we cannot resolve OUR keychain access group
             // (e.g. AppIdentifierPrefix missing from Info.plist or the
             // keychain-access-groups entitlement isn't declared), default
@@ -184,7 +206,7 @@ public final class CredentialManager: Sendable {
             // service == "com.notionbridge" path).
             return false
         }
-        return matchesAccessGroup(item: item, expected: expected)
+        return owned.contains { matchesAccessGroup(item: item, expected: $0) }
     }
 
     /// Pure helper for `isKeychainItemManagedByThisApp` — testable without an
@@ -229,7 +251,7 @@ public final class CredentialManager: Sendable {
         let probe: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrAccessGroup as String: group,
-            kSecAttrService as String: "kup.solutions.notion-bridge.entitlement-probe",
+            kSecAttrService as String: "kup.solutions.the-bridge.entitlement-probe",
             kSecAttrAccount as String: "__probe__",
             kSecMatchLimit as String: kSecMatchLimitOne
         ]

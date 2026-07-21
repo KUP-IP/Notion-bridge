@@ -797,7 +797,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Uses NSRunningApplication to check by bundle identifier.
     /// Returns true if this is the only instance, false if a duplicate exists.
     private func ensureSingleInstance() -> Bool {
-        let bundleID = Bundle.main.bundleIdentifier ?? "kup.solutions.notion-bridge"
+        let bundleID = Bundle.main.bundleIdentifier ?? "kup.solutions.the-bridge"
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
         let myPID = ProcessInfo.processInfo.processIdentifier
 

@@ -18,7 +18,10 @@ import SwiftUI
 import AppKit
 import os.log
 
-private let permLog = Logger(subsystem: "kup.solutions.notion-bridge", category: "PermissionView")
+private let permLog = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "kup.solutions.the-bridge",
+    category: "PermissionView"
+)
 
 /// Displays the V1 TCC permission status grid.
 /// PKT-362 D1: Clean rows — name + status icon only, no DisclosureGroup.

@@ -6,7 +6,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 TheBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. The current source version is **3.9.9** (build **81**). It registers **205 static feature-module tools** (`BridgeConstants.staticFeatureModuleToolCount`) across **31 module families** (`BridgeConstants.staticFeatureModuleFamilyCount`) over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Conditional tools such as `bridge_status` are outside that static count, and client listings may be filtered by enabled feature groups. The former builtin `echo` and Stripe/payment surfaces are no longer registered.
 
-Bundle ID: `kup.solutions.notion-bridge` (legacy: `solutions.kup.keepr`)
+Bundle ID: `kup.solutions.the-bridge` (legacy: `kup.solutions.notion-bridge`, `solutions.kup.keepr`)
 
 > **Agents:** see [`docs/AGENT_PLAYBOOK.md`](docs/AGENT_PLAYBOOK.md) for a task → tool
 > map (builds/tests → `bg_process_*`, surgical edits → `file_edit`, filesystem grounding
@@ -206,7 +206,7 @@ The project enforces Swift 6 strict concurrency (`-strict-concurrency=complete`)
 
 ### TCC Permissions
 
-The app requires Full Disk Access, Automation, and optionally Screen Recording and Accessibility. During development, after frequent rebuilds that change the code signature, run `make clean-tcc` to clear stale TCC grants for both the current (`kup.solutions.notion-bridge`) and legacy (`solutions.kup.keepr`) bundle IDs.
+The app requires Full Disk Access, Automation, and optionally Screen Recording and Accessibility. During development, after frequent rebuilds that change the code signature, run `make clean-tcc` to clear stale TCC grants for the current (`kup.solutions.the-bridge`), prior (`kup.solutions.notion-bridge`), and legacy (`solutions.kup.keepr`) bundle IDs.
 
 ## Jobs (scheduler module) — v1.9.1
 

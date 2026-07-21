@@ -13,7 +13,10 @@ import CoreMedia
 import AVFoundation
 import os.log
 
-private let recLog = Logger(subsystem: "kup.solutions.notion-bridge", category: "ScreenRecording")
+private let recLog = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "kup.solutions.the-bridge",
+    category: "ScreenRecording"
+)
 
 // MARK: - ScreenModule Recording Extension
 

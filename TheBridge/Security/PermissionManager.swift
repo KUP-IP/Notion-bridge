@@ -653,7 +653,7 @@ public final class PermissionManager {
             SELECT indirect_object_identifier, auth_value
             FROM access
             WHERE service = 'kTCCServiceAppleEvents'
-            AND client = 'kup.solutions.notion-bridge'
+            AND client IN ('kup.solutions.the-bridge', 'kup.solutions.notion-bridge')
             """
 
         let process = Process()

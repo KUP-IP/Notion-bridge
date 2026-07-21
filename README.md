@@ -10,7 +10,7 @@ The Bridge exposes your local Mac and connected services as Model Context Protoc
 
 **Product page:** https://kup.solutions/notion-bridge
 
-> **Naming history:** "TheBridge" was the product's original name; the user-facing brand is **The Bridge**. The Swift target and bundle identifier (`kup.solutions.notion-bridge`) are intentionally preserved for data continuity. The Keychain service was renamed `com.notionbridge` → `kup.solutions.the-bridge` (v3.7.8), and all prior services are still read so existing secrets migrate with zero loss.
+> **Naming history:** "TheBridge" was the product's original name; the user-facing brand is **The Bridge**. The Swift target names are preserved for continuity. The bundle identifier cut over to `kup.solutions.the-bridge` (W5B); prior id `kup.solutions.notion-bridge` remains a TCC/Keychain legacy. The Keychain service was renamed `com.notionbridge` → `kup.solutions.the-bridge` (v3.7.8), and all prior services are still read so existing secrets migrate with zero loss.
 
 ---
 

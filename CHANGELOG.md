@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — W5B bundle-id cutover — 2026-07-21
+
+- **Cutover** — `CFBundleIdentifier` → `kup.solutions.the-bridge` (extension
+  `…notification-content`; URL names updated). Makefile `BUNDLE_ID` / `clean-tcc`
+  and TCC client queries accept the new id plus prior `kup.solutions.notion-bridge`.
+- **Continuity** — Keychain service legacy list unchanged; credential access-group
+  filter accepts both prior and new `TEAMID.<bundle-id>` groups so stored secrets
+  remain visible after the id flip.
+- **Docs** — AGENTS / CLAUDE / standing-orders / runbook / TCC + Sparkle operator
+  notes updated. No marketing/build bump; Sale Gate still locks `v4.0.0`.
+
 ## Unreleased — Notion Views write (create/update) — 2026-07-20
 
 - **Feature** — `notion_view_create` / `notion_view_update` wrap `POST`/`PATCH`

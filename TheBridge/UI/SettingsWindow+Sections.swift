@@ -289,7 +289,11 @@ extension SettingsView {
     // MARK: - Permissions Helpers
 
     func resetTCCPermissions() async -> (message: String, didFail: Bool) {
-        let ids = ["kup.solutions.notion-bridge", "solutions.kup.keepr"]
+        let ids = [
+            "kup.solutions.the-bridge",
+            "kup.solutions.notion-bridge",
+            "solutions.kup.keepr",
+        ]
         var failures: [String] = []
 
         for id in ids {

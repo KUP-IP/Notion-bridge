@@ -8,7 +8,7 @@
 
 APP_NAME        = The Bridge
 DMG_VOLUME_NAME = The Bridge
-BUNDLE_ID       = kup.solutions.notion-bridge
+BUNDLE_ID       = kup.solutions.the-bridge
 BINARY_NAME     = TheBridge
 BUILD_DIR       = .build
 RELEASE_DIR     = $(BUILD_DIR)/release
@@ -358,8 +358,10 @@ install-agent-safe: install-copy
 clean-tcc:
 	@echo "🧹 Resetting TCC for legacy bundle ID (solutions.kup.keepr)..."
 	-tccutil reset All solutions.kup.keepr
-	@echo "🧹 Resetting TCC for current bundle ID (kup.solutions.notion-bridge)..."
+	@echo "🧹 Resetting TCC for prior bundle ID (kup.solutions.notion-bridge)..."
 	-tccutil reset All kup.solutions.notion-bridge
+	@echo "🧹 Resetting TCC for current bundle ID (kup.solutions.the-bridge)..."
+	-tccutil reset All kup.solutions.the-bridge
 	@echo "✅ TCC reset complete — permissions will be re-requested on next launch"
 
 # ── Appcast ───────────────────────────────────────────────────
