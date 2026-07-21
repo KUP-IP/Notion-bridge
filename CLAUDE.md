@@ -52,7 +52,7 @@ A macOS menu-bar app that exposes the Mac + a Notion workspace to AI agents over
   at the edge and never reaches the server. The PRM doc lives under `/.well-known/` so it
   stays tunnel-reachable without auth; `/health` is loopback-only in practice (not just by
   server-side gate) — hit it directly on `:9700` for local monitoring, not through the tunnel.
-- **Version:** `Config/Version.swift` (marketing 3.9.9, build 81) + root `Info.plist`
+- **Version:** `Config/Version.swift` (marketing 4.0.0, build 82) + root `Info.plist`
   (CFBundleShortVersionString/CFBundleVersion — the build reads the plist, keep both in sync).
   +1 patch per published install.
 

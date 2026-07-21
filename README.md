@@ -6,7 +6,7 @@ The Bridge exposes your local Mac and connected services as Model Context Protoc
 
 **205 static feature-module tools** across **31 module families** · **3 transports + cloud connector** (Claude web · ChatGPT) · **3-tier security model** with on-device approvals · **Liquid Glass UI**
 
-**Latest published release:** [v3.9.9](https://github.com/KUP-IP/the-bridge/releases/tag/v3.9.9) (July 2026). The current source version is 3.9.9 (build 81). Existing installs auto-update via Sparkle.
+**Latest published release:** [v4.0.0](https://github.com/KUP-IP/the-bridge/releases/tag/v4.0.0) (July 2026). The current source version is 4.0.0 (build 82). Existing installs auto-update via Sparkle.
 
 **Product page:** https://kup.solutions/notion-bridge
 

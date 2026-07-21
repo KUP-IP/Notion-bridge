@@ -35,7 +35,7 @@
 - [ ] Dark for Security / Connection / Memory — **deferred**: system appearance is operator-owned; Light Demo Gate evidence is the Wave A bar
 
 ## Demo Gate (polish-2)
-Agent visual Demo Gate on installed 3.9.9 / `aff3592` — ask operator to confirm if desired.
+Agent visual Demo Gate on installed 3.9.9 / `aff3592`.
 
 | Surface | Evidence | Verdict | Notes |
 |---------|----------|---------|-------|
@@ -43,7 +43,7 @@ Agent visual Demo Gate on installed 3.9.9 / `aff3592` — ask operator to confir
 | Connection | pass1/connection.png | **PASS** | Endpoint / handshake / clients / loopback coherent |
 | Memory | pass1/memory.png | **PASS** | Memos list + empty preview; no chrome breakage |
 
-≥2 of {Security, Connection, Memory} PASS — DoD met.
+**Operator verdict (Ship Gate 2026-07-21):** **PASS** (explicit GO on Demo Gate closeout). DoD met.
 
 ## Pass notes
 - Pass 1: SK-1 / JOB-1 / SEC-1 landed + installed + re-captured.
@@ -51,7 +51,7 @@ Agent visual Demo Gate on installed 3.9.9 / `aff3592` — ask operator to confir
 - SEC-1 used `.info` (BridgeDepLink has no `.warn`) — intentional.
 
 ## Version
-Marketing **3.9.9** unchanged (Wave A — no Sale Gate / no `v4.0.0` tag).
+Wave A landed on 3.9.9; operator Ship Gate GO (2026-07-21) cut **v4.0.0** / build 82.
 
 ## Housekeeping
 - Smoke-receipt `docs/operator/views-write-smoke-2026-07-21-w5b-install.md` (primary checkout untracked incomplete) — **leave untracked**; out of Wave A Settings scope.

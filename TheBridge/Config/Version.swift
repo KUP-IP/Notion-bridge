@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "3.9.9"
+    public static let marketing = "4.0.0"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -298,7 +298,11 @@ public enum AppVersion {
     ///   test-floor 3131 -> 3149 (final reconciled count across all three
     ///   independent test additions on the shared 3128 base: +3 Wave1Broker,
     ///   +8 PKT-1116, +10 RoutingIntegrityLayer).
-    public static let build = "81"
+    /// v4.0.0: 81 -> 82 -- first major under the roll-at-9 rule (3.9.9→4.0.0).
+    ///   Sale-ready V4 cut: W5B bundle-id cutover + continuity, Notion Views
+    ///   write tools, Wave A Settings UI-ITER polish, license public-key +
+    ///   WorkOS OAuth bake secrets present for release.yml inject. Floor 3391.
+    public static let build = "82"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

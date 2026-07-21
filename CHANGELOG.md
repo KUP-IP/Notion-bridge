@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.0.0 (build 82) — Sale-ready V4 — 2026-07-21
+
+- **Release** — Marketing **3.9.9 → 4.0.0**, build **81 → 82** (roll-at-9 major).
+- **Ship batch** — W5B bundle-id cutover (`kup.solutions.the-bridge`) + continuity
+  (defaults migration, ACL heal storm fix); Notion Views create/update; Wave A
+  Settings UI-ITER (Skills caption wrap, Jobs pause signal, orphan credential
+  chip tone) with operator Demo Gate PASS on Security / Connection / Memory.
+- **Release inject** — `LICENSE_PUBLIC_KEY_BASE64URL` + WorkOS/OAuth bake secrets
+  present for `release.yml` (operator custody of live buy flow / directory /
+  legal remains outside this tag).
+- **Tests** — Floor **3391** (0 failed) on ship candidate.
+
 ## Unreleased — W5B cutover continuity (defaults + ACL heal) — 2026-07-21
 
 - **Fix** — One-shot `BundleIDDefaultsMigration` copies UserDefaults from prior
