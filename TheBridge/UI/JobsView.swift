@@ -457,11 +457,12 @@ struct JobGlassRow: View {
         return cadence ?? "no actions"
     }
 
-    /// Compact next-run hint. Paused → "paused"; failing → "retrying…";
-    /// active → the ACTUAL next fire time (relative for near, clock for far),
-    /// falling back to the humanized cadence if the schedule can't be resolved.
+    /// Compact next-run hint. Paused → em dash (badge already says Paused);
+    /// failing → "retrying…"; active → the ACTUAL next fire time (relative for
+    /// near, clock for far), falling back to the humanized cadence if the
+    /// schedule can't be resolved.
     private var nextRunText: String {
-        if job.status == .paused { return "paused" }
+        if job.status == .paused { return "—" }
         if isFailing { return "retrying…" }
         if let next = JobScheduleClock.nextFireDate(for: job.schedule) {
             return JobScheduleClock.relativeNextRun(next)
