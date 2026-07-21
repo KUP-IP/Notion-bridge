@@ -830,6 +830,12 @@ await runPKT1010OnboardingTests()
 // v3.6.0 D1: Credentials scope filter regression guard.
 await runCredentialsScopeFilterTests()
 
+// W5B: UserDefaults suite migration after CFBundleIdentifier cutover.
+await runBundleIDDefaultsMigrationTests()
+
+// W5B: ACL heal sentinel-first + credential access-group continuity.
+await runW5BCutoverContinuityTests()
+
 // v3.6.0 D6: ModuleGroupCard expand-state persistence contract.
 await runModuleGroupExpandPersistenceTests()
 

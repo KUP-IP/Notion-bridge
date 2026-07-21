@@ -323,6 +323,20 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             print("[PathMigration] WARNING: migration failed: \(error)")
         }
 
+        // W5B: CFBundleIdentifier cutover → new UserDefaults suite. Copy missing
+        // keys from the prior id BEFORE CredentialsFeature / other flag readers
+        // apply first-launch defaults on an empty suite.
+        let bundleDefaultsReport = BundleIDDefaultsMigration.runOnce()
+        if !bundleDefaultsReport.alreadyComplete && !bundleDefaultsReport.skipped {
+            print("[BundleIDDefaultsMigration] keysCopied:\(bundleDefaultsReport.keysCopied)")
+            // Suppress the launch-time Keychain ACL heal storm. The new codesign
+            // identity no longer matches ACLs minted under
+            // `kup.solutions.notion-bridge`, so walking every mirrored item
+            // (canonical + 2 legacy services) would queue dozens of
+            // "enter your password" dialogs. Heal stays available on demand.
+            KeychainManager.suppressACLHeal()
+        }
+
         // PKT-MEM-115 Wave 3: fresh installs seed per-client Cursor inject ON.
         MemoryAutoInjectClientStore.seedWave3DefaultsIfNeeded()
 

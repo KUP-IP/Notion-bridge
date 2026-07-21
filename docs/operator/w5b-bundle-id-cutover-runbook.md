@@ -1,6 +1,6 @@
 # W5B — Bundle ID cutover runbook (`notion-bridge` → `the-bridge`)
 
-**Status (2026-07-21):** MANUAL cutover **IN PROGRESS** on `feat/w5b-bundle-id-cutover` after D1 dry_run green ([run 29795964814](https://github.com/KUP-IP/the-bridge/actions/runs/29795964814)). Do **not** tag `v4.0.0` (Sale Gate locked).
+**Status (2026-07-21):** Bundle-id cutover **merged** ([PR #115](https://github.com/KUP-IP/the-bridge/pull/115)). Continuity follow-on (UserDefaults migration + ACL-heal storm fix) on `feat/w5b-cutover-continuity`. Do **not** tag `v4.0.0` (Sale Gate locked).
 
 ## Target
 
