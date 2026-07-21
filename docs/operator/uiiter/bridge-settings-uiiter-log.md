@@ -56,3 +56,16 @@ Wave A landed on 3.9.9; operator Ship Gate GO (2026-07-21) cut **v4.0.0** / buil
 ## Housekeeping
 - Smoke-receipt `docs/operator/views-write-smoke-2026-07-21-w5b-install.md` (primary checkout untracked incomplete) — **leave untracked**; out of Wave A Settings scope.
 - Captures are large PNGs — keep local under `docs/operator/uiiter/captures/`; log is the committed SSOT.
+
+## Terminal close — DEFERRED loops (2026-07-21)
+
+| Loop | Reason deferred |
+|------|-----------------|
+| First-sale proof (Stripe live buy → mint → activate) | Outside tag cut; operator custody |
+| Anthropic directory + legal/ToS sign-off | Outside tag cut |
+| OAuth bake proof without `bridge-env` LaunchAgent | Not re-proven this session after v4 inject |
+| Settings Dark captures (Security/Connection/Memory) | Operator appearance ownership |
+| Settings P3 polish (CMD/SK/CON/MEM/DS/ADV) | Non-blocking density |
+| Lost PACKET Priority scores (~60) | Pre-session Notion data loss; not this arc |
+| Incomplete views-write smoke receipt file | Untracked; incomplete; leave or finish later |
+| Shell UI-ITER (Dashboard / Command Bridge / Onboarding) | Explicit Wave A OUT |
