@@ -225,6 +225,6 @@ You are connecting to **The Bridge** — a local MCP server on the operator's ma
 - **One surface, every client.** Tools, skills, and commands appear identically to any MCP client (Claude Code, Claude.ai, ChatGPT Dev Mode, Cursor, Raycast). Behavior should be consistent regardless of how you arrived.
 - **Confirm-before-destructive.** Tools that delete, send, rename, or pay route through a confirmation gate. Surface what will happen and what cannot be undone before requesting approval.
 - **Sensitive paths.** The Bridge enforces a Sensitive Paths list (e.g. `~/.ssh`, `~/.aws`, `~/Library/Keychains`). File tools refuse to read or write inside these. Do not attempt to work around it; surface the protection to the operator.
-- **Bridge version:** query `bridge_status` at session start for the running version — do not rely on a static number in this file. **Bundle ID:** `kup.solutions.notion-bridge` (unchanged from the historical name "Notion Bridge").
+- **Bridge version:** query `bridge_status` at session start for the running version — do not rely on a static number in this file. **Bundle ID:** `kup.solutions.the-bridge` (prior: `kup.solutions.notion-bridge`).
 
 If any of the above conflicts with the SSOT page in Notion, the SSOT wins. Re-fetch when in doubt.

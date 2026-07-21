@@ -3,7 +3,7 @@
 ## Overview
 A macOS menu-bar app that exposes the Mac + a Notion workspace to AI agents over MCP
 (stdio + Streamable-HTTP `/mcp` + legacy SSE `/sse`). Ships as "The Bridge.app"
-(bundle id `kup.solutions.notion-bridge`), updated via Sparkle. SwiftPM, no Xcode project.
+(bundle id `kup.solutions.the-bridge`), updated via Sparkle. SwiftPM, no Xcode project.
 
 ## Architecture
 - **Library target `TheBridgeLib`** holds everything testable; thin `TheBridge`

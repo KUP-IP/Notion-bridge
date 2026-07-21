@@ -157,8 +157,11 @@ osascript -e 'tell application "The Bridge" to quit' 2>/dev/null || true
 pkill -f "The Bridge.app/Contents/MacOS/TheBridge" 2>/dev/null || true
 
 # 2. Clear pending Sparkle staged update (the corrupt swap source)
-rm -rf "$HOME/Library/Caches/kup.solutions.notion-bridge/org.sparkle-project.Sparkle/Installation/"*
-rm -rf "$HOME/Library/Caches/kup.solutions.notion-bridge/org.sparkle-project.Sparkle/PersistentDownloads/"*
+rm -rf "$HOME/Library/Caches/kup.solutions.the-bridge/org.sparkle-project.Sparkle/Installation/"*
+rm -rf "$HOME/Library/Caches/kup.solutions.the-bridge/org.sparkle-project.Sparkle/PersistentDownloads/"*
+# Prior id (pre-W5B installs):
+# rm -rf "$HOME/Library/Caches/kup.solutions.notion-bridge/org.sparkle-project.Sparkle/Installation/"*
+# rm -rf "$HOME/Library/Caches/kup.solutions.notion-bridge/org.sparkle-project.Sparkle/PersistentDownloads/"*
 
 # 3. Reinstall a known-good build (clears + re-copies the SPM resource bundle)
 make install-copy

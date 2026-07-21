@@ -6,7 +6,7 @@ place and verified (Info.plist usage strings, module registration, and
 `requestFullAccess*` consent calls) — this runbook covers the on-device grant +
 verification that only the operator can perform.
 
-- App: **The Bridge** (`kup.solutions.notion-bridge`), menu-bar agent (`LSUIElement`).
+- App: **The Bridge** (`kup.solutions.the-bridge`), menu-bar agent (`LSUIElement`).
 - Version audited: 3.7.6 (build 51), branch `integration/v3.7.6`.
 - macOS: target is `LSMinimumSystemVersion 26.0`; consent uses the macOS-14+
   full-access APIs (`requestFullAccessToReminders` / `requestFullAccessToEvents`).
@@ -117,8 +117,11 @@ granted and operational.
 
 To force the `.notDetermined` state again so Step 1's dialogs reappear:
 ```bash
-tccutil reset Reminders kup.solutions.notion-bridge
-tccutil reset Calendar kup.solutions.notion-bridge
+tccutil reset Reminders kup.solutions.the-bridge
+tccutil reset Calendar kup.solutions.the-bridge
+# Prior id (pre-W5B) — reset if an old grant is stuck:
+# tccutil reset Reminders kup.solutions.notion-bridge
+# tccutil reset Calendar kup.solutions.notion-bridge
 ```
 Then relaunch The Bridge and re-run Step 1. (`tccutil reset` requires confirming
 any consequent prompts; it clears the recorded decision for this bundle id only.)

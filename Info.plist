@@ -15,7 +15,7 @@
 	<key>CFBundleIconFile</key>
 	<string>TheBridge</string>
 	<key>CFBundleIdentifier</key>
-	<string>kup.solutions.notion-bridge</string>
+	<string>kup.solutions.the-bridge</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
@@ -30,7 +30,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>kup.solutions.notion-bridge.cloud-auth</string>
+			<string>kup.solutions.the-bridge.cloud-auth</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>bridge-auth</string>
@@ -40,7 +40,7 @@
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
 			<key>CFBundleURLName</key>
-			<string>kup.solutions.notion-bridge.settings-deeplink</string>
+			<string>kup.solutions.the-bridge.settings-deeplink</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>bridge</string>

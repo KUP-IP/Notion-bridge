@@ -104,7 +104,7 @@ public struct CredentialsSection: View {
         BridgeBanner(
             signal: .info,
             message:
-                "Secrets live in your macOS Keychain under kup.solutions.notion-bridge. "
+                "Secrets live in your macOS Keychain under kup.solutions.the-bridge. "
                 + "Touch ID to reveal — Bridge never writes plaintext to disk.",
             systemImage: "key.fill"
         )

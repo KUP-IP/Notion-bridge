@@ -5,7 +5,7 @@
 //   • Bundled defaults: Bundle.module, subdir `skills/<name>/SKILL.md`
 //     (or `STUB.md` for source-available linked-only skills).
 //   • User-installable: ~/Library/Application Support/The Bridge/skills/
-//     (or `kup.solutions.notion-bridge`'s appSupport dir derived from the
+//     (or `kup.solutions.the-bridge`'s appSupport dir derived from the
 //     main bundle id).
 //
 // Parses each file's YAML frontmatter via `FrontmatterParser` (zero deps)
@@ -71,11 +71,12 @@ public actor FilesystemSkillIndex {
     /// Watcher-driven invalidation should normally beat this floor.
     public static let cacheTTL: TimeInterval = 60.0
 
-    /// Default app-support bundle id (matches `kup.solutions.notion-bridge`
+    /// Default app-support bundle id (matches `kup.solutions.the-bridge`
     /// from `Info.plist` — kept as a fallback so the index works in
     /// headless test harnesses where `Bundle.main.bundleIdentifier` is
-    /// the test executable id, not the production app).
-    public static let defaultBundleId = "kup.solutions.notion-bridge"
+    /// the test executable id, not the production app). Production skills
+    /// live under `BridgePaths` (`The Bridge/skills/`), not this id path.
+    public static let defaultBundleId = "kup.solutions.the-bridge"
 
     /// Shared default-configured instance — production code path.
     public static let shared = FilesystemSkillIndex()
