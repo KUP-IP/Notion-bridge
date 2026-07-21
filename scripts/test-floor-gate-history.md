@@ -2387,3 +2387,9 @@ set -euo pipefail
 # lastVerifiedAt to Notion read-back after sync-evidence write so minute-
 # truncated date properties do not false-conflict (CR98). Measured 3368
 # passed, 0 failed. FLOOR 3367 -> 3368.
+
+# Closeout-A Voice Memo Reliability slice-2 (2026-07-20): SC2 unbound summary
+# preflight, SC4 unique first-name resolve after exact miss, SC5 degraded
+# sectioned preview, SC6 reminder mid-clause title gate, SC8 memory fallback
+# policy default=review, SC1 commit receipt shape (+6 hermetic). Measured
+# 3374 passed, 0 failed. FLOOR 3368 -> 3374.

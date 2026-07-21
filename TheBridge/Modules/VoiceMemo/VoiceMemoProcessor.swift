@@ -353,9 +353,11 @@ public enum VoiceMemoProcessor {
     public static func execute(intent: VoiceMemoIntent, plan: VoiceMemoPlan, transcript: String, memoId: String = "", router: ToolRouter) async throws -> String {
         switch intent.kind {
         case .reminder:
-            return try await executeReminder(intent, router: router)
+            return try await executeReminder(intent, router: router, transcript: transcript)
         case .memoryKeep:
-            return try await executeMemoryKeep(intent, plan: plan, transcript: transcript, router: router)
+            return try await executeMemoryKeepWithFallbackPolicy(
+                intent, plan: plan, transcript: transcript, router: router
+            )
         case .agentMemory:
             return try await executeAgentMemory(intent, plan: plan, transcript: transcript, router: router)
         case .registryUpdate:
@@ -367,15 +369,49 @@ public enum VoiceMemoProcessor {
         }
     }
 
-    static func executeReminder(_ intent: VoiceMemoIntent, router: ToolRouter) async throws -> String {
-        guard let title = intent.title, !title.isEmpty else {
+    /// SC8 — Notion Memory failure routes through an explicit policy (default: review).
+    static func executeMemoryKeepWithFallbackPolicy(
+        _ intent: VoiceMemoIntent,
+        plan: VoiceMemoPlan,
+        transcript: String,
+        router: ToolRouter
+    ) async throws -> String {
+        do {
+            return try await executeMemoryKeep(intent, plan: plan, transcript: transcript, router: router)
+        } catch {
+            switch BridgeDefaults.voiceMemoMemoryFallbackPolicyEffective {
+            case .off:
+                throw error
+            case .review:
+                throw VoiceMemoError.memoryFallbackReview(
+                    intent.entityKey ?? "memory",
+                    BridgeDefaults.VoiceMemoMemoryFallbackPolicy.review.rawValue,
+                    error.localizedDescription
+                )
+            case .agentMemory:
+                let detail = try await executeAgentMemory(intent, plan: plan, transcript: transcript, router: router)
+                return "\(detail) [fallback=agent_memory policy=agentMemory reason=\(error.localizedDescription)]"
+            }
+        }
+    }
+
+    static func executeReminder(_ intent: VoiceMemoIntent, router: ToolRouter, transcript: String = "") async throws -> String {
+        let rawTitle = intent.title ?? ""
+        let resolvedTitle: String
+        switch VoiceMemoReminderTitleGate.evaluate(rawTitle, transcript: transcript) {
+        case .ok(let title):
+            resolvedTitle = title
+        case .rejected(_, let fallback):
+            resolvedTitle = fallback
+        }
+        guard !resolvedTitle.isEmpty else {
             throw VoiceMemoError.invalidIntent("reminder missing title")
         }
-        var args: [String: Value] = ["title": .string(title)]
+        var args: [String: Value] = ["title": .string(resolvedTitle)]
         if let notes = intent.body { args["notes"] = .string(notes) }
         if let due = intent.dueISO8601 { args["due"] = .string(due) }
         _ = try await router.dispatch(toolName: "reminders_create", arguments: .object(args))
-        return "reminders_create: \(title)"
+        return "reminders_create: \(resolvedTitle)"
     }
 
     public static func executeAgentMemory(_ intent: VoiceMemoIntent, plan: VoiceMemoPlan, transcript: String, router: ToolRouter) async throws -> String {
@@ -444,6 +480,13 @@ public enum VoiceMemoProcessor {
         // never a silent write of the raw transcript into Notion.
         if let rejected = VoiceMemoTranscriptOverlapGuard.firstRejectedField(in: fields, transcript: transcript) {
             throw VoiceMemoError.transcriptOverlapRejected(entityKey, rejected.key, rejected.runLength)
+        }
+
+        // SC2 — fail closed when required write fields (esp. summary/title) are
+        // unbound BEFORE any Notion create. Surfaces candidate Notion names for
+        // rebind via registry_introspect.
+        if let entity {
+            try Self.preflightMemoryKeepBindings(entity: entity, fields: fields)
         }
 
         // PKT-1064 — attach the ORIGINATING Player relation to the new Memory
@@ -714,9 +757,9 @@ public enum VoiceMemoProcessor {
     /// non-Skills entities) — so a not-yet-configured entity (first run) still
     /// dispatches a well-formed call instead of guessing a wrong key.
     ///
-    /// Ambiguity semantics are unchanged from the caller's perspective: a single
-    /// match returns that row id, ≥2 matches throw `registryAmbiguous` (never an
-    /// auto-picked write), and no match throws `registryMatchFailed`.
+    /// SC4: when exact match fails, a unique first-name / first-token title match
+    /// resolves deterministically; ≥2 first-name matches throw `registryAmbiguous`
+    /// with candidate `{id,title}` pairs (never an auto-picked write).
     public static func resolveRegistryRowId(entityKey: String, hint: String?, router: ToolRouter) async throws -> String {
         let normalizedHint = hint?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let normalizedHint, !normalizedHint.isEmpty else {
@@ -728,20 +771,108 @@ public enum VoiceMemoProcessor {
             "entity": .string(entityKey),
             "where": .object([titleKey: .string(normalizedHint)]),
         ]))
-        guard case .object(let envelope) = found,
-              case .array(let rows)? = envelope["rows"] else {
+        if case .object(let envelope) = found, case .array(let rows)? = envelope["rows"] {
+            let ids: [String] = rows.compactMap { row in
+                guard case .object(let rowObj) = row, case .string(let id)? = rowObj["id"] else { return nil }
+                return id
+            }
+            let distinct = Set(ids)
+            if distinct.count == 1, let only = ids.first { return only }
+            if distinct.count >= 2 {
+                let candidates = Self.candidatePairs(from: rows)
+                throw VoiceMemoError.registryAmbiguous(entityKey, hint, distinct.count, candidates)
+            }
+        }
+
+        // SC4 — exact miss: first-name / first-token uniqueness scan via list.
+        let listed = try await router.dispatch(toolName: "registry_list", arguments: .object([
+            "entity": .string(entityKey),
+            "limit": .int(200),
+            "fields": .array([.string("title"), .string("id")]),
+        ]))
+        let firstName = normalizedHint
+            .split(whereSeparator: { $0.isWhitespace || $0 == "," })
+            .first
+            .map(String.init)?
+            .trimmingCharacters(in: .punctuationCharacters)
+            .lowercased() ?? ""
+        guard !firstName.isEmpty else {
             throw VoiceMemoError.registryMatchFailed(entityKey, hint)
         }
-        let ids: [String] = rows.compactMap { row in
-            guard case .object(let rowObj) = row, case .string(let id)? = rowObj["id"] else { return nil }
-            return id
+        var firstNameHits: [(id: String, title: String)] = []
+        if case .object(let listEnv) = listed, case .array(let listRows)? = listEnv["rows"] {
+            for row in listRows {
+                guard case .object(let rowObj) = row,
+                      case .string(let id)? = rowObj["id"] else { continue }
+                let title = Self.rowTitle(from: rowObj) ?? ""
+                let titleFirst = title
+                    .split(whereSeparator: { $0.isWhitespace || $0 == "," })
+                    .first
+                    .map(String.init)?
+                    .trimmingCharacters(in: .punctuationCharacters)
+                    .lowercased() ?? ""
+                if titleFirst == firstName || title.lowercased().hasPrefix(firstName + " ") {
+                    firstNameHits.append((id, title.isEmpty ? id : title))
+                }
+            }
         }
-        let distinct = Set(ids)
-        // PKT-MEM-106 0a: do not silently auto-pick the first of several matches; an
-        // ambiguous hint must route to a manual / picker decision, never a wrong-row write.
-        if distinct.count == 1, let only = ids.first { return only }
-        if distinct.count >= 2 { throw VoiceMemoError.registryAmbiguous(entityKey, hint, distinct.count) }
+        let distinctFirst = Dictionary(grouping: firstNameHits, by: \.id)
+        if distinctFirst.count == 1, let only = firstNameHits.first {
+            return only.id
+        }
+        if distinctFirst.count >= 2 {
+            let candidates = firstNameHits.map { "\($0.id)|\($0.title)" }
+            throw VoiceMemoError.registryAmbiguous(entityKey, hint, distinctFirst.count, candidates)
+        }
         throw VoiceMemoError.registryMatchFailed(entityKey, hint)
+    }
+
+    /// SC2 — required Notion-bound fields must be bound before any write.
+    public static func preflightMemoryKeepBindings(entity: RegistryEntity, fields: [String: String]) throws {
+        let input = fields.mapValues { Value.string($0) }
+        let resolved = RegistryWriter.resolve(input, entity: entity)
+        var unbound = resolved.unbound
+        // Ensure the entity's summary + title slots exist and are bound even when
+        // the caller omitted a key (drift: Relevant: unbound while summary key set).
+        for key in ["summary", "title"] {
+            if let prop = entity.property(key), !prop.isBound, !unbound.contains(key) {
+                unbound.append(key)
+            }
+        }
+        if let titleProp = entity.titleProperty, !titleProp.isBound,
+           !unbound.contains(titleProp.key) {
+            unbound.append(titleProp.key)
+        }
+        guard !unbound.isEmpty else { return }
+        let candidates = unbound.compactMap { key -> String? in
+            guard let prop = entity.property(key) else { return key }
+            let alts = entity.properties
+                .filter { $0.key != key && !$0.isBound }
+                .prefix(3)
+                .map(\.notionName)
+            if alts.isEmpty { return "\(key) (Notion: \(prop.notionName))" }
+            return "\(key) (Notion: \(prop.notionName); nearby unbound: \(alts.joined(separator: ", ")))"
+        }
+        throw VoiceMemoError.requiredFieldsUnbound(entity.key, unbound.sorted(), candidates)
+    }
+
+    private static func candidatePairs(from rows: [Value]) -> [String] {
+        rows.compactMap { row -> String? in
+            guard case .object(let rowObj) = row,
+                  case .string(let id)? = rowObj["id"] else { return nil }
+            let title = rowTitle(from: rowObj) ?? id
+            return "\(id)|\(title)"
+        }
+    }
+
+    private static func rowTitle(from rowObj: [String: Value]) -> String? {
+        if case .string(let t)? = rowObj["title"], !t.isEmpty { return t }
+        if case .object(let props)? = rowObj["properties"] {
+            for key in ["title", "name"] {
+                if case .string(let t)? = props[key], !t.isEmpty { return t }
+            }
+        }
+        return nil
     }
 
     static func resolvedMemoryKeepFields(intent: VoiceMemoIntent, plan: VoiceMemoPlan) -> [String: String] {
@@ -1264,6 +1395,9 @@ public enum VoiceMemoProcessor {
                 fallbackTitle: fallbackTitle, recordingPath: recordingPath
             )
             plan.degraded = true
+            let preview = VoiceMemoDegradedPreviewBuilder.build(from: transcript)
+            if !preview.summary.isEmpty { plan.summary = preview.summary }
+            if !preview.actions.isEmpty { plan.actions = preview.actions }
             return plan
         }
     }
@@ -1282,15 +1416,17 @@ public enum VoiceMemoProcessor {
                 await VoiceMemoSummarizer.structuredSummary(transcript: transcript, fallbackTitle: fallbackTitle)
             }
         } catch {
-            // Timed out — same heuristic fallback structuredSummary itself would have
-            // used for an unhealthy/unreachable Ollama daemon.
+            // SC5 — timed out / LLM degraded: sectioned preview, not opening fragment only.
             let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
                 return VoiceMemoStructuredSummary(paragraph: fallbackTitle, actions: [])
             }
+            let preview = VoiceMemoDegradedPreviewBuilder.build(from: trimmed)
             return VoiceMemoStructuredSummary(
-                paragraph: VoiceMemoParser.firstSentencePublic(in: trimmed, maxLen: 280),
-                actions: VoiceMemoParser.extractActionBulletsPublic(from: trimmed)
+                paragraph: preview.summary.isEmpty ? fallbackTitle : preview.summary,
+                actions: preview.actions.isEmpty
+                    ? VoiceMemoParser.extractActionBulletsPublic(from: trimmed)
+                    : preview.actions
             )
         }
     }
@@ -1511,7 +1647,7 @@ public enum VoiceMemoProcessor {
             }
             return receipt
         } catch let error as VoiceMemoError {
-            if case .registryAmbiguous = error {
+            if case .registryAmbiguous(_, _, _, let candidates) = error {
                 var receipt = commitReceipt(
                     ok: false,
                     memoId: recording.id,
@@ -1522,16 +1658,21 @@ public enum VoiceMemoProcessor {
                 )
                 if case .object(var obj) = receipt {
                     obj["needsManual"] = .bool(true)
+                    if !candidates.isEmpty {
+                        obj["candidates"] = .array(candidates.map { .string($0) })
+                    }
                     receipt = .object(obj)
                 }
                 return receipt
             }
-            if case .contentQualityRejected = error {
-                // GH #81 — the commit-time counterpart of processOne's queueReview: an
-                // agent-driven commit() that fails the quality gate must land in the SAME
-                // review queue a batch run would use (packet requirement), not just fail
-                // the tool call with no durable trace. Best-effort enqueue (never blocks
-                // the graceful response on a store-write failure).
+            let reviewProvenance: String?
+            switch error {
+            case .contentQualityRejected: reviewProvenance = "content-quality-gate"
+            case .requiredFieldsUnbound: reviewProvenance = "required-fields-unbound"
+            case .memoryFallbackReview: reviewProvenance = "memory-fallback-review"
+            default: reviewProvenance = nil
+            }
+            if let reviewProvenance {
                 let intentId = VoiceMemoIntentIdentity.intentId(memoId: recording.id, intent: intent)
                 try? VoiceMemoReviewStore.enqueue(VoiceMemoReviewEntry(
                     memoId: recording.id,
@@ -1544,7 +1685,7 @@ public enum VoiceMemoProcessor {
                     intentId: intentId,
                     entityKey: intent.entityKey,
                     entityHint: intent.entityHint,
-                    provenance: "content-quality-gate"
+                    provenance: reviewProvenance
                 ))
                 var receipt = commitReceipt(
                     ok: false,
@@ -1592,7 +1733,7 @@ public enum VoiceMemoProcessor {
 
     /// Structured commit receipt (Voice Memo Reliability packet SC #7 / proposed receipt).
     /// Additive fields — existing clients still read ok/memoId/intentKind/detail/markedProcessed.
-    static func commitReceipt(
+    public static func commitReceipt(
         ok: Bool,
         memoId: String,
         intentKind: String,
@@ -1714,7 +1855,12 @@ public enum VoiceMemoProcessor {
 public enum VoiceMemoError: Error, LocalizedError {
     case invalidIntent(String)
     case registryMatchFailed(String, String?)
-    case registryAmbiguous(String, String?, Int)
+    /// Ambiguous registry target. `candidates` are `"id|title"` strings (SC4).
+    case registryAmbiguous(String, String?, Int, [String])
+    /// SC2 — required write fields unbound before any Notion call.
+    case requiredFieldsUnbound(String, [String], [String])
+    /// SC8 — memory_keep failed; policy=review (explicit, not silent fallback).
+    case memoryFallbackReview(String, String, String)
     /// The Memory entity has no BOUND PLAYERS relation property, so the
     /// originating Player cannot be attached — a graceful BLOCKED → REVIEW,
     /// never a silent successful processed receipt (PKT-1064).
@@ -1751,8 +1897,15 @@ public enum VoiceMemoError: Error, LocalizedError {
         case .invalidIntent(let msg): return msg
         case .registryMatchFailed(let entity, let hint):
             return "no registry row matched entity=\(entity) hint=\(hint ?? "nil")"
-        case .registryAmbiguous(let entity, let hint, let count):
-            return "ambiguous registry target entity=\(entity) hint=\(hint ?? "nil") matched \(count) rows — select a rowId"
+        case .registryAmbiguous(let entity, let hint, let count, let candidates):
+            let list = candidates.prefix(8).joined(separator: "; ")
+            let suffix = list.isEmpty ? "select a rowId" : "candidates: \(list)"
+            return "ambiguous registry target entity=\(entity) hint=\(hint ?? "nil") matched \(count) rows — \(suffix)"
+        case .requiredFieldsUnbound(let entity, let unbound, let candidates):
+            let detail = candidates.isEmpty ? unbound.joined(separator: ", ") : candidates.joined(separator: "; ")
+            return "entity ‘\(entity)’ required fields unbound before write: \(detail) — rebind via registry_introspect (BLOCKED, queued for review)"
+        case .memoryFallbackReview(let entity, let policy, let reason):
+            return "entity=\(entity) memory_keep failed; fallback policy=\(policy) → REVIEW (\(reason))"
         case .playerRelationUnbound(let entity):
             return "entity ‘\(entity)’ has no bound PLAYERS relation property — cannot attach the originating Player; bind PLAYERS via registry_introspect, then reprocess (BLOCKED, queued for review)"
         case .playerRelationVerifyFailed(let entity, let pageId, let player):

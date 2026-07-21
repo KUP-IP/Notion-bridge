@@ -34,6 +34,7 @@ Notarization is REQUIRED for the published DMG (gate 7 · `release.yml` → `not
 ## 1 · Licensing (Packet B) — first-sale activation
 - [ ] Generate the **prod Ed25519 keypair** under your custody: `swift run license-cli keygen` (details: `docs/operator/license-ops-runbook.md`). **The private key NEVER enters the repo** — store it in your password manager / secure store.
 - [ ] Set GitHub repo secret **`LICENSE_PUBLIC_KEY_BASE64URL`** = the public key (base64url). `release.yml`'s `make inject-license-key` bakes it into the build so a minted token verifies against the bundled key. (Committed default is EMPTY = fail-closed → an unconfigured build accepts no license.)
+  - **2026-07-20 Closeout-A:** secret still **ABSENT** (`gh secret list` names-only). Track B = Engineering-ready STOP — not Ship-Gate-ready; dry_run fails secret preflight until set.
 - [ ] Mint customer tokens with `swift run license-cli mint …` (operator custody).
 - [ ] **Verify:** baked build + a freshly-minted token → activates end-to-end.
 

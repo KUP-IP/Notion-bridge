@@ -14,6 +14,21 @@
   `data_source` only (not `database`) under Notion-Version 2026-03-11.
 - **Counts** — static feature tools 205 → 207; test floor 3207 → 3213.
 
+## Unreleased — Voice Memo Reliability slice-2 (SC2/4/5/6/8) — 2026-07-20
+
+- **Fix (SC2)** — `memory_keep` preflights unbound required fields (esp. `summary` /
+  title) before any Notion create; surfaces candidate Notion names for rebind.
+- **Feature (SC4)** — registry row resolve: after exact `registry_find` miss, unique
+  first-name / first-token match via `registry_list` resolves; ≥2 candidates throw
+  `registryAmbiguous` with `{id|title}` pairs (never auto-pick).
+- **Feature (SC5)** — LLM/timeout degraded summarize/understand paths emit a
+  sectioned preview (`Topics` / `Decisions` / `Actions`) instead of an opening fragment.
+- **Feature (SC6)** — reminder titles pass a mid-clause gate; rejected titles use a
+  stable transcript-derived fallback before `reminders_create`.
+- **Feature (SC8)** — Notion Memory failure routes through explicit policy
+  (`off` | `review` | `agentMemory`); default absent key = `review` (never silent
+  agent-memory substitute).
+
 ## Unreleased — Voice Memo Reliability (list + receipts + identity projection) — 2026-07-15
 
 - **Fix** — `FieldsFilter` retains `id` / `entity` / `title` on projected registry
