@@ -22,9 +22,9 @@ func runNotionModuleTests() async {
     // MARK: - Tool Registration (23 tools)
     // ============================================================
 
-    await test("NotionModule registers 24 tools (views list/get + prior surface)") {
+    await test("NotionModule registers 26 tools (views list/get/create/update + prior surface)") {
         let tools = await router.registrations(forModule: "notion")
-        try expect(tools.count == 24, "Expected 24 notion tools, got \(tools.count)")
+        try expect(tools.count == 26, "Expected 26 notion tools, got \(tools.count)")
     }
 
     let expectedTools: [String] = [
@@ -36,8 +36,10 @@ func runNotionModuleTests() async {
         "notion_page_move", "notion_file_upload", "notion_token_introspect",
         "notion_block_update",
         "notion_datasource_update", "notion_datasource_create",
+        "notion_datasource_delete",
         "notion_discussion_create",
-        "notion_views_list", "notion_view_get"
+        "notion_views_list", "notion_view_get",
+        "notion_view_create", "notion_view_update"
     ]
 
     for toolName in expectedTools {
@@ -72,7 +74,8 @@ func runNotionModuleTests() async {
         "notion_block_delete", "notion_page_edit",
         "notion_comment_create", "notion_page_move", "notion_file_upload",
         "notion_datasource_update", "notion_datasource_create",
-        "notion_block_update"
+        "notion_block_update",
+        "notion_view_create", "notion_view_update"
     ]
     for toolName in notifyTools {
         await test("\(toolName) tier is notify") {
@@ -301,6 +304,51 @@ func runNotionModuleTests() async {
                 arguments: .object([:])
             )
             throw TestError.assertion("Expected error for missing viewId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_view_create rejects missing name/type/parent") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_view_create",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing name")
+        } catch is ToolRouterError {
+            // Expected
+        }
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_view_create",
+                arguments: .object([
+                    "name": .string("Smoke"),
+                    "type": .string("table")
+                ])
+            )
+            throw TestError.assertion("Expected error for missing databaseId/dataSourceId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+    }
+
+    await test("notion_view_update rejects missing viewId and empty patch") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_view_update",
+                arguments: .object([:])
+            )
+            throw TestError.assertion("Expected error for missing viewId")
+        } catch is ToolRouterError {
+            // Expected
+        }
+        do {
+            _ = try await router.dispatch(
+                toolName: "notion_view_update",
+                arguments: .object(["viewId": .string("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")])
+            )
+            throw TestError.assertion("Expected error for empty patch body")
         } catch is ToolRouterError {
             // Expected
         }

@@ -1943,6 +1943,186 @@ public enum NotionModule {
             }
         ))
 
+        // MARK: 26. notion_view_create – notify (Views API write)
+        await router.register(ToolRegistration(
+            name: "notion_view_create",
+            module: moduleName,
+            tier: .notify,
+            description: "Create a Notion database view (POST /v1/views). Requires name + type and at least one of databaseId or dataSourceId. Pass configuration as a JSON string; table property entries must use property_id (not display name). Prefer a disposable database — never experiment on production PACKETS.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "databaseId": .object(["type": .string("string"), "description": .string("Parent database ID.")]),
+                    "dataSourceId": .object(["type": .string("string"), "description": .string("Data source ID (recommended with databaseId).")]),
+                    "name": .object(["type": .string("string"), "description": .string("View name.")]),
+                    "type": .object(["type": .string("string"), "description": .string("View type: table, board, calendar, list, gallery, timeline, chart, form, map, …")]),
+                    "configuration": .object(["type": .string("string"), "description": .string("JSON string of view configuration (must include type + properties with property_id / visible / width / wrap_cells / frozen_column_index as needed).")]),
+                    "filter": .object(["type": .string("string"), "description": .string("Optional JSON string filter object.")]),
+                    "sorts": .object(["type": .string("string"), "description": .string("Optional JSON string sorts array.")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("name"), .string("type")])
+            ]),
+            metadata: ToolMetadata(
+                title: "Notion: Create View",
+                whenToUse: ["creating a table/board view with width/visible/wrap/freeze on a disposable or owned database"],
+                whenNotToUse: ["listing or inspecting views (use notion_views_list / notion_view_get)",
+                               "mutating an existing view (use notion_view_update)"],
+                relatedTools: ["notion_view_update", "notion_view_get", "notion_views_list", "notion_datasource_get"]
+            ),
+            handler: { arguments in
+                guard case .object(let args) = arguments else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_view_create", reason: "missing arguments")
+                }
+                guard case .string(let name) = args["name"], !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_view_create", reason: "missing 'name'")
+                }
+                guard case .string(let viewType) = args["type"], !viewType.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_view_create", reason: "missing 'type'")
+                }
+                let databaseId: String? = { if case .string(let d) = args["databaseId"] { return d }; return nil }()
+                let dataSourceId: String? = { if case .string(let d) = args["dataSourceId"] { return d }; return nil }()
+                let hasDB = !(databaseId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                let hasDS = !(dataSourceId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                guard hasDB || hasDS else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "notion_view_create",
+                        reason: "at least one of 'databaseId' or 'dataSourceId' is required"
+                    )
+                }
+
+                var body: [String: Any] = [
+                    "name": name,
+                    "type": viewType
+                ]
+                if hasDB, let databaseId {
+                    body["database_id"] = databaseId.replacingOccurrences(of: "-", with: "")
+                }
+                if hasDS, let dataSourceId {
+                    body["data_source_id"] = dataSourceId.replacingOccurrences(of: "-", with: "")
+                }
+                if case .string(let cfgJSON) = args["configuration"], !cfgJSON.isEmpty {
+                    guard let cfgData = cfgJSON.data(using: .utf8),
+                          let cfgObj = try? JSONSerialization.jsonObject(with: cfgData) else {
+                        throw ToolRouterError.invalidArguments(toolName: "notion_view_create", reason: "configuration must be valid JSON")
+                    }
+                    body["configuration"] = cfgObj
+                }
+                if case .string(let filterJSON) = args["filter"], !filterJSON.isEmpty {
+                    guard let filterData = filterJSON.data(using: .utf8),
+                          let filterObj = try? JSONSerialization.jsonObject(with: filterData) else {
+                        throw ToolRouterError.invalidArguments(toolName: "notion_view_create", reason: "filter must be valid JSON")
+                    }
+                    body["filter"] = filterObj
+                }
+                if case .string(let sortsJSON) = args["sorts"], !sortsJSON.isEmpty {
+                    guard let sortsData = sortsJSON.data(using: .utf8),
+                          let sortsObj = try? JSONSerialization.jsonObject(with: sortsData) else {
+                        throw ToolRouterError.invalidArguments(toolName: "notion_view_create", reason: "sorts must be valid JSON")
+                    }
+                    body["sorts"] = sortsObj
+                }
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.createView(body: body)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse create view response")])
+                }
+                let raw = String(data: data, encoding: .utf8) ?? "{}"
+                return .object([
+                    "success": .bool(true),
+                    "id": .string(json["id"] as? String ?? ""),
+                    "object": .string(json["object"] as? String ?? "view"),
+                    "name": .string(json["name"] as? String ?? name),
+                    "type": .string(json["type"] as? String ?? viewType),
+                    "data_source_id": .string(json["data_source_id"] as? String ?? ""),
+                    "url": .string(json["url"] as? String ?? ""),
+                    "view": .string(raw)
+                ])
+            }
+        ))
+
+        // MARK: 27. notion_view_update – notify (Views API write)
+        await router.register(ToolRegistration(
+            name: "notion_view_update",
+            module: moduleName,
+            tier: .notify,
+            description: "Update a Notion database view (PATCH /v1/views/{id}). Pass configuration as a JSON string (property_id required for property entries). Use for width/visible/wrap_cells/frozen_column_index changes after notion_view_get.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "viewId": .object(["type": .string("string"), "description": .string("View ID to update.")]),
+                    "name": .object(["type": .string("string"), "description": .string("Optional new view name.")]),
+                    "configuration": .object(["type": .string("string"), "description": .string("JSON string of view configuration to patch.")]),
+                    "filter": .object(["type": .string("string"), "description": .string("Optional JSON string filter object.")]),
+                    "sorts": .object(["type": .string("string"), "description": .string("Optional JSON string sorts array.")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("viewId")])
+            ]),
+            metadata: ToolMetadata(
+                title: "Notion: Update View",
+                whenToUse: ["changing column width/visibility/wrap/freeze or renaming a view"],
+                whenNotToUse: ["creating a new view (use notion_view_create)",
+                               "read-only inspection (use notion_view_get)"],
+                relatedTools: ["notion_view_create", "notion_view_get", "notion_views_list"]
+            ),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let viewId) = args["viewId"], !viewId.isEmpty else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_view_update", reason: "missing 'viewId'")
+                }
+                var body: [String: Any] = [:]
+                if case .string(let name) = args["name"], !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    body["name"] = name
+                }
+                if case .string(let cfgJSON) = args["configuration"], !cfgJSON.isEmpty {
+                    guard let cfgData = cfgJSON.data(using: .utf8),
+                          let cfgObj = try? JSONSerialization.jsonObject(with: cfgData) else {
+                        throw ToolRouterError.invalidArguments(toolName: "notion_view_update", reason: "configuration must be valid JSON")
+                    }
+                    body["configuration"] = cfgObj
+                }
+                if case .string(let filterJSON) = args["filter"], !filterJSON.isEmpty {
+                    guard let filterData = filterJSON.data(using: .utf8),
+                          let filterObj = try? JSONSerialization.jsonObject(with: filterData) else {
+                        throw ToolRouterError.invalidArguments(toolName: "notion_view_update", reason: "filter must be valid JSON")
+                    }
+                    body["filter"] = filterObj
+                }
+                if case .string(let sortsJSON) = args["sorts"], !sortsJSON.isEmpty {
+                    guard let sortsData = sortsJSON.data(using: .utf8),
+                          let sortsObj = try? JSONSerialization.jsonObject(with: sortsData) else {
+                        throw ToolRouterError.invalidArguments(toolName: "notion_view_update", reason: "sorts must be valid JSON")
+                    }
+                    body["sorts"] = sortsObj
+                }
+                guard !body.isEmpty else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "notion_view_update",
+                        reason: "at least one of name, configuration, filter, or sorts is required"
+                    )
+                }
+
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.updateView(viewId: viewId, body: body)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse update view response")])
+                }
+                let raw = String(data: data, encoding: .utf8) ?? "{}"
+                return .object([
+                    "success": .bool(true),
+                    "id": .string(json["id"] as? String ?? viewId),
+                    "object": .string(json["object"] as? String ?? "view"),
+                    "name": .string(json["name"] as? String ?? ""),
+                    "type": .string(json["type"] as? String ?? ""),
+                    "data_source_id": .string(json["data_source_id"] as? String ?? ""),
+                    "url": .string(json["url"] as? String ?? ""),
+                    "view": .string(raw)
+                ])
+            }
+        ))
+
     }
 }
 
