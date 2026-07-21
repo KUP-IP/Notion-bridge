@@ -93,9 +93,9 @@ public struct DepLinkChip: Identifiable, Sendable {
 public enum ToolDepLinks {
     /// Build "used by" chips for a credential row from the live ToolInfo
     /// list. The chip count is exact — equal to the number of tools in
-    /// the dependent modules. Variant is `.bad` if no live tools match
-    /// (credential is orphaned — wasted secret) so the user sees they
-    /// can safely remove it.
+    /// the dependent modules. Variant is `.info` if no live tools match
+    /// (credential is unused by tools — informational orphan, not an error)
+    /// so the row stays calm while still surfacing that nothing consumes it.
     @MainActor
     public static func usedByChips(
         forCredentialService service: String,
@@ -112,7 +112,7 @@ public enum ToolDepLinks {
                 DepLinkChip(
                     id: "cred-orphan-\(normalizedName)",
                     label: "no tools registered",
-                    variant: .bad,
+                    variant: .info,
                     section: .tools,
                     anchor: normalizedName
                 )

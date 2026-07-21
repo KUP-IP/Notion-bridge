@@ -533,14 +533,21 @@ struct SkillsView: View {
     }
 
     /// `.sk-group-cap` — an uppercase kind caption + count + a trailing rule.
+    /// SK-1: keep caption single-line (long labels like "Routing & orchestrators"
+    /// used to wrap a stray letter under the count). Count is fixedSize; the
+    /// rule absorbs leftover width.
     private func groupHeader(_ label: String, count: Int) -> some View {
         HStack(spacing: 8) {
             Text(label).bridgeCap()
                 .foregroundStyle(BridgeTokens.fg4)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
             Text("\(count)")
                 .font(BridgeTokens.Typeface.micro)
                 .monospacedDigit()
                 .foregroundStyle(BridgeTokens.fg5)
+                .fixedSize(horizontal: true, vertical: false)
             Rectangle().fill(BridgeTokens.hairlineFaint).frame(height: 0.5)
         }
         .padding(.horizontal, 7)

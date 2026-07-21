@@ -20,8 +20,8 @@
 //      a future Grant added without dep mapping fails the test.
 //   6. ToolDepLinks.usedByChips collapses N tools per module into one
 //      chip with the correct plural form ("28 notion tools" vs "1 ...").
-//   7. ToolDepLinks.usedByChips returns a single `.bad` orphan chip when
-//      no live tools match (credential is wasted).
+//   7. ToolDepLinks.usedByChips returns a single `.info` orphan chip when
+//      no live tools match (credential unused by tools — informational).
 //   8. ToolDepLinks.requiredByChips returns `.bad` chips when permission
 //      not granted but tools depend on it ("9 file tools — disabled").
 //   9. BridgeSectionIcon.systemImage(for:) returns the locked SF Symbol
@@ -143,8 +143,8 @@ func runSettingsSectionsLGTests() async {
                    "singular pluralization wrong: \(chips[0].label)")
     }
 
-    // 8. Orphan credential → single .bad chip.
-    await test("PKT-876: ToolDepLinks.usedByChips returns .bad orphan chip when no tools match") {
+    // 8. Orphan credential → single .info chip (informational, not error-red).
+    await test("PKT-876: ToolDepLinks.usedByChips returns .info orphan chip when no tools match") {
         let chips = await MainActor.run { () -> [DepLinkChip] in
             ToolDepLinks.usedByChips(
                 forCredentialService: "openai",
@@ -154,8 +154,8 @@ func runSettingsSectionsLGTests() async {
             )
         }
         try expect(chips.count == 1)
-        if case .bad = chips[0].variant { } else {
-            throw TestError.assertion("expected .bad variant for orphan, got .info")
+        if case .info = chips[0].variant { } else {
+            throw TestError.assertion("expected .info variant for orphan, got .bad")
         }
         try expect(chips[0].label == "no tools registered")
     }
