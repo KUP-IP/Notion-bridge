@@ -2393,3 +2393,9 @@ set -euo pipefail
 # sectioned preview, SC6 reminder mid-clause title gate, SC8 memory fallback
 # policy default=review, SC1 commit receipt shape (+6 hermetic). Measured
 # 3374 passed, 0 failed. FLOOR 3368 -> 3374.
+
+# Closeout-A Views write Partial (2026-07-20): notion_view_create +
+# notion_view_update (+ hermetic rejects / E2E count); disposable write smoke
+# PASS for width/visible/wrap/frozen; capability matrix + W5B prep runbook.
+# Rebased onto Voice Memo #113. Measured 3381 passed, 0 failed.
+# FLOOR 3374 -> 3381.
