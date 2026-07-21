@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — Notion Views write (create/update) — 2026-07-20
+
+- **Feature** — `notion_view_create` / `notion_view_update` wrap `POST`/`PATCH`
+  `/v1/views` for width/visible/wrap_cells/frozen_column_index (and name) on
+  disposable or owned databases. Configuration is a JSON string; property
+  entries require `property_id`.
+- **Evidence** — disposable write smoke PASS (`docs/operator/views-write-smoke-2026-07-20.md`);
+  capability matrix at `docs/operator/notion-views-capability-matrix.md`.
+- **Counts** — static feature tools 209 → 211. Delete view remains follow-on.
+
 ## Unreleased — Notion Views read + comment reply fidelity — 2026-07-15
 
 - **Feature** — `notion_views_list` and `notion_view_get` wrap the Notion Views

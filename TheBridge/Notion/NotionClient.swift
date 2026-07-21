@@ -1044,6 +1044,31 @@ public actor NotionClient {
         return data
     }
 
+    /// Create a view. POST /v1/views
+    /// Body must include `name`, `type`, and at least one of `database_id` / `data_source_id`.
+    /// Configuration property entries require `property_id` (not display name).
+    public func createView(body: [String: Any]) async throws -> Data {
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "POST", path: "/views", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// Update a view. PATCH /v1/views/{view_id}
+    public func updateView(viewId: String, body: [String: Any]) async throws -> Data {
+        let cleanId = viewId.replacingOccurrences(of: "-", with: "")
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "PATCH", path: "/views/\(cleanId)", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
     /// E3 (v1.9.1): Update a code block by chunking a long string into
     /// sequential rich_text runs (each ≤2000 chars to respect Notion's
     /// per-run cap). Block must already be a code block.
