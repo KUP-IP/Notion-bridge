@@ -382,7 +382,8 @@ public enum BridgeInitializeService {
             transportSessionId: transportSessionId,
             client: context.client ?? dispatchContext?.client,
             mode: mode,
-            startedAt: context.now
+            startedAt: context.now,
+            principalKey: dispatchContext?.governancePrincipal
         )
         let constitution = includeConstitution
             ? (try? await constitutionStore.assemble(supplementalStore: store, commandStore: .shared))

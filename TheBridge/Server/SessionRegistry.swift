@@ -5,6 +5,10 @@
 // existing SessionPersistenceStore keeps Streamable HTTP session IDs alive
 // across app restarts; this registry records whether a caller has completed
 // bridge_initialize and is therefore governed.
+//
+// Remote OAuth connectors often rotate Mcp-Session-Id between tool calls.
+// Governance therefore also keys on a verified principal (`oauth-sub:<sub>`)
+// when present — never on spoofable clientInfo.
 
 import Foundation
 import SQLite3
@@ -22,6 +26,7 @@ public struct BrokerSessionRecord: Codable, Sendable, Equatable {
     public let sessionId: String
     public let transportSessionId: String
     public let client: String?
+    public let principalKey: String?
     public let mode: BrokerSessionMode
     public let startedAt: Date
     public let governed: Bool
@@ -31,6 +36,7 @@ public struct BrokerSessionRecord: Codable, Sendable, Equatable {
         sessionId: String = UUID().uuidString,
         transportSessionId: String,
         client: String?,
+        principalKey: String? = nil,
         mode: BrokerSessionMode,
         startedAt: Date = Date(),
         governed: Bool = true,
@@ -39,6 +45,7 @@ public struct BrokerSessionRecord: Codable, Sendable, Equatable {
         self.sessionId = sessionId
         self.transportSessionId = transportSessionId
         self.client = client
+        self.principalKey = principalKey
         self.mode = mode
         self.startedAt = startedAt
         self.governed = governed
@@ -58,24 +65,29 @@ public struct ToolDispatchContext: Sendable, Equatable {
     public let origin: ToolDispatchOrigin
     public let client: String?
     public let clientVersion: String?
+    /// Verified OAuth subject key (`oauth-sub:<sub>`). Never request-supplied.
+    public let governancePrincipal: String?
 
     public init(
         transportSessionId: String?,
         origin: ToolDispatchOrigin,
         client: String? = nil,
-        clientVersion: String? = nil
+        clientVersion: String? = nil,
+        governancePrincipal: String? = nil
     ) {
         self.transportSessionId = transportSessionId
         self.origin = origin
         self.client = client
         self.clientVersion = clientVersion
+        self.governancePrincipal = SessionRegistry.normalizedPrincipalKey(governancePrincipal)
     }
 
     public static let localDefault = ToolDispatchContext(
         transportSessionId: nil,
         origin: .local,
         client: nil,
-        clientVersion: nil
+        clientVersion: nil,
+        governancePrincipal: nil
     )
 }
 
@@ -95,32 +107,55 @@ public actor SessionRegistry {
             .appendingPathComponent("sessions.sqlite", isDirectory: false)
     }
 
+    /// Build a governance principal key from a verified OAuth subject.
+    /// Returns nil for empty/whitespace subjects so they cannot share a bucket.
+    public nonisolated static func principalKey(subject: String) -> String? {
+        let trimmed = subject.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return "oauth-sub:\(trimmed)"
+    }
+
+    public nonisolated static func normalizedPrincipalKey(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("oauth-sub:") {
+            let suffix = trimmed.dropFirst("oauth-sub:".count)
+            guard !suffix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return trimmed
+        }
+        return principalKey(subject: trimmed)
+    }
+
     @discardableResult
     public func open(
         transportSessionId: String,
         client: String?,
         mode: BrokerSessionMode,
-        startedAt: Date = Date()
+        startedAt: Date = Date(),
+        principalKey: String? = nil
     ) throws -> BrokerSessionRecord {
         try ensureOpen()
         let record = BrokerSessionRecord(
             transportSessionId: transportSessionId,
             client: client,
+            principalKey: Self.normalizedPrincipalKey(principalKey),
             mode: mode,
             startedAt: startedAt,
             governed: true
         )
         let sql = """
         INSERT INTO broker_sessions(
-            session_id, transport_session_id, client, mode, started_at, governed, closed_at
-        ) VALUES(?,?,?,?,?,?,NULL)
+            session_id, transport_session_id, client, mode, started_at, governed, closed_at, principal_key
+        ) VALUES(?,?,?,?,?,?,NULL,?)
         ON CONFLICT(transport_session_id) DO UPDATE SET
             session_id=excluded.session_id,
             client=excluded.client,
             mode=excluded.mode,
             started_at=excluded.started_at,
             governed=excluded.governed,
-            closed_at=NULL;
+            closed_at=NULL,
+            principal_key=excluded.principal_key;
         """
         try bindAndStep(sql) { stmt in
             sqlite3_bind_text(stmt, 1, record.sessionId, -1, SESSION_SQLITE_TRANSIENT)
@@ -133,6 +168,11 @@ public actor SessionRegistry {
             sqlite3_bind_text(stmt, 4, record.mode.rawValue, -1, SESSION_SQLITE_TRANSIENT)
             sqlite3_bind_text(stmt, 5, Self.iso(record.startedAt), -1, SESSION_SQLITE_TRANSIENT)
             sqlite3_bind_int(stmt, 6, record.governed ? 1 : 0)
+            if let principalKey = record.principalKey {
+                sqlite3_bind_text(stmt, 7, principalKey, -1, SESSION_SQLITE_TRANSIENT)
+            } else {
+                sqlite3_bind_null(stmt, 7)
+            }
         }
         return record
     }
@@ -140,7 +180,7 @@ public actor SessionRegistry {
     public func current(transportSessionId: String) throws -> BrokerSessionRecord? {
         try ensureOpen()
         let rows = try query("""
-        SELECT session_id, transport_session_id, client, mode, started_at, governed, closed_at
+        SELECT session_id, transport_session_id, client, mode, started_at, governed, closed_at, principal_key
         FROM broker_sessions
         WHERE transport_session_id=? AND closed_at IS NULL
         LIMIT 1;
@@ -150,9 +190,27 @@ public actor SessionRegistry {
         return rows.compactMap(Self.record(from:)).first
     }
 
-    public func isGoverned(transportSessionId: String?) throws -> Bool {
-        guard let transportSessionId, !transportSessionId.isEmpty else { return false }
-        return try current(transportSessionId: transportSessionId)?.governed == true
+    public func isGoverned(
+        transportSessionId: String?,
+        principalKey: String? = nil
+    ) throws -> Bool {
+        try ensureOpen()
+        let principal = Self.normalizedPrincipalKey(principalKey)
+        if let transportSessionId, !transportSessionId.isEmpty {
+            if try current(transportSessionId: transportSessionId)?.governed == true {
+                return true
+            }
+        }
+        guard let principal, !principal.isEmpty else { return false }
+        let rows = try query("""
+        SELECT session_id, transport_session_id, client, mode, started_at, governed, closed_at, principal_key
+        FROM broker_sessions
+        WHERE principal_key=? AND closed_at IS NULL AND governed=1
+        LIMIT 1;
+        """) { stmt in
+            sqlite3_bind_text(stmt, 1, principal, -1, SESSION_SQLITE_TRANSIENT)
+        }
+        return rows.compactMap(Self.record(from:)).first != nil
     }
 
     public func close(transportSessionId: String, at date: Date = Date()) throws {
@@ -196,12 +254,19 @@ public actor SessionRegistry {
             mode TEXT NOT NULL,
             started_at TEXT NOT NULL,
             governed INTEGER NOT NULL,
-            closed_at TEXT
+            closed_at TEXT,
+            principal_key TEXT
         );
         """)
+        // Pre-existing DBs created before principal continuity lack the column.
+        try? exec("ALTER TABLE broker_sessions ADD COLUMN principal_key TEXT;")
         try exec("""
         CREATE INDEX IF NOT EXISTS idx_broker_sessions_transport
         ON broker_sessions(transport_session_id, closed_at);
+        """)
+        try exec("""
+        CREATE INDEX IF NOT EXISTS idx_broker_sessions_principal
+        ON broker_sessions(principal_key, closed_at, governed);
         """)
     }
 
@@ -267,10 +332,12 @@ public actor SessionRegistry {
               let started = isoDate(startedRaw),
               let governedRaw = row[5]
         else { return nil }
+        let principalKey = row.count >= 8 ? row[7] : nil
         return BrokerSessionRecord(
             sessionId: sessionId,
             transportSessionId: transportSessionId,
             client: row[2] ?? nil,
+            principalKey: principalKey ?? nil,
             mode: mode,
             startedAt: started,
             governed: governedRaw == "1",
