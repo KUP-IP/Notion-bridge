@@ -1000,6 +1000,10 @@ await runMemoryHubLiveProcessingTests()
 // connector token. Pure decision logic + injected-seam repair action.
 await runCloudEnvSelfHealTests()
 
+// Sleep/wake: kickstart LaunchAgent cloudflared so remote connectors recover
+// without quitting The Bridge. Pure decide + injectable kick (no real sleep).
+await runTunnelLaunchAgentHealerTests()
+
 // ============================================================
 // MARK: - Summary
 // ============================================================
