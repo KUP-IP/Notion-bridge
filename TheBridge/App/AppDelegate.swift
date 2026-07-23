@@ -577,6 +577,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             Task.detached {
                 await VoiceMemoReviewLifecycle.sweepIfNeeded(router: await JobsManager.shared.router_())
             }
+            // Sleep drops Cloudflare edge sockets for LaunchAgent cloudflared while
+            // local /mcp often stays fine. Kickstart the tunnel agent after a short
+            // delay (throttled). Residual: ChatGPT may still need one plugin reconnect.
+            Task.detached {
+                try? await Task.sleep(nanoseconds: TunnelLaunchAgentHealer.defaultPostWakeDelayNanoseconds)
+                _ = TunnelLaunchAgentHealer.handleWake()
+            }
         }
     }
 

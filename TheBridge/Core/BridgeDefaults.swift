@@ -193,6 +193,48 @@ public enum BridgeDefaults {
     /// first transition to `.online`. ABSENT ⇒ not yet seen (modal shows once).
     public static let hasSeenCloudAccessFirstRun = "com.notionbridge.hasSeenCloudAccessFirstRun"
 
+    // MARK: - Wake tunnel heal (LaunchAgent cloudflared)
+
+    /// When true, `NSWorkspace.didWake` may kickstart the cloudflared LaunchAgent
+    /// so remote connectors recover after lid sleep. ABSENT ⇒ ON.
+    public static let tunnelWakeHealEnabled = "com.notionbridge.tunnelWakeHeal.enabled"
+
+    public static var tunnelWakeHealEnabledValue: Bool {
+        if UserDefaults.standard.object(forKey: tunnelWakeHealEnabled) == nil { return true }
+        return UserDefaults.standard.bool(forKey: tunnelWakeHealEnabled)
+    }
+
+    /// LaunchAgent label for `launchctl kickstart -k gui/<uid>/<label>`.
+    /// ABSENT ⇒ `TunnelLaunchAgentHealer.defaultLabel` (`com.kup.cloudflared-bridge`).
+    public static let tunnelLaunchAgentLabel = "com.notionbridge.tunnelWakeHeal.launchAgentLabel"
+
+    public static var tunnelLaunchAgentLabelValue: String {
+        let raw = UserDefaults.standard.string(forKey: tunnelLaunchAgentLabel)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return raw.isEmpty ? TunnelLaunchAgentHealer.defaultLabel : raw
+    }
+
+    /// Minimum seconds between wake kickstarts. ABSENT or ≤0 ⇒ 90.
+    public static let tunnelWakeHealThrottleSeconds = "com.notionbridge.tunnelWakeHeal.throttleSeconds"
+
+    public static var tunnelWakeHealThrottleSecondsValue: TimeInterval {
+        let stored = UserDefaults.standard.double(forKey: tunnelWakeHealThrottleSeconds)
+        return stored > 0 ? stored : TunnelLaunchAgentHealer.defaultThrottleSeconds
+    }
+
+    /// Last successful kickstart time (TimeInterval since reference date).
+    public static let tunnelWakeHealLastKickAtKey = "com.notionbridge.tunnelWakeHeal.lastKickAt"
+
+    public static var tunnelWakeHealLastKickAt: Date? {
+        let raw = UserDefaults.standard.double(forKey: tunnelWakeHealLastKickAtKey)
+        guard raw > 0 else { return nil }
+        return Date(timeIntervalSinceReferenceDate: raw)
+    }
+
+    public static func recordTunnelWakeHealKick(at date: Date = Date()) {
+        UserDefaults.standard.set(date.timeIntervalSinceReferenceDate, forKey: tunnelWakeHealLastKickAtKey)
+    }
+
     // MARK: - Local Models (Ollama · Wave 2a)
 
     /// Base URL for the local Ollama HTTP API. String. Default `http://127.0.0.1:11434`.

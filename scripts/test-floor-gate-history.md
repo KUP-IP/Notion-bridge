@@ -2408,3 +2408,7 @@ set -euo pipefail
 # governance + routing-manifest markers survive Mcp-Session-Id churn; empty
 # sub refused; clientInfo alone still fail-closed (PKT-1124). +6 hermetic.
 # Measured 3397 passed, 0 failed. FLOOR 3391 -> 3397.
+
+# Wake tunnel LaunchAgent heal (2026-07-23): didWake kickstarts
+# com.kup.cloudflared-bridge (throttled; no "running=healthy" probe). +11 hermetic.
+# Measured 3408 passed, 0 failed. FLOOR 3397 -> 3408.
