@@ -20,24 +20,27 @@ func runCommandBridgeLayoutTests() async {
     print("\n\u{1F9F1}  CommandBridge Layout Tests (v4 round-2 · adaptive width + drag memory)")
 
     await test("Adaptive width: tracks favorite count, clamped to [half, full]") {
-        let full: CGFloat = 640
-        try expect(CommandBridgeController.paletteWidth(favoriteCount: 0,  full: full) == 320,
-                   "0 favorites floors at half width (320)")
-        try expect(CommandBridgeController.paletteWidth(favoriteCount: 1,  full: full) == 320,
-                   "1 favorite floors at half width (320)")
-        try expect(CommandBridgeController.paletteWidth(favoriteCount: 5,  full: full) == 320,
-                   "5 favorites ≈ half width (320)")
-        try expect(CommandBridgeController.paletteWidth(favoriteCount: 7,  full: full) == 448,
-                   "7 favorites grows past the floor (7×64=448)")
-        try expect(CommandBridgeController.paletteWidth(favoriteCount: 10, full: full) == 640,
-                   "10 favorites = full width (640)")
-        try expect(CommandBridgeController.paletteWidth(favoriteCount: 20, full: full) == 640,
-                   "beyond 10 never exceeds full width (640)")
+        let full = CommandBridgeChrome.pillWidth  // 560
+        let half = (full / 2).rounded()          // 280
+        let pitch = CommandBridgeChrome.tilePitch // 48
+        try expect(CommandBridgeController.paletteWidth(favoriteCount: 0,  full: full) == half,
+                   "0 favorites floors at half width (\(half))")
+        try expect(CommandBridgeController.paletteWidth(favoriteCount: 1,  full: full) == half,
+                   "1 favorite floors at half width")
+        try expect(CommandBridgeController.paletteWidth(favoriteCount: 5,  full: full) == half,
+                   "5 favorites still at floor (5×\(pitch)=\(5 * pitch) < half)")
+        try expect(CommandBridgeController.paletteWidth(favoriteCount: 7,  full: full) == 7 * pitch,
+                   "7 favorites grows past the floor (7×\(pitch)=\(7 * pitch))")
+        // 10 tiles × pitch (48) = 480 — under pillWidth 560, so width is content (not forced to full).
+        try expect(CommandBridgeController.paletteWidth(favoriteCount: 10, full: full) == 10 * pitch,
+                   "10 favorites = 10×pitch (\(10 * pitch)), got \(CommandBridgeController.paletteWidth(favoriteCount: 10, full: full))")
+        try expect(CommandBridgeController.paletteWidth(favoriteCount: 20, full: full) == full,
+                   "beyond full pitch-sum clamps to full width (\(full))")
     }
 
     await test("Drag memory: clampOrigin keeps the panel fully on-screen") {
         let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
-        let size = CGSize(width: 640, height: 360)
+        let size = CommandBridgeController.panelSize
 
         let inside = CommandBridgeController.clampOrigin(
             CGPoint(x: 100, y: 100), toScreens: [screen], panelSize: size)
@@ -46,7 +49,7 @@ func runCommandBridgeLayoutTests() async {
 
         let tr = CommandBridgeController.clampOrigin(
             CGPoint(x: 5000, y: 5000), toScreens: [screen], panelSize: size)
-        try expect(tr.x == 1440 - 640 && tr.y == 900 - 360,
+        try expect(tr.x == 1440 - size.width && tr.y == 900 - size.height,
                    "off top-right clamps to the max in-bounds origin, got \(tr)")
 
         let bl = CommandBridgeController.clampOrigin(

@@ -2416,3 +2416,6 @@ set -euo pipefail
 # Calibrate APPLY 2026-07-23: git_status clean-but-behind (+1) + section unique
 # prefix / ambiguous prefix (+2). Inject restore is Makefile-only (no harness).
 # Measured 3411 passed, 0 failed. FLOOR 3408 -> 3411.
+
+# Command Bridge visual-pass 2026-07-23: chrome metrics + open/close duration
+# family (+1 net). Measured 3412 passed, 0 failed. FLOOR 3411 -> 3412.

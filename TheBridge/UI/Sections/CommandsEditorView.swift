@@ -631,56 +631,58 @@ public struct CommandsEditorView: View {
                 if favoredCommands.isEmpty {
                     HStack {
                         Spacer()
-                        Text("No favorites yet — assign a slot above to place a bubble here.")
+                        Text("No favorites yet — assign a slot above to place a tile in the Command Bridge.")
                             .font(BridgeTokens.Typeface.meta)
                             .foregroundStyle(BridgeTokens.fg4)
                         Spacer()
                     }
                     .padding(.vertical, 18)
                 } else {
-                    let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    HStack(alignment: .top, spacing: 12) {
+                    // Parity with live Command Bridge tiles (squircle + digit in-tile).
+                    // No plate behind the row — discrete glass only.
+                    HStack(alignment: .center, spacing: 8) {
                         Spacer(minLength: 0)
                         ForEach(favoredCommands, id: \.slug) { c in
-                            VStack(spacing: 6) {
-                                trayBubble(c)
-                                Text(String(c.keySlot ?? 0))
-                                    .font(BridgeTokens.Typeface.cap.monospacedDigit())
-                                    .foregroundStyle(BridgeTokens.fg4)
-                            }
+                            settingsFavoriteTile(c)
                         }
                         Spacer(minLength: 0)
                     }
-                    .padding(.vertical, 16)
-                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
                     .frame(maxWidth: .infinity)
-                    .background(
-                        shape.fill(BridgeTokens.wellFillDeep)
-                            .bridgeBevel(BridgeTokens.bevelInset, radius: 14)
-                    )
-                    .overlay(shape.strokeBorder(BridgeTokens.hairlineFaint, lineWidth: 0.5))
                 }
             }
         }
     }
 
-    /// Tray bubble — ALL favorites render at full opacity (the real Command
-    /// Bridge shows every favorite, not just the selected one). The currently
-    /// EDITED command is marked with the design's double-ring (a canvas-colored
-    /// gap then an `accent-strong` halo) rather than by dimming the rest (fix U8).
-    private func trayBubble(_ c: CommandStore.Command) -> some View {
+    /// Settings preview tile — matches live Command Bridge chrome (squircle,
+    /// digit inside, shared glass language). Selected command gets accent ring.
+    private func settingsFavoriteTile(_ c: CommandStore.Command) -> some View {
         let isSelected = c.slug == selectedSlug
-        return iconBubble(c.icon, color: c.color, diameter: 40, glyph: 21)
-            .overlay(
-                Circle().strokeBorder(BridgeTokens.bgCanvas,
-                                      lineWidth: isSelected ? 2 : 0)
-            )
-            .overlay(
-                Circle()
-                    .inset(by: -2)
-                    .strokeBorder(isSelected ? BridgeTokens.accentStrong : Color.clear,
-                                  lineWidth: 1.5)
-            )
+        let size: CGFloat = 40
+        let radius: CGFloat = 12
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        return ZStack(alignment: .bottom) {
+            iconBubble(c.icon, color: c.color, diameter: 28, glyph: 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, 8)
+            Text(String(c.keySlot ?? 0))
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
+                .foregroundStyle(BridgeTokens.fg2)
+                .padding(.bottom, 4)
+        }
+        .frame(width: size, height: size)
+        .background {
+            ZStack {
+                shape.fill(.regularMaterial.opacity(0.65))
+                shape.fill(.ultraThinMaterial)
+            }
+        }
+        .overlay(shape.strokeBorder(
+            isSelected ? BridgeTokens.accentStrong : BridgeTokens.hairlineStrong,
+            lineWidth: isSelected ? 1.5 : 0.5))
+        .clipShape(shape)
+        .shadow(color: .black.opacity(0.14), radius: 10, y: 4)
     }
 
     // MARK: - Empty state

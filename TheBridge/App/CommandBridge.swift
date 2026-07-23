@@ -141,36 +141,76 @@ public final class CommandBridgeRecents: @unchecked Sendable {
 /// unit-asserted as a single value type (no GUI dependency). The
 /// `reduceMotion` flag collapses everything to instant — that is what
 /// `@Environment(\.accessibilityReduceMotion)` flips on inside the view.
+///
+/// Visual-pass 2026-07-23 (Spotlight-rhyme): open **and** close share the
+/// same duration family; tiles co-born with the bar (tiny stagger only);
+/// no group-scale silhouette (opacity-led open).
 public struct CommandBridgeAnimation: Sendable, Equatable {
-    /// Open animation duration (seconds). Locked at 180ms.
+    /// Open animation duration (seconds).
     public let openDuration: TimeInterval
-    /// Stagger between bubble appearances (seconds). Locked at 10ms.
+    /// Close animation duration (seconds). Same family as open (±0); dismiss
+    /// must finish **before** `orderOut` so close is never a hard cut.
+    public let closeDuration: TimeInterval
+    /// Stagger between favorite-tile appearances (seconds). Micro only —
+    /// tiles still read as co-born with the bar.
     public let bubbleCascadeStagger: TimeInterval
-    /// Recents panel slide-in duration (seconds). Locked at 140ms.
+    /// Recents / search panel slide-in duration (seconds).
     public let recentsSlideDuration: TimeInterval
-    /// Starting scale for the open animation. Locked at 0.94.
+    /// Starting scale for the **bar** open animation (tiles use opacity only).
     public let openStartScale: CGFloat
-    /// Starting opacity for the open animation. Locked at 0.
+    /// Starting opacity for open.
     public let openStartOpacity: Double
 
     public init(reduceMotion: Bool = false) {
         if reduceMotion {
             self.openDuration = 0
+            self.closeDuration = 0
             self.bubbleCascadeStagger = 0
             self.recentsSlideDuration = 0
             self.openStartScale = 1.0
             self.openStartOpacity = 1.0
         } else {
             self.openDuration = 0.180
-            self.bubbleCascadeStagger = 0.010
+            self.closeDuration = 0.180
+            self.bubbleCascadeStagger = 0.012
             self.recentsSlideDuration = 0.140
-            self.openStartScale = 0.94
+            self.openStartScale = 0.97
             self.openStartOpacity = 0.0
         }
     }
 
     public static let locked = CommandBridgeAnimation()
     public static let reduced = CommandBridgeAnimation(reduceMotion: true)
+}
+
+// ============================================================
+// MARK: - Glass recipe (bar + tiles share one system)
+// ============================================================
+
+/// Shared visual metrics for Command Bridge chrome (bar + favorite tiles).
+/// Contract 2026-07-23: one recipe table — not dual bubble vs ultraThin air.
+public enum CommandBridgeChrome: Sendable {
+    /// Search bar width (≤580). Slightly under legacy 640.
+    public static let pillWidth: CGFloat = 560
+    /// Search bar height (≤58).
+    public static let pillHeight: CGFloat = 52
+    /// Bar continuous corner radius (squarer than Spotlight stadium).
+    public static let barCornerRadius: CGFloat = 14
+    /// Favorite tile edge length (≥36 hit target).
+    public static let tileSize: CGFloat = 40
+    /// Tile continuous corner radius (squircle, not full circle).
+    public static let tileCornerRadius: CGFloat = 12
+    /// Results panel corner radius.
+    public static let panelCornerRadius: CGFloat = 14
+    /// Soft float shadow (not e2 fog r33).
+    public static let glassShadowRadius: CGFloat = 12
+    public static let glassShadowY: CGFloat = 5
+    /// Pitch between tile centers for adaptive width.
+    public static let tilePitch: CGFloat = 48
+    /// Host panel width: bar + horizontal breathing room.
+    public static let hostWidth: CGFloat = pillWidth + 24
+    /// Host panel height: content-hug for closed + results room (not 360 empty air).
+    public static let hostHeight: CGFloat = 260
 }
 
 // ============================================================
@@ -227,16 +267,12 @@ public final class CommandBridgeController: NSObject {
 
     // MARK: Constants
 
-    /// Pill width (matches the design mock's --pill-w: 640px).
-    public static let pillWidth: CGFloat = 640
-    /// Hosting panel size — wide enough for the 10-slot tray + pill +
-    /// the secondary slide-in panel. v3.7.6: the height was dropped from the
-    /// legacy 460 to 360 so the transparent envelope HUGS the bar + favorites
-    /// instead of leaving a tall empty box around them. The SwiftUI content is
-    /// TOP-anchored inside this envelope (see `CommandBridgeRootView.body`) so
-    /// any slack sits below the bar as fully-transparent space that never
-    /// paints — only the tray + pill (+ optional results panel) draw.
-    public static let panelSize = NSSize(width: 640, height: 360)
+    /// Pill width — `CommandBridgeChrome.pillWidth` (≤580 Spotlight-rhyme).
+    public nonisolated static var pillWidth: CGFloat { CommandBridgeChrome.pillWidth }
+    /// Hosting panel size — content-hug (no empty 360pt air plate).
+    public nonisolated static var panelSize: NSSize {
+        NSSize(width: CommandBridgeChrome.hostWidth, height: CommandBridgeChrome.hostHeight)
+    }
 
     // MARK: Stored state
 
@@ -288,6 +324,9 @@ public final class CommandBridgeController: NSObject {
     /// The clipboard write is ALWAYS performed regardless of this flag; this
     /// only governs the post-write ⌘V synthesis.
     public var pasteIntoAppEnabled: Bool = true
+
+    /// Cancels a pending close `orderOut` when re-opened mid-dismiss.
+    private var dismissGeneration: UInt = 0
 
     public private(set) var isRegistered = false
     public private(set) var lastRegisterStatus: HotkeyRegisterStatus = .unattempted
@@ -357,7 +396,7 @@ public final class CommandBridgeController: NSObject {
     /// count and centres in the transparent envelope, clamped to [half, full].
     /// ~5 favorites ≈ half width; 10 ≈ full. Pure so the clamp is unit-tested.
     public nonisolated static func paletteWidth(favoriteCount: Int, full: CGFloat) -> CGFloat {
-        let pitch: CGFloat = 64                       // 54 bubble + 10 gap
+        let pitch = CommandBridgeChrome.tilePitch     // tile + gap
         let content = CGFloat(max(favoriteCount, 1)) * pitch
         let floorW = (full / 2).rounded()             // never narrower than half
         return min(max(content, floorW), full)
@@ -543,6 +582,9 @@ public final class CommandBridgeController: NSObject {
     }
 
     private func show() {
+        // Cancel any in-flight close so re-hotkey mid-fade doesn't orderOut.
+        dismissGeneration &+= 1
+
         // (v3.7.6) Capture the frontmost app BEFORE we order the panel front,
         // so paste-into-app can re-activate it on commit. The panel is a
         // `.nonactivatingPanel`, so the prior app normally stays frontmost —
@@ -620,6 +662,8 @@ public final class CommandBridgeController: NSObject {
 
     /// Public entrypoint mirroring the legacy `dismissOnEscape()` —
     /// closes the popup without writing anything.
+    /// Visual-pass: animate close (didOpen→false) then `orderOut` only after
+    /// `closeDuration` so dismiss is never a hard cut (Red Team DoD).
     public func hide() {
         guard lifecycle == .open || lifecycle == .opening else { return }
         lifecycle = .closing
@@ -628,8 +672,17 @@ public final class CommandBridgeController: NSObject {
         removeGlobalClickMonitor()
         removeDidMoveObserver()
         model?.didOpen = false
-        panel?.orderOut(nil)
-        lifecycle = .closed
+        dismissGeneration &+= 1
+        let gen = dismissGeneration
+        let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let delay = reduce ? 0 : CommandBridgeAnimation.locked.closeDuration
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            guard self.dismissGeneration == gen, self.lifecycle == .closing else { return }
+            self.panel?.orderOut(nil)
+            self.model?.resetToTray()
+            self.lifecycle = .closed
+        }
     }
 
     // MARK: - Focus loss
@@ -1345,36 +1398,31 @@ public struct CommandBridgeRootView: View {
     }
 
     public var body: some View {
-        // v3.7.6 transparency: TOP-anchor the content so only the tray + pill
-        // (+ optional results panel) paint near the top of the envelope and the
-        // unused height falls below as fully-transparent space. Combined with
-        // the shrunken `panelSize` height + the cut pill shadow, the palette no
-        // longer reads as a dark square halo — transparency HUGS the bar.
+        // Visual-pass 2026-07-23: discrete glass pieces only (tiles + bar +
+        // optional results). No footer hints. No whole-stack scale (group plate
+        // on white). Content-hug host; opacity-led open; bar alone micro-scales.
         ZStack(alignment: .top) {
-            // Clear backing — BridgeGlass surfaces draw their own
-            // background. Lets the panel's NSWindow shape through.
             Color.clear
-            VStack(spacing: BridgeTokens.Space.s3) {
+            VStack(spacing: BridgeTokens.Space.s2) {
                 tray
                 pill
+                    .scaleEffect(model.didOpen ? 1.0 : anim.openStartScale)
                 if case .none = model.panelMode {
                     EmptyView()
                 } else {
                     secondaryPanel
-                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
-                footer
             }
             .padding(.horizontal, 0)
-            .padding(.top, 16)
-            .padding(.bottom, 28)
-            .scaleEffect(model.didOpen ? 1.0 : anim.openStartScale)
+            .padding(.top, 10)
+            .padding(.bottom, 12)
             .opacity(model.didOpen ? 1.0 : anim.openStartOpacity)
             .animation(.easeOut(duration: anim.openDuration), value: model.didOpen)
             .animation(.easeOut(duration: anim.recentsSlideDuration), value: panelModeKey)
         }
-        .frame(width: CommandBridgeController.pillWidth + 24,
-               height: CommandBridgeController.panelSize.height,
+        .frame(width: CommandBridgeChrome.hostWidth,
+               height: CommandBridgeChrome.hostHeight,
                alignment: .top)
         // (PKT-1006 R4c) Publish the drag state so the legibility halos freeze
         // (rasterize) while the window moves instead of shimmering.
@@ -1446,10 +1494,9 @@ public struct CommandBridgeRootView: View {
     }
 
     private var tray: some View {
-        // Only REAL favorites, CENTERED (operator round-2: no empty slots, no
-        // left-anchored gaps). The fixed-pitch HStack centres inside `paletteWidth`.
+        // Only assigned favorites, centered; width tracks count (adaptive).
         let favorites = model.slotRows.filter { $0.command != nil }
-        return HStack(spacing: 10) {
+        return HStack(spacing: 8) {
             ForEach(Array(favorites.enumerated()), id: \.element.id) { idx, row in
                 slotView(row, cascadeIndex: idx)
             }
@@ -1459,19 +1506,14 @@ public struct CommandBridgeRootView: View {
 
     @ViewBuilder
     private func slotView(_ row: CommandBridgeViewModel.SlotRow, cascadeIndex: Int) -> some View {
-        // The tray now renders ONLY assigned favorites (operator round-2), so this
-        // is always a real command; `command == nil` cannot reach here.
         if let cmd = row.command {
-            VStack(spacing: BridgeTokens.Space.s2) {
-                Button { model.onFireSlot(row.storeSlot) } label: {
-                    BridgeGlassBubble(size: Self.bubbleSize) {
-                        iconView(for: cmd.icon, color: cmd.color, size: 25)
-                    }
-                }
-                .buttonStyle(.plain)
-                keycap(row.displayKey)
+            Button { model.onFireSlot(row.storeSlot) } label: {
+                favoriteTile(cmd: cmd, displayKey: row.displayKey)
             }
-            // Bubble cascade — 10ms stagger per slot from the locked spec.
+            .buttonStyle(.plain)
+            .frame(width: CommandBridgeChrome.tileSize, height: CommandBridgeChrome.tileSize)
+            .contentShape(RoundedRectangle(cornerRadius: CommandBridgeChrome.tileCornerRadius, style: .continuous))
+            // Co-born with bar: opacity only (no under-keycap, no group scale).
             .opacity(model.didOpen ? 1.0 : 0.0)
             .animation(
                 .easeOut(duration: anim.openDuration)
@@ -1481,29 +1523,25 @@ public struct CommandBridgeRootView: View {
         }
     }
 
-    /// Tray bubble edge length — the v4 source draws 54px liquid-glass domes.
-    private static let bubbleSize: CGFloat = 54
-
-    /// Mono numeric keycap beneath each favorite — a dark chip with near-white ink
-    /// (operator round-2: the bare number was unreadable on light backdrops). The
-    /// chip is self-contained (dark fill + white digit) so it stays legible on ANY
-    /// backdrop — carbon or titanium, over wallpaper or white.
-    private func keycap(_ n: Int) -> some View {
-        Text("\(n)")
-            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-            .monospacedDigit()
-            .foregroundStyle(Color.white.opacity(0.96))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1.5)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(Color.black.opacity(0.34))
-            )
+    /// Spotlight-rhyme favorite tile: shared glass recipe, squircle, digit inside.
+    private func favoriteTile(cmd: CommandStore.Command, displayKey: Int) -> some View {
+        let r = CommandBridgeChrome.tileCornerRadius
+        let size = CommandBridgeChrome.tileSize
+        return ZStack(alignment: .bottom) {
+            iconView(for: cmd.icon, color: cmd.color, size: 20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, 8)
+            Text("\(displayKey)")
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .monospacedDigit()
+                .foregroundStyle(Color.primary.opacity(0.88))
+                .legibilityHalo()
+                .padding(.bottom, 4)
+        }
+        .frame(width: size, height: size)
+        .commandBridgeGlass(radius: r)
+        .accessibilityLabel("\(cmd.name), key \(displayKey)")
     }
-
-    // (emptyWell removed — the tray no longer renders unassigned slots; operator
-    //  round-2: show only real favorites, centered.)
-
     // MARK: Pill
     //
     //   v4 source `.cb-pill`: 70px popover-glass bar (radius 22) whose ONLY
@@ -1548,21 +1586,21 @@ public struct CommandBridgeRootView: View {
                 model.onSettings()
             } label: {
                 menuBarMark
-                    .frame(width: 24, height: 24)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 20, height: 20)
+                    .frame(width: 32, height: 32)
                     .background(
-                        RoundedRectangle(cornerRadius: BridgeTokens.Radius.card, style: .continuous)
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(BridgeTokens.glassControl)
-                            .bridgeBevel(BridgeTokens.bevelControl, radius: BridgeTokens.Radius.card)
+                            .bridgeBevel(BridgeTokens.bevelControl, radius: 10)
                     )
             }
             .buttonStyle(.plain)
             .help("Bring The Bridge to the front")
         }
-        .padding(.leading, BridgeTokens.Space.s6)
-        .padding(.trailing, BridgeTokens.Space.s4)
-        .frame(width: paletteWidth, height: 70)
-        .popoverGlass(radius: 22)
+        .padding(.leading, BridgeTokens.Space.s5)
+        .padding(.trailing, BridgeTokens.Space.s3)
+        .frame(width: paletteWidth, height: CommandBridgeChrome.pillHeight)
+        .commandBridgeGlass(radius: CommandBridgeChrome.barCornerRadius)
     }
 
     // (Fake blinking caret removed — the real QueryField shows the only caret,
@@ -1600,48 +1638,8 @@ public struct CommandBridgeRootView: View {
         return img
     }()
 
-    // MARK: Footer hint rail (`.cb-foot`)
-    //
-    //   A non-interactive shortcut legend mirroring the source's keycap rail.
-    //   Pure decoration — no controller wiring; the keys it advertises are the
-    //   ones already handled by `KeyHandler` / `QueryField`.
-
-    private var footer: some View {
-        HStack(spacing: BridgeTokens.Space.s4) {
-            footHint("1–0", "fire favorite")
-            footHint("↑↓", "browse")
-            footHint("↵", "run")
-            Spacer(minLength: 0)
-            footHint("esc", "close")
-        }
-        .frame(width: paletteWidth)
-        .padding(.horizontal, BridgeTokens.Space.s2 - 2)
-        .padding(.top, BridgeTokens.Space.s1 / 2)
-        .accessibilityHidden(true)
-    }
-
-    private func footHint(_ key: String, _ label: String) -> some View {
-        HStack(spacing: BridgeTokens.Space.s1 + 1) {
-            kbdChip(key)
-            Text(label)
-                .font(BridgeTokens.Typeface.micro)
-                .foregroundStyle(BridgeTokens.fg5)
-                .legibilityHalo()
-        }
-    }
-
-    /// A `<kbd>` chip from the source footer — mono glyph in a chip-filled pill.
-    private func kbdChip(_ s: String) -> some View {
-        Text(s)
-            .font(.system(size: 10.5, weight: .regular, design: .monospaced))
-            .foregroundStyle(BridgeTokens.fg4)
-            .padding(.horizontal, BridgeTokens.Space.s1 + 1)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(BridgeTokens.chipFill)
-            )
-    }
+    // Footer hint rail removed (visual-pass 2026-07-23): discover by use;
+    // KeyHandler still owns 1–0 / ↑↓ / ↵ / Esc.
 
     // MARK: Secondary panel (recents / search)
 
@@ -1679,7 +1677,7 @@ public struct CommandBridgeRootView: View {
         }
         .padding(BridgeTokens.Space.s2)
         .frame(width: paletteWidth)
-        .popoverGlass(radius: 18)
+        .commandBridgeGlass(radius: CommandBridgeChrome.panelCornerRadius)
     }
 
     /// Panel section header (`.cb-phead`) — an uppercase cap micro-caption.
@@ -1883,71 +1881,58 @@ public struct CommandBridgeRootView: View {
 }
 
 // ============================================================
-// MARK: - 7b. Popover-glass surface (`.cb-pill` / `.cb-panel`)
+// MARK: - 7b. Shared Command Bridge glass (bar + tiles + results)
 //
-//   The pill + recents/search panel container. Operator round-2 ("I still see
-//   the container color + outlines — make it near-invisible liquid glass")
-//   reduced this from the opaque e3 popover material to FROSTED AIR:
-//     • `.ultraThinMaterial` — the most transparent system blur, the ONLY
-//       backing, so the desktop reads through as liquid glass (no tint box).
-//     • a faint centre LENS frost (thick middle → clear rim).
-//     • a faint diagonal `--sheen` lip — the only specular.
-//     • a single soft FLOAT shadow — NO directional bevel, NO edge hairline.
-//   The favorites (`BridgeGlassBubble`) stay FIRM (fill + rim); only the
-//   container goes near-invisible — the operator's firm-orbs / no-box split.
+//   ONE recipe for every floating chrome piece (visual-pass 2026-07-23):
+//     • `.regularMaterial` under `.ultraThinMaterial` — more look-through body
+//       than pure air, without a continuous grey plate between pieces.
+//     • Even top sheen + hairline + soft float shadow (budgeted — not e2 fog).
+//     • Continuous rounded-rect; caller picks radius (bar 14 / tile 12).
 // ============================================================
 
-private struct PopoverGlass: ViewModifier {
+private struct CommandBridgeGlassModifier: ViewModifier {
     let radius: CGFloat
     @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         let isDark = colorScheme == .dark
-        // SPOTLIGHT-MIMIC (operator: mimic native macOS Spotlight — the gold-standard
-        // liquid glass). Spotlight's bar is EVEN frosted glass: uniform across its
-        // width AND height (NOT a centre-pooled lens — that read unbalanced + top-
-        // heavy on a horizontal bar), an adaptive frost that lightens + blurs the
-        // backdrop, with a faint EVEN top sheen, a hairline edge, and a soft shadow.
         return content
             .background {
                 ZStack {
-                    // (PKT-1006 R4b · operator-resolved Q2) STANDALONE liquid glass on a
-                    // fully transparent container. The shade was `.regularMaterial` — too
-                    // opaque/tinted, so the favorites row + bar read as sitting on one
-                    // shared backdrop rectangle. Move to the most transparent system
-                    // blur (`.ultraThinMaterial`, the design's frosted-air .cb-pill /
-                    // .cb-panel intent) so each element (the favorites bubbles above, the
-                    // pill, the results panel) stands alone as its OWN frosted-glass
-                    // surface over the desktop — no shared shade. The hairline edge +
-                    // even top sheen + per-element float shadow (below) keep each one
-                    // reading as a discrete raised pane (design elevation rung e3).
+                    // Body frost — Spotlight-rhyme depth without a solid fill plate.
+                    shape.fill(.regularMaterial.opacity(isDark ? 0.55 : 0.72))
                     shape.fill(.ultraThinMaterial)
-                    // Faint EVEN top sheen — a thin glass top-light, balanced: bright
-                    // only at the very top edge, gone by ~26% (NOT a big upper dome).
+                    // Even top sheen (utilitarian glass, not a lens dome).
                     shape.fill(LinearGradient(
                         gradient: Gradient(stops: [
-                            .init(color: Color.white.opacity(isDark ? 0.14 : 0.30), location: 0.0),
-                            .init(color: .clear, location: 0.26),
+                            .init(color: Color.white.opacity(isDark ? 0.16 : 0.34), location: 0.0),
+                            .init(color: .clear, location: 0.32),
                         ]),
                         startPoint: .top, endPoint: .bottom))
                 }
             }
-            // Hairline edge + a soft PER-ELEMENT drop shadow — each glass pane floats
-            // on its own (no shared backdrop rectangle behind both).
-            .overlay(shape.strokeBorder(BridgeTokens.edgeRaise, lineWidth: 1).allowsHitTesting(false))
+            .overlay(shape.strokeBorder(
+                Color.primary.opacity(isDark ? 0.22 : 0.12), lineWidth: 0.5)
+                .allowsHitTesting(false))
             .clipShape(shape)
-            .shadow(color: .black.opacity(isDark ? 0.28 : 0.16), radius: 16, y: 7)
+            .shadow(
+                color: .black.opacity(isDark ? 0.32 : 0.14),
+                radius: CommandBridgeChrome.glassShadowRadius,
+                y: CommandBridgeChrome.glassShadowY
+            )
     }
 }
 
-// (No OptionalBridgeShadow — the Spotlight-mimic PopoverGlass uses a single soft
-//  drop shadow, not the rung's dual shadow.)
-
 private extension View {
-    /// Wrap `self` in the v4 floating popover-glass surface at `radius`.
+    /// Shared bar/tile/panel glass at `radius` (CommandBridgeChrome recipe).
+    func commandBridgeGlass(radius: CGFloat) -> some View {
+        modifier(CommandBridgeGlassModifier(radius: radius))
+    }
+
+    /// Back-compat alias — same recipe.
     func popoverGlass(radius: CGFloat) -> some View {
-        modifier(PopoverGlass(radius: radius))
+        commandBridgeGlass(radius: radius)
     }
 }
 

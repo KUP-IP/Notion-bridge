@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — Command Bridge visual pass (Spotlight-rhyme) — 2026-07-23
+
+- **UI** — Smaller bar (560×52), content-hug host (no 360pt plate), shared glass
+  recipe for bar + favorite tiles + results (regular+ultraThin, soft shadow).
+- **Favorites** — Squircle tiles with digit **inside**; under-keycaps and footer
+  hints removed; adaptive count retained.
+- **Motion** — Open/close share 180ms family; close completes before `orderOut`;
+  no whole-stack scale. Floor **3411 → 3412**.
+- **Settings** — Commands tray preview matches live tile chrome.
+- **Evidence** — `docs/operator/command-bridge-visual-pass-2026-07-23.md` (F.0 gate).
+
 ## Unreleased — Calibrate APPLY (agent feedback) — 2026-07-23
 
 - **Fix** — `make build` restores committed fail-closed inject templates

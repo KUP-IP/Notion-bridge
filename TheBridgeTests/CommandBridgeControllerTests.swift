@@ -93,27 +93,42 @@ func runCommandBridgeControllerTests() async {
         try expect(r.ordered.isEmpty, "reset must clear; got \(r.ordered)")
     }
 
-    // ── (C) Animation config (180ms open + 10ms cascade + reduce) ──
+    // ── (C) Animation config (Spotlight-rhyme visual-pass 2026-07-23) ──
 
-    await test("Animation: locked values match PKT-878 spec exactly") {
+    await test("Animation: locked open/close share duration family") {
         let a = CommandBridgeAnimation.locked
         try expect(a.openDuration == 0.180,
                    "open duration must be 180ms, got \(a.openDuration)")
-        try expect(a.bubbleCascadeStagger == 0.010,
-                   "cascade stagger must be 10ms, got \(a.bubbleCascadeStagger)")
+        try expect(a.closeDuration == 0.180,
+                   "close duration must match open (180ms), got \(a.closeDuration)")
+        try expect(a.bubbleCascadeStagger == 0.012,
+                   "tile micro-stagger 12ms, got \(a.bubbleCascadeStagger)")
         try expect(a.recentsSlideDuration == 0.140,
                    "recents slide must be 140ms, got \(a.recentsSlideDuration)")
-        try expect(a.openStartScale == 0.94, "start scale 0.94")
+        try expect(a.openStartScale == 0.97, "start scale 0.97 (bar micro)")
         try expect(a.openStartOpacity == 0.0, "start opacity 0")
     }
 
     await test("Animation: reduceMotion collapses every duration to 0 (instant)") {
         let a = CommandBridgeAnimation.reduced
         try expect(a.openDuration == 0, "open must collapse to instant")
+        try expect(a.closeDuration == 0, "close must collapse to instant")
         try expect(a.bubbleCascadeStagger == 0, "stagger must collapse to instant")
         try expect(a.recentsSlideDuration == 0, "recents must collapse to instant")
         try expect(a.openStartScale == 1.0, "start scale must be 1.0 when reducing")
         try expect(a.openStartOpacity == 1.0, "start opacity must be 1.0 when reducing")
+    }
+
+    await test("Chrome metrics: size floors from visual contract") {
+        try expect(CommandBridgeChrome.pillWidth <= 580, "pill width ≤580")
+        try expect(CommandBridgeChrome.pillHeight <= 58, "pill height ≤58")
+        try expect(CommandBridgeChrome.tileSize >= 36, "tile hit ≥36")
+        try expect(CommandBridgeChrome.tileCornerRadius < CommandBridgeChrome.tileSize / 2,
+                   "tile is squircle, not full circle")
+        try expect(CommandBridgeChrome.hostHeight < 360,
+                   "host height content-hug (< legacy 360 plate)")
+        try expect(CommandBridgeChrome.glassShadowRadius <= 14,
+                   "shadow budget — no e2 fog")
     }
 
     // ── (D) ViewModel pure builders ─────────────────────────────────
