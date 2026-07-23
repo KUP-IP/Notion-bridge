@@ -227,7 +227,7 @@ public enum SkillsModule {
                     ]),
                     "section": .object([
                         "type": .string("string"),
-                        "description": .string("Optional heading name to return ONLY that section's slice (case-insensitive, '#' markers ignored) instead of the whole body — a granular partial fetch to avoid blowing token caps. Nested subsections are included; a sibling/shallower heading ends the slice. No match → compact heading index + a `section-not-found` annotation.")
+                        "description": .string("Optional heading name to return ONLY that section's slice (case-insensitive, '#' markers ignored) instead of the whole body — a granular partial fetch to avoid blowing token caps. Exact match first; else unique prefix (heading starts with query). Nested subsections are included; a sibling/shallower heading ends the slice. No match → compact heading index + a `section-not-found` annotation.")
                     ]),
                     "fields": .object([
                         "type": .string("array"),

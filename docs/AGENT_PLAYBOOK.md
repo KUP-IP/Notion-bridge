@@ -140,6 +140,14 @@ Source: `TheBridge/Modules/GitModule.swift`.
 
 ---
 
+## Session wrap-up / Close
+
+Session wrap-up is the **Close** command → skill **`close-agent`** only.
+There is **no** skill named `ScaleFocusKeeper` (and no roster alias). If a prompt
+asks to "fetch ScaleFocusKeeper," route to `close-agent` instead.
+
+---
+
 ## See also
 
 - `AGENT_FEEDBACK.md` — evidence-only friction log; the source for the VERIFIED-FIXED

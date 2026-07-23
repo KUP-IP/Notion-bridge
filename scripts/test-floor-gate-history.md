@@ -2412,3 +2412,7 @@ set -euo pipefail
 # Wake tunnel LaunchAgent heal (2026-07-23): didWake kickstarts
 # com.kup.cloudflared-bridge (throttled; no "running=healthy" probe). +11 hermetic.
 # Measured 3408 passed, 0 failed. FLOOR 3397 -> 3408.
+
+# Calibrate APPLY 2026-07-23: git_status clean-but-behind (+1) + section unique
+# prefix / ambiguous prefix (+2). Inject restore is Makefile-only (no harness).
+# Measured 3411 passed, 0 failed. FLOOR 3408 -> 3411.

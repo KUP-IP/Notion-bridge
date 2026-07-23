@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — Calibrate APPLY (agent feedback) — 2026-07-23
+
+- **Fix** — `make build` restores committed fail-closed inject templates
+  (`RemoteAccessIdentity`, `LicensePublicKeyInjected`) after compile so local
+  trees stay clean when LICENSE/WorkOS env is present (binary retains bake).
+- **Fix** — `git_status` `clean` / `worktreeClean` are worktree/index only;
+  expose `upstreamSynchronized` separately (clean-but-behind no longer dirty).
+- **Fix** — Markdown `section` selector: exact match, then unique heading prefix
+  (e.g. `Thread Handoff` → long hub handoff titles); ambiguous prefix misses.
+- **Docs** — v4 release-gate LICENSE secret marked PRESENT (2026-07-21);
+  playbook session wrap-up = `close-agent` only (no ScaleFocusKeeper).
+- **Tests** — Floor **3408 → 3411** (+3 hermetic). close-agent Phase 5 thin
+  Session AI LOG fail-closed landed on skill body (Notion).
+
 ## v4.0.0 (build 82) — Sale-ready V4 — 2026-07-21
 
 - **Release** — Marketing **3.9.9 → 4.0.0**, build **81 → 82** (roll-at-9 major).

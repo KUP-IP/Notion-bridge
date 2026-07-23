@@ -896,7 +896,7 @@ public enum NotionModule {
                 "type": .string("object"),
                 "properties": .object([
                     "pageId": .object(["type": .string("string"), "description": .string("Notion page ID")]),
-                    "section": .object(["type": .string("string"), "description": .string("Optional markdown heading to return, case-insensitive and without # markers.")]),
+                    "section": .object(["type": .string("string"), "description": .string("Optional markdown heading to return, case-insensitive and without # markers. Exact match first; else unique prefix (e.g. 'Thread Handoff' → 'Thread Handoff — A · Bridge…').")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("pageId")])

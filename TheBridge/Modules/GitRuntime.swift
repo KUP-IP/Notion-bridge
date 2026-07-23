@@ -63,7 +63,13 @@ public struct GitStatusSummary: Sendable {
     public let ahead: Int
     public let behind: Int
     public let files: [GitFileStatus]
+    /// Worktree/index only — true when there are no modified/untracked/unmerged files.
+    /// Does **not** require upstream sync (see `upstreamSynchronized`).
     public let clean: Bool
+    /// Same as `clean` (explicit name for agents that previously misread `clean` as "in sync").
+    public let worktreeClean: Bool
+    /// `ahead == 0 && behind == 0` relative to upstream (when branch.ab is present).
+    public let upstreamSynchronized: Bool
 }
 
 public struct GitLogCommit: Sendable, Equatable {
@@ -280,10 +286,16 @@ public actor GitRuntime {
                     indexStatus: "!", worktreeStatus: "!", kind: "ignored"))
             }
         }
-        let clean = files.isEmpty && ahead == 0 && behind == 0
+        // Calibrate 2026-07-23: `clean` is worktree/index only. A clean-but-behind
+        // branch must not report clean:false (AGENT_FEEDBACK 2026-07-22).
+        let worktreeClean = files.isEmpty
+        let upstreamSynchronized = ahead == 0 && behind == 0
         return GitStatusSummary(
             branch: branch, upstream: upstream, oid: oid,
-            ahead: ahead, behind: behind, files: files, clean: clean)
+            ahead: ahead, behind: behind, files: files,
+            clean: worktreeClean,
+            worktreeClean: worktreeClean,
+            upstreamSynchronized: upstreamSynchronized)
     }
 
     /// Parse `git log --pretty=format:%H<US>%an<US>%ae<US>%aI<US>%s<RS>` output.

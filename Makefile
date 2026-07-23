@@ -104,6 +104,16 @@ build: inject-license-key inject-remote-access
 	swift build -c release --product $(BINARY_NAME) \
 		-Xswiftc -strict-concurrency=complete
 	@echo "$(CURDIR)" > $(BUILD_DIR)/.source_path
+	@# Calibrate 2026-07-23 (AGENT_FEEDBACK inject-dirt): bake lives in the binary only.
+	@# Restore committed fail-closed inject templates so local trees stay clean after
+	@# install-copy / build when LICENSE_* or WorkOS env is present. No-op outside git.
+	@if git -C "$(CURDIR)" rev-parse --is-inside-work-tree >/dev/null 2>&1; then \
+		git -C "$(CURDIR)" checkout -- \
+			TheBridge/Modules/Auth/RemoteAccessIdentity.swift \
+			TheBridge/Core/Licensing/LicensePublicKeyInjected.swift \
+			2>/dev/null || true; \
+		echo "🔐 Restored committed inject templates (binary retains bake)"; \
+	fi
 	@echo "✅ Release build: $(RELEASE_DIR)/$(BINARY_NAME)"
 
 # ── Test ───────────────────────────────────────────────────────

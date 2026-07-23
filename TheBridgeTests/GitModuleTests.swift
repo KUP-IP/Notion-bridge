@@ -93,7 +93,25 @@ func runGitModuleTests() async {
     await test("parsePorcelainV2 reports clean on empty working tree") {
         let s = GitRuntime.parsePorcelainV2("# branch.head main\n# branch.ab +0 -0\n")
         try expect(s.clean == true, "expected clean=true")
+        try expect(s.worktreeClean == true)
+        try expect(s.upstreamSynchronized == true)
         try expect(s.files.isEmpty)
+    }
+
+    await test("parsePorcelainV2 clean-but-behind is worktree-clean (not dirty)") {
+        // Calibrate 2026-07-23 / AGENT_FEEDBACK 2026-07-22: behind must not flip clean.
+        let s = GitRuntime.parsePorcelainV2("""
+        # branch.oid abc
+        # branch.head main
+        # branch.upstream origin/main
+        # branch.ab +0 -21
+        """)
+        try expect(s.files.isEmpty)
+        try expect(s.behind == 21, "behind got \(s.behind)")
+        try expect(s.ahead == 0)
+        try expect(s.clean == true, "clean must be worktree-only; got false while behind")
+        try expect(s.worktreeClean == true)
+        try expect(s.upstreamSynchronized == false, "behind ⇒ not synchronized")
     }
 
     await test("parsePorcelainV2 handles detached HEAD") {

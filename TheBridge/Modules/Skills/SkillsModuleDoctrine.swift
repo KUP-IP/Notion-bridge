@@ -15,7 +15,10 @@ extension SkillsModule {
     ///
     /// Matching is case-insensitive and ignores leading `#` markers and
     /// surrounding whitespace, so `section="Setup"` matches `## Setup`,
-    /// `### setup`, etc. The FIRST matching heading wins. A nested
+    /// `### setup`, etc. Order: exact title → unique prefix (heading starts
+    /// with the query, e.g. `Thread Handoff` → `Thread Handoff — A · Bridge…`).
+    /// Ambiguous prefixes miss (return nil + heading index). The FIRST exact
+    /// match wins; unique prefix is only used when exact fails. A nested
     /// subsection (deeper level) is included in its parent's slice; a
     /// sibling or shallower heading terminates it.
     ///
@@ -65,14 +68,24 @@ extension SkillsModule {
         var startIndex: Int? = nil
         var startLevel = 0
         var inFence = false
+        var prefixCandidates: [(index: Int, level: Int)] = []
         for (i, line) in lines.enumerated() {
             if isFence(line) { inFence.toggle(); continue }
             guard !inFence, let level = headingLevel(line) else { continue }
-            if headingText(line, level: level) == target {
+            let text = headingText(line, level: level)
+            if text == target {
                 startIndex = i
                 startLevel = level
                 break
             }
+            // Calibrate 2026-07-23: unique prefix match for long hub handoff titles.
+            if text.hasPrefix(target) {
+                prefixCandidates.append((i, level))
+            }
+        }
+        if startIndex == nil, prefixCandidates.count == 1 {
+            startIndex = prefixCandidates[0].index
+            startLevel = prefixCandidates[0].level
         }
 
         guard let start = startIndex else { return nil }

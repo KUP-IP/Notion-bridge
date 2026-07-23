@@ -81,6 +81,45 @@ func runResultSizeControlsTests() async {
                    "unknown heading must return nil, not an empty/wrong slice")
     }
 
+    await test("fb-resultsize (1): unique prefix matches long handoff titles") {
+        let hub = """
+        ## Objective
+
+        North star.
+
+        ## Thread Handoff — A · Bridge (2026-07-23 surgical)
+
+        Residual sale/ops only.
+
+        ## Other Notes
+
+        Noise.
+        """
+        let slice = SkillsModule.extractMarkdownSection(hub, section: "Thread Handoff")
+        guard let slice else { throw TestError.assertion("expected unique prefix match for Thread Handoff") }
+        try expect(slice.contains("Residual sale/ops only."), "prefix slice missed body")
+        try expect(!slice.contains("North star."), "leaked prior section")
+        try expect(!slice.contains("## Other Notes"), "ran past sibling")
+    }
+
+    await test("fb-resultsize (1): ambiguous prefix → nil (no silent pick)") {
+        let amb = """
+        ## Setup
+
+        A.
+
+        ## Setup extras
+
+        B.
+        """
+        // Exact "Setup" still wins via exact match.
+        let exact = SkillsModule.extractMarkdownSection(amb, section: "Setup")
+        try expect(exact != nil && (exact ?? "").contains("A."), "exact Setup should still win")
+        // Prefix that matches both must miss.
+        let miss = SkillsModule.extractMarkdownSection(amb, section: "Set")
+        try expect(miss == nil, "ambiguous prefix must not auto-pick")
+    }
+
     await test("fb-resultsize (1): section miss response is compact and lists real headings") {
         let miss = SkillsModule.sectionMissMarkdown(requested: "Nonexistent", markdown: doc)
         try expect(miss.contains("Section not found: Nonexistent"))

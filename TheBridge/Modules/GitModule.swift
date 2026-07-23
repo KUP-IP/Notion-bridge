@@ -42,7 +42,7 @@ public enum GitModule {
             name: "git_status",
             module: moduleName,
             tier: .request,
-            description: "Run `git status --porcelain=v2 --branch` and return a STRUCTURED summary instead of raw stdout: branch, upstream, OID, ahead/behind counts, and per-file entries with indexStatus/worktreeStatus/kind (tracked|untracked|ignored|unmerged). Use `cwd` to target a specific worktree (defaults to Bridge process cwd).",
+            description: "Run `git status --porcelain=v2 --branch` and return a STRUCTURED summary instead of raw stdout: branch, upstream, OID, ahead/behind, clean/worktreeClean (files only), upstreamSynchronized, and per-file entries with indexStatus/worktreeStatus/kind (tracked|untracked|ignored|unmerged). `clean` is worktree/index only — a clean-but-behind branch is clean:true with upstreamSynchronized:false. Use `cwd` to target a specific worktree (defaults to Bridge process cwd).",
             inputSchema: schemaObj([
                 "cwd": strProp("Working directory (absolute path). Defaults to Bridge process cwd."),
                 "includeIgnored": boolProp("Include ignored files (passes --ignored)."),
@@ -229,6 +229,8 @@ public enum GitModule {
             "tool":       .string("git_status"),
             "exitCode":   .int(Int(raw.exitCode)),
             "clean":      .bool(s.clean),
+            "worktreeClean": .bool(s.worktreeClean),
+            "upstreamSynchronized": .bool(s.upstreamSynchronized),
             "ahead":      .int(s.ahead),
             "behind":     .int(s.behind),
             "files":      .array(fileVals),
