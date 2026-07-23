@@ -284,12 +284,42 @@ public actor ToolRouter {
 
     /// Test/diagnostic seam for PKT-1094: a session is marked only after a
     /// successful bridge_initialize / fetch_skill / routing-skill manifest call.
+    /// Marks may be transport session ids or verified principal keys.
     public func hasRoutingManifestMarker(sessionID: String) -> Bool {
         routingManifestSessionIDs.contains(sessionID)
     }
 
     public func markRoutingManifestFetched(sessionID: String) {
         routingManifestSessionIDs.insert(sessionID)
+    }
+
+    private func isGoverned(_ context: ToolDispatchContext) async -> Bool? {
+        try? await sessionRegistry.isGoverned(
+            transportSessionId: context.transportSessionId,
+            principalKey: context.governancePrincipal
+        )
+    }
+
+    private func hasRoutingManifestMarker(context: ToolDispatchContext) -> Bool {
+        if let sessionID = context.transportSessionId,
+           !sessionID.isEmpty,
+           routingManifestSessionIDs.contains(sessionID) {
+            return true
+        }
+        if let principal = context.governancePrincipal,
+           routingManifestSessionIDs.contains(principal) {
+            return true
+        }
+        return false
+    }
+
+    private func markRoutingManifestFetched(context: ToolDispatchContext) {
+        if let sessionID = context.transportSessionId, !sessionID.isEmpty {
+            routingManifestSessionIDs.insert(sessionID)
+        }
+        if let principal = context.governancePrincipal {
+            routingManifestSessionIDs.insert(principal)
+        }
     }
 
     /// Surface for MCP `tools/list` — empty until startup registration completes (FB-4).
@@ -491,9 +521,7 @@ public actor ToolRouter {
            RemoteControlPlanePolicy.isAlwaysBlocked(tool: tool)
             || (BridgeDefaults.brokerRemoteControlPlaneBlockEnabled
                 && RemoteControlPlanePolicy.isBlocked(tool: tool)) {
-            let governed = try? await sessionRegistry.isGoverned(
-                transportSessionId: context.transportSessionId
-            )
+            let governed = await isGoverned(context)
             await auditLog.append(AuditEntry(
                 timestamp: Date(),
                 toolName: toolName,
@@ -519,9 +547,7 @@ public actor ToolRouter {
         if context.origin == .remote,
            BridgeDefaults.brokerRemoteGovernedSessionRequiredEnabled,
            RemoteControlPlanePolicy.requiresGovernedSession(tool: tool, effectiveTier: effectiveTier) {
-            let governed = try? await sessionRegistry.isGoverned(
-                transportSessionId: context.transportSessionId
-            )
+            let governed = await isGoverned(context)
             if governed != true {
                 await auditLog.append(AuditEntry(
                     timestamp: Date(),
@@ -553,9 +579,15 @@ public actor ToolRouter {
         // governing skill route" one — calling bridge_initialize satisfies both
         // at once (it is itself a manifest-marker tool), so there is no case
         // where reordering costs a legitimate caller an extra round trip.
-        if let sessionID = context.transportSessionId,
+        // Remote OAuth principals share the marker across Mcp-Session-Id churn.
+        // No correlatable identity (nil transport + nil principal) keeps the
+        // legacy skip — same as the prior `if let sessionID` gate.
+        let hasCorrelatableIdentity =
+            (context.transportSessionId?.isEmpty == false)
+            || (context.governancePrincipal != nil)
+        if hasCorrelatableIdentity,
            ToolSkillBindingRegistry.requiresManifestFetch(toolName),
-           !routingManifestSessionIDs.contains(sessionID) {
+           !hasRoutingManifestMarker(context: context) {
             let binding = ToolSkillBindingRegistry.binding(for: toolName)
             let governance = binding?.governanceSummary ?? "unregistered"
             let duration = ContinuousClock.now - start
@@ -569,7 +601,7 @@ public actor ToolRouter {
                 outputSummary: "REJECTED: routing manifest required (\(governance))",
                 durationMs: ms,
                 approvalStatus: .rejected,
-                transportSessionId: sessionID
+                transportSessionId: context.transportSessionId
             ))
             throw ToolRouterError.routingManifestRequired(
                 toolName: toolName,
@@ -633,9 +665,7 @@ public actor ToolRouter {
         // Execute handler
         do {
             let result = try await tool.handler(arguments)
-            let governed = try? await sessionRegistry.isGoverned(
-                transportSessionId: context.transportSessionId
-            )
+            let governed = await isGoverned(context)
             let governanceNote: String?
             let returnedResult: Value
             if Self.shouldAnnotateGovernance(
@@ -650,9 +680,8 @@ public actor ToolRouter {
                 returnedResult = result
             }
 
-            if let sessionID = context.transportSessionId,
-               ToolSkillBindingRegistry.callSatisfiesManifestMarker(toolName: toolName, result: result) {
-                routingManifestSessionIDs.insert(sessionID)
+            if ToolSkillBindingRegistry.callSatisfiesManifestMarker(toolName: toolName, result: result) {
+                markRoutingManifestFetched(context: context)
             }
 
             // F2 + PKT-552: Fire-and-forget Notify-tier notification with structured context.

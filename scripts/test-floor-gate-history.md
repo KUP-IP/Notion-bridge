@@ -2403,3 +2403,8 @@ set -euo pipefail
 # W5B cutover continuity (2026-07-21): BundleIDDefaultsMigration (+4) +
 # ACL heal sentinel-first / access-group allowlist (+6). Measured 3391
 # passed, 0 failed. FLOOR 3381 -> 3391.
+
+# Remote governance continuity (2026-07-22): OAuth principal-keyed broker
+# governance + routing-manifest markers survive Mcp-Session-Id churn; empty
+# sub refused; clientInfo alone still fail-closed (PKT-1124). +6 hermetic.
+# Measured 3397 passed, 0 failed. FLOOR 3391 -> 3397.

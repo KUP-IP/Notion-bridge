@@ -737,7 +737,8 @@ public actor SSEServer {
     private func processStreamableHTTP(
         _ request: HTTPRequest,
         connectorAuthed: Bool = false,
-        origin: ToolDispatchOrigin = .local
+        origin: ToolDispatchOrigin = .local,
+        governancePrincipal: String? = nil
     ) async -> HTTPResponse {
         let sessionID = request.header(HTTPHeaderName.sessionID)
 
@@ -752,7 +753,8 @@ public actor SSEServer {
                     transportSessionId: sessionID,
                     origin: origin,
                     client: session.clientName,
-                    clientVersion: session.clientVersion
+                    clientVersion: session.clientVersion,
+                    governancePrincipal: governancePrincipal
                 )
             ) {
                 await session.transport.handleRequest(request)
@@ -769,7 +771,12 @@ public actor SSEServer {
            let body = request.body,
            isInitializeRequest(body)
         {
-            return await createSession(request, connectorAuthed: connectorAuthed, origin: origin)
+            return await createSession(
+                request,
+                connectorAuthed: connectorAuthed,
+                origin: origin,
+                governancePrincipal: governancePrincipal
+            )
         }
 
         if let sessionID {
@@ -952,10 +959,22 @@ public actor SSEServer {
         // connector clients compact JSON here, falling back to the SDK path for
         // anything processConnectorJSONRPC does not handle. The session pipeline
         // still skips the legacy static-bearer re-check (connectorAuthed).
-        if let connectorResponse = await processConnectorJSONRPC(request, token: token, auth: auth, origin: origin) {
+        let governancePrincipal = SessionRegistry.principalKey(subject: token.subject)
+        if let connectorResponse = await processConnectorJSONRPC(
+            request,
+            token: token,
+            auth: auth,
+            origin: origin,
+            governancePrincipal: governancePrincipal
+        ) {
             return connectorResponse
         }
-        return await processStreamableHTTP(request, connectorAuthed: true, origin: origin)
+        return await processStreamableHTTP(
+            request,
+            connectorAuthed: true,
+            origin: origin,
+            governancePrincipal: governancePrincipal
+        )
     }
 
     /// Compact JSON-RPC handler for OAuth connector clients (v3.7.10). ChatGPT's
@@ -971,7 +990,8 @@ public actor SSEServer {
         _ request: HTTPRequest,
         token: BridgeAccessToken,
         auth: ConnectorAuthContext,
-        origin: ToolDispatchOrigin
+        origin: ToolDispatchOrigin,
+        governancePrincipal: String? = nil
     ) async -> HTTPResponse? {
         guard request.method.uppercased() == "POST",
               let body = request.body,
@@ -983,6 +1003,7 @@ public actor SSEServer {
         let requestSessionID = request.header(HTTPHeaderName.sessionID)
         let sessionID = requestSessionID ?? UUID().uuidString
         let brokerSessionID = requestSessionID ?? (origin == .remote ? "remote-connector-json" : sessionID)
+        let principal = governancePrincipal ?? SessionRegistry.principalKey(subject: token.subject)
         let headers = Self.connectorJSONHeaders(sessionID: sessionID)
 
         switch method {
@@ -1069,7 +1090,8 @@ public actor SSEServer {
                 context: ToolDispatchContext(
                     transportSessionId: brokerSessionID,
                     origin: origin,
-                    client: origin == .remote ? "remote-connector" : nil
+                    client: origin == .remote ? "remote-connector" : nil,
+                    governancePrincipal: principal
                 )
             )
             if !isError { await MainActor.run { onToolCall() } }
@@ -1172,7 +1194,8 @@ public actor SSEServer {
     private func createSession(
         _ request: HTTPRequest,
         connectorAuthed: Bool = false,
-        origin: ToolDispatchOrigin = .local
+        origin: ToolDispatchOrigin = .local,
+        governancePrincipal: String? = nil
     ) async -> HTTPResponse {
         let sessionID = UUID().uuidString
 
@@ -1331,7 +1354,8 @@ public actor SSEServer {
                 transportSessionId: resourceSessionID,
                 origin: origin,
                 client: resourceClientName,
-                clientVersion: resourceClientVersion
+                clientVersion: resourceClientVersion,
+                governancePrincipal: governancePrincipal
             )
             let (text, isError) = await router.dispatchFormatted(
                 toolName: params.name,
