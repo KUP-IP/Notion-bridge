@@ -97,7 +97,8 @@ public enum RunningReportJob {
                 arguments: [
                     "recipient": .string(recipient),
                     "body": .string("$prev_result.stdout"),
-                    "confirm": .string("SEND")
+                    "confirm": .string("SEND"),
+                    "service": .string("iMessage")
                 ],
                 onFail: .continue
             )

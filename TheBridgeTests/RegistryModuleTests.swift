@@ -147,7 +147,7 @@ func runRegistryModuleTests() async {
     // MARK: - Registration
 
     await test("RegistryModule registers exactly 13 tools with expected names") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await RegistryModule.register(on: router)
         let tools = await router.registrations(forModule: "registry")
         try expect(tools.count == 13, "expected 13 registry tools, got \(tools.count)")
@@ -160,7 +160,7 @@ func runRegistryModuleTests() async {
     }
 
     await test("RegistryModule tiers: delete+remove_entity=request, writes=notify, reads=open") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await RegistryModule.register(on: router)
         let tools = await router.registrations(forModule: "registry")
         func tier(_ n: String) -> SecurityTier? { tools.first { $0.name == n }?.tier }
@@ -1035,7 +1035,7 @@ func runRegistryModuleTests() async {
     }
 
     await test("registry_update schema declares optional appendKeys alongside entity/id/fields") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await RegistryModule.register(on: router)
         let tools = await router.registrations(forModule: "registry")
         guard let tool = tools.first(where: { $0.name == "registry_update" }) else {
@@ -1325,7 +1325,7 @@ func runRegistryModuleTests() async {
     }
 
     await test("fields: schema declares 'fields' array param on all 6 row-shaped tools (+ resultFields on resolve_and_update)") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await RegistryModule.register(on: router)
         let tools = await router.registrations(forModule: "registry")
         for name in ["registry_list", "registry_find", "registry_get", "registry_create", "registry_update"] {

@@ -11,7 +11,7 @@ import TheBridgeLib
 func runFileModuleTests() async {
     print("\n📁 FileModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await FileModule.register(on: router)

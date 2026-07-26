@@ -583,7 +583,7 @@ func runRemoteOAuthBearerTests() async {
             resourceMetadataURL: prmURL
         )
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {},
             connectorAuth: auth,
             authFailureAudit: audit
@@ -643,7 +643,7 @@ func runRemoteOAuthBearerTests() async {
             else { defaults.removeObject(forKey: MCPHTTPValidation.mcpBearerTokenUserDefaultsKey) }
         }
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx
         )
         let oauthJWT = try await keys.sign(iss: kIssuer, aud: kResource, scope: "openid")
@@ -676,7 +676,7 @@ func runRemoteOAuthBearerTests() async {
             diagnostics: diagnostics,
             resourceMetadataURL: prmURL
         )
-        let liveRouter = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let liveRouter = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let port = 19_000 + Int(ProcessInfo.processInfo.processIdentifier % 500)
         let liveServer = SSEServer(
             port: port,
@@ -786,7 +786,7 @@ func runRemoteOAuthBearerTests() async {
             resourceMetadataURL: prmURL
         )
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: auth
         )
         let beforeRefresh = try await keys.sign(
@@ -835,7 +835,7 @@ func runRemoteOAuthBearerTests() async {
         // NO Authorization header without producing a 401 bearer challenge
         // (it instead reaches the pre-S2 session machinery → a 400
         // Mcp-Session-Id error, exactly as before S2).
-        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let r = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let server = SSEServer(router: r, onToolCall: {})
         let req = HTTPRequest(method: "POST", headers: [:], body: nil)
         let resp = await server.handleHTTPRequest(req)
@@ -868,7 +868,7 @@ func runRemoteOAuthBearerTests() async {
         // session id must fall through to the SAME pre-S2 400 (proving the
         // bearer gate is transparent to authorized traffic — it does not
         // alter the underlying session contract).
-        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let r = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let server = SSEServer(
             router: r, onToolCall: {}, connectorAuth: authCtx
         )
@@ -883,7 +883,7 @@ func runRemoteOAuthBearerTests() async {
     }
 
     await test("Connector-gated server: missing bearer on /mcp → 401 + WWW-Authenticate") {
-        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let r = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let server = SSEServer(router: r, onToolCall: {}, connectorAuth: authCtx)
         // PKT-810 R5: the OAuth bearer gate applies to REMOTE (tunnel) requests
         // only — mark this a tunnel request so the missing-bearer challenge fires.
@@ -896,7 +896,7 @@ func runRemoteOAuthBearerTests() async {
     }
 
     await test("Connector-gated server: scope-insufficient tools/call → 403, no dispatch") {
-        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let r = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let server = SSEServer(router: r, onToolCall: {}, connectorAuth: authCtx)
         // read-only scope, calling a write tool.
         let tok = try await keys.sign(iss: kIssuer, aud: kResource, scope: "snippets.read")
@@ -915,7 +915,7 @@ func runRemoteOAuthBearerTests() async {
         // v3.9.8-era default). strictScopes must now be requested explicitly
         // to exercise the connector-layer scope/step-up gate — see the
         // ConnectorAuthContext.strictScopes doc comment.
-        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let r = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let explicitStrictAuth = ConnectorAuthContext(
             validator: validator(keys: keys.verifyKeys),
             resourceMetadataURL: prmURL,
@@ -957,7 +957,7 @@ func runRemoteOAuthBearerTests() async {
     }
 
     await test("Connector-gated server: strict tools/list hides non-callable Messages tools") {
-        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let r = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await r.register(ToolRegistration(
             name: "snippets_list",
             module: "snippets",

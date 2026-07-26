@@ -52,7 +52,7 @@ func runReadOnlyTierAuditTests() async {
     // Build the canonical module surface ONCE (same path production uses via
     // ServerManager; includeStripe:false keeps it network-free). Reused across
     // all checks below — the registry is deterministic.
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await BridgeModuleRegistry.registerStaticFeatureModules(

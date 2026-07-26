@@ -12,7 +12,7 @@ func runBridgeModuleRegistryTests() async {
     print("\n\u{1F9E9} BridgeModuleRegistry (PKT v3.0·0.4 · single-source)")
 
     func buildRouter() async -> ToolRouter {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await BridgeModuleRegistry.registerStaticFeatureModules(

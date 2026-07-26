@@ -33,7 +33,7 @@ func runSchedulerResilienceTests() async {
     // which is exactly the durability contract under test (we are not testing the
     // action tool itself here, only serialization / idempotency / resume).
     func makeTestToolRouter() async -> ToolRouter {
-        ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
     }
 
     // Insert a throwaway active job and return its id; caller deletes it.
@@ -462,6 +462,9 @@ func runSchedulerResilienceTests() async {
         if case .string(let confirm)? = chain[1].arguments["confirm"] {
             try expect(confirm == "SEND", "unattended messages_send requires confirm: SEND")
         } else { try expect(false, "messages_send must carry the SEND gate") }
+        if case .string(let service)? = chain[1].arguments["service"] {
+            try expect(service == "iMessage", "running-report delivery must explicitly select iMessage")
+        } else { try expect(false, "messages_send must carry an explicit service") }
     }
 
     await test("Jobs: previous-result path extracts object fields and array members") {

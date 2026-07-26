@@ -15,7 +15,7 @@ func runEndToEndTests() async {
     print("\n🔗 End-to-End Integration Tests")
 
     // Shared infrastructure for all integration tests
-    let securityGate = SecurityGate()
+    let securityGate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let auditLog = AuditLog()
     let router = ToolRouter(securityGate: securityGate, auditLog: auditLog)
 

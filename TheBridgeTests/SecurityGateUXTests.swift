@@ -209,7 +209,7 @@ func runSecurityGateUXTests() async {
         try expect(t == .notify, "sibling resolves to .notify under a module grant")
 
         // And .notify enforces to .allow with no approval interaction.
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let decision = await gate.enforce(
             toolName: "snippets_import", tier: t, neverAutoApprove: false,
             arguments: .object(["payload": .string("x")]), module: "snippets"
@@ -225,7 +225,7 @@ func runSecurityGateUXTests() async {
     // ============================================================
 
     await test("regression: snippets read-only tools stay tier .open") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await SnippetsModule.register(on: router)
@@ -243,18 +243,69 @@ func runSecurityGateUXTests() async {
     // MARK: - (3) Approval timeout is configurable (less-missable UX)
     // ============================================================
 
-    await test("NotificationApprovalManager: custom timeout initializer is accepted") {
-        // The injectable timeout is the test seam that keeps the longer,
-        // less-missable default (90s) from making tests slow. Constructing with
-        // a short timeout must not crash in the standalone test process (which
-        // never touches UNUserNotificationCenter).
-        let mgr = NotificationApprovalManager(approvalTimeout: 0.05)
-        // In the test process requestApproval short-circuits to .allow without
-        // ever arming the timeout — assert that contract holds.
-        let decision = await mgr.requestApproval(title: "t", body: "b")
+
+    await test("SecurityGate source contains no runtime approval inference inputs") {
+        let testsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let sourceURL = testsURL.deletingLastPathComponent()
+            .appendingPathComponent("TheBridge/Security/SecurityGate.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        for forbidden in ["thebridgetests", "notionbridgetests", "CommandLine.arguments",
+                          "ProcessInfo.processInfo", "--multi-instance", "runningInTestProcess"] {
+            try expect(!source.contains(forbidden), "production approval source must not inspect \(forbidden)")
+        }
+    }
+
+    await test("explicit denial prevents the request-tier handler from running") {
+        final class HandlerProbe: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _count = 0
+            var count: Int { lock.withLock { _count } }
+            func hit() { lock.withLock { _count += 1 } }
+        }
+        let provider = TestSecurityApprovalProvider(decision: .deny)
+        let gate = SecurityGate(approvalProvider: provider)
+        let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+        let probe = HandlerProbe()
+        await router.register(ToolRegistration(
+            name: "c1_denial_probe",
+            module: "security",
+            tier: .request,
+            description: "C1 denial handler probe",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([:]),
+                "required": .array([])
+            ]),
+            handler: { _ in probe.hit(); return .object(["ran": .bool(true)]) }
+        ))
+        do {
+            _ = try await router.dispatch(
+                toolName: "c1_denial_probe",
+                arguments: .object([
+                    "processName": .string("thebridgetests"),
+                    "legacyProcess": .string("notionbridgetests"),
+                    "arguments": .string("--multi-instance")
+                ])
+            )
+            throw TestError.assertion("denied request unexpectedly returned")
+        } catch let error as ToolRouterError {
+            guard case .securityRejection = error else { throw error }
+        }
+        try expect(probe.count == 0, "modal/provider denial must invoke no handler")
+    }
+
+    await test("explicit fake provider supplies deterministic test approval") {
+        let provider = TestSecurityApprovalProvider(decision: .allow)
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await gate.enforce(
+            toolName: "test_request",
+            tier: .request,
+            arguments: .object(["value": .string("x")])
+        )
         switch decision {
         case .allow: break
-        default: throw TestError.assertion("test-process approval must be .allow, got \(decision)")
+        default: throw TestError.assertion("explicit fake approval must allow, got \(decision)")
         }
+        try expect(provider.approvalRequestCount == 1, "fake provider must be called exactly once")
     }
 }

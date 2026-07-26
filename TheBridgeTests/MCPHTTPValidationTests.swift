@@ -188,7 +188,7 @@ func runMCPHTTPValidationTests() async {
         // token-free; tunnel-origin traffic must now fail remote OAuth readiness
         // before it can fall through to a local/legacy auth model.
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}
         )
         let initBody = Data("""

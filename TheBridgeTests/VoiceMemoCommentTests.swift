@@ -180,7 +180,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: idea-purpose comment resolves via registry_resolve_and_update, posts, and logs the ledger") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityWithTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
             await state.setResolveMatchedId("page-alpha")
@@ -223,7 +223,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: reflow-purpose comment posts but is NEVER logged to the ledger") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityWithTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
 
@@ -245,7 +245,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: missing entityHint blocks gracefully before any tool call") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityWithTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
 
@@ -275,7 +275,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: entity with no title-role property blocks gracefully") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityNoTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
 
@@ -298,7 +298,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: unconfigured entity blocks gracefully") {
         try await withCommentTempHome {
             // No seedEntity call — the registry has no "project" entity configured.
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
 
@@ -320,7 +320,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: registry_resolve_and_update no-match/ambiguous failure blocks gracefully, no comment posted") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityWithTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
             await state.setResolveThrows(ToolRouterError.invalidArguments(
@@ -347,7 +347,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: missing purpose throws invalidIntent") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityWithTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
 
@@ -369,7 +369,7 @@ func runVoiceMemoCommentTests() async {
     // 8. Missing entityKey → throws invalidIntent.
     await test("PKT-MEM-136: missing entityKey throws invalidIntent") {
         try await withCommentTempHome {
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
 
@@ -390,7 +390,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: missing comment text throws invalidIntent") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityWithTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
 
@@ -413,7 +413,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: notion_comment_create success:false blocks gracefully, ledger untouched") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityWithTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
             await state.setCommentSuccess(false)
@@ -438,7 +438,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: title is used as comment text when body is absent") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityWithTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
 
@@ -483,7 +483,7 @@ func runVoiceMemoCommentTests() async {
         }
 
         try await seedEntity(projectEntityWithTitle())
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = CommentStubState()
         await installCommentStubs(on: router, state: state)
         await state.setResolveMatchedId("page-body-arg")
@@ -513,7 +513,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: registry_resolve_and_update call carries a non-empty receipt field") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityWithTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
 
@@ -596,7 +596,7 @@ func runVoiceMemoCommentTests() async {
     await test("PKT-MEM-136: a comment intent with no resolvable target routes gracefully via commit(), never crashes") {
         try await withCommentTempHome {
             try await seedEntity(projectEntityWithTitle())
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             let state = CommentStubState()
             await installCommentStubs(on: router, state: state)
             await state.setResolveThrows(ToolRouterError.invalidArguments(

@@ -5,7 +5,7 @@ import Foundation
 import MCP
 
 public enum MessagesDeliveryVerificationStatus: String, Sendable, Equatable {
-    case verified = "LOCAL_OUTBOUND_RECORD_VERIFIED"
+    case verified = "CORRELATED_LOCAL_OUTBOUND_RECORD"
     case notFound = "NOT_FOUND"
     case ambiguous = "AMBIGUOUS"
     case deliveryError = "DELIVERY_ERROR"
@@ -207,7 +207,7 @@ public struct ThreadMessagesReceiptRequest: Sendable, Equatable {
 }
 
 public enum ThreadMessagesReceiptOutcome: String, Sendable, Equatable {
-    case verified = "LOCAL_OUTBOUND_RECORD_VERIFIED"
+    case verified = "CORRELATED_LOCAL_OUTBOUND_RECORD"
     case alreadyCompleted = "ALREADY_COMPLETED"
     case inProgress = "IN_PROGRESS"
     case blocked = "BLOCKED"
@@ -663,7 +663,7 @@ public enum ThreadMessagesReceiptEngine {
                 record = await markReview(record, error: "reconciliation matched multiple local outbound records", dependencies: dependencies)
                 return .init(outcome: .ambiguous, actionId: request.actionId, error: record.lastError)
             case .notFound:
-                record = await markReview(record, error: "delivery invocation may have occurred but no exact local outbound record is provable", dependencies: dependencies)
+                record = await markReview(record, error: "delivery invocation may have occurred but no correlated local outbound record was observed", dependencies: dependencies)
                 return .init(outcome: .deliveryStateUnknown, actionId: request.actionId, error: record.lastError)
             case .deliveryError:
                 record = await markReview(record, error: reconciled.error ?? "reconciliation failed", dependencies: dependencies)
@@ -722,14 +722,14 @@ public enum ThreadMessagesReceiptEngine {
                         messageDate: attempt.verification.messageDate,
                         deliveryReference: attempt.verification.deliveryReference,
                         service: attempt.service,
-                        error: "local record verified but durable evidence save failed: \(error.localizedDescription)"
+                        error: "correlated local record observed but durable evidence save failed: \(error.localizedDescription)"
                     )
                 }
             case .ambiguous:
                 record = await markReview(record, error: "delivery invoked but multiple exact local records matched", dependencies: dependencies)
                 return .init(outcome: .ambiguous, actionId: request.actionId, deliveryInvoked: attempt.invoked, error: record.lastError)
             case .notFound:
-                record = await markReview(record, error: "delivery invoked but no exact local outbound record was proven", dependencies: dependencies)
+                record = await markReview(record, error: "delivery invoked but no correlated local outbound record was observed", dependencies: dependencies)
                 return .init(outcome: .deliveryStateUnknown, actionId: request.actionId, deliveryInvoked: attempt.invoked, error: record.lastError)
             case .deliveryError:
                 record = await markReview(record, error: attempt.error ?? attempt.verification.error ?? "delivery failed", dependencies: dependencies)
@@ -757,7 +757,7 @@ public enum ThreadMessagesReceiptEngine {
                 messageDate: verification.messageDate,
                 deliveryReference: verification.deliveryReference,
                 service: record.service,
-                error: "local record verified but lifecycle read-back failed: \(error.localizedDescription)"
+                error: "correlated local record observed but lifecycle read-back failed: \(error.localizedDescription)"
             )
         }
         let unchanged = lifecycleUnchanged(initial, afterDelivery)
@@ -769,7 +769,7 @@ public enum ThreadMessagesReceiptEngine {
             completedAt: dependencies.now(),
             lifecycleUnchanged: unchanged,
             recoveryNote: deliveryInvoked
-                ? "Local outbound record verified after guarded delivery."
+                ? "Correlated local outbound record observed after guarded delivery."
                 : "Recovered from durable invocation state; no resend performed."
         )
 

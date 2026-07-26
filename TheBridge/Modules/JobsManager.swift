@@ -1514,8 +1514,22 @@ public actor JobsManager {
             guard Self.hasNonEmptyString(args["body"]) else {
                 throw JobsModuleError.invalidActionChain("messages_send jobs require non-empty 'body'")
             }
-            guard Self.hasNonEmptyString(args["recipient"]) || Self.hasNonEmptyString(args["chatIdentifier"]) else {
+            let hasRecipient = Self.hasNonEmptyString(args["recipient"])
+            let hasChatIdentifier = Self.hasNonEmptyString(args["chatIdentifier"])
+            guard hasRecipient || hasChatIdentifier else {
                 throw JobsModuleError.invalidActionChain("messages_send jobs require 'recipient' or 'chatIdentifier'")
+            }
+            for contained in ["threadPageId", "actionId", "approvalBasis", "actor", "workspace"]
+                where args[contained] != nil {
+                throw JobsModuleError.invalidActionChain("THREAD Messages execution is contained; remove '\(contained)'")
+            }
+            if hasRecipient {
+                guard case .string(let service) = args["service"] ?? .null,
+                      service == "iMessage" || service == "SMS" else {
+                    throw JobsModuleError.invalidActionChain(
+                        "ordinary one-to-one messages_send jobs require explicit service: 'iMessage' or 'SMS'"
+                    )
+                }
             }
         } else {
             // Other known-destructive interactive tools remain blocked unless they

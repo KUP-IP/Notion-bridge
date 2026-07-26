@@ -169,7 +169,7 @@ func runCredentialHardeningTests() async {
 
     // MARK: - 4. credential_read / credential_list MCP surface wiring
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await CredentialModule.register(on: router)

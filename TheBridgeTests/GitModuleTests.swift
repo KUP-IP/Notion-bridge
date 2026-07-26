@@ -16,7 +16,7 @@ func runGitModuleTests() async {
     // 1) Tool registration: 3 tools, module = "dev", tier = .request
     // ------------------------------------------------------------------
     await test("GitModule registers 3 tools (W1 triumvirate) under module=\"dev\"") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GitModule.register(on: router)
@@ -28,7 +28,7 @@ func runGitModuleTests() async {
     }
 
     await test("All git_* tools are tier .request") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GitModule.register(on: router)
@@ -188,7 +188,7 @@ func runGitModuleTests() async {
     // 6) Capability missing → short-circuit envelope
     // ------------------------------------------------------------------
     await test("GitRuntime(gitPath: bogus) yields capability_missing on tool dispatch") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         let runtime = GitRuntime(gitPath: "/nonexistent/git-binary-xyz")
@@ -213,7 +213,7 @@ func runGitModuleTests() async {
     // 7) Schema sanity: required fields are encoded in the input schema
     // ------------------------------------------------------------------
     await test("git_status schema declares no required fields") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GitModule.register(on: router)
@@ -236,7 +236,7 @@ func runGitModuleTests() async {
         let runtime = GitRuntime()
         let cap = await runtime.capabilityCheck()
         guard cap.ok else { return }
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GitModule.register(on: router, runtime: runtime)
@@ -268,7 +268,7 @@ func runGitModuleTests() async {
     print("\n  \u{1F4C1} W2 — git_show / git_blame / git_apply_patch")
 
     await test("W2 adds git_show / git_blame / git_apply_patch to module=\"dev\"") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GitModule.register(on: router)
@@ -408,7 +408,7 @@ func runGitModuleTests() async {
     }
 
     await test("git_apply_patch yields capability_missing on bogus git binary") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         let runtime = GitRuntime(gitPath: "/nonexistent/git-binary-xyz-w2")
@@ -427,7 +427,7 @@ func runGitModuleTests() async {
     }
 
     await test("git_blame schema requires 'file', git_apply_patch requires 'diff'") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GitModule.register(on: router)
@@ -481,7 +481,7 @@ func runGitModuleTests() async {
         }
         _ = try? await runtime.runGit(["checkout", "--", "a.txt"], cwd: tmp)
 
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GitModule.register(on: router, runtime: runtime)
@@ -509,7 +509,7 @@ func runGitModuleTests() async {
         let cwd = FileManager.default.currentDirectoryPath
         let isGitDir = FileManager.default.fileExists(atPath: cwd + "/.git")
         guard isGitDir else { return }
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GitModule.register(on: router, runtime: runtime)
@@ -573,7 +573,7 @@ func runGitModuleTests() async {
     }
 
     await test("git_create_branch schema requires 'branch'") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await GitModule.register(on: router)
         // git_create_branch missing 'branch'
         let cb = try await router.dispatch(toolName: "git_create_branch", arguments: .object([:]))
@@ -598,7 +598,7 @@ func runGitModuleTests() async {
         _ = try await runtime.runGit(["add", "a.txt"], cwd: tmp.path)
         _ = try await runtime.runGit(["commit", "-q", "-m", "init"], cwd: tmp.path)
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await GitModule.register(on: router)
         let res = try await router.dispatch(toolName: "git_create_branch", arguments: .object([
             "branch": .string("w3-feature"),

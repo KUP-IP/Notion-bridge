@@ -8,7 +8,7 @@ import TheBridgeLib
 func runCommandsModuleTests() async {
     print("\n📋 CommandsModule Tests (PKT-1061)")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await CommandsModule.register(on: router)

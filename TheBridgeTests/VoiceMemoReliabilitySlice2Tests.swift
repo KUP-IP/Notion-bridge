@@ -107,7 +107,7 @@ func runVoiceMemoReliabilitySlice2Tests() async {
     }
 
     await test("SC4_firstNameUnique_resolvesViaListAfterExactMiss") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let schema: Value = .object(["type": .string("object")])
         await router.register(ToolRegistration(
             name: "registry_find",

@@ -165,7 +165,7 @@ func runVoiceMemoTranscriptOverlapGuardTests() async {
     // MARK: - Wiring: executeMemoryKeep
 
     await test("overlap_executeMemoryKeep_verbatimFieldsOverride_throwsBeforeAnyWrite") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = OverlapStubState()
         await installOverlapStubs(on: router, state: state, pageId: "page-overlap-1")
 
@@ -198,7 +198,7 @@ func runVoiceMemoTranscriptOverlapGuardTests() async {
     }
 
     await test("overlap_executeMemoryKeep_shortReusePasses_writesNormally") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = OverlapStubState()
         await installOverlapStubs(on: router, state: state, pageId: "page-overlap-2")
 
@@ -219,7 +219,7 @@ func runVoiceMemoTranscriptOverlapGuardTests() async {
     }
 
     await test("overlap_executeMemoryKeep_longOriginalPasses_writesNormally") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = OverlapStubState()
         await installOverlapStubs(on: router, state: state, pageId: "page-overlap-3")
 
@@ -243,7 +243,7 @@ func runVoiceMemoTranscriptOverlapGuardTests() async {
         // The automated (non-fields-override) path derives fields from plan.summary,
         // which never contains the raw transcript — must be completely unaffected by
         // the guard's addition.
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = OverlapStubState()
         await installOverlapStubs(on: router, state: state, pageId: "page-overlap-4")
 
@@ -261,7 +261,7 @@ func runVoiceMemoTranscriptOverlapGuardTests() async {
     // MARK: - Wiring: executeRegistryUpdate
 
     await test("overlap_executeRegistryUpdate_verbatimFieldsOverride_throwsBeforeAnyWrite") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = OverlapStubState()
         await installOverlapStubs(on: router, state: state, pageId: "page-overlap-5")
         await state.setListRows([.object(["id": .string("row-1"), "title": .string("Bridge v4")])])
@@ -291,7 +291,7 @@ func runVoiceMemoTranscriptOverlapGuardTests() async {
         // The explicitRowId path (used by voice_memo_review_resolve's rowId param)
         // must be guarded exactly like the hint-resolved path — it is the SAME
         // registry_update write vector.
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = OverlapStubState()
         await installOverlapStubs(on: router, state: state, pageId: "page-overlap-6")
 
@@ -316,7 +316,7 @@ func runVoiceMemoTranscriptOverlapGuardTests() async {
     }
 
     await test("overlap_executeRegistryUpdate_shortReusePasses_writesNormally") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = OverlapStubState()
         await installOverlapStubs(on: router, state: state, pageId: "page-overlap-7")
 
@@ -337,7 +337,7 @@ func runVoiceMemoTranscriptOverlapGuardTests() async {
         // the merged-field-map path without append-wrapping noise; the raw proposed
         // value (a verbatim transcript run embedded in otherwise-original text)
         // must still trip the guard after merge.
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = OverlapStubState()
         await installOverlapStubs(on: router, state: state, pageId: "page-overlap-8")
 

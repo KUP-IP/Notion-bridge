@@ -65,7 +65,7 @@ func runBgProcessModuleTests() async {
     // Build a router with ONLY this module registered (registration/tier checks
     // don't need the full surface; dispatch checks don't either).
     func makeRouter() async -> ToolRouter {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await BgProcessModule.register(on: router)

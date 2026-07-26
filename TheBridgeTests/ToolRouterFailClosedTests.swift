@@ -20,7 +20,7 @@ func runToolRouterFailClosedTests() async {
     /// Build a router with the live static registry. Stripe is excluded
     /// to avoid pulling the dynamic-proxy surface into a UI-state test.
     func buildRouter() async -> ToolRouter {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await BridgeModuleRegistry.registerStaticFeatureModules(

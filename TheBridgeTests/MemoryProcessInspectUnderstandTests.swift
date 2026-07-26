@@ -42,7 +42,7 @@ func runMemoryProcessInspectUnderstandTests() async {
         let sidecar = recordings.appendingPathComponent("get.txt")
         try "Remind me to test understand false.".data(using: .utf8)?.write(to: sidecar)
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await VoiceMemoModule.register(on: router)
         let list = VoiceMemoDiscovery.listRecordings(roots: [recordings])
         let result = try await VoiceMemoProcessor.get(args: .object([

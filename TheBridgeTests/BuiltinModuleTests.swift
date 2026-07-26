@@ -17,7 +17,7 @@ import TheBridgeLib
 func runBuiltinModuleTests() async {
     print("\n🔧 BuiltinModule Tests (echo)")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
 

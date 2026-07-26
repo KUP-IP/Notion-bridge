@@ -23,7 +23,7 @@ func runToolMetadataAuthoringTests() async {
     }
 
     // End-to-end: authored metadata must reach the rendered MCP description.
-    let gate = SecurityGate(); let log = AuditLog()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider()); let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await BridgeModuleRegistry.registerStaticFeatureModules(
         on: router,

@@ -167,6 +167,31 @@ enum SQLiteConnectionError: Error, LocalizedError {
 /// Provides iMessage/SMS read and send tools.
 /// Read operations query chat.db via native SQLite C API (read-only, WAL).
 /// Send uses in-process AppleScript through NSAppleScript.
+public enum MessagesService: String, Sendable, Equatable, CaseIterable {
+    case iMessage = "iMessage"
+    case sms = "SMS"
+
+    public static func parseStrict(_ value: String?) -> MessagesService? {
+        guard let value else { return nil }
+        return MessagesService(rawValue: value)
+    }
+}
+
+public struct MessagesAppleScriptInvocationResult: Sendable, Equatable {
+    public var error: String?
+    public var errorNumber: Int?
+
+    public init(error: String? = nil, errorNumber: Int? = nil) {
+        self.error = error
+        self.errorNumber = errorNumber
+    }
+
+    public var succeeded: Bool { error == nil }
+}
+
+public typealias MessagesServiceInvoker = @Sendable (MessagesService, String, String) -> MessagesAppleScriptInvocationResult
+public typealias MessagesLocalRecordVerifier = @Sendable (String, String, Int, Date) -> MessagesDeliveryVerification
+
 public enum MessagesModule {
 
     public static let moduleName = "messages"
@@ -652,7 +677,7 @@ public enum MessagesModule {
         )
     }
 
-    /// Poll chat.db for one exact local outbound record. Evidence is bounded
+    /// Poll chat.db for one correlated local outbound record candidate. Evidence is bounded
     /// by the pre-send ROWID and Intent preparation timestamp; it does not
     /// claim provider delivery or remote receipt.
     public static func verifyExactDelivery(
@@ -729,16 +754,46 @@ public enum MessagesModule {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    /// One-to-one delivery primitive shared by ordinary messages_send and the
-    /// THREAD receipt transaction. It preserves the exact SEND token guard and
-    /// returns evidence rather than mutating relationship state.
-    static func performOneToOneSend(
+    /// One-to-one delivery primitive for ordinary messages_send and dormant
+    /// receipt-engine compatibility tests. The public tool handler contains every
+    /// THREAD-shaped request before this seam. It preserves the exact SEND token
+    /// guard and returns correlation evidence without mutating relationship state.
+    public static func performOneToOneSend(
         recipient: String,
         body: String,
         confirm: String,
         serviceOverride: String?,
         afterId: Int,
         preparedAt: Date
+    ) -> MessagesDeliveryAttempt {
+        performOneToOneSend(
+            recipient: recipient,
+            body: body,
+            confirm: confirm,
+            serviceOverride: serviceOverride,
+            afterId: afterId,
+            preparedAt: preparedAt,
+            invoke: invokeAppleScript,
+            verify: { target, approvedBody, watermark, prepared in
+                verifyExactDelivery(
+                    target: target,
+                    body: approvedBody,
+                    afterId: watermark,
+                    preparedAt: prepared
+                )
+            }
+        )
+    }
+
+    public static func performOneToOneSend(
+        recipient: String,
+        body: String,
+        confirm: String,
+        serviceOverride: String?,
+        afterId: Int,
+        preparedAt: Date,
+        invoke: MessagesServiceInvoker,
+        verify: MessagesLocalRecordVerifier
     ) -> MessagesDeliveryAttempt {
         guard confirm == "SEND" else {
             return .init(
@@ -747,92 +802,73 @@ public enum MessagesModule {
                 error: "messages_send requires confirm: 'SEND'"
             )
         }
-
-        let serviceType: String
-        let detectedService: String
-        if let override = serviceOverride {
-            serviceType = override.lowercased() == "imessage" ? "iMessage" : "SMS"
-            detectedService = override
-        } else {
-            let detectSQL = """
-                SELECT c.service_name
-                FROM chat c
-                WHERE c.chat_identifier LIKE '%' || ?1 || '%'
-                ORDER BY c.ROWID DESC
-                LIMIT 1
-                """
-            let detectRows = (try? performQuery(detectSQL, params: [recipient])) ?? []
-            if let serviceName = detectRows.first?["service_name"] as? String {
-                detectedService = serviceName
-                serviceType = serviceName.lowercased() == "imessage" ? "iMessage" : "SMS"
-            } else {
-                serviceType = "iMessage"
-                detectedService = "iMessage (no history, default)"
-            }
-        }
-
-        func execute(service: String) -> (success: Bool, error: String?, number: Int?) {
-            let safeRecipient = escapeAppleScriptString(recipient)
-            let safeBody = escapeAppleScriptString(body)
-            let script = """
-                tell application "Messages"
-                    set targetService to 1st service whose service type = \(service)
-                    set targetBuddy to buddy "\(safeRecipient)" of targetService
-                    send "\(safeBody)" to targetBuddy
-                end tell
-                """
-            let appleScript = NSAppleScript(source: script)
-            var errorInfo: NSDictionary?
-            _ = appleScript?.executeAndReturnError(&errorInfo)
-            if let errorInfo {
-                return (
-                    false,
-                    errorInfo[NSAppleScript.errorMessage] as? String ?? "AppleScript execution failed",
-                    errorInfo[NSAppleScript.errorNumber] as? Int ?? -1
-                )
-            }
-            return (true, nil, nil)
-        }
-
-        let first = execute(service: serviceType)
-        if first.success {
-            let verification = verifyExactDelivery(target: recipient, body: body, afterId: afterId, preparedAt: preparedAt)
+        guard let service = MessagesService.parseStrict(serviceOverride) else {
+            let reason = serviceOverride == nil
+                ? "messages_send requires explicit service: 'iMessage' or 'SMS'"
+                : "unsupported Messages service '\(serviceOverride!)'; expected exactly 'iMessage' or 'SMS'"
             return .init(
-                invoked: true,
-                verification: verification,
-                service: serviceType,
-                detectedService: detectedService
+                invoked: false,
+                verification: .init(status: .deliveryError, error: reason),
+                error: reason
+            )
+        }
+        if service == .sms, !isPhoneRecipient(recipient) {
+            let reason = "SMS requires a phone-number recipient"
+            return .init(
+                invoked: false,
+                verification: .init(status: .deliveryError, error: reason),
+                service: service.rawValue,
+                error: reason
             )
         }
 
-        if serviceType == "iMessage", serviceOverride == nil {
-            let fallback = execute(service: "SMS")
-            if fallback.success {
-                let verification = verifyExactDelivery(target: recipient, body: body, afterId: afterId, preparedAt: preparedAt)
-                return .init(
-                    invoked: true,
-                    verification: verification,
-                    service: "SMS (fallback from iMessage)",
-                    detectedService: detectedService
-                )
-            }
+        let invocation = invoke(service, recipient, body)
+        if !invocation.succeeded {
             return .init(
-                invoked: false,
-                verification: .init(status: .deliveryError, error: "iMessage failed: \(first.error ?? "unknown"). SMS fallback failed: \(fallback.error ?? "unknown")"),
-                service: serviceType,
-                detectedService: detectedService,
-                error: "iMessage failed: \(first.error ?? "unknown"). SMS fallback failed: \(fallback.error ?? "unknown")",
-                errorNumber: fallback.number ?? first.number
+                invoked: true,
+                verification: .init(status: .deliveryError, error: invocation.error),
+                service: service.rawValue,
+                error: invocation.error,
+                errorNumber: invocation.errorNumber
             )
         }
 
         return .init(
-            invoked: false,
-            verification: .init(status: .deliveryError, error: first.error),
-            service: serviceType,
-            detectedService: detectedService,
-            error: first.error,
-            errorNumber: first.number
+            invoked: true,
+            verification: verify(recipient, body, afterId, preparedAt),
+            service: service.rawValue
+        )
+    }
+
+    private static func isPhoneRecipient(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("@") else { return false }
+        let allowed = CharacterSet(charactersIn: "+0123456789().- ")
+        guard trimmed.unicodeScalars.allSatisfy(allowed.contains) else { return false }
+        return trimmed.filter(\.isNumber).count >= 7
+    }
+
+    private static func invokeAppleScript(
+        service: MessagesService,
+        recipient: String,
+        body: String
+    ) -> MessagesAppleScriptInvocationResult {
+        let safeRecipient = escapeAppleScriptString(recipient)
+        let safeBody = escapeAppleScriptString(body)
+        let script = """
+            tell application "Messages"
+                set targetService to 1st service whose service type = \(service.rawValue)
+                set targetBuddy to buddy "\(safeRecipient)" of targetService
+                send "\(safeBody)" to targetBuddy
+            end tell
+            """
+        let appleScript = NSAppleScript(source: script)
+        var errorInfo: NSDictionary?
+        _ = appleScript?.executeAndReturnError(&errorInfo)
+        guard let errorInfo else { return .init() }
+        return .init(
+            error: errorInfo[NSAppleScript.errorMessage] as? String ?? "AppleScript execution failed",
+            errorNumber: errorInfo[NSAppleScript.errorNumber] as? Int ?? -1
         )
     }
 
@@ -1203,7 +1239,7 @@ public enum MessagesModule {
             module: moduleName,
             tier: .request,
             neverAutoApprove: true,
-            description: "Send an iMessage/SMS after a fresh non-downgradable review of the complete target and body. Requires confirm:'SEND'. Returns exact local outbound-record evidence; it does not claim provider delivery. With threadPageId + actionId + descriptive approvalBasis, runs the recoverable one-to-one THREAD Intent→send→Result transaction with linked-person binding and no lifecycle-property writes.",
+            description: "Send one explicitly selected iMessage or SMS after fresh approval. One-to-one sends require service:'iMessage' or service:'SMS' and never fall back. THREAD transaction arguments return THREAD_MESSAGES_CONTAINED. chat.db matches are CORRELATED_LOCAL_OUTBOUND_RECORD evidence only.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1211,12 +1247,12 @@ public enum MessagesModule {
                     "chatIdentifier": .object(["type": .string("string"), "description": .string("Existing Messages chat identifier/group id; targets an existing chat only")]),
                     "body": .object(["type": .string("string"), "description": .string("Message body text")]),
                     "confirm": .object(["type": .string("string"), "description": .string("Must be exactly 'SEND' to proceed")]),
-                    "service": .object(["type": .string("string"), "description": .string("Optional: 'iMessage' or 'SMS'. Auto-detected from chat history if omitted. RCS recipients use 'SMS'.")]),
-                    "threadPageId": .object(["type": .string("string"), "description": .string("Optional canonical THREAD page id. When supplied, messages_send runs the M1 recoverable Intent → send → Result receipt transaction; one-to-one recipient only.")]),
-                    "actionId": .object(["type": .string("string"), "description": .string("Stable idempotency key for a THREAD action. Required with threadPageId.")]),
-                    "approvalBasis": .object(["type": .string("string"), "description": .string("Descriptive note about the approval context. Required with threadPageId, but authority comes only from The Bridge's fresh server-issued approval receipt.")]),
-                    "actor": .object(["type": .string("string"), "description": .string("Actor label recorded in the THREAD Intent receipt (default: The Bridge).")]),
-                    "workspace": .object(["type": .string("string"), "description": .string("Optional Notion workspace connection for THREAD receipt reads and appends.")])
+                    "service": .object(["type": .string("string"), "enum": .array([.string("iMessage"), .string("SMS")]), "description": .string("Required for ordinary one-to-one sends. Exact value only: 'iMessage' or 'SMS'. No auto-detection, RCS mapping, or fallback.")]),
+                    "threadPageId": .object(["type": .string("string"), "description": .string("Contained THREAD transaction argument. Any supplied value returns THREAD_MESSAGES_CONTAINED before side effects.")]),
+                    "actionId": .object(["type": .string("string"), "description": .string("Contained THREAD transaction argument. Any supplied value returns THREAD_MESSAGES_CONTAINED before side effects.")]),
+                    "approvalBasis": .object(["type": .string("string"), "description": .string("Contained THREAD transaction argument. Any supplied value returns THREAD_MESSAGES_CONTAINED before side effects.")]),
+                    "actor": .object(["type": .string("string"), "description": .string("Contained THREAD transaction argument. Any supplied value returns THREAD_MESSAGES_CONTAINED before side effects.")]),
+                    "workspace": .object(["type": .string("string"), "description": .string("Contained THREAD transaction argument. Any supplied value returns THREAD_MESSAGES_CONTAINED before side effects.")])
                 ]),
                 "required": .array([.string("body"), .string("confirm")])
             ]),
@@ -1229,8 +1265,27 @@ public enum MessagesModule {
                 relatedTools: ["messages_participants", "contacts_resolve_handle", "messages_chat"]
             ),
             handler: { arguments in
-                guard case .object(let args) = arguments,
-                      case .string(let body) = args["body"],
+                guard case .object(let args) = arguments else {
+                    throw ToolRouterError.invalidArguments(toolName: "messages_send", reason: "arguments must be an object")
+                }
+                let threadTransactionArguments: Set<String> = [
+                    "threadPageId", "actionId", "approvalBasis", "actor", "workspace"
+                ]
+                let suppliedThreadArguments = args.keys.filter(threadTransactionArguments.contains).sorted()
+                if !suppliedThreadArguments.isEmpty {
+                    return .object([
+                        "code": .string("THREAD_MESSAGES_CONTAINED"),
+                        "status": .string("contained"),
+                        "reason": .string("THREAD Messages execution is held pending a separately approved reactivation contract."),
+                        "suppliedThreadArguments": .array(suppliedThreadArguments.map(Value.string)),
+                        "sent": .bool(false),
+                        "deliveryInvoked": .bool(false),
+                        "consequencePossible": .bool(false),
+                        "correlatedLocalRecord": .bool(false),
+                        "providerDeliveryConfirmed": .bool(false)
+                    ])
+                }
+                guard case .string(let body) = args["body"],
                       case .string(let confirm) = args["confirm"] else {
                     throw ToolRouterError.invalidArguments(toolName: "messages_send", reason: "missing required parameters")
                 }
@@ -1261,7 +1316,10 @@ public enum MessagesModule {
                     return .object([
                         "error": .string("messages_send requires a fresh server-issued approval receipt bound to this exact target and body"),
                         "sent": .bool(false),
-                        "deliveryInvoked": .bool(false)
+                        "deliveryInvoked": .bool(false),
+                        "consequencePossible": .bool(false),
+                        "correlatedLocalRecord": .bool(false),
+                        "providerDeliveryConfirmed": .bool(false)
                     ])
                 }
 
@@ -1432,6 +1490,10 @@ public enum MessagesModule {
                         let errorNumber = errorInfo[NSAppleScript.errorNumber] as? Int ?? -1
                         return .object([
                             "sent": .bool(false),
+                            "deliveryInvoked": .bool(true),
+                            "consequencePossible": .bool(true),
+                            "correlatedLocalRecord": .bool(false),
+                            "providerDeliveryConfirmed": .bool(false),
                             "error": .string(errorMessage),
                             "errorNumber": .int(errorNumber),
                             "chatIdentifier": .string(chatIdentifier)
@@ -1446,6 +1508,8 @@ public enum MessagesModule {
                     return .object([
                         "sent": .bool(verification.verified),
                         "deliveryInvoked": .bool(true),
+                        "consequencePossible": .bool(true),
+                        "correlatedLocalRecord": .bool(verification.verified),
                         "providerDeliveryConfirmed": .bool(false),
                         "chatIdentifier": .string(chatIdentifier),
                         "bodyLength": .int(body.utf8.count),
@@ -1476,6 +1540,30 @@ public enum MessagesModule {
                     if case .string(let value)? = args["service"] { return value }
                     return nil
                 }()
+                guard let explicitService = MessagesService.parseStrict(serviceOverride) else {
+                    let reason = serviceOverride == nil
+                        ? "messages_send requires explicit service: 'iMessage' or 'SMS'"
+                        : "unsupported Messages service '\(serviceOverride!)'; expected exactly 'iMessage' or 'SMS'"
+                    return .object([
+                        "sent": .bool(false),
+                        "deliveryInvoked": .bool(false),
+                        "consequencePossible": .bool(false),
+                        "correlatedLocalRecord": .bool(false),
+                        "providerDeliveryConfirmed": .bool(false),
+                        "error": .string(reason)
+                    ])
+                }
+                if explicitService == .sms, !isPhoneRecipient(recipient) {
+                    return .object([
+                        "sent": .bool(false),
+                        "deliveryInvoked": .bool(false),
+                        "consequencePossible": .bool(false),
+                        "correlatedLocalRecord": .bool(false),
+                        "providerDeliveryConfirmed": .bool(false),
+                        "service": .string(explicitService.rawValue),
+                        "error": .string("SMS requires a phone-number recipient")
+                    ])
+                }
                 let preSendMaxId: Int
                 let preparedAt = Date()
                 do {
@@ -1483,6 +1571,10 @@ public enum MessagesModule {
                 } catch {
                     return .object([
                         "sent": .bool(false),
+                        "deliveryInvoked": .bool(false),
+                        "consequencePossible": .bool(false),
+                        "correlatedLocalRecord": .bool(false),
+                        "providerDeliveryConfirmed": .bool(false),
                         "verified": .bool(false),
                         "verificationStatus": .string(MessagesDeliveryVerificationStatus.deliveryError.rawValue),
                         "error": .string("Could not capture pre-send ROWID watermark: \(error.localizedDescription)")
@@ -1499,7 +1591,10 @@ public enum MessagesModule {
                 var result: [String: Value] = [
                     "sent": .bool(attempt.verification.verified),
                     "deliveryInvoked": .bool(attempt.invoked),
+                    "consequencePossible": .bool(attempt.invoked),
+                    "correlatedLocalRecord": .bool(attempt.verification.verified),
                     "providerDeliveryConfirmed": .bool(false),
+                    "compatibilityFieldSemantics": .string("sent and verified are local-correlation aliases only"),
                     "recipient": .string(recipient),
                     "bodyLength": .int(body.utf8.count),
                     "service": attempt.service.map(Value.string) ?? .null,

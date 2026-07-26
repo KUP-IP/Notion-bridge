@@ -214,6 +214,40 @@ func runJobsModuleTests() async {
         ])
     }
 
+    await test("Jobs validation: ordinary one-to-one messages_send requires explicit service") {
+        do {
+            try JobsManager.validateUnattended(tool: "messages_send", args: [
+                "recipient": .string("+15551234567"),
+                "body": .string("Explicit transport required."),
+                "confirm": .string("SEND")
+            ])
+            throw TestError.assertion("expected missing service to be rejected")
+        } catch JobsModuleError.invalidActionChain(let message) {
+            try expect(message.contains("explicit service"), "expected service error, got \(message)")
+        }
+        try JobsManager.validateUnattended(tool: "messages_send", args: [
+            "recipient": .string("+15551234567"),
+            "body": .string("Explicit transport selected."),
+            "confirm": .string("SEND"),
+            "service": .string("iMessage")
+        ])
+    }
+
+    await test("Jobs validation rejects contained THREAD transaction arguments") {
+        do {
+            try JobsManager.validateUnattended(tool: "messages_send", args: [
+                "recipient": .string("+15551234567"),
+                "body": .string("Must not dispatch."),
+                "confirm": .string("SEND"),
+                "service": .string("iMessage"),
+                "threadPageId": .string("thread-page")
+            ])
+            throw TestError.assertion("expected THREAD argument to be rejected")
+        } catch JobsModuleError.invalidActionChain(let message) {
+            try expect(message.contains("contained"), "expected containment error, got \(message)")
+        }
+    }
+
     await test("Jobs validation: canonicalizes messages.messages_send") {
         try expect(JobsManager.canonicalActionToolName("messages.messages_send") == "messages_send")
         try JobsManager.validateUnattended(tool: "messages.messages_send", args: [

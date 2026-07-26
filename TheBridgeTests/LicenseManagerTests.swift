@@ -481,7 +481,7 @@ func runLicenseDispatchGateTests() async {
     // is the seam — we drive trial-active vs trial-expired without
     // touching LicenseManager.shared.
     func build(provider: @escaping ToolRouter.LicenseStatusProvider) async -> ToolRouter {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log  = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log, licenseStatusProvider: provider)
         await router.register(ToolRegistration(

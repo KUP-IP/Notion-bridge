@@ -17,7 +17,7 @@ import TheBridgeLib
 func runPermissionsModuleTests() async {
     print("\n\u{1F510} PermissionsModule Tests (fb-permissions)")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await PermissionsModule.register(on: router)

@@ -19,7 +19,7 @@ import TheBridgeLib
 func runBridgeAutomationModuleTests() async {
     print("\n\u{1F9F0} BridgeAutomationModule Tests (FB-AUTOMATION)")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log  = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await BridgeAutomationModule.register(on: router)

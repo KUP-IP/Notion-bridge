@@ -75,7 +75,7 @@ func runSecurityAuditTests() async {
     // ============================================================
 
     await test("SEC-03: clipboard_write tier is .notify (not .open)") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await FileModule.register(on: router)
@@ -87,7 +87,7 @@ func runSecurityAuditTests() async {
     }
 
     await test("SEC-03: clipboard_read tier remains .open") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await FileModule.register(on: router)
@@ -103,7 +103,7 @@ func runSecurityAuditTests() async {
     // ============================================================
 
     await test("All .request tier tools have correct classification") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         // Register all modules
@@ -126,7 +126,7 @@ func runSecurityAuditTests() async {
     }
 
     await test("No write/mutating tools at .open tier") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await FileModule.register(on: router)
@@ -322,7 +322,7 @@ func runSecurityAuditTests() async {
         // safe-command path (which would have returned before any path logic).
         // We assert the ordering structurally: enforce() must consult
         // checkSensitivePaths for a shell_exec safe command hitting ~/.ssh.
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let testPath = "~/.ssh"
         let key = "com.notionbridge.security.pathAllow." + testPath
         let saved = UserDefaults.standard.object(forKey: key)

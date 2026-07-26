@@ -49,7 +49,7 @@ private func cleanup(_ url: URL) {
 }
 
 private func makeMemoryRouter(_ store: MemoryStore) async -> ToolRouter {
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await MemoryModule.register(on: router, store: store)

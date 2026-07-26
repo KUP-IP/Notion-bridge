@@ -10,7 +10,7 @@ import TheBridgeLib
 func runCredentialModuleTests() async {
     print("\n🔐 CredentialModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await CredentialModule.register(on: router)

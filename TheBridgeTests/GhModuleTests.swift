@@ -126,7 +126,7 @@ func runGhModuleTests() async {
     // 6) Capability missing: forced bogus path returns short-circuit.
     // ------------------------------------------------------------------
     await test("GhRuntime(ghPath: bogus) yields capability_missing on tool dispatch") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         let runtime = GhRuntime(ghPath: "/nonexistent/gh-binary-xyz")
@@ -155,7 +155,7 @@ func runGhModuleTests() async {
     // 7) Schema sanity: required fields are encoded in the input schema.
     // ------------------------------------------------------------------
     await test("gh_pr_comment schema declares number+body required") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GhModule.register(on: router)
@@ -176,7 +176,7 @@ func runGhModuleTests() async {
     }
 
     await test("gh_check_status schema accepts no required fields") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GhModule.register(on: router)
@@ -198,7 +198,7 @@ func runGhModuleTests() async {
         // Only meaningful when gh is on PATH; otherwise cap_missing comes first.
         let cap = await GhRuntime.shared.capabilityCheck()
         guard cap.ok else { return }  // Skip when gh not auth'd.
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await GhModule.register(on: router)

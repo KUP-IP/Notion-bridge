@@ -24,7 +24,7 @@ func runDevSuiteEdgeTests() async {
 
     // ---- ArtifactModule: http_fetch ------------------------------------
     await test("http_fetch rejects a non-http(s) scheme with structured invalid_argument") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         let r = try await router.dispatch(toolName: "http_fetch",
                                           arguments: .object(["url": .string("file:///etc/passwd")]))
@@ -39,7 +39,7 @@ func runDevSuiteEdgeTests() async {
     }
 
     await test("http_fetch with a missing/invalid url throws structured invalidArguments") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         do {
             _ = try await router.dispatch(toolName: "http_fetch", arguments: .object([:]))
@@ -55,7 +55,7 @@ func runDevSuiteEdgeTests() async {
 
     // ---- ArtifactModule: diff_render -----------------------------------
     await test("diff_render on an empty diff returns ok with zero counts") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         let r = try await router.dispatch(toolName: "diff_render", arguments: .object(["diff": .string("")]))
         guard case .object(let d) = r, case .bool(true) = d["ok"] else {
@@ -66,7 +66,7 @@ func runDevSuiteEdgeTests() async {
     }
 
     await test("diff_render unknown format falls back to markdown (no crash)") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         let r = try await router.dispatch(toolName: "diff_render",
                                           arguments: .object(["diff": .string("@@ -1 +1 @@\n-a\n+b"),
@@ -81,7 +81,7 @@ func runDevSuiteEdgeTests() async {
     }
 
     await test("diff_render with missing 'diff' throws structured invalidArguments") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         do {
             _ = try await router.dispatch(toolName: "diff_render", arguments: .object([:]))
@@ -91,7 +91,7 @@ func runDevSuiteEdgeTests() async {
 
     // ---- ArtifactModule: file_hash -------------------------------------
     await test("file_hash on a nonexistent path returns structured not_found") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         let missing = edgeTempDir("fh").appendingPathComponent("nope.bin").path
         let r = try await router.dispatch(toolName: "file_hash", arguments: .object(["path": .string(missing)]))
@@ -103,7 +103,7 @@ func runDevSuiteEdgeTests() async {
     }
 
     await test("file_hash is deterministic + matches CryptoKit SHA-256 of bytes") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         let f = edgeTempDir("fh2").appendingPathComponent("a.txt")
         try "hello bridge\n".data(using: .utf8)!.write(to: f)
@@ -120,7 +120,7 @@ func runDevSuiteEdgeTests() async {
 
     // ---- CodeEditModule: code_search wrong-type + empty -----------------
     await test("code_search with missing 'pattern' throws structured invalidArguments") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await CodeEditModule.register(on: router)
         do {
             _ = try await router.dispatch(toolName: "code_search", arguments: .object(["path": .string("/tmp")]))
@@ -134,7 +134,7 @@ func runDevSuiteEdgeTests() async {
     }
 
     await test("code_search wrong-type 'pattern' (int not string) throws invalidArguments") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await CodeEditModule.register(on: router)
         do {
             _ = try await router.dispatch(toolName: "code_search",
@@ -148,7 +148,7 @@ func runDevSuiteEdgeTests() async {
             // rg not installed → capability_missing path is covered elsewhere.
             return
         }
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await CodeEditModule.register(on: router)
         let dir = edgeTempDir("cs")
         let r = try await router.dispatch(toolName: "code_search", arguments: .object([

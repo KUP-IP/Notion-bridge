@@ -102,7 +102,7 @@ func runMemoryHubLiveProcessingTests() async {
         defer { BridgePaths.overrideHomeForTesting(nil) }
         let recording = try makeFixtureRecording(name: "considering")
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let listener = LiveProcessingListener()
         let token = NotificationCenter.default.addObserver(
             forName: .memoryHubLiveProcessingDidChange, object: nil, queue: .main
@@ -139,7 +139,7 @@ func runMemoryHubLiveProcessingTests() async {
         defer { BridgePaths.overrideHomeForTesting(nil) }
         let recording = try makeFixtureRecording(name: "inspect-only")
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let listener = LiveProcessingListener()
         let token = NotificationCenter.default.addObserver(
             forName: .memoryHubLiveProcessingDidChange, object: nil, queue: .main
@@ -170,7 +170,7 @@ func runMemoryHubLiveProcessingTests() async {
         defer { BridgePaths.overrideHomeForTesting(nil) }
         let recording = try makeFixtureRecording(name: "committed")
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await installAgentMemoryStub(on: router)
         let listener = LiveProcessingListener()
         let token = NotificationCenter.default.addObserver(
@@ -218,7 +218,7 @@ func runMemoryHubLiveProcessingTests() async {
         // registry_list returns two rows whose titles both contain the hint, forcing
         // the documented registryAmbiguous → needsManual short-circuit (no write, no
         // processed-gate) — the "committed" event must NOT fire on this path.
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let ambiguousRows: Value = .object(["rows": .array([
             .object(["id": .string("row-1"), "title": .string("Ambiguous Match One")]),
             .object(["id": .string("row-2"), "title": .string("Ambiguous Match Two")]),

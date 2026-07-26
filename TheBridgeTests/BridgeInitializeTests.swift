@@ -273,7 +273,7 @@ func runBridgeInitializeTests() async {
 
     // ── tool registration + tier ───────────────────────────────────────
     await test("Init: bridge_initialize registers at tier .open under standing_orders module") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await BridgeInitializeModule.register(on: router)
@@ -302,7 +302,7 @@ func runBridgeInitializeTests() async {
         try await withInitTempHome {
             try StandingOrdersStore.shared.resetForTesting()
             _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v7.0.2\n\nx")
-            let gate = SecurityGate()
+            let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
             let log = AuditLog()
             let router = ToolRouter(securityGate: gate, auditLog: log)
             await BridgeInitializeModule.register(on: router)
@@ -327,7 +327,7 @@ func runBridgeInitializeTests() async {
         try await withInitTempHome {
             try StandingOrdersStore.shared.resetForTesting()
             _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v7.0.2\n\nx")
-            let gate = SecurityGate()
+            let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
             let log = AuditLog()
             let router = ToolRouter(securityGate: gate, auditLog: log)
             await BridgeInitializeModule.register(on: router)

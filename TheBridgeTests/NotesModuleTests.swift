@@ -51,7 +51,7 @@ private final class MockNotesRunner: @unchecked Sendable {
 }
 
 private func makeRouter(_ runner: MockNotesRunner) async -> ToolRouter {
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await NotesModule.register(on: router, runner: runner.runner())

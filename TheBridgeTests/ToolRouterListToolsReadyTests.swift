@@ -9,7 +9,7 @@ func runToolRouterListToolsReadyTests() async {
     print("\n\u{1F6A6} ToolRouter ListTools registration gate (FB-4)")
 
     await test("registrationsForListTools is empty until markModulesRegistrationComplete") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await BridgeAutomationModule.register(on: router)
         let before = await router.registrationsForListTools(disabledNames: [])
         try expect(before.isEmpty, "expected empty list before registration complete")
@@ -21,7 +21,7 @@ func runToolRouterListToolsReadyTests() async {
     }
 
     await test("enabledRegistrations is unchanged by registration gate (dispatch still works)") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await BridgeAutomationModule.register(on: router)
         let regs = await router.enabledRegistrations(disabledNames: [])
         try expect(regs.count == 3, "dispatch registry should still expose automation tools")

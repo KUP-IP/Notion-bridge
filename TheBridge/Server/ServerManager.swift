@@ -116,7 +116,7 @@ public actor ServerManager {
     /// Returns the number of registered tools.
     public func setup() async -> Int {
         // 1. Create core components
-        let securityGate = SecurityGate()
+        let securityGate = SecurityGate(approvalProvider: NotificationApprovalManager())
         self.securityGate = securityGate
         let auditLog = AuditLog()
         self.auditLog = auditLog
