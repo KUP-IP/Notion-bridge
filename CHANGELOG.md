@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — Registry find/list completeness — 2026-07-25
+
+- **Fix** — `registry_find` now paginates the source independently of its return
+  cap, so completeness-critical predicates can match rows beyond the first
+  list window (including the F2 `Ship KeepUp MVP` project fixture).
+- **Honesty** — `registry_list` preserves its bounded result window and adds
+  `has_more` when additional rows exist; existing response keys are unchanged.
+- **Tests** — Golden F2/F5 membership regression plus list truncation coverage.
+
 ## Unreleased — Command Bridge visual pass (Spotlight-rhyme) — 2026-07-23
 
 - **UI** — Smaller bar (560×52), content-hug host (no 360pt plate), shared glass
