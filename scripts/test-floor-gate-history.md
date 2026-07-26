@@ -2419,3 +2419,7 @@ set -euo pipefail
 
 # Command Bridge visual-pass 2026-07-23: chrome metrics + open/close duration
 # family (+1 net). Measured 3412 passed, 0 failed. FLOOR 3411 -> 3412.
+
+# Registry find/list completeness F2 (2026-07-25): exhaustive find scan
+# beyond the return cap + additive list has_more (+2 hermetic). Measured 3414
+# passed, 0 failed. FLOOR 3412 -> 3414.

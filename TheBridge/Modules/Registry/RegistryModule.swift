@@ -357,7 +357,7 @@ public enum RegistryModule {
     public static func makeList() -> ToolRegistration {
         ToolRegistration(
             name: "registry_list", module: moduleName, tier: .open,
-            description: "List rows of a registry entity (cache-backed, offline-tolerant). Returns projected rows keyed by the entity's canonical field keys." + fieldsParamDescriptionSuffix,
+            description: "List rows of a registry entity (cache-backed, offline-tolerant). Returns projected rows keyed by the entity's canonical field keys. The additive `has_more` flag is true when the requested window is truncated." + fieldsParamDescriptionSuffix,
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -377,10 +377,15 @@ public enum RegistryModule {
                 var limit = 50
                 if case .int(let n)? = a["limit"] { limit = max(1, min(500, n)) }
                 let reader = RegistryReader(gateway: gateway())
-                let rows = try await reader.list(entity: entity, limit: limit)
+                // Read one sentinel row beyond the requested window so callers
+                // can distinguish an exhausted source from a truncated list.
+                let scanned = try await reader.list(entity: entity, limit: limit + 1)
+                let hasMore = scanned.count > limit
+                let rows = Array(scanned.prefix(limit))
                 return .object([
                     "entity": .string(key),
                     "count": .int(rows.count),
+                    "has_more": .bool(hasMore),
                     "rows": .array(rows.map { FieldsFilter.project(rowValue($0, stale: $0.isExpired()), fields: requestedFields) }),
                 ])
             })
@@ -405,7 +410,7 @@ public enum RegistryModule {
                 "properties": .object([
                     "entity": .object(["type": .string("string"), "description": .string("Entity key.")]),
                     "where": .object(["type": .string("object"), "description": .string("Map of canonical field key → value to match (e.g. {\"name\":\"Alpha\"} or {\"status\":\"Active\",\"slug\":\"x\"}). ALL predicates must match.")]),
-                    "limit": .object(["type": .string("integer"), "description": .string("Max rows scanned/returned (default 100, max 500; paginates internally).")]),
+                    "limit": .object(["type": .string("integer"), "description": .string("Max matching rows returned (default 100, max 500). The source scan paginates independently to exhaustion.")]),
                     "fields": fieldsParamSchema(),
                 ]),
                 "required": .array([.string("entity"), .string("where")]),

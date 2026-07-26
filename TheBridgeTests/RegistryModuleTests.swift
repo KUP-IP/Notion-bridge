@@ -18,11 +18,18 @@ private actor ModFakeGateway: RegistryNotionGateway {
     private(set) var updated: [(String, [BoundField])] = []
     private(set) var archived: [String] = []
     private(set) var markdownWrites: [(pageId: String, markdown: String)] = []
+    private(set) var queryCalls = 0
     init(schema: DataSourceSchema, queryRows: [NotionRow] = [], pages: [String: NotionRow] = [:]) {
         self.schemaToReturn = schema; self.queryRows = queryRows; self.pages = pages
     }
     func schema(dataSourceId: String, workspace: String?) async throws -> DataSourceSchema { schemaToReturn }
-    func query(dataSourceId: String, workspace: String?, pageSize: Int, startCursor: String?) async throws -> (rows: [NotionRow], nextCursor: String?) { (queryRows, nil) }
+    func query(dataSourceId: String, workspace: String?, pageSize: Int, startCursor: String?) async throws -> (rows: [NotionRow], nextCursor: String?) {
+        queryCalls += 1
+        let start = Int(startCursor ?? "0") ?? 0
+        let end = min(start + max(1, pageSize), queryRows.count)
+        let page = start < end ? Array(queryRows[start..<end]) : []
+        return (page, end < queryRows.count ? String(end) : nil)
+    }
     func page(pageId: String, workspace: String?) async throws -> NotionRow {
         guard let r = pages[CachedRow.normalize(pageId)] ?? pages[pageId] else { throw NSError(domain: "fake", code: 404) }
         return r
@@ -69,11 +76,25 @@ private func packetSchema() -> DataSourceSchema {
     ])
 }
 
+private func projectSchema() -> DataSourceSchema {
+    DataSourceSchema(columnsByName: [
+        "VENTURE > PROJECT": .init(id: "id_project_title", type: "title"),
+        "Status": .init(id: "id_project_status", type: "status"),
+    ])
+}
+
 private func skillRow(id: String, name: String) -> NotionRow {
     NotionRow(id: CachedRow.normalize(id), url: "https://n/\(id)", lastEditedTime: "2026-06-17T10:00:00.000Z", cells: [
         "Skill Name": NotionCell(id: "id_title", type: "title", value: .string(name)),
         "Description": NotionCell(id: "id_desc", type: "rich_text", value: .string("desc of \(name)")),
         "Status": NotionCell(id: "id_status", type: "status", value: .string("Stable")),
+    ])
+}
+
+private func projectRow(id: String, name: String, status: String) -> NotionRow {
+    NotionRow(id: CachedRow.normalize(id), url: "https://n/\(id)", lastEditedTime: "2026-07-25T10:00:00.000Z", cells: [
+        "VENTURE > PROJECT": NotionCell(id: "id_project_title", type: "title", value: .string(name)),
+        "Status": NotionCell(id: "id_project_status", type: "status", value: .string(status)),
     ])
 }
 
@@ -177,6 +198,29 @@ func runRegistryModuleTests() async {
         }
     }
 
+    await test("registry_list reports has_more without changing existing row keys") {
+        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: (0..<75).map {
+            skillRow(id: String(format: "%032x", $0 + 1), name: "Skill \($0)")
+        })
+        try await withRegistryModuleEnv(fake) {
+            let first = try await RegistryModule.makeList().handler(.object([
+                "entity": .string("skill"),
+                "limit": .int(50),
+            ]))
+            try expect(obj(first)["count"] == .int(50), "requested window preserved")
+            try expect(obj(first)["has_more"] == .bool(true), "truncation is explicit")
+            try expect(obj(first)["entity"] == .string("skill") && obj(first)["rows"] != nil,
+                       "existing response keys preserved")
+
+            let all = try await RegistryModule.makeList().handler(.object([
+                "entity": .string("skill"),
+                "limit": .int(100),
+            ]))
+            try expect(obj(all)["count"] == .int(75), "all rows returned when window is large enough")
+            try expect(obj(all)["has_more"] == .bool(false), "exhausted source is honest")
+        }
+    }
+
     await test("registry_get returns one projected row by id") {
         let fake = ModFakeGateway(schema: skillsSchema(), pages: [
             "bbbb0000000000000000000000000001": skillRow(id: "bbbb0000000000000000000000000001", name: "Gamma"),
@@ -203,6 +247,51 @@ func runRegistryModuleTests() async {
             guard case .array(let rows)? = obj(out)["rows"], let r0 = rows.first else { throw TestError.assertion("no rows") }
             try expect(obj(r0)["id"] == .string("ffff0000000000000000000000000001"), "the correct row id")
             try expect(obj(r0)["title"] == .string("Alpha"), "and its title")
+        }
+    }
+
+    await test("registry_find F2 completeness: default return cap does not cap source scan") {
+        let f2 = "5de3190f0a394c13b7f8163e75301e24"
+        let f5 = "389cbb58889e81829ad9d4e6dc45543e"
+        var rows = (0..<390).map { index in
+            projectRow(
+                id: String(format: "%032x", index + 10_000),
+                name: "Project \(index)",
+                status: "BACKLOG"
+            )
+        }
+        rows[25] = projectRow(id: f5, name: "KeepUp Beta Launch", status: "FOCUS")
+        rows[320] = projectRow(id: f2, name: "Ship KeepUp MVP", status: "FOCUS")
+
+        let fake = ModFakeGateway(schema: projectSchema(), queryRows: rows)
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeAddEntity().handler(.object([
+                "key": .string("project"),
+                "displayName": .string("Projects"),
+                "dataSourceId": .string("project_ds"),
+                "hasBody": .bool(false),
+                "properties": .array([
+                    .object(["key": .string("title"), "notionName": .string("VENTURE > PROJECT"), "type": .string("title"), "role": .string("title")]),
+                    .object(["key": .string("status"), "notionName": .string("Status"), "type": .string("status"), "role": .string("status")]),
+                ]),
+            ]))
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("project")]))
+
+            let out = try await RegistryModule.makeFind().handler(.object([
+                "entity": .string("project"),
+                "where": .object(["status": .string("FOCUS")]),
+            ]))
+            guard case .array(let matches)? = obj(out)["rows"] else {
+                throw TestError.assertion("rows missing")
+            }
+            let ids = Set(matches.compactMap { row -> String? in
+                if case .string(let id)? = obj(row)["id"] { return id }
+                return nil
+            })
+            try expect(ids.contains(f2), "F2 Ship KeepUp MVP must be findable beyond the first 100 rows")
+            try expect(ids.contains(f5), "F5 control must remain findable")
+            let calls = await fake.queryCalls
+            try expect(calls == 4, "390 rows should be scanned across four pages, got \(calls)")
         }
     }
 

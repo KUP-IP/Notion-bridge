@@ -143,8 +143,11 @@ public struct RegistryReader: Sendable {
     /// Read-only: matches `predicates` (canonical KEY → value) against the
     /// entity's projected rows, which are keyed rename-safe by BOUND PROPERTY
     /// ID (projection resolves each cell via `cell(for:)`, id-first), so a
-    /// Notion rename never breaks the match. Reuses `list` verbatim, so it
-    /// inherits the same read-through cache + offline fallback contract.
+    /// Notion rename never breaks the match. Unlike `list`, the caller's
+    /// `limit` is only a RETURN cap: the live source is paginated to exhaustion
+    /// before matching, so rows beyond the first list window remain findable.
+    /// The scan preserves the same read-through cache + offline fallback
+    /// contract as `list`.
     ///
     /// Semantics: ALL predicates must match (AND). A row matches a predicate
     /// when the projected value for that key equals the predicate value —
@@ -153,14 +156,44 @@ public struct RegistryReader: Sendable {
     /// absent key never matches. Zero matches is a valid, non-error result
     /// (empty array). Ambiguous input naturally yields multiple rows.
     public func find(entity: RegistryEntity, predicates: [String: Value], limit: Int = 100) async throws -> [CachedRow] {
-        let rows = try await list(entity: entity, limit: limit)
-        guard !predicates.isEmpty else { return rows }
-        return rows.filter { row in
+        let returnCap = max(1, limit)
+        let rows = try await scanAll(entity: entity)
+        guard !predicates.isEmpty else { return Array(rows.prefix(returnCap)) }
+        return Array(rows.filter { row in
             guard case .object(let props) = row.properties else { return false }
             return predicates.allSatisfy { key, wanted in
                 guard let have = props[key] else { return false }
                 return Self.valueMatches(have, wanted)
             }
+        }.prefix(returnCap))
+    }
+
+    /// Exhaustively page the live source for completeness-critical lookups.
+    /// A repeated cursor is treated as an invalid gateway response rather than
+    /// looping forever. On any live failure, fall back to the entity cache —
+    /// identical to `list`'s offline-tolerant contract.
+    private func scanAll(entity: RegistryEntity) async throws -> [CachedRow] {
+        do {
+            var out: [CachedRow] = []
+            var cursor: String? = nil
+            var seenCursors = Set<String>()
+            repeat {
+                if let cursor, !seenCursors.insert(cursor).inserted {
+                    throw RegistryGatewayError.invalidResponse("Notion query repeated cursor \(cursor)")
+                }
+                let result = try await gateway.query(
+                    dataSourceId: entity.dataSourceId, workspace: entity.workspace,
+                    pageSize: 100, startCursor: cursor)
+                for row in result.rows {
+                    out.append(await Self.store(row, entity: entity, into: cache))
+                }
+                cursor = result.nextCursor
+            } while cursor != nil
+            return out
+        } catch {
+            let cached = await cache.readAll(entity: entity.key)
+            if cached.isEmpty { throw error }
+            return cached
         }
     }
 
