@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "4.0.0"
+    public static let marketing = "4.0.1"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -302,7 +302,11 @@ public enum AppVersion {
     ///   Sale-ready V4 cut: W5B bundle-id cutover + continuity, Notion Views
     ///   write tools, Wave A Settings UI-ITER polish, license public-key +
     ///   WorkOS OAuth bake secrets present for release.yml inject. Floor 3391.
-    public static let build = "82"
+    /// v4.0.1: 82 -> 83 -- post-v4 reliability and UX batch: principal-keyed
+    ///   remote governance across MCP session churn, wake-time cloudflared
+    ///   LaunchAgent healing, Calibrate runtime fixes, Command Bridge visual
+    ///   refinement, and registry find/list completeness. Floor 3416.
+    public static let build = "83"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

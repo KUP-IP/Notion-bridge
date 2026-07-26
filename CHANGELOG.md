@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased — Registry find/list completeness — 2026-07-25
+## v4.0.1 (build 83) — Post-v4 reliability and UX — 2026-07-25
+
+- **Release** — Marketing **4.0.0 → 4.0.1**, build **82 → 83**.
+- **Remote governance** — OAuth principals retain governed routing state across
+  `Mcp-Session-Id` churn; empty subjects remain fail-closed.
+- **Wake reliability** — The app can throttle and kickstart the cloudflared
+  LaunchAgent after Mac wake instead of leaving remote access silently stale.
+- **Registry correctness** — `registry_find` scans the complete source before
+  filtering/capping, and `registry_list` reports exact additive `has_more`.
+- **Command Bridge** — Spotlight-rhyme sizing, glass, favorite tiles, and motion
+  refinements ship with the post-v4 reliability batch.
+- **Runtime hardening** — Build inject templates restore cleanly, `git_status`
+  separates worktree cleanliness from upstream synchronization, and skill-body
+  section selection supports unique heading prefixes.
+- **Tests** — Floor **3391 → 3416**, with **3416 passed, 0 failed** on the
+  release candidate.
+
+### Registry find/list completeness — 2026-07-25
 
 - **Fix** — `registry_find` now paginates the source independently of its return
   cap, so completeness-critical predicates can match rows beyond the first
@@ -11,7 +28,7 @@
   coverage, exact `has_more` boundaries, repeated-cursor termination, and
   later-page cache fallback. Test floor **3414 → 3416**.
 
-## Unreleased — Command Bridge visual pass (Spotlight-rhyme) — 2026-07-23
+### Command Bridge visual pass (Spotlight-rhyme) — 2026-07-23
 
 - **UI** — Smaller bar (560×52), content-hug host (no 360pt plate), shared glass
   recipe for bar + favorite tiles + results (regular+ultraThin, soft shadow).
@@ -22,7 +39,7 @@
 - **Settings** — Commands tray preview matches live tile chrome.
 - **Evidence** — `docs/operator/command-bridge-visual-pass-2026-07-23.md` (F.0 gate).
 
-## Unreleased — Calibrate APPLY (agent feedback) — 2026-07-23
+### Calibrate APPLY (agent feedback) — 2026-07-23
 
 - **Fix** — `make build` restores committed fail-closed inject templates
   (`RemoteAccessIdentity`, `LicensePublicKeyInjected`) after compile so local
