@@ -2423,3 +2423,9 @@ set -euo pipefail
 # Registry find/list completeness F2 (2026-07-25): exhaustive find scan
 # beyond the return cap + additive list has_more (+2 hermetic). Measured 3414
 # passed, 0 failed. FLOOR 3412 -> 3414.
+
+# Registry completeness hardening (2026-07-25): late-title and post-filter cap
+# assertions folded into the F2 golden; repeated-cursor empty-cache/cached
+# fallback and later-page cache fallback added (+2 hermetic). Exact list
+# N-1/N/N+1 and max-500 boundaries are covered inside the existing list test.
+# Measured 3416 passed, 0 failed. FLOOR 3414 -> 3416.
