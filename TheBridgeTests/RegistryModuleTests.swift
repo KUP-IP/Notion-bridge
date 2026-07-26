@@ -19,17 +19,28 @@ private actor ModFakeGateway: RegistryNotionGateway {
     private(set) var archived: [String] = []
     private(set) var markdownWrites: [(pageId: String, markdown: String)] = []
     private(set) var queryCalls = 0
+    private(set) var queryHistory: [(cursor: String?, pageSize: Int)] = []
+    private var repeatedCursor: String?
+    private var failOnQueryCall: Int?
     init(schema: DataSourceSchema, queryRows: [NotionRow] = [], pages: [String: NotionRow] = [:]) {
         self.schemaToReturn = schema; self.queryRows = queryRows; self.pages = pages
     }
     func schema(dataSourceId: String, workspace: String?) async throws -> DataSourceSchema { schemaToReturn }
     func query(dataSourceId: String, workspace: String?, pageSize: Int, startCursor: String?) async throws -> (rows: [NotionRow], nextCursor: String?) {
         queryCalls += 1
+        queryHistory.append((startCursor, pageSize))
+        if failOnQueryCall == queryCalls {
+            throw NSError(domain: "fake.query", code: queryCalls)
+        }
         let start = Int(startCursor ?? "0") ?? 0
         let end = min(start + max(1, pageSize), queryRows.count)
         let page = start < end ? Array(queryRows[start..<end]) : []
+        if let repeatedCursor { return (page, repeatedCursor) }
         return (page, end < queryRows.count ? String(end) : nil)
     }
+    func setRepeatedCursor(_ cursor: String?) { repeatedCursor = cursor }
+    func setFailOnQueryCall(_ call: Int?) { failOnQueryCall = call }
+    func resetQueryTracking() { queryCalls = 0; queryHistory = [] }
     func page(pageId: String, workspace: String?) async throws -> NotionRow {
         guard let r = pages[CachedRow.normalize(pageId)] ?? pages[pageId] else { throw NSError(domain: "fake", code: 404) }
         return r
@@ -96,6 +107,20 @@ private func projectRow(id: String, name: String, status: String) -> NotionRow {
         "VENTURE > PROJECT": NotionCell(id: "id_project_title", type: "title", value: .string(name)),
         "Status": NotionCell(id: "id_project_status", type: "status", value: .string(status)),
     ])
+}
+
+private func registerProjectEntity() async throws {
+    _ = try await RegistryModule.makeAddEntity().handler(.object([
+        "key": .string("project"),
+        "displayName": .string("Projects"),
+        "dataSourceId": .string("project_ds"),
+        "hasBody": .bool(false),
+        "properties": .array([
+            .object(["key": .string("title"), "notionName": .string("VENTURE > PROJECT"), "type": .string("title"), "role": .string("title")]),
+            .object(["key": .string("status"), "notionName": .string("Status"), "type": .string("status"), "role": .string("status")]),
+        ]),
+    ]))
+    _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("project")]))
 }
 
 private func withRegistryModuleEnv(_ fake: ModFakeGateway, _ body: () async throws -> Void) async throws {
@@ -198,27 +223,29 @@ func runRegistryModuleTests() async {
         }
     }
 
-    await test("registry_list reports has_more without changing existing row keys") {
-        let fake = ModFakeGateway(schema: skillsSchema(), queryRows: (0..<75).map {
-            skillRow(id: String(format: "%032x", $0 + 1), name: "Skill \($0)")
-        })
-        try await withRegistryModuleEnv(fake) {
-            let first = try await RegistryModule.makeList().handler(.object([
-                "entity": .string("skill"),
-                "limit": .int(50),
-            ]))
-            try expect(obj(first)["count"] == .int(50), "requested window preserved")
-            try expect(obj(first)["has_more"] == .bool(true), "truncation is explicit")
-            try expect(obj(first)["entity"] == .string("skill") && obj(first)["rows"] != nil,
-                       "existing response keys preserved")
-
-            let all = try await RegistryModule.makeList().handler(.object([
-                "entity": .string("skill"),
-                "limit": .int(100),
-            ]))
-            try expect(obj(all)["count"] == .int(75), "all rows returned when window is large enough")
-            try expect(obj(all)["has_more"] == .bool(false), "exhausted source is honest")
+    await test("registry_list has_more is exact at boundaries and max-limit clamp") {
+        func assertWindow(total: Int, requested: Int, expectedCount: Int, expectedHasMore: Bool) async throws {
+            let fake = ModFakeGateway(schema: skillsSchema(), queryRows: (0..<total).map {
+                skillRow(id: String(format: "%032x", $0 + 1), name: "Skill \($0)")
+            })
+            try await withRegistryModuleEnv(fake) {
+                let out = try await RegistryModule.makeList().handler(.object([
+                    "entity": .string("skill"),
+                    "limit": .int(requested),
+                ]))
+                try expect(obj(out)["count"] == .int(expectedCount), "total=\(total), requested=\(requested)")
+                try expect(obj(out)["has_more"] == .bool(expectedHasMore), "has_more total=\(total), requested=\(requested)")
+                try expect(obj(out)["entity"] == .string("skill") && obj(out)["rows"] != nil,
+                           "existing response keys preserved")
+                guard case .array(let rows)? = obj(out)["rows"] else { throw TestError.assertion("rows missing") }
+                try expect(rows.count <= min(max(1, requested), 500), "public limit must cap returned rows")
+            }
         }
+
+        try await assertWindow(total: 49, requested: 50, expectedCount: 49, expectedHasMore: false)
+        try await assertWindow(total: 50, requested: 50, expectedCount: 50, expectedHasMore: false)
+        try await assertWindow(total: 51, requested: 50, expectedCount: 50, expectedHasMore: true)
+        try await assertWindow(total: 501, requested: 999, expectedCount: 500, expectedHasMore: true)
     }
 
     await test("registry_get returns one projected row by id") {
@@ -250,7 +277,7 @@ func runRegistryModuleTests() async {
         }
     }
 
-    await test("registry_find F2 completeness: default return cap does not cap source scan") {
+    await test("registry_find F2 completeness: predicates and return caps never cap source scan") {
         let f2 = "5de3190f0a394c13b7f8163e75301e24"
         let f5 = "389cbb58889e81829ad9d4e6dc45543e"
         var rows = (0..<390).map { index in
@@ -261,37 +288,130 @@ func runRegistryModuleTests() async {
             )
         }
         rows[25] = projectRow(id: f5, name: "KeepUp Beta Launch", status: "FOCUS")
+        rows[150] = projectRow(id: "0000000000000000000000000000f150", name: "Focus Control", status: "FOCUS")
         rows[320] = projectRow(id: f2, name: "Ship KeepUp MVP", status: "FOCUS")
 
         let fake = ModFakeGateway(schema: projectSchema(), queryRows: rows)
         try await withRegistryModuleEnv(fake) {
-            _ = try await RegistryModule.makeAddEntity().handler(.object([
-                "key": .string("project"),
-                "displayName": .string("Projects"),
-                "dataSourceId": .string("project_ds"),
-                "hasBody": .bool(false),
-                "properties": .array([
-                    .object(["key": .string("title"), "notionName": .string("VENTURE > PROJECT"), "type": .string("title"), "role": .string("title")]),
-                    .object(["key": .string("status"), "notionName": .string("Status"), "type": .string("status"), "role": .string("status")]),
-                ]),
-            ]))
-            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("project")]))
+            try await registerProjectEntity()
 
+            let statusOut = try await RegistryModule.makeFind().handler(.object([
+                "entity": .string("project"),
+                "where": .object(["status": .string("FOCUS")]),
+            ]))
+            guard case .array(let statusMatches)? = obj(statusOut)["rows"] else {
+                throw TestError.assertion("status rows missing")
+            }
+            let statusIds = Set(statusMatches.compactMap { row -> String? in
+                if case .string(let id)? = obj(row)["id"] { return id }
+                return nil
+            })
+            try expect(statusIds.contains(f2), "F2 must be findable beyond the first 100 rows")
+            try expect(statusIds.contains(f5), "F5 control must remain findable")
+            var trace = await fake.queryHistory
+            try expect(trace.map { $0.cursor ?? "<nil>" } == ["<nil>", "100", "200", "300"],
+                       "successful scan cursor trace: \(trace)")
+            try expect(trace.allSatisfy { $0.pageSize == 100 }, "find source page size must remain 100")
+
+            await fake.resetQueryTracking()
+            let titleOut = try await RegistryModule.makeFind().handler(.object([
+                "entity": .string("project"),
+                "where": .object(["title": .string("Ship KeepUp MVP")]),
+                "limit": .int(1),
+            ]))
+            try expect(obj(titleOut)["count"] == .int(1), "late title predicate must match under limit 1")
+            guard case .array(let titleMatches)? = obj(titleOut)["rows"], let titleRow = titleMatches.first else {
+                throw TestError.assertion("title rows missing")
+            }
+            try expect(obj(titleRow)["id"] == .string(f2), "late title predicate returns F2")
+            trace = await fake.queryHistory
+            try expect(trace.map { $0.cursor ?? "<nil>" } == ["<nil>", "100", "200", "300"],
+                       "return cap must not shorten source scan")
+
+            await fake.resetQueryTracking()
+            let cappedOut = try await RegistryModule.makeFind().handler(.object([
+                "entity": .string("project"),
+                "where": .object(["status": .string("FOCUS")]),
+                "limit": .int(2),
+            ]))
+            try expect(obj(cappedOut)["count"] == .int(2), "three matches must be capped to two returned rows")
+            trace = await fake.queryHistory
+            try expect(trace.map { $0.cursor ?? "<nil>" } == ["<nil>", "100", "200", "300"],
+                       "filtering and cap happen after exhaustive scan")
+        }
+    }
+
+    await test("registry_find repeated cursor terminates with empty-cache error or cached fallback") {
+        let emptyFake = ModFakeGateway(schema: projectSchema())
+        await emptyFake.setRepeatedCursor("loop")
+        try await withRegistryModuleEnv(emptyFake) {
+            try await registerProjectEntity()
+            do {
+                _ = try await RegistryModule.makeFind().handler(.object([
+                    "entity": .string("project"),
+                    "where": .object(["status": .string("FOCUS")]),
+                ]))
+                throw TestError.assertion("empty-cache repeated cursor must throw")
+            } catch RegistryGatewayError.invalidResponse(let reason) {
+                try expect(reason.contains("repeated cursor loop"), "unexpected repeated-cursor reason: \(reason)")
+            }
+            try expect(await emptyFake.queryCalls == 2, "repeated cursor must terminate before a third query")
+        }
+
+        let cachedId = "0000000000000000000000000000cafe"
+        let cachedFake = ModFakeGateway(schema: projectSchema(), queryRows: [
+            projectRow(id: cachedId, name: "Cached Focus", status: "FOCUS"),
+        ])
+        await cachedFake.setRepeatedCursor("loop")
+        try await withRegistryModuleEnv(cachedFake) {
+            try await registerProjectEntity()
             let out = try await RegistryModule.makeFind().handler(.object([
                 "entity": .string("project"),
                 "where": .object(["status": .string("FOCUS")]),
             ]))
-            guard case .array(let matches)? = obj(out)["rows"] else {
-                throw TestError.assertion("rows missing")
+            try expect(obj(out)["count"] == .int(1), "non-empty cache must be used on repeated cursor")
+            guard case .array(let matches)? = obj(out)["rows"], let row = matches.first else {
+                throw TestError.assertion("cached fallback rows missing")
             }
-            let ids = Set(matches.compactMap { row -> String? in
-                if case .string(let id)? = obj(row)["id"] { return id }
-                return nil
-            })
-            try expect(ids.contains(f2), "F2 Ship KeepUp MVP must be findable beyond the first 100 rows")
-            try expect(ids.contains(f5), "F5 control must remain findable")
-            let calls = await fake.queryCalls
-            try expect(calls == 4, "390 rows should be scanned across four pages, got \(calls)")
+            try expect(obj(row)["id"] == .string(cachedId), "cached fallback row preserved")
+            try expect(await cachedFake.queryCalls == 2, "cached repeated cursor must terminate before a third query")
+        }
+    }
+
+    await test("registry_find later-page failure uses cache then filters and caps") {
+        let cachedA = "00000000000000000000000000000001"
+        let cachedB = "00000000000000000000000000000002"
+        let liveRows = (0..<150).map { index in
+            projectRow(id: String(format: "%032x", index + 20_000), name: "Live \(index)", status: "BACKLOG")
+        }
+        let fake = ModFakeGateway(schema: projectSchema(), queryRows: liveRows)
+        await fake.setFailOnQueryCall(2)
+        try await withRegistryModuleEnv(fake) {
+            try await registerProjectEntity()
+            try await RegistryRowCache.shared.write(CachedRow(
+                entity: "project", pageId: cachedA, title: "Cached Focus A", url: "u",
+                properties: .object(["title": .string("Cached Focus A"), "status": .string("FOCUS")]),
+                lastEditedTime: "t", writtenAt: Date(), ttlSeconds: 3600, callCount: 1
+            ))
+            try await RegistryRowCache.shared.write(CachedRow(
+                entity: "project", pageId: cachedB, title: "Cached Focus B", url: "u",
+                properties: .object(["title": .string("Cached Focus B"), "status": .string("FOCUS")]),
+                lastEditedTime: "t", writtenAt: Date(), ttlSeconds: 3600, callCount: 1
+            ))
+
+            let out = try await RegistryModule.makeFind().handler(.object([
+                "entity": .string("project"),
+                "where": .object(["status": .string("FOCUS")]),
+                "limit": .int(1),
+            ]))
+            try expect(obj(out)["count"] == .int(1), "fallback matches must still respect return cap")
+            guard case .array(let matches)? = obj(out)["rows"], let row = matches.first else {
+                throw TestError.assertion("fallback rows missing")
+            }
+            try expect(obj(row)["id"] == .string(cachedA), "cached-only match proves fallback, not partial live out")
+            let trace = await fake.queryHistory
+            try expect(trace.map { $0.cursor ?? "<nil>" } == ["<nil>", "100"],
+                       "later-page failure trace: \(trace)")
         }
     }
 

@@ -7,7 +7,9 @@
   list window (including the F2 `Ship KeepUp MVP` project fixture).
 - **Honesty** — `registry_list` preserves its bounded result window and adds
   `has_more` when additional rows exist; existing response keys are unchanged.
-- **Tests** — Golden F2/F5 membership regression plus list truncation coverage.
+- **Tests** — Golden F2/F5 status and late-title regressions, post-filter return-cap
+  coverage, exact `has_more` boundaries, repeated-cursor termination, and
+  later-page cache fallback. Test floor **3414 → 3416**.
 
 ## Unreleased — Command Bridge visual pass (Spotlight-rhyme) — 2026-07-23
 
