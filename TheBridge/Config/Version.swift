@@ -299,8 +299,10 @@ public enum AppVersion {
     ///   independent test additions on the shared 3128 base: +3 Wave1Broker,
     ///   +8 PKT-1116, +10 RoutingIntegrityLayer).
     /// v4.0.0: 81 -> 82 -- first major under the roll-at-9 rule (3.9.9→4.0.0).
-    /// v4.0.2 C1 containment: 82 -> 84 -- build 83 is claimed by the active
-    /// v4.0.1 release branch. Contains THREAD Messages before side effects,
+    /// v4.0.1 candidate: 82 -> 83 -- post-v4 reliability and UX batch; no
+    ///   tag or GitHub release was published before v4.0.2 superseded it.
+    /// v4.0.2 C1 containment: 82 -> 84 -- build 83 was used by the superseded
+    /// v4.0.1 release candidate. Contains THREAD Messages before side effects,
     /// removes runtime approval inference, requires one explicit ordinary-send
     /// service, removes fallback, and reports correlation-only local evidence.
     ///   Sale-ready V4 cut: W5B bundle-id cutover + continuity, Notion Views
