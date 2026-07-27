@@ -1164,6 +1164,15 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         }
     }
 
+    #if canImport(AppKit)
+    /// Fail-closed modal mapping. The first/default button is Deny; only an
+    /// explicit second-button response grants approval. Return, Escape, window
+    /// dismissal, and any unknown response therefore remain non-consequential.
+    public static func decisionForModalResponse(_ response: NSApplication.ModalResponse) -> ApprovalDecision {
+        response == .alertSecondButtonReturn ? .allow : .deny
+    }
+    #endif
+
     @MainActor
     private func requestViaAlert(title: String, body: String) async -> ApprovalDecision {
         #if canImport(AppKit)
@@ -1176,10 +1185,12 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         alert.messageText = title
         alert.informativeText = body
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Allow")
         alert.addButton(withTitle: "Deny")
+        alert.addButton(withTitle: "Allow")
+        alert.buttons[0].keyEquivalent = "\r"
+        alert.buttons[1].keyEquivalent = ""
         let response = alert.runModal()
-        return response == .alertFirstButtonReturn ? .allow : .deny
+        return Self.decisionForModalResponse(response)
         #else
         return .deny
         #endif

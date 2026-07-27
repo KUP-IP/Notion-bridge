@@ -20,11 +20,39 @@
 // `runSecurityGateUXTests()` is invoked from TestRunner.swift.
 
 import Foundation
+import AppKit
 import MCP
 import TheBridgeLib
 
 func runSecurityGateUXTests() async {
     print("\n🛡️  SecurityGate UX Tests (fb-securitygate)")
+
+    // ============================================================
+    // MARK: - C1 modal approval must fail closed
+    // ============================================================
+
+    await test("Modal approval: first/default button denies") {
+        let decision = NotificationApprovalManager.decisionForModalResponse(.alertFirstButtonReturn)
+        if case .deny = decision {} else {
+            try expect(false, "the first/default modal response must deny")
+        }
+    }
+
+    await test("Modal approval: only explicit second button allows") {
+        let decision = NotificationApprovalManager.decisionForModalResponse(.alertSecondButtonReturn)
+        if case .allow = decision {} else {
+            try expect(false, "only the explicit Allow button may approve")
+        }
+    }
+
+    await test("Modal approval: cancel and unknown responses deny") {
+        for response in [NSApplication.ModalResponse.cancel, NSApplication.ModalResponse(rawValue: 9999)] {
+            let decision = NotificationApprovalManager.decisionForModalResponse(response)
+            if case .deny = decision {} else {
+                try expect(false, "cancel/unknown modal responses must deny")
+            }
+        }
+    }
 
     // ============================================================
     // MARK: - (race fix) drain-before-park lost-wakeup regression

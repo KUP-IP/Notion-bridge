@@ -7,7 +7,8 @@
   receipt, or AppleScript work. Dormant M1 code and records remain untouched.
 - **Approval security** — Production approval is explicitly injected and no
   longer auto-granted from process names, argv, environment strings, or test
-  labels; tests supply an explicit fake provider.
+  labels; tests supply an explicit fake provider. Modal review is fail-closed:
+  **Deny** is the default/first action and only an explicit **Allow** proceeds.
 - **Transport** — Ordinary one-to-one sends require exact `iMessage` or `SMS`,
   invoke one selected service once, reject RCS/auto/unknown values, and never
   fall back to another transport.
@@ -19,7 +20,7 @@
   available, but no M1 delivery handoff is authorized.
 - **Release** — Marketing **4.0.0 → 4.0.2**, build **82 → 84**; build 83 is
   reserved by the active v4.0.1 release branch.
-- **Tests** — Locked floor **3448 passed, 0 failed** against floor 3416. No live
+- **Tests** — Locked floor **3451 passed, 0 failed** against floor 3416. No live
   approval-to-send smoke is part of C1.
 
 ## Unreleased — Registry find/list completeness — 2026-07-25
