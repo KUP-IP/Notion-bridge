@@ -222,7 +222,7 @@ func runRemoteOAuthHardeningS4Tests() async {
 
     await test("A1 E2E: contacts_get with voice.resolve bearer → 403 insufficient_scope, no dispatch") {
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx()
         )
         let tok = try await keys.sign(iss: s4Issuer, aud: s4Resource, scope: "voice.resolve")
@@ -243,7 +243,7 @@ func runRemoteOAuthHardeningS4Tests() async {
 
     await test("A1 E2E: contacts_get with contacts.read bearer reaches session path (not 401/403)") {
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx()
         )
         let tok = try await keys.sign(iss: s4Issuer, aud: s4Resource, scope: "contacts.read")
@@ -344,7 +344,7 @@ func runRemoteOAuthHardeningS4Tests() async {
 
     await test("A3: destructive tool DENIED with bearer+capability-scope but NO connector.step_up") {
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx()
         )
         let tok = try await keys.sign(iss: s4Issuer, aud: s4Resource, scope: "snippets.write")
@@ -365,7 +365,7 @@ func runRemoteOAuthHardeningS4Tests() async {
 
     await test("A3: destructive tool ALLOWED (reaches session path) WITH connector.step_up scope") {
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx()
         )
         let tok = try await keys.sign(
@@ -387,7 +387,7 @@ func runRemoteOAuthHardeningS4Tests() async {
         // `{"_stepUp":"anything"}` with NO connector.step_up scope must
         // STILL be refused. (Prior S3 logic would have let this through.)
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx()
         )
         let tok = try await keys.sign(iss: s4Issuer, aud: s4Resource, scope: "snippets.write")
@@ -472,7 +472,7 @@ func runRemoteOAuthHardeningS4Tests() async {
 
     await test("S4 non-regression: default SSEServer attaches NO connector auth (no scope/step-up gating)") {
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {})
         // A contacts_get tools/call with NO Authorization on the default
         // (connectorAuth==nil) server must NOT be 401/403 — the A1 split

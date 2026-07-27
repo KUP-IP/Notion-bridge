@@ -11,7 +11,7 @@ import TheBridgeLib
 func runCGEventModuleTests() async {
     print("\n\u{1F39B}\u{FE0F} CGEventModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log  = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await CGEventModule.register(on: router)

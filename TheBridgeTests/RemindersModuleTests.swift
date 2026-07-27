@@ -176,7 +176,7 @@ final class MockRemindersStore: RemindersStoring, @unchecked Sendable {
 // MARK: - Test helpers
 
 private func makeRouter(_ store: RemindersStoring) async -> ToolRouter {
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await RemindersModule.register(on: router, store: store)

@@ -33,7 +33,7 @@ func runVoiceMemoSettingsToolsTests() async {
         fixture.reset()
     }
 
-    let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+    let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
     await VoiceMemoModule.register(on: router)
 
     await test("voice_memo_settings tools register with exact tiers, schemas, and annotations") {

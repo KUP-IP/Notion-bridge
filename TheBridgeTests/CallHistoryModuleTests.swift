@@ -34,7 +34,7 @@ private func object(_ value: Value) throws -> [String: Value] {
 func runCallHistoryModuleTests() async {
     print("\n☎️ CallHistoryModule Tests")
 
-    let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+    let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
     await CallHistoryModule.register(on: router)
 
     await test("calls_recent registers as one open-tier calls tool") {

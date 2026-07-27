@@ -75,7 +75,7 @@ func runRoutingIntegrityLayerTests() async {
         try await withRILTempHome {
             let log = AuditLog()
             let router = ToolRouter(
-                securityGate: SecurityGate(),
+                securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
                 auditLog: log,
                 licenseStatusProvider: { .trial(daysRemaining: 5) }
             )
@@ -116,7 +116,7 @@ func runRoutingIntegrityLayerTests() async {
 
             let log = AuditLog()
             let router = ToolRouter(
-                securityGate: SecurityGate(),
+                securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
                 auditLog: log,
                 licenseStatusProvider: { .trial(daysRemaining: 5) }
             )

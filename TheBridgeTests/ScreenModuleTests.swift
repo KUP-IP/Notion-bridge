@@ -15,7 +15,7 @@ import TheBridgeLib
 func runScreenModuleTests() async {
     print("\n📸 ScreenModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await ScreenModule.register(on: router)

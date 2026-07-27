@@ -11,7 +11,7 @@ func runShellModuleTests() async {
     print("\n🐚 ShellModule Tests")
 
     // Set up a fresh router with SecurityGate + AuditLog
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await ShellModule.register(on: router)

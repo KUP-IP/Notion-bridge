@@ -207,7 +207,7 @@ func runVoiceMemoContentQualityGateTests() async {
         defer { teardownFixture(fixture) }
         try await seedMemoryEntity()
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = QualityGateStubState()
         await installQualityGateStubs(on: router, state: state, pageId: "page-filler")
 
@@ -250,7 +250,7 @@ func runVoiceMemoContentQualityGateTests() async {
         defer { teardownFixture(fixture) }
         try await seedMemoryEntity()
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = QualityGateStubState()
         await installQualityGateStubs(on: router, state: state, pageId: "page-good")
 
@@ -278,7 +278,7 @@ func runVoiceMemoContentQualityGateTests() async {
     // MARK: First-class `summary` schema parameter (Success Criterion 3)
 
     await test("Schema: voice_memo_commit documents a top-level 'summary' parameter") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await VoiceMemoModule.register(on: router)
         let tools = await router.registrations(forModule: "voice")
         guard let commitTool = tools.first(where: { $0.name == "voice_memo_commit" }) else {
@@ -306,7 +306,7 @@ func runVoiceMemoContentQualityGateTests() async {
         defer { teardownFixture(fixture) }
         try await seedMemoryEntity()
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = QualityGateStubState()
         await installQualityGateStubs(on: router, state: state, pageId: "page-override")
 
@@ -337,7 +337,7 @@ func runVoiceMemoContentQualityGateTests() async {
         defer { teardownFixture(fixture) }
         try await seedMemoryEntity()
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = QualityGateStubState()
         await installQualityGateStubs(on: router, state: state, pageId: "page-batch-filler")
 
@@ -413,7 +413,7 @@ func runVoiceMemoContentQualityGateTests() async {
         let fixture = try makeFixture(name: "stall-fixture", transcript: "some transcript text for the stalled memo")
         defer { teardownFixture(fixture) }
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = QualityGateStubState()
         await installQualityGateStubs(on: router, state: state, pageId: "page-stall")
 
@@ -466,7 +466,7 @@ func runVoiceMemoContentQualityGateTests() async {
         let fixture = try makeFixture(name: "get-stall-fixture", transcript: "irrelevant — override wins")
         defer { teardownFixture(fixture) }
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let start = ContinuousClock.now
         let result = try await VoiceMemoProcessor.get(args: .object([
             "memoId": .string(fixture.recording.id),

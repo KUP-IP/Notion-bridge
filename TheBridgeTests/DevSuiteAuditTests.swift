@@ -16,7 +16,7 @@ import TheBridgeLib
 
 /// Build a router carrying ONLY the surviving Dev-suite modules.
 private func makeDevRouter() async -> ToolRouter {
-    let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+    let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
 
     await DevModule.register(on: router)
     await GhModule.register(on: router)

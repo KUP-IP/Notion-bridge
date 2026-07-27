@@ -92,7 +92,7 @@ func runAgentSurfaceReliabilityTests() async {
     }
 
     await test("agent surface: router snapshots are atomic, revisioned, filtered, and ordered") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         for item in shuffled { await router.register(item) }
         await router.markModulesRegistrationComplete()
 
@@ -110,7 +110,7 @@ func runAgentSurfaceReliabilityTests() async {
 
     await test("agent surface: tools_list uses the canonical order") {
         let router = ToolRouter(
-            securityGate: SecurityGate(),
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog(),
             licenseStatusProvider: { .trial(daysRemaining: 5) }
         )
@@ -129,7 +129,7 @@ func runAgentSurfaceReliabilityTests() async {
 
     await test("agent surface: stateful HTTP tools/list uses the canonical router snapshot") {
         let log = AuditLog()
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: log)
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: log)
         for item in shuffled { await router.register(item) }
         await router.markModulesRegistrationComplete()
 
@@ -188,7 +188,7 @@ func runAgentSurfaceReliabilityTests() async {
     await test("agent surface: unknown calls audit one safe dispatch_miss without arguments") {
         let log = AuditLog()
         let router = ToolRouter(
-            securityGate: SecurityGate(),
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: log,
             licenseStatusProvider: { .trial(daysRemaining: 5) }
         )

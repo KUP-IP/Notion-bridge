@@ -10,7 +10,7 @@ import TheBridgeLib
 func runSessionModuleTests() async {
     print("\n🔧 SessionModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await SessionModule.register(
@@ -175,7 +175,7 @@ func runSessionModuleTests() async {
     // session_info: with NO diagnostics provider, network client counts are 0
     // (not a fabricated 1) — a stdio-only caller is legitimately 0 clients.
     await test("session_info reports 0 clients when no diagnostics provider is wired") {
-        let localGate = SecurityGate()
+        let localGate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let localLog = AuditLog()
         let localRouter = ToolRouter(securityGate: localGate, auditLog: localLog)
         await SessionModule.register(on: localRouter, auditLog: localLog)
@@ -196,7 +196,7 @@ func runSessionModuleTests() async {
     // caller input echo. Use a dedicated log/router so existing test traffic
     // cannot obscure ordering or filter assertions.
     await test("audit_recent returns newest entries and composes tool/status/tier filters") {
-        let auditGate = SecurityGate()
+        let auditGate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let auditLog = AuditLog()
         let auditRouter = ToolRouter(securityGate: auditGate, auditLog: auditLog)
         await SessionModule.register(on: auditRouter, auditLog: auditLog)
@@ -337,14 +337,14 @@ func runSessionModuleTests() async {
     // session_info was called first), so uptime measured "time since first
     // call" instead of "time since this server instance booted".
     await test("independent registrations track independent start times") {
-        let gateA = SecurityGate()
+        let gateA = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let logA = AuditLog()
         let routerA = ToolRouter(securityGate: gateA, auditLog: logA)
         await SessionModule.register(on: routerA, auditLog: logA)
 
         try await Task.sleep(nanoseconds: 300_000_000) // 300ms
 
-        let gateB = SecurityGate()
+        let gateB = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let logB = AuditLog()
         let routerB = ToolRouter(securityGate: gateB, auditLog: logB)
         await SessionModule.register(on: routerB, auditLog: logB)

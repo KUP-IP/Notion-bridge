@@ -70,6 +70,23 @@ public enum GateDecision: Sendable {
     case handoff(command: String, explanation: String, warning: String)
 }
 
+public enum SecurityApprovalDecision: Sendable {
+    case allow
+    case deny
+    case alwaysAllow
+}
+
+public protocol SecurityApprovalProviding: Sendable {
+    func requestPermission() async
+    func requestApproval(
+        title: String,
+        body: String,
+        allowAlwaysAllowAction: Bool,
+        forceModalReview: Bool
+    ) async -> SecurityApprovalDecision
+    func sendFireAndForget(context: ExecutionNotificationContext) async
+}
+
 // MARK: - SecurityGate Actor
 
 /// Enforces security policies on every tool call.
@@ -171,13 +188,13 @@ public actor SecurityGate {
 
     // PKT-363 D2: sensitivePaths moved to ConfigManager (config.json-backed)
 
-    private let approvalManager: NotificationApprovalManager
+    private let approvalProvider: any SecurityApprovalProviding
     private var sessionAllowedPaths: Set<String> = []
 
     private static let permanentAllowPrefix = "com.notionbridge.security.pathAllow."
 
-    public init() {
-        self.approvalManager = NotificationApprovalManager()
+    public init(approvalProvider: any SecurityApprovalProviding) {
+        self.approvalProvider = approvalProvider
 
         // PKT-363 D1: Seed sensitivePaths defaults on first launch with new schema
         ConfigManager.shared.seedDefaultsIfNeeded()
@@ -186,7 +203,7 @@ public actor SecurityGate {
     // MARK: Permission Setup
 
     public func requestNotificationPermission() async {
-        await approvalManager.requestPermission()
+        await approvalProvider.requestPermission()
     }
 
     // MARK: Enforcement
@@ -381,10 +398,11 @@ public actor SecurityGate {
                 // Sensitive path approvals must not set global tool tier overrides.
                 // Option B: Allow = session only; Always Allow = permanent path grant (UserDefaults).
                 let body = String("Access sensitive path: \(sensitive)".prefix(120))
-                let approval = await approvalManager.requestApproval(
+                let approval = await approvalProvider.requestApproval(
                     title: "The Bridge wants to \(toolName)",
                     body: body,
-                    allowAlwaysAllowAction: true
+                    allowAlwaysAllowAction: true,
+                    forceModalReview: false
                 )
                 switch approval {
                 case .allow:
@@ -479,11 +497,15 @@ public actor SecurityGate {
         detail: String,
         neverAutoApprove: Bool
     ) async -> GateDecision {
-        let truncated = String(detail.prefix(120))
-        let decision = await approvalManager.requestApproval(
+        // Consequence tools marked neverAutoApprove must show the complete
+        // payload prepared by requestDetail. Other generic Request tools keep
+        // the compact notification treatment.
+        let approvalBody = neverAutoApprove ? detail : String(detail.prefix(120))
+        let decision = await approvalProvider.requestApproval(
             title: "The Bridge wants to \(toolName)",
-            body: truncated,
-            allowAlwaysAllowAction: !neverAutoApprove
+            body: approvalBody,
+            allowAlwaysAllowAction: !neverAutoApprove,
+            forceModalReview: neverAutoApprove && toolName == "messages_send"
         )
 
         switch decision {
@@ -527,12 +549,33 @@ public actor SecurityGate {
             return normalizeWhitespace(fallback)
         }
 
+        if toolName == "messages_send" {
+            func string(_ key: String) -> String? {
+                guard case .string(let value)? = dict[key] else { return nil }
+                return value
+            }
+            let recipient = string("recipient") ?? string("chatIdentifier") ?? "<missing target>"
+            let body = string("body") ?? ""
+            let bodyDigest = SecurityApprovalReceipt.digest(.string(body))
+            let thread = string("threadPageId") ?? "<ordinary send>"
+            let action = string("actionId") ?? "<ordinary send>"
+            let service = string("service") ?? "<missing explicit service>"
+            return """
+            Recipient: \(recipient)
+            Service: \(service)
+            THREAD: \(thread)
+            Action ID: \(action)
+            Body approval digest (SHA-256): \(bodyDigest)
+            Message body:
+            \(body)
+            """
+        }
+
         let keyCandidatesByTool: [String: [String]] = [
             "shell_exec": ["command"],
             "cli_exec": ["command"],
             "run_script": ["scriptName"],
             "applescript_exec": ["script"],
-            "messages_send": ["recipient", "body"],
         ]
 
         let keyCandidates = keyCandidatesByTool[toolName] ?? ["command", "script", "scriptName"]
@@ -570,7 +613,7 @@ public actor SecurityGate {
     /// PKT-552: Notify-tier fire-and-forget with structured context.
     /// Populates `userInfo` with tool + Notion deep-link metadata (contract with PKT-553).
     public func sendExecutionNotification(context: ExecutionNotificationContext) async {
-        await approvalManager.sendFireAndForget(context: context)
+        await approvalProvider.sendFireAndForget(context: context)
     }
 
     /// Legacy overload retained for backward compatibility.
@@ -661,13 +704,9 @@ public struct ApprovalCoalescer: Sendable {
 /// Manages UNUserNotificationCenter-based approval flow.
 /// Falls back to synchronous NSAlert if notification permission is denied.
 /// Thread safety: NSLock via nonisolated synchronous helpers (Swift 6 safe).
-public final class NotificationApprovalManager: NSObject, @unchecked Sendable, UNUserNotificationCenterDelegate {
+public final class NotificationApprovalManager: NSObject, @unchecked Sendable, UNUserNotificationCenterDelegate, SecurityApprovalProviding {
 
-    public enum ApprovalDecision: Sendable {
-        case allow
-        case deny
-        case alwaysAllow
-    }
+    public typealias ApprovalDecision = SecurityApprovalDecision
 
     private let center: UNUserNotificationCenter?
     private var hasPermission: Bool = false
@@ -675,7 +714,6 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
     /// Default raised to 90s so the prompt does not vanish out from under a user
     /// who steps away briefly. Injectable for deterministic tests.
     private let approvalTimeout: TimeInterval
-    private let isTestProcess: Bool
 
     private let lock = NSLock()
     private var pendingApprovals: [String: CheckedContinuation<ApprovalDecision, Never>] = [:]
@@ -716,18 +754,6 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         Bundle.main.bundleURL.pathExtension.lowercased() == "app"
     }
 
-    /// Detect standalone test executable runs to keep tests non-interactive.
-    /// NOTE: matches the lowercased test-binary name. Kept in lockstep with the
-    /// SwiftPM test target name (`TheBridgeTests` → processName `thebridgetests`);
-    /// the legacy `notionbridgetests` form is still accepted so an older test
-    /// binary / external harness keeps detecting non-interactive mode.
-    private static var runningInTestProcess: Bool {
-        let processName = ProcessInfo.processInfo.processName.lowercased()
-        if processName.contains("thebridgetests") || processName.contains("notionbridgetests") { return true }
-        let args = CommandLine.arguments.joined(separator: " ").lowercased()
-        return args.contains("thebridgetests") || args.contains("notionbridgetests")
-    }
-
     public override convenience init() {
         self.init(approvalTimeout: 90)
     }
@@ -736,7 +762,6 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
     /// Production uses the 90s default via the convenience `init()`.
     public init(approvalTimeout: TimeInterval) {
         self.approvalTimeout = approvalTimeout
-        self.isTestProcess = Self.runningInTestProcess
         if Self.canUseUserNotifications {
             self.center = UNUserNotificationCenter.current()
         } else {
@@ -953,7 +978,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
     /// `notionPageURL` is present; otherwise `NOTIFY_GENERIC` (Silence + Require Approval).
     /// `userInfo` carries the full context for PKT-553 Content Extension rendering.
     public func sendFireAndForget(context: ExecutionNotificationContext) async {
-        guard !isTestProcess, let center else { return }
+        guard let center else { return }
         let content = UNMutableNotificationContent()
         content.title = "The Bridge"
         content.body = "\"\(context.toolName)\" was called"
@@ -982,7 +1007,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
     /// Legacy overload retained for non-Notify callers.
     public func sendFireAndForget(title: String, body: String) async {
-        guard !isTestProcess, let center else { return }
+        guard let center else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -1041,10 +1066,11 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
     public func requestApproval(
         title: String,
         body: String,
-        allowAlwaysAllowAction: Bool = true
+        allowAlwaysAllowAction: Bool = true,
+        forceModalReview: Bool = false
     ) async -> ApprovalDecision {
-        if isTestProcess {
-            return .allow
+        if forceModalReview {
+            return await requestViaAlert(title: title, body: body)
         }
         // PKT-548: Diagnostic log to surface which approval path is chosen.
         // Helps diagnose cases where Request-tier tool calls fall back to NSAlert
@@ -1138,6 +1164,15 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         }
     }
 
+    #if canImport(AppKit)
+    /// Fail-closed modal mapping. The first/default button is Deny; only an
+    /// explicit second-button response grants approval. Return, Escape, window
+    /// dismissal, and any unknown response therefore remain non-consequential.
+    public static func decisionForModalResponse(_ response: NSApplication.ModalResponse) -> ApprovalDecision {
+        response == .alertSecondButtonReturn ? .allow : .deny
+    }
+    #endif
+
     @MainActor
     private func requestViaAlert(title: String, body: String) async -> ApprovalDecision {
         #if canImport(AppKit)
@@ -1150,10 +1185,12 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         alert.messageText = title
         alert.informativeText = body
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Allow")
         alert.addButton(withTitle: "Deny")
+        alert.addButton(withTitle: "Allow")
+        alert.buttons[0].keyEquivalent = "\r"
+        alert.buttons[1].keyEquivalent = ""
         let response = alert.runModal()
-        return response == .alertFirstButtonReturn ? .allow : .deny
+        return Self.decisionForModalResponse(response)
         #else
         return .deny
         #endif

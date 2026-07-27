@@ -51,7 +51,7 @@ func runMailModuleTests() async {
     }
 
     func makeRouter() async -> ToolRouter {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await MailModule.register(on: router)

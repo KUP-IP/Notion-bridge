@@ -9,7 +9,7 @@ import MCP
 import TheBridgeLib
 
 private func makeVoiceRouter() async -> ToolRouter {
-    let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+    let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
     await VoiceMemoModule.register(on: router)
     await MemoryModule.register(on: router)
     return router

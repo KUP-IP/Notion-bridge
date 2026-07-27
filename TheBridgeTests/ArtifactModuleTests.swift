@@ -9,7 +9,7 @@ func runArtifactModuleTests() async {
     print("\n📦 ArtifactModule Tests (PKT-743 v2.2 · 3.1)")
 
     await test("ArtifactModule registers 5 dev tools") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         let names = Set(await router.registrations(forModule: "dev").map(\.name))
         let expected: Set<String> = [
@@ -23,7 +23,7 @@ func runArtifactModuleTests() async {
     }
 
     await test("diff_render escapes HTML and counts hunks") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         let diff = """
         --- a/file.ts
@@ -60,7 +60,7 @@ func runArtifactModuleTests() async {
         try data.write(to: file)
         let expected = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         let result = try await router.dispatch(toolName: "file_hash", arguments: .object(["path": .string(file.path)]))
         guard case .object(let dict) = result,
@@ -82,7 +82,7 @@ func runArtifactModuleTests() async {
         defer { try? FileManager.default.removeItem(at: tmp) }
         try "roundtrip".write(to: src.appendingPathComponent("payload.txt"), atomically: true, encoding: .utf8)
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await ArtifactModule.register(on: router)
         let zipResult = try await router.dispatch(toolName: "file_zip", arguments: .object([
             "sourcePath": .string(src.path),

@@ -18,7 +18,7 @@ func runDevModuleTests() async {
     print("\n\u{1F9F0} DevModule Tests (Sprint A · mcp-builder #8 — placeholder removed)")
 
     await test("DevModule.register no longer registers dev_module_info (Sprint A · #8)") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await DevModule.register(on: router)
         let names = Set((await router.registrations(forModule: "dev")).map { $0.name })
         try expect(!names.contains("dev_module_info"),
@@ -37,7 +37,7 @@ func runDevModuleTests() async {
     }
 
     await test("Dispatching dev_module_info now throws unknownTool") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await DevModule.register(on: router)
         do {
             _ = try await router.dispatch(toolName: "dev_module_info", arguments: .object([:]))

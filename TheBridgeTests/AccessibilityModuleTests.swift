@@ -25,7 +25,7 @@ import TheBridgeLib
 func runAccessibilityModuleTests() async {
     print("\n♿ AccessibilityModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await AccessibilityModule.register(on: router)

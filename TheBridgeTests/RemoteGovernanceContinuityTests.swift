@@ -246,7 +246,7 @@ private func withRemoteGovernanceHarness(
     let registry = SessionRegistry(path: root.appendingPathComponent("broker-sessions.sqlite"))
     try await registry.resetForTesting()
     let router = ToolRouter(
-        securityGate: SecurityGate(),
+        securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
         auditLog: AuditLog(),
         sessionRegistry: registry
     )

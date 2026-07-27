@@ -58,7 +58,7 @@ func runMCPToolFactoryTests() async {
     }
 
     await test("factory over full registry: behavior-preserving + every tool titled") {
-        let gate = SecurityGate(); let log = AuditLog()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider()); let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await BridgeModuleRegistry.registerStaticFeatureModules(
             on: router,

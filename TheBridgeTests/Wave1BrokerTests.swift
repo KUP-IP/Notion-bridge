@@ -167,7 +167,7 @@ func runWave1BrokerTests() async {
             let registry = SessionRegistry(path: tmp.appendingPathComponent("sessions.sqlite"))
             try await registry.resetForTesting()
             let log = AuditLog()
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: log, sessionRegistry: registry)
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: log, sessionRegistry: registry)
             await router.register(ToolRegistration(
                 name: "probe",
                 module: "test",
@@ -207,7 +207,7 @@ func runWave1BrokerTests() async {
             let registry = SessionRegistry(path: tmp.appendingPathComponent("sessions.sqlite"))
             try await registry.resetForTesting()
             let log = AuditLog()
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: log, sessionRegistry: registry)
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: log, sessionRegistry: registry)
             await router.register(ToolRegistration(
                 name: "shell_exec",
                 module: "shell",
@@ -275,7 +275,7 @@ func runWave1BrokerTests() async {
             let registry = SessionRegistry(path: tmp.appendingPathComponent("sessions.sqlite"))
             try await registry.resetForTesting()
             let log = AuditLog()
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: log, sessionRegistry: registry)
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: log, sessionRegistry: registry)
             await router.register(ToolRegistration(
                 name: "shell_exec",
                 module: "shell",
@@ -321,7 +321,7 @@ func runWave1BrokerTests() async {
             let registry = SessionRegistry(path: tmp.appendingPathComponent("sessions.sqlite"))
             try await registry.resetForTesting()
             let log = AuditLog()
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: log, sessionRegistry: registry)
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: log, sessionRegistry: registry)
             await router.register(ToolRegistration(
                 name: "memory_remember",
                 module: "memory",
@@ -437,7 +437,7 @@ func runWave1BrokerTests() async {
             try StandingOrdersStore.shared.resetForTesting()
             _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v8.0.2\n\nRoot doctrine.")
 
-            let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+            let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
             await DoctrineSyncModule.register(on: router)
             let registration = await router.allRegistrations().first(where: { $0.name == "doctrine_sync" })
             try expect(registration?.tier == .request)

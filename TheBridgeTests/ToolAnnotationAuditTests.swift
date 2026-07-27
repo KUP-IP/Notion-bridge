@@ -14,7 +14,7 @@ func runToolAnnotationAuditTests() async {
     print("\n\u{1F50E} Tool Annotation Audit (PKT-803 · WS-B)")
 
     // Build the static surface (no StripeMcpModule).
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await BridgeModuleRegistry.registerStaticFeatureModules(

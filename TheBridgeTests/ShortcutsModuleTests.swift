@@ -44,7 +44,7 @@ func runShortcutsModuleTests() async {
 
     // Helper: build a router with the two tools registered over a mock runner.
     func makeRouter(_ runner: ShortcutsRunning) async -> ToolRouter {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await ShortcutsModule.register(on: router, runner: runner)

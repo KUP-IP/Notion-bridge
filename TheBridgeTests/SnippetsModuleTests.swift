@@ -17,7 +17,7 @@ func runSnippetsModuleTests() async {
     }
 
     // ── registration / shape ──────────────────────────────────────────
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await SnippetsModule.register(on: router, store: SnippetStore(storeURL: tmpURL()))

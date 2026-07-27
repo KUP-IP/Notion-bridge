@@ -29,7 +29,7 @@ func runStandingOrdersModuleTests() async {
     }
 
     // ── registration / shape ──────────────────────────────────────────
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await StandingOrdersModule.register(on: router, store: freshStore())
@@ -190,7 +190,7 @@ func runStandingOrdersModuleTests() async {
 
     // ── tool layer: save → read → delete via MCP handlers ─────────────
     await test("tool: standing_orders_save then _read returns full body via handler") {
-        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let r = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await StandingOrdersModule.register(on: r, store: freshStore())
 
         let saveResult = try await r.dispatch(toolName: 
@@ -209,7 +209,7 @@ func runStandingOrdersModuleTests() async {
     }
 
     await test("tool: standing_orders_read of unknown id returns not_found envelope") {
-        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let r = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await StandingOrdersModule.register(on: r, store: freshStore())
         let res = try await r.dispatch(toolName: "standing_orders_read", arguments: .object(["id": .string("nope")]))
         guard case .object(let o) = res, case .string(let code)? = o["error"] else {
@@ -219,7 +219,7 @@ func runStandingOrdersModuleTests() async {
     }
 
     await test("tool: standing_orders_save rejects an invalid scope") {
-        let r = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let r = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await StandingOrdersModule.register(on: r, store: freshStore())
         let res = try await r.dispatch(toolName: 
             "standing_orders_save",

@@ -1,8 +1,33 @@
 # Changelog
 
-## v4.0.1 (build 83) — Post-v4 reliability and UX — 2026-07-25
+## v4.0.2 (build 84) — THREAD Messages C1 containment — 2026-07-26
 
-- **Release** — Marketing **4.0.0 → 4.0.1**, build **82 → 83**.
+- **Containment** — Any THREAD-shaped `messages_send` request returns
+  `THREAD_MESSAGES_CONTAINED` before durable-store, ledger, Registry/Notion,
+  receipt, or AppleScript work. Dormant M1 code and records remain untouched.
+- **Approval security** — Production approval is explicitly injected and no
+  longer auto-granted from process names, argv, environment strings, or test
+  labels; tests supply an explicit fake provider. Modal review is fail-closed:
+  **Deny** is the default/first action and only an explicit **Allow** proceeds.
+- **Transport** — Ordinary one-to-one sends require exact `iMessage` or `SMS`,
+  invoke one selected service once, reject RCS/auto/unknown values, and never
+  fall back to another transport.
+- **Evidence honesty** — Invoked sends remain consequence-possible; local
+  `chat.db` matches are `CORRELATED_LOCAL_OUTBOUND_RECORD` evidence only, with
+  `providerDeliveryConfirmed=false`.
+- **Governance** — `mac-message`, `outreach-dispatch`, PEOPLE Keepr, and
+  `sales-keepr` now state the C1 hold; review, preparation, and `AWAIT_GO` remain
+  available, but no M1 delivery handoff is authorized.
+- **Release** — Marketing **4.0.0 → 4.0.2**, build **82 → 84**; build 83 was
+  used by the superseded v4.0.1 release candidate.
+- **Tests** — Locked floor **3451 passed, 0 failed** against floor 3416. No live
+  approval-to-send smoke is part of C1.
+
+## v4.0.1 (build 83) — Superseded release candidate — 2026-07-25
+
+- **Candidate** — Prepared marketing **4.0.0 → 4.0.1**, build **82 → 83**;
+  no `v4.0.1` tag or GitHub release was published, and v4.0.2 build 84
+  superseded this candidate.
 - **Remote governance** — OAuth principals retain governed routing state across
   `Mcp-Session-Id` churn; empty subjects remain fail-closed.
 - **Wake reliability** — The app can throttle and kickstart the cloudflared

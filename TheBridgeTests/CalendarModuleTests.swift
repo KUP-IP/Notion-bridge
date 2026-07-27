@@ -134,7 +134,7 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
 // MARK: - Test helpers
 
 private func makeCalendarRouter(_ store: CalendarStoring) async -> ToolRouter {
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await CalendarModule.register(on: router, store: store)
