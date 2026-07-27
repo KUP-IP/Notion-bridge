@@ -108,7 +108,7 @@ public enum ScreenModule {
     /// Register all ScreenModule tools with explicit runtime dependencies.
     package static func register(on router: ToolRouter, runtime: ScreenModuleRuntime) async {
 
-        // MARK: 1. screen_capture – Open (read-only)
+        // MARK: 1. screen_capture – Open (writes capture artifact)
         await router.register(ToolRegistration(
             name: "screen_capture",
             module: moduleName,
@@ -647,8 +647,9 @@ package struct ScreenModuleRuntime: Sendable {
 }
 
 extension ScreenModuleRuntime {
-    /// Production-only composition. `internal` intentionally keeps the live
-    /// framework implementation inaccessible to the separate test target.
+    /// Production-only composition. `internal` keeps the live factory hidden
+    /// from the separate test target; only the explicitly gated probe below can
+    /// route through it.
     internal static let live = ScreenModuleRuntime(
         frontmostBundleId: { ScreenModuleLive.frontmostBundleId() },
         cleanupCaptureFiles: { ScreenModuleLive.cleanupCaptureFiles() },
@@ -661,6 +662,19 @@ extension ScreenModuleRuntime {
             try ScreenModuleLive.recognizeText(image, language: language)
         }
     )
+}
+
+extension ScreenModule {
+    /// Explicit opt-in bridge for the non-canonical live OCR probe. Canonical
+    /// tests cannot accidentally register live dependencies because this path
+    /// refuses to run unless the dedicated environment switch is present.
+    package static func registerLiveProbe(on router: ToolRouter) async -> Bool {
+        guard ProcessInfo.processInfo.environment["BRIDGE_SCREEN_LIVE_PROBE"] == "1" else {
+            return false
+        }
+        await register(on: router, runtime: .live)
+        return true
+    }
 }
 
 /// Live macOS implementation. Handler registration and response assembly do

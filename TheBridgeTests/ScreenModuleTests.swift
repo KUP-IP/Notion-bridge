@@ -12,12 +12,15 @@ import TheBridgeLib
 
 private enum ScreenFixtureError: Error, LocalizedError, Sendable {
     case unexpectedCall(String)
+    case persistenceFailure
     case ocrFailure
 
     var errorDescription: String? {
         switch self {
         case .unexpectedCall(let name):
             return "Unexpected Screen runtime call: \(name)"
+        case .persistenceFailure:
+            return "fixture persistence failure"
         case .ocrFailure:
             return "fixture OCR failure"
         }
@@ -32,7 +35,9 @@ private final class ScreenRuntimeSpy: @unchecked Sendable {
         let persistCalls: Int
         let metadataCalls: Int
         let ocrCalls: Int
+        let callOrder: [String]
         let lastCaptureRequest: ScreenCaptureRequest?
+        let lastPersistFormat: String?
         let lastOCRLanguage: String?
     }
 
@@ -43,7 +48,9 @@ private final class ScreenRuntimeSpy: @unchecked Sendable {
     private var persistCalls = 0
     private var metadataCalls = 0
     private var ocrCalls = 0
+    private var callOrder: [String] = []
     private var lastCaptureRequest: ScreenCaptureRequest?
+    private var lastPersistFormat: String?
     private var lastOCRLanguage: String?
 
     let frontmostValue: String?
@@ -77,30 +84,45 @@ private final class ScreenRuntimeSpy: @unchecked Sendable {
     func runtime() -> ScreenModuleRuntime {
         ScreenModuleRuntime(
             frontmostBundleId: { [self] in
-                lock.withLock { frontmostCalls += 1 }
+                lock.withLock {
+                    frontmostCalls += 1
+                    callOrder.append("frontmost")
+                }
                 return frontmostValue
             },
             cleanupCaptureFiles: { [self] in
-                lock.withLock { cleanupCalls += 1 }
+                lock.withLock {
+                    cleanupCalls += 1
+                    callOrder.append("cleanup")
+                }
             },
             captureImage: { [self] request in
                 lock.withLock {
                     captureCalls += 1
+                    callOrder.append("capture")
                     lastCaptureRequest = request
                 }
                 return try await capture(request)
             },
             persistCaptureArtifact: { [self] image, format in
-                lock.withLock { persistCalls += 1 }
+                lock.withLock {
+                    persistCalls += 1
+                    callOrder.append("persist")
+                    lastPersistFormat = format
+                }
                 return try persist(image, format)
             },
             displayMetadata: { [self] in
-                lock.withLock { metadataCalls += 1 }
+                lock.withLock {
+                    metadataCalls += 1
+                    callOrder.append("metadata")
+                }
                 return await metadata()
             },
             recognizeText: { [self] image, language in
                 lock.withLock {
                     ocrCalls += 1
+                    callOrder.append("ocr")
                     lastOCRLanguage = language
                 }
                 return try ocr(image, language)
@@ -117,7 +139,9 @@ private final class ScreenRuntimeSpy: @unchecked Sendable {
                 persistCalls: persistCalls,
                 metadataCalls: metadataCalls,
                 ocrCalls: ocrCalls,
+                callOrder: callOrder,
                 lastCaptureRequest: lastCaptureRequest,
+                lastPersistFormat: lastPersistFormat,
                 lastOCRLanguage: lastOCRLanguage
             )
         }
@@ -378,6 +402,93 @@ func runScreenModuleTests() async {
         ))
     }
 
+    await test("screen_capture success assembles exact artifact and display response in order") {
+        let image = try makeScreenTestImage()
+        let artifact = ScreenCaptureArtifact(
+            filePath: "/tmp/fixture-screen.jpg",
+            width: 640,
+            height: 480,
+            bytes: 12345,
+            format: "jpg",
+            isFallback: false
+        )
+        let displays = [
+            ScreenDisplayInfo(index: 0, width: 1728, height: 1117, isMain: true),
+            ScreenDisplayInfo(index: 1, width: 1920, height: 1080, isMain: false)
+        ]
+        let spy = ScreenRuntimeSpy(
+            capture: { _ in image },
+            persist: { _, _ in artifact },
+            metadata: { displays }
+        )
+        let testRouter = await makeScreenRouter(spy)
+        let result = try await testRouter.dispatch(
+            toolName: "screen_capture",
+            arguments: .object(["format": .string("jpg")])
+        )
+        let expected: Value = .object([
+            "filePath": .string("/tmp/fixture-screen.jpg"),
+            "width": .int(640),
+            "height": .int(480),
+            "bytes": .int(12345),
+            "format": .string("jpg"),
+            "displayCount": .int(2),
+            "displays": .array([
+                .object(["index": .int(0), "width": .int(1728), "height": .int(1117), "isMain": .bool(true)]),
+                .object(["index": .int(1), "width": .int(1920), "height": .int(1080), "isMain": .bool(false)])
+            ])
+        ])
+        try expect(result == expected, "unexpected successful capture response: \(result)")
+
+        let calls = spy.snapshot()
+        try expect(calls.callOrder == ["cleanup", "capture", "persist", "metadata"], "unexpected call order: \(calls.callOrder)")
+        try expect(calls.lastPersistFormat == "jpg")
+    }
+
+    await test("screen_capture fallback artifact emits exact warning") {
+        let image = try makeScreenTestImage()
+        let artifact = ScreenCaptureArtifact(
+            filePath: "/tmp/nb-screen-fixture.png",
+            width: 1,
+            height: 1,
+            bytes: 4,
+            format: "png",
+            isFallback: true
+        )
+        let spy = ScreenRuntimeSpy(
+            capture: { _ in image },
+            persist: { _, _ in artifact },
+            metadata: { [] }
+        )
+        let testRouter = await makeScreenRouter(spy)
+        let result = try await testRouter.dispatch(toolName: "screen_capture", arguments: .object([:]))
+        guard case .object(let response) = result else {
+            throw TestError.assertion("expected object response")
+        }
+        try expect(response["warning"] == .string("Configured output directory is invalid or not writable — fell back to /tmp"))
+        try expect(response["displayCount"] == .int(0))
+        try expect(spy.snapshot().callOrder == ["cleanup", "capture", "persist", "metadata"])
+    }
+
+    await test("screen_capture persistence failure skips display metadata") {
+        let image = try makeScreenTestImage()
+        let spy = ScreenRuntimeSpy(
+            capture: { _ in image },
+            persist: { _, _ in throw ScreenFixtureError.persistenceFailure }
+        )
+        let testRouter = await makeScreenRouter(spy)
+        let result = try await testRouter.dispatch(toolName: "screen_capture", arguments: .object([:]))
+        let expected: Value = .object([
+            "error": .string("capture_failed"),
+            "message": .string("Failed to persist capture artifact: fixture persistence failure")
+        ])
+        try expect(result == expected, "unexpected persistence failure response: \(result)")
+
+        let calls = spy.snapshot()
+        try expect(calls.callOrder == ["cleanup", "capture", "persist"])
+        try expect(calls.metadataCalls == 0)
+    }
+
     await test("screen_capture from detached task returns through fake capture without live SCK") {
         let spy = ScreenRuntimeSpy(capture: { _ in throw ScreenModuleError.screenRecordingDenied })
         let testRouter = await makeScreenRouter(spy)
@@ -508,7 +619,7 @@ func runScreenModuleTests() async {
         try expect(!error.isEmpty)
     }
 
-    await test("Screen handler source is isolated from live framework and filesystem calls") {
+    await test("Screen registration has no known direct live-call tokens") {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -539,6 +650,26 @@ func runScreenModuleTests() async {
         try expect(!handlerSource.contains("public static func register(on router: ToolRouter) async"))
         try expect(liveSource.contains("internal static let live"))
         try expect(!liveSource.contains("package static let live"))
+        try expect(liveSource.contains("package static func registerLiveProbe"))
+
+        let testsDirectory = repository.appendingPathComponent("TheBridgeTests")
+        let probeURL = testsDirectory.appendingPathComponent("ScreenLiveProbeTests.swift")
+        let probeTests = try String(contentsOf: probeURL, encoding: .utf8)
+        let liveProbeCall = ["ScreenModule", ".registerLiveProbe(on:"].joined()
+        let canonicalSources = try FileManager.default.contentsOfDirectory(
+            at: testsDirectory,
+            includingPropertiesForKeys: nil
+        ).filter {
+            $0.pathExtension == "swift" && $0.lastPathComponent != probeURL.lastPathComponent
+        }
+        let offenders = try canonicalSources.compactMap { url -> String? in
+            let contents = try String(contentsOf: url, encoding: .utf8)
+            return contents.contains(liveProbeCall) ? url.lastPathComponent : nil
+        }
+        try expect(offenders.isEmpty,
+                   "canonical tests must not invoke the live probe bridge: \(offenders)")
+        try expect(probeTests.contains(liveProbeCall),
+                   "dedicated live probe must be the only test route into live Screen dependencies")
     }
 
     await test("ScreenModule.moduleName is 'screen'") {
