@@ -1,29 +1,168 @@
-// ScreenModuleTests.swift – V1-TESTCOVERAGE
+// ScreenModuleTests.swift — deterministic Screen handler contracts
 // TheBridge · Tests
 //
-// Tests for ScreenModule (4 tools: screen_capture, screen_ocr,
-// screen_record_start, screen_record_stop).
-// Note: Screen tools require Screen Recording TCC grant. Tests focus on
-// registration, tier classification, and graceful error handling.
+// Canonical tests use explicit package-scoped runtime dependencies. They never
+// touch live TCC, ScreenCaptureKit, Vision, AppKit, capture directories, or
+// image persistence. Live integration and performance verification are separate.
 
+import CoreGraphics
 import Foundation
 import MCP
 import TheBridgeLib
+
+private enum ScreenFixtureError: Error, LocalizedError, Sendable {
+    case unexpectedCall(String)
+    case ocrFailure
+
+    var errorDescription: String? {
+        switch self {
+        case .unexpectedCall(let name):
+            return "Unexpected Screen runtime call: \(name)"
+        case .ocrFailure:
+            return "fixture OCR failure"
+        }
+    }
+}
+
+private final class ScreenRuntimeSpy: @unchecked Sendable {
+    struct Snapshot: Sendable {
+        let frontmostCalls: Int
+        let cleanupCalls: Int
+        let captureCalls: Int
+        let persistCalls: Int
+        let metadataCalls: Int
+        let ocrCalls: Int
+        let lastCaptureRequest: ScreenCaptureRequest?
+        let lastOCRLanguage: String?
+    }
+
+    private let lock = NSLock()
+    private var frontmostCalls = 0
+    private var cleanupCalls = 0
+    private var captureCalls = 0
+    private var persistCalls = 0
+    private var metadataCalls = 0
+    private var ocrCalls = 0
+    private var lastCaptureRequest: ScreenCaptureRequest?
+    private var lastOCRLanguage: String?
+
+    let frontmostValue: String?
+    let capture: @MainActor @Sendable (ScreenCaptureRequest) async throws -> CGImage
+    let persist: @Sendable (CGImage, String) throws -> ScreenCaptureArtifact
+    let metadata: @MainActor @Sendable () async -> [ScreenDisplayInfo]
+    let ocr: @Sendable (CGImage, String) throws -> [ScreenOCRObservation]
+
+    init(
+        frontmostValue: String? = nil,
+        capture: @escaping @MainActor @Sendable (ScreenCaptureRequest) async throws -> CGImage = { _ in
+            throw ScreenFixtureError.unexpectedCall("captureImage")
+        },
+        persist: @escaping @Sendable (CGImage, String) throws -> ScreenCaptureArtifact = { _, _ in
+            throw ScreenFixtureError.unexpectedCall("persistCaptureArtifact")
+        },
+        metadata: @escaping @MainActor @Sendable () async -> [ScreenDisplayInfo] = {
+            []
+        },
+        ocr: @escaping @Sendable (CGImage, String) throws -> [ScreenOCRObservation] = { _, _ in
+            throw ScreenFixtureError.unexpectedCall("recognizeText")
+        }
+    ) {
+        self.frontmostValue = frontmostValue
+        self.capture = capture
+        self.persist = persist
+        self.metadata = metadata
+        self.ocr = ocr
+    }
+
+    func runtime() -> ScreenModuleRuntime {
+        ScreenModuleRuntime(
+            frontmostBundleId: { [self] in
+                lock.withLock { frontmostCalls += 1 }
+                return frontmostValue
+            },
+            cleanupCaptureFiles: { [self] in
+                lock.withLock { cleanupCalls += 1 }
+            },
+            captureImage: { [self] request in
+                lock.withLock {
+                    captureCalls += 1
+                    lastCaptureRequest = request
+                }
+                return try await capture(request)
+            },
+            persistCaptureArtifact: { [self] image, format in
+                lock.withLock { persistCalls += 1 }
+                return try persist(image, format)
+            },
+            displayMetadata: { [self] in
+                lock.withLock { metadataCalls += 1 }
+                return await metadata()
+            },
+            recognizeText: { [self] image, language in
+                lock.withLock {
+                    ocrCalls += 1
+                    lastOCRLanguage = language
+                }
+                return try ocr(image, language)
+            }
+        )
+    }
+
+    func snapshot() -> Snapshot {
+        lock.withLock {
+            Snapshot(
+                frontmostCalls: frontmostCalls,
+                cleanupCalls: cleanupCalls,
+                captureCalls: captureCalls,
+                persistCalls: persistCalls,
+                metadataCalls: metadataCalls,
+                ocrCalls: ocrCalls,
+                lastCaptureRequest: lastCaptureRequest,
+                lastOCRLanguage: lastOCRLanguage
+            )
+        }
+    }
+}
+
+private func makeScreenTestImage() throws -> CGImage {
+    guard let context = CGContext(
+        data: nil,
+        width: 1,
+        height: 1,
+        bitsPerComponent: 8,
+        bytesPerRow: 4,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ), let image = context.makeImage() else {
+        throw TestError.assertion("failed to create deterministic 1x1 image")
+    }
+    return image
+}
+
+private func makeScreenRouter(_ spy: ScreenRuntimeSpy) async -> ToolRouter {
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
+    let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+    await ScreenModule.register(on: router, runtime: spy.runtime())
+    await ScreenModule.registerRecording(on: router)
+    return router
+}
+
+private let screenRecordingDeniedResponse: Value = .object([
+    "error": .string("screen_recording_denied"),
+    "message": .string("Screen Recording permission not granted. Open System Settings > Privacy & Security > Screen Recording and enable The Bridge.")
+])
 
 // MARK: - ScreenModule Tests
 
 func runScreenModuleTests() async {
     print("\n📸 ScreenModule Tests")
 
-    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
-    let log = AuditLog()
-    let router = ToolRouter(securityGate: gate, auditLog: log)
-    await ScreenModule.register(on: router)
-    await ScreenModule.registerRecording(on: router)
+    let registrationSpy = ScreenRuntimeSpy()
+    let router = await makeScreenRouter(registrationSpy)
 
     // --- Registration ---
 
-    await test("ScreenModule registers 4 tools") {
+    await test("ScreenModule registers 4 tools with explicit test runtime") {
         let tools = await router.registrations(forModule: "screen")
         try expect(tools.count == 4, "Expected 4 screen tools, got \(tools.count)")
     }
@@ -31,24 +170,31 @@ func runScreenModuleTests() async {
     await test("ScreenModule tool names are correct") {
         let tools = await router.registrations(forModule: "screen")
         let names = Set(tools.map(\.name))
-        try expect(names.contains("screen_capture"), "Missing screen_capture")
-        try expect(names.contains("screen_ocr"), "Missing screen_ocr")
-        try expect(names.contains("screen_record_start"), "Missing screen_record_start")
-        try expect(names.contains("screen_record_stop"), "Missing screen_record_stop")
+        try expect(names == ["screen_capture", "screen_ocr", "screen_record_start", "screen_record_stop"])
     }
 
-    // --- Tier classification ---
-
     await test("screen_capture is open tier") {
-        let tools = await router.registrations(forModule: "screen")
-        let tool = tools.first(where: { $0.name == "screen_capture" })!
+        let tool = await router.registrations(forModule: "screen")
+            .first(where: { $0.name == "screen_capture" })!
         try expect(tool.tier == .open, "Expected open, got \(tool.tier.rawValue)")
     }
 
     await test("screen_ocr is open tier") {
-        let tools = await router.registrations(forModule: "screen")
-        let tool = tools.first(where: { $0.name == "screen_ocr" })!
+        let tool = await router.registrations(forModule: "screen")
+            .first(where: { $0.name == "screen_ocr" })!
         try expect(tool.tier == .open, "Expected open, got \(tool.tier.rawValue)")
+    }
+
+    await test("screen_record_start is notify tier") {
+        let tool = await router.registrations(forModule: "screen")
+            .first(where: { $0.name == "screen_record_start" })!
+        try expect(tool.tier == .notify, "Expected notify, got \(tool.tier.rawValue)")
+    }
+
+    await test("screen_record_stop is notify tier") {
+        let tool = await router.registrations(forModule: "screen")
+            .first(where: { $0.name == "screen_record_stop" })!
+        try expect(tool.tier == .notify, "Expected notify, got \(tool.tier.rawValue)")
     }
 
     await test("screen window schemas expose bundleId and appName at both registration sites") {
@@ -65,6 +211,8 @@ func runScreenModuleTests() async {
         }
     }
 
+    // --- Pure window resolution ---
+
     let windows = [
         ScreenModule.WindowCandidate(windowId: 11, bundleId: "com.example.one", appName: "Example"),
         ScreenModule.WindowCandidate(windowId: 12, bundleId: "com.example.two", appName: "Example"),
@@ -76,7 +224,8 @@ func runScreenModuleTests() async {
             windowId: 13,
             bundleId: "com.example.one",
             appName: "Example",
-            candidates: windows)
+            candidates: windows
+        )
         try expect(result == .selected(13), "windowId must win: \(result)")
     }
 
@@ -85,7 +234,8 @@ func runScreenModuleTests() async {
             windowId: nil,
             bundleId: "com.example.unique",
             appName: nil,
-            candidates: windows)
+            candidates: windows
+        )
         try expect(result == .selected(13), "unique bundle match failed: \(result)")
     }
 
@@ -94,7 +244,8 @@ func runScreenModuleTests() async {
             windowId: nil,
             bundleId: nil,
             appName: "unique app",
-            candidates: windows)
+            candidates: windows
+        )
         try expect(result == .selected(13), "unique appName match failed: \(result)")
     }
 
@@ -103,12 +254,13 @@ func runScreenModuleTests() async {
             windowId: nil,
             bundleId: "com.example.missing",
             appName: nil,
-            candidates: windows)
+            candidates: windows
+        )
         guard case .appNotFound(let query, let available) = result else {
             throw TestError.assertion("expected appNotFound, got \(result)")
         }
-        try expect(query.contains("com.example.missing"), "query should identify bundle")
-        try expect(available == windows, "failure must list all capturable ids/names")
+        try expect(query.contains("com.example.missing"))
+        try expect(available == windows)
     }
 
     await test("screen window resolver errors instead of guessing across multiple matches") {
@@ -116,11 +268,12 @@ func runScreenModuleTests() async {
             windowId: nil,
             bundleId: nil,
             appName: "Example",
-            candidates: windows)
+            candidates: windows
+        )
         guard case .ambiguous(_, let matches) = result else {
             throw TestError.assertion("expected ambiguous result, got \(result)")
         }
-        try expect(matches.map(\.windowId) == [11, 12], "ambiguous ids should be explicit")
+        try expect(matches.map(\.windowId) == [11, 12])
     }
 
     await test("screen window resolver requires one identity") {
@@ -128,113 +281,267 @@ func runScreenModuleTests() async {
             windowId: nil,
             bundleId: nil,
             appName: nil,
-            candidates: windows)
-        try expect(result == .missingIdentity, "missing identity must not select a window")
-    }
-    await test("screen_record_start is notify tier") {
-        let tools = await router.registrations(forModule: "screen")
-        let tool = tools.first(where: { $0.name == "screen_record_start" })!
-        try expect(tool.tier == .notify, "Expected notify, got \(tool.tier.rawValue)")
+            candidates: windows
+        )
+        try expect(result == .missingIdentity)
     }
 
-    await test("screen_record_stop is notify tier") {
-        let tools = await router.registrations(forModule: "screen")
-        let tool = tools.first(where: { $0.name == "screen_record_stop" })!
-        try expect(tool.tier == .notify, "Expected notify, got \(tool.tier.rawValue)")
+    // --- Deterministic handler contracts ---
+
+    await test("screen_capture serializes exact Screen Recording denial and stops before persistence") {
+        let spy = ScreenRuntimeSpy(capture: { _ in throw ScreenModuleError.screenRecordingDenied })
+        let testRouter = await makeScreenRouter(spy)
+        let result = try await testRouter.dispatch(toolName: "screen_capture", arguments: .object([:]))
+        try expect(result == screenRecordingDeniedResponse, "unexpected denial response: \(result)")
+
+        let calls = spy.snapshot()
+        try expect(calls.cleanupCalls == 1)
+        try expect(calls.captureCalls == 1)
+        try expect(calls.persistCalls == 0)
+        try expect(calls.metadataCalls == 0)
+        try expect(calls.ocrCalls == 0)
     }
 
-    // --- Graceful error handling ---
+    await test("screen_ocr serializes exact Screen Recording denial and never invokes OCR") {
+        let spy = ScreenRuntimeSpy(capture: { _ in throw ScreenModuleError.screenRecordingDenied })
+        let testRouter = await makeScreenRouter(spy)
+        let result = try await testRouter.dispatch(toolName: "screen_ocr", arguments: .object([:]))
+        try expect(result == screenRecordingDeniedResponse, "unexpected denial response: \(result)")
 
-    await test("screen_capture returns error when Screen Recording denied") {
-        let result = try await router.dispatch(
+        let calls = spy.snapshot()
+        try expect(calls.cleanupCalls == 0)
+        try expect(calls.captureCalls == 1)
+        try expect(calls.persistCalls == 0)
+        try expect(calls.metadataCalls == 0)
+        try expect(calls.ocrCalls == 0)
+    }
+
+    await test("screen_capture frontmost mismatch short-circuits every downstream dependency") {
+        let spy = ScreenRuntimeSpy(frontmostValue: "com.example.other")
+        let testRouter = await makeScreenRouter(spy)
+        let required = "com.example.required"
+        let result = try await testRouter.dispatch(
             toolName: "screen_capture",
-            arguments: .object([:])
+            arguments: .object(["requireFrontmostBundleId": .string(required)])
         )
-        if case .object(let dict) = result {
-            if case .string(let err) = dict["error"] {
-                try expect(!err.isEmpty, "Error message should not be empty")
-            }
-        }
+        let expected: Value = .object([
+            "error": .string("frontmost_mismatch"),
+            "message": .string("Required frontmost app 'com.example.required' is not active (frontmost: 'com.example.other'). Capture aborted. Bring the app forward (e.g. bridge_focus_settings) and retry."),
+            "requiredBundleId": .string(required),
+            "frontmostBundleId": .string("com.example.other")
+        ])
+        try expect(result == expected, "unexpected mismatch response: \(result)")
+
+        let calls = spy.snapshot()
+        try expect(calls.frontmostCalls == 1)
+        try expect(calls.cleanupCalls == 0)
+        try expect(calls.captureCalls == 0)
+        try expect(calls.persistCalls == 0)
+        try expect(calls.metadataCalls == 0)
+        try expect(calls.ocrCalls == 0)
     }
 
-    await test("screen_ocr returns error when Screen Recording denied") {
-        let result = try await router.dispatch(
-            toolName: "screen_ocr",
-            arguments: .object([:])
+    await test("screen_capture empty frontmost requirement skips lookup and reaches capture") {
+        let spy = ScreenRuntimeSpy(capture: { _ in throw ScreenModuleError.screenRecordingDenied })
+        let testRouter = await makeScreenRouter(spy)
+        let result = try await testRouter.dispatch(
+            toolName: "screen_capture",
+            arguments: .object(["requireFrontmostBundleId": .string("")])
         )
-        if case .object(let dict) = result {
-            if case .string(let err) = dict["error"] {
-                try expect(!err.isEmpty, "Error message should not be empty")
-            }
-        }
+        try expect(result == screenRecordingDeniedResponse)
+
+        let calls = spy.snapshot()
+        try expect(calls.frontmostCalls == 0)
+        try expect(calls.cleanupCalls == 1)
+        try expect(calls.captureCalls == 1)
     }
+
+    await test("screen_capture forwards parsed target arguments to the capture dependency") {
+        let spy = ScreenRuntimeSpy(capture: { _ in throw ScreenModuleError.screenRecordingDenied })
+        let testRouter = await makeScreenRouter(spy)
+        _ = try await testRouter.dispatch(
+            toolName: "screen_capture",
+            arguments: .object([
+                "target": .string("region"),
+                "region": .object(["x": .int(1), "y": .int(2), "w": .int(3), "h": .int(4)]),
+                "displayIndex": .int(2)
+            ])
+        )
+        let request = spy.snapshot().lastCaptureRequest
+        try expect(request == ScreenCaptureRequest(
+            target: "region",
+            windowId: nil,
+            bundleId: nil,
+            appName: nil,
+            region: ScreenCaptureRegion(x: 1, y: 2, width: 3, height: 4),
+            displayIndex: 2
+        ))
+    }
+
+    await test("screen_capture from detached task returns through fake capture without live SCK") {
+        let spy = ScreenRuntimeSpy(capture: { _ in throw ScreenModuleError.screenRecordingDenied })
+        let testRouter = await makeScreenRouter(spy)
+        let result = await Task.detached {
+            try? await testRouter.dispatch(toolName: "screen_capture", arguments: .object([:]))
+        }.value
+        try expect(result == screenRecordingDeniedResponse)
+        try expect(spy.snapshot().captureCalls == 1)
+    }
+
+    await test("screen_ocr empty observations return the exact blank-screen response") {
+        let image = try makeScreenTestImage()
+        let spy = ScreenRuntimeSpy(
+            capture: { _ in image },
+            ocr: { _, _ in [] }
+        )
+        let testRouter = await makeScreenRouter(spy)
+        let result = try await testRouter.dispatch(toolName: "screen_ocr", arguments: .object([:]))
+        let expected: Value = .object([
+            "text": .string(""),
+            "confidence": .double(0.0),
+            "bounds": .array([])
+        ])
+        try expect(result == expected, "unexpected blank OCR response: \(result)")
+    }
+
+    await test("screen_ocr maps OCR failure to exact ocr_failed response") {
+        let image = try makeScreenTestImage()
+        let spy = ScreenRuntimeSpy(
+            capture: { _ in image },
+            ocr: { _, _ in throw ScreenFixtureError.ocrFailure }
+        )
+        let testRouter = await makeScreenRouter(spy)
+        let result = try await testRouter.dispatch(toolName: "screen_ocr", arguments: .object([:]))
+        let expected: Value = .object([
+            "error": .string("ocr_failed"),
+            "message": .string("Vision text recognition failed: fixture OCR failure")
+        ])
+        try expect(result == expected, "unexpected OCR error response: \(result)")
+    }
+
+    await test("screen_ocr preserves observation order, bounds, language, and rounded average") {
+        let image = try makeScreenTestImage()
+        let firstConfidence = Float(0.9)
+        let secondConfidence = Float(0.3)
+        let observations = [
+            ScreenOCRObservation(
+                candidate: ScreenOCRCandidate(text: "First", confidence: firstConfidence),
+                boundingBox: CGRect(x: 0.1, y: 0.2, width: 0.3, height: 0.4)
+            ),
+            ScreenOCRObservation(
+                candidate: ScreenOCRCandidate(text: "Second", confidence: secondConfidence),
+                boundingBox: CGRect(x: 0.5, y: 0.6, width: 0.2, height: 0.1)
+            )
+        ]
+        let spy = ScreenRuntimeSpy(
+            capture: { _ in image },
+            ocr: { _, _ in observations }
+        )
+        let testRouter = await makeScreenRouter(spy)
+        let result = try await testRouter.dispatch(
+            toolName: "screen_ocr",
+            arguments: .object(["language": .string("fr")])
+        )
+        let expected: Value = .object([
+            "text": .string("First\nSecond"),
+            "confidence": .double(0.6),
+            "bounds": .array([
+                .object([
+                    "text": .string("First"),
+                    "confidence": .double(Double(firstConfidence)),
+                    "rect": .object([
+                        "x": .double(0.1), "y": .double(0.2),
+                        "width": .double(0.3), "height": .double(0.4)
+                    ])
+                ]),
+                .object([
+                    "text": .string("Second"),
+                    "confidence": .double(Double(secondConfidence)),
+                    "rect": .object([
+                        "x": .double(0.5), "y": .double(0.6),
+                        "width": .double(0.2), "height": .double(0.1)
+                    ])
+                ])
+            ])
+        ])
+        try expect(result == expected, "unexpected ordered OCR response: \(result)")
+        try expect(spy.snapshot().lastOCRLanguage == "fr")
+    }
+
+    await test("screen_ocr keeps candidate-less observations in confidence denominator") {
+        let image = try makeScreenTestImage()
+        let confidence = Float(0.9)
+        let spy = ScreenRuntimeSpy(
+            capture: { _ in image },
+            ocr: { _, _ in
+                [
+                    ScreenOCRObservation(
+                        candidate: ScreenOCRCandidate(text: "Only", confidence: confidence),
+                        boundingBox: .zero
+                    ),
+                    ScreenOCRObservation(candidate: nil, boundingBox: .zero)
+                ]
+            }
+        )
+        let testRouter = await makeScreenRouter(spy)
+        let result = try await testRouter.dispatch(toolName: "screen_ocr", arguments: .object([:]))
+        guard case .object(let response) = result else {
+            throw TestError.assertion("expected object response")
+        }
+        try expect(response["text"] == .string("Only"))
+        try expect(response["confidence"] == .double(0.45), "candidate-less observation must remain in denominator")
+        guard case .array(let bounds)? = response["bounds"] else {
+            throw TestError.assertion("expected bounds array")
+        }
+        try expect(bounds.count == 1, "candidate-less observation must not create a bounds row")
+    }
+
     await test("screen_record_stop handles no active recording") {
         let result = try await router.dispatch(
             toolName: "screen_record_stop",
             arguments: .object([:])
         )
-        if case .object(let dict) = result {
-            if case .string(let err) = dict["error"] {
-                try expect(!err.isEmpty, "Error message should not be empty")
-            }
+        guard case .object(let response) = result,
+              case .string(let error)? = response["error"] else {
+            throw TestError.assertion("expected nonempty recording error")
         }
+        try expect(!error.isEmpty)
     }
 
-    // --- Module name ---
+    await test("Screen handler source is isolated from live framework and filesystem calls") {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: repository.appendingPathComponent("TheBridge/Modules/ScreenModule.swift"),
+            encoding: .utf8
+        )
+        guard let runtimeMarker = source.range(of: "// MARK: - Screen Runtime Dependencies") else {
+            throw TestError.assertion("missing Screen runtime boundary marker")
+        }
+        let handlerSource = String(source[..<runtimeMarker.lowerBound])
+            .components(separatedBy: .newlines)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        let liveSource = String(source[runtimeMarker.lowerBound...])
+        let forbidden = [
+            "CGPreflightScreenCaptureAccess(",
+            "SCScreenshotManager.captureImage",
+            "VNRecognizeTextRequest(",
+            "NSWorkspace.shared",
+            "CGImageDestinationCreateWithURL(",
+            "FileManager.default"
+        ]
+        for token in forbidden {
+            try expect(!handlerSource.contains(token), "handler source must not call live dependency: \(token)")
+        }
+        try expect(handlerSource.contains("package static func register(on router: ToolRouter, runtime: ScreenModuleRuntime)"))
+        try expect(!handlerSource.contains("public static func register(on router: ToolRouter) async"))
+        try expect(liveSource.contains("internal static let live"))
+        try expect(!liveSource.contains("package static let live"))
+    }
 
     await test("ScreenModule.moduleName is 'screen'") {
-        try expect(ScreenModule.moduleName == "screen",
-                   "Expected 'screen', got '\(ScreenModule.moduleName)'")
-    }
-
-    // --- SCK off-main-actor continuation-leak regression guard ---
-    // Before the SCKBoundary fix, dispatching an SCK-backed tool from a
-    // nonisolated / off-main-actor context (`Task.detached`) leaked the
-    // ScreenCaptureKit checked continuation and HUNG FOREVER ("SWIFT TASK
-    // CONTINUATION MISUSE"). The fix routes the SCK call onto the main actor
-    // and guards it with a libdispatch watchdog, so the call must now RETURN
-    // or THROW promptly. We only assert "did not hang" — content depends on
-    // live TCC/display/Chrome state, which we do not gate on here.
-    await test("screen_capture from a detached (off-main) task returns promptly, never hangs") {
-        let result = await Task.detached {
-            try? await router.dispatch(toolName: "screen_capture", arguments: .object([:]))
-        }.value
-        try expect(result != nil, "screen_capture dispatch should produce a value off-main, not hang")
-    }
-
-    // --- FB-AUTOMATION: requireFrontmostBundleId guard ---
-    // An impossible bundle id can never be frontmost, so the guard MUST short-
-    // circuit with error='frontmost_mismatch' and perform NO capture (no
-    // filePath in the response). This holds regardless of TCC/display state.
-    await test("screen_capture aborts with frontmost_mismatch when required app is not frontmost") {
-        let result = try await router.dispatch(
-            toolName: "screen_capture",
-            arguments: .object(["requireFrontmostBundleId": .string("com.example.never.frontmost.\(UUID().uuidString)")])
-        )
-        guard case .object(let dict) = result else {
-            throw TestError.assertion("expected object response")
-        }
-        guard case .string(let err) = dict["error"] else {
-            throw TestError.assertion("expected error key on mismatch, got keys: \(dict.keys)")
-        }
-        try expect(err == "frontmost_mismatch", "expected frontmost_mismatch, got \(err)")
-        try expect(dict["filePath"] == nil, "guard must abort BEFORE capture — no filePath expected")
-        try expect(dict["requiredBundleId"] != nil, "mismatch response should echo requiredBundleId")
-    }
-
-    // Empty / absent requireFrontmostBundleId must NOT engage the guard — the
-    // call proceeds exactly as before (returns promptly, content state-dependent).
-    await test("screen_capture with empty requireFrontmostBundleId does not engage the guard") {
-        let result = try await router.dispatch(
-            toolName: "screen_capture",
-            arguments: .object(["requireFrontmostBundleId": .string("")])
-        )
-        guard case .object(let dict) = result else {
-            throw TestError.assertion("expected object response")
-        }
-        // Must not be a frontmost_mismatch (guard skipped on empty string).
-        if case .string(let err) = dict["error"] {
-            try expect(err != "frontmost_mismatch", "empty guard string must not trigger frontmost_mismatch")
-        }
+        try expect(ScreenModule.moduleName == "screen")
     }
 }
