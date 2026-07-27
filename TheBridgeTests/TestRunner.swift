@@ -63,6 +63,33 @@ func expect(_ condition: Bool, _ msg: String = "Assertion failed", file: String 
     guard condition else { throw TestError.assertion("\(msg) at \(file):\(line)") }
 }
 
+final class TestSecurityApprovalProvider: @unchecked Sendable, SecurityApprovalProviding {
+    private let lock = NSLock()
+    private let decision: SecurityApprovalDecision
+    private(set) var approvalRequestCount = 0
+    private(set) var notificationCount = 0
+
+    init(decision: SecurityApprovalDecision = .allow) {
+        self.decision = decision
+    }
+
+    func requestPermission() async {}
+
+    func requestApproval(
+        title: String,
+        body: String,
+        allowAlwaysAllowAction: Bool,
+        forceModalReview: Bool
+    ) async -> SecurityApprovalDecision {
+        lock.withLock { approvalRequestCount += 1 }
+        return decision
+    }
+
+    func sendFireAndForget(context: ExecutionNotificationContext) async {
+        lock.withLock { notificationCount += 1 }
+    }
+}
+
 enum TestError: Error, LocalizedError {
     case assertion(String)
     var errorDescription: String? {
@@ -275,7 +302,7 @@ struct TheBridgeTestRunner {
 
         print("\n\u{1F512} SecurityGate Tests (v3)")
 
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
 
 await test("Open tier allows immediately") {
     let d = await gate.enforce(toolName: "read_file", tier: .open, arguments: .object(["path": .string("/tmp/test.txt")]))
@@ -439,7 +466,7 @@ await test("GateDecision.handoff is not allow or reject") {
 
 print("\n\u{1F500} ToolRouter Tests")
 
-let routerGate = SecurityGate()
+let routerGate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
 let routerLog = AuditLog()
 let router = ToolRouter(securityGate: routerGate, auditLog: routerLog)
 
@@ -651,6 +678,7 @@ await runDataSourcesViewModelTests() // Data-Source Registry W4: Settings pane s
 await runRegistryEdgeCaseTests()     // Data-Source Registry: adversarial edge cases (codec chunking, pagination, cache concurrency, config race, writer)
 await runRegistryHydrationTests()    // Packet Runner v1 (FR-1/§8.3): packet-registry-v1 one-hop hydration envelope (primary+body+relations+provenance+warnings)
 await runMessagesModuleTests()
+await runThreadMessagesReceiptTests()  // THREAD Messages Receipt M1: exact ROWID + recoverable Intent/Result journal
 await runCallHistoryModuleTests()      // Bridge v4 Wave 1: calls_recent filters, schema/FDA errors, annotations
 await runMessagesSuiteAuditTests()   // Messages-suite every-angle-of-attack audit
 await runVoiceMemoSuiteAuditTests()  // Voice memo suite audit (PKT-MEM-122)

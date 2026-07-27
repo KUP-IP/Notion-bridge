@@ -212,7 +212,7 @@ func runRemoteOAuthHardeningTests() async {
 
     await test("StepUp E2E: destructive tools/call without step-up → 403 step_up_required, NO dispatch") {
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx(ConnectorAuthDiagnostics(), ConnectorSessionBinding())
         )
         let tok = try await keys.sign(iss: hIssuer, aud: hResource, scope: "snippets.write")
@@ -233,7 +233,7 @@ func runRemoteOAuthHardeningTests() async {
 
     await test("StepUp E2E: destructive tools/call WITH step-up scope reaches session machinery") {
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx(ConnectorAuthDiagnostics(), ConnectorSessionBinding())
         )
         let tok = try await keys.sign(
@@ -258,7 +258,7 @@ func runRemoteOAuthHardeningTests() async {
 
     await test("StepUp E2E: non-destructive tools/call needs no step-up (reaches session path)") {
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx(ConnectorAuthDiagnostics(), ConnectorSessionBinding())
         )
         let tok = try await keys.sign(iss: hIssuer, aud: hResource, scope: "snippets.read")
@@ -327,7 +327,7 @@ func runRemoteOAuthHardeningTests() async {
     await test("ConfusedDeputy E2E: token substitution across a bound /mcp session → 403, no dispatch") {
         let binding = ConnectorSessionBinding()
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx(ConnectorAuthDiagnostics(), binding)
         )
         // Client A binds session "shared" with a non-tools/call request.
@@ -372,7 +372,7 @@ func runRemoteOAuthHardeningTests() async {
     await test("LeakSweep: every auth path captured — transcript has 0 token/secret occurrences") {
         let diag = ConnectorAuthDiagnostics()
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: authCtx(diag, ConnectorSessionBinding())
         )
         // The actual secret material we will look for in the transcript.
@@ -533,7 +533,7 @@ func runRemoteOAuthHardeningTests() async {
 
     await test("Non-regression: default SSEServer attaches NO connector auth (no step-up, no bearer)") {
         let server = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}
         )
         // A destructive tools/call with NO Authorization header on the

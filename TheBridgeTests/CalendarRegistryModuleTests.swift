@@ -63,7 +63,7 @@ func runCalendarRegistryModuleTests() async {
 
     await test("calendar_registry_pair registered on calendar family with .request tier") {
         defer { clearSeams() }
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await CalendarRegistryModule.register(on: router)
         let tools = await router.registrations(forModule: "calendar")
         guard let tool = tools.first(where: { $0.name == CalendarRegistryModule.toolName }) else {
@@ -77,7 +77,7 @@ func runCalendarRegistryModuleTests() async {
     await test("env off → ListTools omits calendar_registry_pair") {
         defer { clearSeams() }
         CalendarRegistryFeature.environmentOverride = [:]
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await CalendarRegistryModule.register(on: router)
         let disabled = ToolListingGates.mergedDisabledToolNames()
         try expect(disabled.contains(CalendarRegistryModule.toolName), "gated when env off")
@@ -105,7 +105,7 @@ func runCalendarRegistryModuleTests() async {
     await test("env off → dispatch fail-closed") {
         defer { clearSeams() }
         CalendarRegistryFeature.environmentOverride = [:]
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await CalendarRegistryModule.register(on: router)
         do {
             _ = try await router.dispatch(toolName: CalendarRegistryModule.toolName, arguments: sampleArgs())
@@ -201,7 +201,7 @@ func runCalendarRegistryModuleTests() async {
             ])
         }
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await CalendarRegistryModule.register(on: router)
         let disabled = ToolListingGates.mergedDisabledToolNames()
         try expect(!disabled.contains(CalendarRegistryModule.toolName), "listed when env on")

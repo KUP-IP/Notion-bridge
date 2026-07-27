@@ -71,7 +71,7 @@ private func hasLeadingOrTrailingControl(_ s: String) -> Bool {
 func runMessagesSuiteAuditTests() async {
     print("\n\u{1F50E} Messages Suite Audit (every-angle-of-attack)")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await MessagesModule.register(on: router)

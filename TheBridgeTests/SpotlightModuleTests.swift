@@ -11,7 +11,7 @@ import TheBridgeLib
 func runSpotlightModuleTests() async {
     print("\n\u{1F50D} SpotlightModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log  = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await SpotlightModule.register(on: router)

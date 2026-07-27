@@ -33,7 +33,7 @@ func runToolConventionTests() async {
     }
 
     await test("forward-guard: every registered inputSchema property key is camelCase") {
-        let gate = SecurityGate(); let log = AuditLog()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider()); let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await BridgeModuleRegistry.registerStaticFeatureModules(
             on: router,

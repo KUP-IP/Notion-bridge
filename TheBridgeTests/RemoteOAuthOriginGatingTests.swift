@@ -65,7 +65,7 @@ func runRemoteOAuthOriginGatingTests() async {
 
     func server() -> SSEServer {
         SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {}, connectorAuth: auth()
         )
     }
@@ -139,7 +139,7 @@ func runRemoteOAuthOriginGatingTests() async {
     }
 
     await test("OriginGate: LOCAL keeps full local tool surface (token-free init + tools/call)") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await router.register(ToolRegistration(
             name: "local_probe",
             module: "test",
@@ -199,7 +199,7 @@ func runRemoteOAuthOriginGatingTests() async {
     await test("OriginGate: REMOTE + connectorAuth nil ⇒ coarse 503 + local oauth_inactive mapping") {
         let audit = TunnelAuthFailureAudit()
         let s = SSEServer(
-            router: ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog()),
+            router: ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog()),
             onToolCall: {},
             connectorAuth: nil,
             authFailureAudit: audit
@@ -302,7 +302,7 @@ func runRemoteOAuthOriginGatingTests() async {
             try? fm.removeItem(at: tmp)
         }
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await BridgeInitializeModule.register(
             on: router,
             contextProvider: { client in

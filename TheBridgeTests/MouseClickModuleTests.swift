@@ -12,7 +12,7 @@ import TheBridgeLib
 func runMouseClickModuleTests() async {
     print("\n\u{1F5B1}\u{FE0F} MouseClickModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log  = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await MouseClickModule.register(on: router)

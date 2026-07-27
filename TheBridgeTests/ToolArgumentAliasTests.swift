@@ -22,7 +22,7 @@ private actor AliasInvocationProbe {
 
 private func aliasTestRouter() -> ToolRouter {
     ToolRouter(
-        securityGate: SecurityGate(),
+        securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
         auditLog: AuditLog(),
         licenseStatusProvider: { .trial(daysRemaining: 30) }
     )
@@ -160,7 +160,7 @@ func runToolArgumentAliasTests() async {
     }
 
     await test("live Notion dual-key schemas declare every accepted handler alias") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(
             securityGate: gate,

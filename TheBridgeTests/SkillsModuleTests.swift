@@ -14,7 +14,7 @@ import TheBridgeLib
 func runSkillsModuleTests() async {
     print("\n🧠 SkillsModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await SkillsModule.register(on: router)

@@ -37,7 +37,7 @@ private func loadAllTestSource() -> String {
 func runToolSurfaceCoverageAuditTests() async {
     print("\n\u{1F50E} Tool surface coverage meta-audit")
 
-    let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+    let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
     let log = AuditLog()
     await BridgeModuleRegistry.registerStaticFeatureModules(on: router) { r in
         await SessionModule.register(on: r, auditLog: log)

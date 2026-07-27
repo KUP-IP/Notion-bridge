@@ -10,7 +10,7 @@ import TheBridgeLib
 func runMessagesModuleTests() async {
     print("\n💬 MessagesModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await MessagesModule.register(on: router)
@@ -63,6 +63,12 @@ func runMessagesModuleTests() async {
         let tools = await router.registrations(forModule: "messages")
         let tool = tools.first(where: { $0.name == "messages_send" })!
         try expect(tool.tier == .request, "Expected request, got \(tool.tier.rawValue)")
+    }
+
+    await test("messages_send is non-downgradable and requires fresh approval") {
+        let tools = await router.registrations(forModule: "messages")
+        let tool = tools.first(where: { $0.name == "messages_send" })!
+        try expect(tool.neverAutoApprove, "messages_send must not accept Always Allow or tier downgrades")
     }
 
     // Functional tests — messages_search (requires chat.db access)
@@ -232,6 +238,136 @@ func runMessagesModuleTests() async {
         } catch is ToolRouterError {
             // Expected
         }
+    }
+
+
+    await test("messages_send contains every THREAD transaction argument before ordinary validation") {
+        let keys = ["threadPageId", "actionId", "approvalBasis", "actor", "workspace"]
+        for key in keys {
+            let result = try await router.dispatch(
+                toolName: "messages_send",
+                arguments: .object([key: .string("hostile-value")])
+            )
+            guard case .object(let object) = result else {
+                throw TestError.assertion("contained result must be an object for \(key)")
+            }
+            try expect(object["code"] == .string("THREAD_MESSAGES_CONTAINED"), "\(key) must trigger stable containment code")
+            try expect(object["deliveryInvoked"] == .bool(false), "contained \(key) must not invoke delivery")
+            try expect(object["consequencePossible"] == .bool(false), "contained \(key) must have no consequence")
+        }
+    }
+
+    await test("THREAD containment guard is structurally before every M1 side-effect seam") {
+        let testsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let sourceURL = testsURL.deletingLastPathComponent()
+            .appendingPathComponent("TheBridge/Modules/MessagesModule.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        guard let guardIndex = source.range(of: "\"code\": .string(\"THREAD_MESSAGES_CONTAINED\")")?.lowerBound else {
+            throw TestError.assertion("containment code missing")
+        }
+        for seam in [
+            "SQLiteThreadMessagesReceiptStore.live()",
+            "toolName: \"notion_page_read\"",
+            "toolName: \"registry_get\"",
+            "toolName: \"notion_blocks_append\""
+        ] {
+            guard let seamIndex = source.range(of: seam)?.lowerBound else {
+                throw TestError.assertion("expected M1 seam missing: \(seam)")
+            }
+            try expect(guardIndex < seamIndex, "containment must precede \(seam)")
+        }
+    }
+
+    await test("messages_send contains mixed THREAD arguments before receipt or ledger construction") {
+        let result = try await router.dispatch(
+            toolName: "messages_send",
+            arguments: .object([
+                "recipient": .string("+15551234567"),
+                "body": .string("must not send"),
+                "confirm": .string("SEND"),
+                "service": .string("iMessage"),
+                "threadPageId": .string("thread-page"),
+                "actionId": .string("action-1"),
+                "approvalBasis": .string("test")
+            ])
+        )
+        guard case .object(let object) = result else { throw TestError.assertion("expected containment object") }
+        try expect(object["code"] == .string("THREAD_MESSAGES_CONTAINED"))
+        try expect(object["providerDeliveryConfirmed"] == .bool(false))
+        try expect(object["correlatedLocalRecord"] == .bool(false))
+    }
+
+    final class InvocationProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _services: [MessagesService] = []
+        private var _verifyCount = 0
+        var result = MessagesAppleScriptInvocationResult()
+
+        var services: [MessagesService] { lock.withLock { _services } }
+        var verifyCount: Int { lock.withLock { _verifyCount } }
+        func invoke(_ service: MessagesService, _ recipient: String, _ body: String) -> MessagesAppleScriptInvocationResult {
+            lock.withLock { _services.append(service) }
+            return result
+        }
+        func verify(_ recipient: String, _ body: String, _ watermark: Int, _ preparedAt: Date) -> MessagesDeliveryVerification {
+            lock.withLock { _verifyCount += 1 }
+            return .init(status: .notFound)
+        }
+    }
+
+    await test("ordinary one-to-one rejects missing, auto, RCS, and unknown service without invocation") {
+        for service in [nil, "auto", "RCS", "sms", "bogus"] as [String?] {
+            let probe = InvocationProbe()
+            let attempt = MessagesModule.performOneToOneSend(
+                recipient: "+15551234567", body: "test", confirm: "SEND",
+                serviceOverride: service, afterId: 1, preparedAt: Date(),
+                invoke: probe.invoke, verify: probe.verify
+            )
+            try expect(!attempt.invoked, "invalid service \(service ?? "<missing>") must not invoke")
+            try expect(probe.services.isEmpty, "invalid service must have zero invocation calls")
+            try expect(probe.verifyCount == 0, "invalid service must not correlate local records")
+        }
+    }
+
+    await test("SMS rejects an email recipient before invocation") {
+        let probe = InvocationProbe()
+        let attempt = MessagesModule.performOneToOneSend(
+            recipient: "person@example.com", body: "test", confirm: "SEND",
+            serviceOverride: "SMS", afterId: 1, preparedAt: Date(),
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(!attempt.invoked)
+        try expect(probe.services.isEmpty)
+        try expect(attempt.error?.contains("phone-number") == true)
+    }
+
+    await test("one ordinary request invokes exactly one explicit service and never falls back after error") {
+        for service in [MessagesService.iMessage, .sms] {
+            let probe = InvocationProbe()
+            probe.result = .init(error: "forced failure", errorNumber: -1708)
+            let attempt = MessagesModule.performOneToOneSend(
+                recipient: "+15551234567", body: "test", confirm: "SEND",
+                serviceOverride: service.rawValue, afterId: 1, preparedAt: Date(),
+                invoke: probe.invoke, verify: probe.verify
+            )
+            try expect(attempt.invoked, "AppleScript attempt is consequence-possible even when it reports an error")
+            try expect(probe.services == [service], "one request must invoke only the reviewed service")
+            try expect(probe.verifyCount == 0, "synchronous AppleScript error must not trigger correlation retry")
+        }
+    }
+
+    await test("successful invocation with no local match remains consequence-possible but not successful") {
+        let probe = InvocationProbe()
+        let attempt = MessagesModule.performOneToOneSend(
+            recipient: "+15551234567", body: "test", confirm: "SEND",
+            serviceOverride: "iMessage", afterId: 1, preparedAt: Date(),
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(attempt.invoked)
+        try expect(probe.services == [.iMessage])
+        try expect(probe.verifyCount == 1)
+        try expect(!attempt.verification.verified, "missing local evidence must not be success")
+        try expect(attempt.verification.status == .notFound)
     }
 
     await test("messages_send rejects body+confirm without recipient or chatIdentifier") {

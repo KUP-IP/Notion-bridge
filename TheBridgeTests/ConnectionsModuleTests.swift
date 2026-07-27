@@ -5,7 +5,7 @@ import TheBridgeLib
 func runConnectionsModuleTests() async {
     print("\n🔌 ConnectionsModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await ConnectionsModule.register(on: router)
@@ -167,7 +167,7 @@ func runConnectionsModuleTests() async {
         defer { try? FileManager.default.removeItem(at: temp) }
         try await registry.resetForTesting()
         let isolatedRouter = ToolRouter(
-            securityGate: SecurityGate(),
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog(),
             sessionRegistry: registry
         )

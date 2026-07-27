@@ -222,7 +222,7 @@ func runResultSizeControlsTests() async {
     // ============================================================
 
     func makeRouter(_ store: CalendarStoring) async -> ToolRouter {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await CalendarModule.register(on: router, store: store)
         return router
     }

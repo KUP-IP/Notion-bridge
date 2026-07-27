@@ -123,7 +123,7 @@ func runCloudStatusModuleTests() async {
     // MARK: - 2. bridge_status gated registration + payload
 
     await test("WS-D bridge_status: registered then deregistered (cloud gate)") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         let mgr = await makeManager(health: .healthy)
@@ -143,7 +143,7 @@ func runCloudStatusModuleTests() async {
 
     await test("WS-D bridge_status: NOT part of the static feature-module count") {
         // The static surface is registered without any cloud tool.
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await BridgeModuleRegistry.registerStaticFeatureModules(

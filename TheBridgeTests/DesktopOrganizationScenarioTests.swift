@@ -9,7 +9,7 @@ import TheBridgeLib
 func runDesktopOrganizationScenarioTests() async {
     print("\n🗂️ Desktop organization scenario (sandbox /tmp, not ~/Desktop)")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await FileModule.register(on: router)

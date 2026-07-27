@@ -90,7 +90,7 @@ func runModuleGroupTests() async {
     // ----------------------------------------------------------------
 
     await test("LIVE: every registered tool resolves to a non-system group OR is an explicit system tool") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await BridgeModuleRegistry.registerStaticFeatureModules(
@@ -120,7 +120,7 @@ func runModuleGroupTests() async {
     }
 
     await test("LIVE: deriveGroups order is stable and matches ModuleGroupID.allCases") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await BridgeModuleRegistry.registerStaticFeatureModules(
@@ -260,7 +260,7 @@ func runModuleGroupTests() async {
     // they can audit ModuleGroupOverride.map and prefixMap directly.
     // ----------------------------------------------------------------
     await test("self-critique: print live group map for human review") {
-        let gate = SecurityGate()
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(securityGate: gate, auditLog: log)
         await BridgeModuleRegistry.registerStaticFeatureModules(

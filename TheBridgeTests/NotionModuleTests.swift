@@ -13,7 +13,7 @@ import TheBridgeLib
 func runNotionModuleTests() async {
     print("\n📝 NotionModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await NotionModule.register(on: router)

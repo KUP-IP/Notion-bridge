@@ -18,7 +18,7 @@ func runOllamaModuleTests() async {
     }
 
     await test("OllamaModule registers 2 open tools") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await OllamaModule.register(on: router)
         let tools = await router.registrations(forModule: "ollama")
         try expect(tools.count == 2, "expected 2 ollama tools")

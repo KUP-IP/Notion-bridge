@@ -16,7 +16,7 @@ import TheBridgeLib
 func runSyntheticInputModuleTests() async {
     print("\n\u{2328}\u{FE0F} SyntheticInputModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log  = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await SyntheticInputModule.register(on: router)

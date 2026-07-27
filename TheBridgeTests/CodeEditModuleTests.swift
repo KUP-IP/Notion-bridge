@@ -8,7 +8,7 @@ import TheBridgeLib
 func runCodeEditModuleTests() async {
     print("\n\u{1F6E0}  CodeEditModule Tests (PKT-750 v2.2 · 1.2)")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await CodeEditModule.register(on: router)

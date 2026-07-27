@@ -176,7 +176,7 @@ func runVoiceMemoPlayerAttachTests() async {
 
     // 1. Attaches the default originating player on memory_keep create.
     await test("PKT-1064: memory_keep attaches the originating Player relation at create") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = MemoryKeepStubState()
         await installStubs(on: router, state: state, pageId: "page-123")
 
@@ -197,7 +197,7 @@ func runVoiceMemoPlayerAttachTests() async {
 
     // 2. Verify read-back confirms the relation is present.
     await test("PKT-1064: verify read-back confirms the Player relation is present") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = MemoryKeepStubState()
         await installStubs(on: router, state: state, pageId: "page-verify")
 
@@ -217,7 +217,7 @@ func runVoiceMemoPlayerAttachTests() async {
     // 3. Absent PLAYERS property → graceful BLOCKED (throws, no crash), and NO
     //    row is created (we block before the write).
     await test("PKT-1064: absent PLAYERS property blocks gracefully (throws, no crash)") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = MemoryKeepStubState()
         await installStubs(on: router, state: state, pageId: "page-none")
 
@@ -244,7 +244,7 @@ func runVoiceMemoPlayerAttachTests() async {
 
     // 4. Present-but-UNBOUND PLAYERS property is treated as absent → BLOCKED.
     await test("PKT-1064: unbound PLAYERS property (no property id) also blocks gracefully") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = MemoryKeepStubState()
         await installStubs(on: router, state: state, pageId: "page-unbound")
 
@@ -269,7 +269,7 @@ func runVoiceMemoPlayerAttachTests() async {
 
     // 5. Read-back that omits the relation → verify failure (not a clean success).
     await test("PKT-1064: read-back missing the relation fails verification") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = MemoryKeepStubState()
         await installStubs(on: router, state: state, pageId: "page-drop")
         await state.setOmitPlayers(true)   // create "succeeds" but relation is gone
@@ -295,7 +295,7 @@ func runVoiceMemoPlayerAttachTests() async {
 
     // 6. An explicit per-intent originating player overrides the default.
     await test("PKT-1064: explicit originatingPlayer override wins over the default") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = MemoryKeepStubState()
         await installStubs(on: router, state: state, pageId: "page-override")
         let other = "11111111-2222-3333-4444-555555555555"

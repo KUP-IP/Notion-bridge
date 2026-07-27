@@ -47,7 +47,7 @@ private actor StubRegistryState {
 }
 
 private func makeStubRouter(_ state: StubRegistryState) async -> ToolRouter {
-    let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+    let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
     let schema: Value = .object(["type": .string("object")])
     await router.register(ToolRegistration(name: "registry_list", module: "registry", tier: .open,
         description: "stub", inputSchema: schema) { _ in

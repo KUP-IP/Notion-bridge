@@ -13,7 +13,7 @@ import TheBridgeLib
 func runAppleScriptModuleTests() async {
     print("\n🍎 AppleScriptModule Tests")
 
-    let gate = SecurityGate()
+    let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await AppleScriptModule.register(on: router)

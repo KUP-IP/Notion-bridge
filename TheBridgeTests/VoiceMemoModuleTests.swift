@@ -9,7 +9,7 @@ func runVoiceMemoModuleTests() async {
     print("\n🎙️ Voice Memos curator — module + parser + job")
 
     await test("VoiceMemoModule registers 12 tools with expected tiers") {
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await VoiceMemoModule.register(on: router)
         let tools = await router.registrations(forModule: "voice")
         try expect(tools.count == 12, "expected 12 voice tools, got \(tools.count)")
@@ -68,7 +68,7 @@ func runVoiceMemoModuleTests() async {
         let sidecar = recordings.appendingPathComponent("test.txt")
         try "Remind me to ship the release notes.".data(using: .utf8)?.write(to: sidecar)
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await VoiceMemoModule.register(on: router)
 
         let result = try await VoiceMemoProcessor.process(
@@ -124,7 +124,7 @@ func runVoiceMemoModuleTests() async {
         let id = VoiceMemoDiscovery.stableId(for: audio)
         try VoiceMemoProcessedStore.markProcessed(id: id)
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await VoiceMemoModule.register(on: router)
         let result = try await VoiceMemoProcessor.process(
             args: .object(["memoId": .string(id)]),
@@ -338,7 +338,7 @@ func runVoiceMemoModuleTests() async {
         let audio = recordings.appendingPathComponent("listed.m4a")
         try makeTsrpM4AFixture(transcript: "List view Apple source.").write(to: audio)
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await VoiceMemoModule.register(on: router)
         let result = try await router.dispatch(toolName: "voice_memo_list", arguments: .object([
             "includeProcessed": .bool(true),
@@ -430,7 +430,7 @@ func runVoiceMemoModuleTests() async {
         )
         try VoiceMemoReviewStore.enqueue(entry)
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await VoiceMemoModule.register(on: router)
         let result = try await router.dispatch(toolName: "voice_memo_review_resolve", arguments: .object([
             "id": .string(entry.id),
@@ -466,7 +466,7 @@ func runVoiceMemoModuleTests() async {
         )
         try VoiceMemoReviewStore.enqueue(entry)
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await VoiceMemoModule.register(on: router)
         do {
             _ = try await router.dispatch(toolName: "voice_memo_review_resolve", arguments: .object([
@@ -501,7 +501,7 @@ func runVoiceMemoModuleTests() async {
         VoiceMemoTranscriber.transcribeFile = { _ in throw VoiceMemoTranscriber.TranscriberError.disabled }
         defer { VoiceMemoTranscriber.transcribeFile = priorTranscribe }
 
-        let router = ToolRouter(securityGate: SecurityGate(), auditLog: AuditLog())
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         await VoiceMemoModule.register(on: router)
         let result = try await router.dispatch(toolName: "voice_memo_transcript_refresh", arguments: .object([
             "path": .string(audio.path),
