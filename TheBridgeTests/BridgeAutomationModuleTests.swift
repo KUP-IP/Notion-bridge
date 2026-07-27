@@ -22,7 +22,7 @@ func runBridgeAutomationModuleTests() async {
     let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
     let log  = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
-    await BridgeAutomationModule.register(on: router)
+    await BridgeAutomationModule.register(on: router, applicationProvider: { nil })
     await MouseClickModule.register(on: router)
 
     // MARK: - Registration + tiers
@@ -63,6 +63,13 @@ func runBridgeAutomationModuleTests() async {
         try expect(t.tier == .open, "expected .open, got \(t.tier.rawValue)")
     }
 
+    await test("bridge_focus_settings documents operational success semantics") {
+        let tools = await router.registrations(forModule: "automation")
+        let tool = tools.first { $0.name == "bridge_focus_settings" }!
+        try expect(tool.description.contains("success=true means a Settings window was found and raised"),
+                   "focus tool must define success as an achieved focus operation")
+    }
+
     await test("bridge_focus_settings returns focus outcome (headless: focused=false + note)") {
         let result = try await router.dispatch(
             toolName: "bridge_focus_settings",
@@ -71,7 +78,7 @@ func runBridgeAutomationModuleTests() async {
         guard case .object(let dict) = result else {
             throw TestError.assertion("expected object response")
         }
-        try expect(dict["success"] != nil, "missing success")
+        try expect(dict["success"] == .bool(false), "headless focus must report success=false")
         if case .bool(let focused) = dict["focused"] {
             try expect(focused == false, "headless test should report focused=false")
         } else {
