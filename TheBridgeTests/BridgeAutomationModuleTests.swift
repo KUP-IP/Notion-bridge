@@ -77,7 +77,13 @@ func runBridgeAutomationModuleTests() async {
         } else {
             throw TestError.assertion("missing focused bool")
         }
-        try expect(dict["note"] != nil, "headless focus should surface a note")
+        if case .bool(let activated) = dict["activated"] {
+            try expect(activated == false, "headless test should report activated=false")
+        } else {
+            throw TestError.assertion("missing activated bool")
+        }
+        try expect(dict["note"] == .string("No app window host present to activate (headless/test context)."),
+                   "headless focus should surface the exact no-host note")
     }
 
     // MARK: - Section resolution

@@ -200,7 +200,7 @@ public enum BridgeSettingsAutomation {
     /// way. PKT-1005: the bare cast alone is the bug — it can miss under the
     /// adaptor and strand the open path.
     static func liveAppDelegate() -> AppDelegate? {
-        AppDelegate.shared ?? (NSApp.delegate as? AppDelegate)
+        AppDelegate.shared ?? (NSApp?.delegate as? AppDelegate)
     }
 
     /// Open the Settings window from a COLD / closed state and deep-link it to
@@ -219,7 +219,11 @@ public enum BridgeSettingsAutomation {
             SettingsNavigation.shared.go(section, anchor: anchor)
         }
 
-        let alreadyOpen = NSApp.windows.contains { isSettingsWindow($0) }
+        guard let app = NSApp else {
+            return (opened: false, section: section)
+        }
+
+        let alreadyOpen = app.windows.contains { isSettingsWindow($0) }
         if !alreadyOpen, let delegate = liveAppDelegate() {
             delegate.openSettings(section: section)
         } else if alreadyOpen, let section {
@@ -227,7 +231,7 @@ public enum BridgeSettingsAutomation {
             SettingsNavigation.shared.go(section, anchor: anchor)
         }
 
-        let opened = NSApp.windows.contains { isSettingsWindow($0) }
+        let opened = app.windows.contains { isSettingsWindow($0) }
         return (opened: opened, section: section)
     }
 
@@ -237,9 +241,13 @@ public enum BridgeSettingsAutomation {
     /// Settings window was found and ordered front.
     @discardableResult
     public static func focusSettings(openIfNeeded: Bool) -> (windowFound: Bool, activated: Bool) {
+        guard let app = NSApp else {
+            return (windowFound: false, activated: false)
+        }
+
         // Ensure the window exists if requested and none is open yet.
         if openIfNeeded {
-            let alreadyOpen = NSApp.windows.contains { $0.isVisible && isSettingsWindow($0) }
+            let alreadyOpen = app.windows.contains { $0.isVisible && isSettingsWindow($0) }
             if !alreadyOpen, let delegate = liveAppDelegate() {
                 delegate.openSettings(section: nil)
             }
@@ -248,12 +256,12 @@ public enum BridgeSettingsAutomation {
         // Accessory (LSUIElement) windows hide when the app deactivates; flip to
         // .regular so the window can come fully frontmost and stay visible to a
         // following screen_capture.
-        if NSApp.activationPolicy() != .regular {
-            NSApp.setActivationPolicy(.regular)
+        if app.activationPolicy() != .regular {
+            app.setActivationPolicy(.regular)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        app.activate(ignoringOtherApps: true)
 
-        guard let window = NSApp.windows.first(where: { isSettingsWindow($0) }) else {
+        guard let window = app.windows.first(where: { isSettingsWindow($0) }) else {
             return (windowFound: false, activated: true)
         }
         if window.isMiniaturized {
@@ -472,9 +480,15 @@ public enum BridgeAutomationModule {
                     "activated": .bool(outcome.activated)
                 ]
                 if !outcome.windowFound {
-                    result["note"] = .string(openIfNeeded
-                        ? "App activated but no Settings window host present (headless/test context)."
-                        : "No Settings window found to focus.")
+                    let note: String
+                    if !outcome.activated {
+                        note = "No app window host present to activate (headless/test context)."
+                    } else if openIfNeeded {
+                        note = "App activated but no Settings window host present (headless/test context)."
+                    } else {
+                        note = "No Settings window found to focus."
+                    }
+                    result["note"] = .string(note)
                 }
                 return .object(result)
             }
