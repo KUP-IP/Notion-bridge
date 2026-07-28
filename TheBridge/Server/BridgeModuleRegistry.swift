@@ -49,7 +49,7 @@ public enum BridgeModuleRegistry {
         await CalendarModule.register(on: router)
         await CalendarRegistryModule.register(on: router) // env-filtered calendar_registry_pair (ListTools gated)
         await NotionModule.register(on: router)
-        await ScreenModule.register(on: router)
+        await ScreenModule.register(on: router, runtime: .live)
         await ScreenModule.registerRecording(on: router)
         await AccessibilityModule.register(on: router)
         await AppleScriptModule.register(on: router)

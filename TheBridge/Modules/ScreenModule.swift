@@ -1,10 +1,10 @@
 // ScreenModule.swift – V3-SCREEN-001 Screen Capture & OCR Tools
 // TheBridge · Modules
 //
-// Two read-only tools: screen_capture (Open), screen_ocr (Open).
-// Uses ScreenCaptureKit for capture, Vision framework for OCR.
-// Both classified as Open tier (read-only, zero side effects).
-// PKT-354: Pull-forward of Phase 4 ScreenModule — read tools only.
+// Two Open-tier tools: screen_capture and screen_ocr.
+// Uses ScreenCaptureKit for capture and Vision for OCR. screen_capture writes
+// one image artifact and performs best-effort cleanup of prior capture files.
+// PKT-354: Pull-forward of Phase 4 ScreenModule capture/OCR tools.
 //
 // Frameworks:
 //   - ScreenCaptureKit: SCScreenshotManager.captureImage for screenshots
@@ -15,12 +15,14 @@
 // Capture files: <configuredDir>/nb-screen-<timestamp>.<ext> (default ~/Desktop, fallback /tmp)
 // Cleanup: On each screen_capture call, delete files >1hr old, cap at 20.
 
-import MCP
 import AppKit
-import ScreenCaptureKit
-import Vision
+import CoreGraphics
+import Foundation
 import ImageIO
+import MCP
+import ScreenCaptureKit
 import UniformTypeIdentifiers
+import Vision
 
 // MARK: - ScreenModule
 
@@ -89,260 +91,24 @@ public enum ScreenModule {
         }
     }
 
-    // MARK: - Cleanup
+    // MARK: - Pure response helpers
 
-    /// Best-effort cleanup of old capture files.
-    /// Deletes nb-screen-* files older than 1 hour, then caps at 20 remaining.
-    /// Failures are logged but never block the capture operation.
-    private static func cleanupCaptureFiles() {
-        let resolved = ConfigManager.shared.resolvedScreenOutputDir()
-        let tmpDir = resolved.path
-        let prefix = "nb-screen-"
-        let oneHourAgo = Date().addingTimeInterval(-3600)
-        let fm = FileManager.default
-
-        do {
-            let allFiles = try fm.contentsOfDirectory(atPath: tmpDir)
-            let captureFiles = allFiles.filter { $0.hasPrefix(prefix) }
-
-            // Phase 1: Delete files older than 1 hour
-            for name in captureFiles {
-                let path = "\(tmpDir)/\(name)"
-                if let attrs = try? fm.attributesOfItem(atPath: path),
-                   let modified = attrs[.modificationDate] as? Date,
-                   modified < oneHourAgo {
-                    try? fm.removeItem(atPath: path)
-                }
-            }
-
-            // Phase 2: Cap at 20 files (delete oldest first)
-            let remaining = try fm.contentsOfDirectory(atPath: tmpDir)
-                .filter { $0.hasPrefix(prefix) }
-                .compactMap { name -> (path: String, date: Date)? in
-                    let path = "\(tmpDir)/\(name)"
-                    guard let attrs = try? fm.attributesOfItem(atPath: path),
-                          let modified = attrs[.modificationDate] as? Date else { return nil }
-                    return (path: path, date: modified)
-                }
-                .sorted { $0.date < $1.date }
-
-            if remaining.count > 20 {
-                for file in remaining.prefix(remaining.count - 20) {
-                    try? fm.removeItem(atPath: file.path)
-                }
-            }
-        } catch {
-            // Best-effort — never block capture
-        }
-    }
-
-    // MARK: - Frontmost Guard
-
-    /// The bundle identifier of the frontmost (active) application, if any.
-    /// Read on the main actor — `NSWorkspace.frontmostApplication` is
-    /// main-actor-isolated and stale reads off-main are unreliable.
-    @MainActor
-    private static func frontmostBundleId() -> String? {
-        NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-    }
-
-    /// FB-AUTOMATION: optional guard for `screen_capture`. When the caller
-    /// passes `requireFrontmostBundleId`, the capture only proceeds if that
-    /// bundle id is currently frontmost. Lets an agent assert the expected app
-    /// (e.g. The Bridge after bridge_focus_settings) is actually in front before
-    /// spending a capture — and surface a clear error if focus was stolen.
-    /// Returns the structured-error `Value` to short-circuit with, or nil to
-    /// proceed.
-    @MainActor
-    private static func frontmostGuardFailure(required: String?) -> Value? {
-        guard let required, !required.isEmpty else { return nil }
-        let actual = frontmostBundleId()
+    private static func frontmostGuardFailure(required: String, actual: String?) -> Value? {
         if actual == required { return nil }
         return .object([
             "error": .string("frontmost_mismatch"),
             "message": .string("Required frontmost app '\(required)' is not active (frontmost: '\(actual ?? "unknown")'). Capture aborted. Bring the app forward (e.g. bridge_focus_settings) and retry."),
             "requiredBundleId": .string(required),
-            "frontmostBundleId": actual.map { Value.string($0) } ?? .null
+            "frontmostBundleId": actual.map(Value.string) ?? .null
         ])
-    }
-
-    // MARK: - Capture Helpers
-
-    /// Verify Screen Recording TCC grant and fetch shareable content.
-    /// Uses CGPreflightScreenCaptureAccess() only — never CGRequestScreenCaptureAccess()
-    /// (which opens a modal dialog, inappropriate at tool-call time).
-    private static func getShareableContent() async throws -> SCShareableContent {
-        guard CGPreflightScreenCaptureAccess() else {
-            throw ScreenModuleError.screenRecordingDenied
-        }
-        // SCK delivers its reply on the main run loop; calling it off the main
-        // actor leaks the continuation and hangs forever. Route through the
-        // main-actor boundary (see ScreenCaptureKitBoundary.swift). The
-        // preflight gate above keeps the denied path fast — we never reach the
-        // SCK call when access is not granted.
-        return try await SCKBoundary.fetchShareableContent()
-    }
-
-    /// Capture a CGImage based on target parameters.
-    ///
-    /// `@MainActor`: every ScreenCaptureKit async API used here
-    /// (`SCShareableContent.excludingDesktopWindows` via `getShareableContent`
-    /// and `SCScreenshotManager.captureImage`) delivers its reply on the main
-    /// run loop. Calling them off the main actor leaks the checked continuation
-    /// and hangs forever (it was masked only because GUI dispatch ran on main;
-    /// it surfaces as intermittent suite hangs from the nonisolated test
-    /// harness). Pinning the whole helper to the main actor makes every SCK
-    /// reply land on a serviced context. The fast denied-path short-circuit is
-    /// preserved: `getShareableContent` preflights TCC and throws before any
-    /// SCK call.
-    @MainActor
-    private static func captureImage(
-        target: String,
-        windowId: Int?,
-        bundleId: String?,
-        appName: String?,
-        region: (x: Int, y: Int, w: Int, h: Int)?,
-        displayIndex: Int? = nil
-    ) async throws -> CGImage {
-        let content = try await getShareableContent()
-
-        switch target {
-        case "window":
-            let candidates = content.windows.map { window in
-                WindowCandidate(
-                    windowId: Int(window.windowID),
-                    bundleId: window.owningApplication?.bundleIdentifier,
-                    appName: window.owningApplication?.applicationName)
-            }
-            let wid: Int
-            switch resolveWindowTarget(
-                windowId: windowId,
-                bundleId: bundleId,
-                appName: appName,
-                candidates: candidates
-            ) {
-            case .selected(let selected):
-                wid = selected
-            case .missingIdentity:
-                throw ScreenModuleError.missingParameter(
-                    "windowId, bundleId, or appName required for window target")
-            case .windowIdNotFound(let id):
-                throw ScreenModuleError.windowNotFound(id)
-            case .appNotFound(let query, let available):
-                throw ScreenModuleError.windowNotFoundForApp(query: query, available: available)
-            case .ambiguous(let query, let matches):
-                throw ScreenModuleError.ambiguousWindowsForApp(query: query, matches: matches)
-            }
-            guard let window = content.windows.first(where: { $0.windowID == CGWindowID(wid) }) else {
-                throw ScreenModuleError.windowNotFound(wid)
-            }
-            let filter = SCContentFilter(desktopIndependentWindow: window)
-            let config = SCStreamConfiguration()
-            config.width = Int(window.frame.width) * 2
-            config.height = Int(window.frame.height) * 2
-            config.scalesToFit = false
-            return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-
-        case "region":
-            guard let r = region else {
-                throw ScreenModuleError.missingParameter("region {x,y,w,h} required for region target")
-            }
-            guard !content.displays.isEmpty else {
-                throw ScreenModuleError.noDisplays
-            }
-            let regionIdx = displayIndex ?? 0
-            guard regionIdx >= 0, regionIdx < content.displays.count else {
-                let available = content.displays.enumerated().map { "\($0.offset): \($0.element.width)x\($0.element.height)" }.joined(separator: ", ")
-                throw ScreenModuleError.missingParameter("displayIndex \(regionIdx) out of range. Available: [\(available)]")
-            }
-            let display = content.displays[regionIdx]
-            let filter = SCContentFilter(display: display, excludingWindows: [])
-            let config = SCStreamConfiguration()
-            config.sourceRect = CGRect(x: r.x, y: r.y, width: r.w, height: r.h)
-            config.width = r.w
-            config.height = r.h
-            config.scalesToFit = false
-            return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-
-        case "all_displays":
-            guard content.displays.count > 1 else {
-                throw ScreenModuleError.missingParameter("all_displays requires 2+ displays; found \(content.displays.count)")
-            }
-            var images: [CGImage] = []
-            for disp in content.displays {
-                let f = SCContentFilter(display: disp, excludingWindows: [])
-                let c = SCStreamConfiguration()
-                c.width = disp.width * 2
-                c.height = disp.height * 2
-                c.scalesToFit = false
-                images.append(try await SCScreenshotManager.captureImage(contentFilter: f, configuration: c))
-            }
-            let totalWidth = images.reduce(0) { $0 + $1.width }
-            let maxHeight = images.map { $0.height }.max() ?? 0
-            guard let ctx = CGContext(
-                data: nil, width: totalWidth, height: maxHeight,
-                bitsPerComponent: 8, bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
-            ) else {
-                throw ScreenModuleError.captureFailed("Failed to create composite CGContext (\(totalWidth)x\(maxHeight))")
-            }
-            var xOffset = 0
-            for img in images {
-                ctx.draw(img, in: CGRect(x: xOffset, y: maxHeight - img.height, width: img.width, height: img.height))
-                xOffset += img.width
-            }
-            guard let composite = ctx.makeImage() else {
-                throw ScreenModuleError.captureFailed("Failed to finalize composite image")
-            }
-            return composite
-
-        default: // "display"
-            guard !content.displays.isEmpty else {
-                throw ScreenModuleError.noDisplays
-            }
-            let dispIdx = displayIndex ?? 0
-            guard dispIdx >= 0, dispIdx < content.displays.count else {
-                let available = content.displays.enumerated().map { "\($0.offset): \($0.element.width)x\($0.element.height)" }.joined(separator: ", ")
-                throw ScreenModuleError.missingParameter("displayIndex \(dispIdx) out of range. Available: [\(available)]")
-            }
-            let display = content.displays[dispIdx]
-            let filter = SCContentFilter(display: display, excludingWindows: [])
-            let config = SCStreamConfiguration()
-            config.width = display.width * 2
-            config.height = display.height * 2
-            config.scalesToFit = false
-            return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-        }
-    }
-
-    /// Encode a CGImage to disk as PNG or JPEG using ImageIO (Sendable-safe, no AppKit).
-    private static func writeImage(_ cgImage: CGImage, format: String, to path: String) throws {
-        let url = URL(fileURLWithPath: path) as CFURL
-        let utType: CFString = format == "jpg"
-            ? UTType.jpeg.identifier as CFString
-            : UTType.png.identifier as CFString
-
-        guard let destination = CGImageDestinationCreateWithURL(url, utType, 1, nil) else {
-            throw ScreenModuleError.encodingFailed(format)
-        }
-
-        let options: [CFString: Any] = format == "jpg"
-            ? [kCGImageDestinationLossyCompressionQuality: 0.8]
-            : [:]
-        CGImageDestinationAddImage(destination, cgImage, options as CFDictionary)
-
-        guard CGImageDestinationFinalize(destination) else {
-            throw ScreenModuleError.encodingFailed(format)
-        }
     }
 
     // MARK: - Registration
 
-    /// Register all ScreenModule tools on the given router.
-    public static func register(on router: ToolRouter) async {
+    /// Register all ScreenModule tools with explicit runtime dependencies.
+    package static func register(on router: ToolRouter, runtime: ScreenModuleRuntime) async {
 
-        // MARK: 1. screen_capture – Open (read-only)
+        // MARK: 1. screen_capture – Open (writes capture artifact)
         await router.register(ToolRegistration(
             name: "screen_capture",
             module: moduleName,
@@ -416,13 +182,13 @@ public enum ScreenModule {
                     if case .string(let value) = args["appName"] { return value }
                     return nil
                 }()
-                let region: (x: Int, y: Int, w: Int, h: Int)? = {
-                    if case .object(let r) = args["region"],
-                       case .int(let x) = r["x"],
-                       case .int(let y) = r["y"],
-                       case .int(let w) = r["w"],
-                       case .int(let h) = r["h"] {
-                        return (x: x, y: y, w: w, h: h)
+                let region: ScreenCaptureRegion? = {
+                    if case .object(let value) = args["region"],
+                       case .int(let x) = value["x"],
+                       case .int(let y) = value["y"],
+                       case .int(let width) = value["w"],
+                       case .int(let height) = value["h"] {
+                        return ScreenCaptureRegion(x: x, y: y, width: width, height: height)
                     }
                     return nil
                 }()
@@ -440,78 +206,70 @@ public enum ScreenModule {
                 }()
 
                 // FB-AUTOMATION: frontmost-app guard (opt-in). Short-circuit
-                // before any capture work if the required app is not in front.
-                if let guardFailure = await frontmostGuardFailure(required: requireFrontmost) {
-                    return guardFailure
-                }
-
-                // Cleanup old capture files (best-effort, never blocks)
-                cleanupCaptureFiles()
-
-                // Capture
-                let cgImage: CGImage
-                do {
-                    cgImage = try await captureImage(
-                        target: target,
-                        windowId: windowId,
-                        bundleId: bundleId,
-                        appName: appName,
-                        region: region,
-                        displayIndex: displayIndex)
-                } catch let error as ScreenModuleError {
-                    return error.toResponse()
-                } catch {
-                    return ScreenModuleError.captureFailed("Screen capture failed: \(error.localizedDescription)").toResponse()
-                }
-
-                // Encode to file
-                let ext = format == "jpg" ? "jpg" : "png"
-                let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-                let resolved = ConfigManager.shared.resolvedScreenOutputDir()
-                let filePath = "\(resolved.path)/nb-screen-\(timestamp).\(ext)"
-
-                do {
-                    try writeImage(cgImage, format: format, to: filePath)
-                } catch let error as ScreenModuleError {
-                    // PKT-373 P2-2: Clean up partial file on failure
-                    try? FileManager.default.removeItem(atPath: filePath)
-                    return error.toResponse()
-                } catch {
-                    // PKT-373 P2-2: Clean up partial file on failure
-                    try? FileManager.default.removeItem(atPath: filePath)
-                    return ScreenModuleError.captureFailed("Failed to write image to \(filePath): \(error.localizedDescription)").toResponse()
-                }
-
-                let fileSize = (try? FileManager.default.attributesOfItem(atPath: filePath)[.size] as? Int) ?? 0
-
-                // Fetch display info for response metadata. Route through the
-                // main-actor SCK boundary — an off-main call leaks its
-                // continuation and hangs. `try?` keeps metadata best-effort.
-                let displayInfoArray: [Value]
-                if let content = try? await SCKBoundary.fetchShareableContent() {
-                    displayInfoArray = content.displays.enumerated().map { idx, d in
-                        .object([
-                            "index": .int(idx),
-                            "width": .int(d.width),
-                            "height": .int(d.height),
-                            "isMain": .bool(idx == 0)
-                        ])
+                // before cleanup or capture if the required app is not in front.
+                if let required = requireFrontmost, !required.isEmpty {
+                    let actual = await runtime.frontmostBundleId()
+                    if let guardFailure = frontmostGuardFailure(required: required, actual: actual) {
+                        return guardFailure
                     }
-                } else {
-                    displayInfoArray = []
+                }
+
+                runtime.cleanupCaptureFiles()
+
+                let request = ScreenCaptureRequest(
+                    target: target,
+                    windowId: windowId,
+                    bundleId: bundleId,
+                    appName: appName,
+                    region: region,
+                    displayIndex: displayIndex
+                )
+
+                let image: CGImage
+                do {
+                    image = try await runtime.captureImage(request)
+                } catch let error as ScreenModuleError {
+                    return error.toResponse()
+                } catch {
+                    return ScreenModuleError.captureFailed(
+                        "Screen capture failed: \(error.localizedDescription)"
+                    ).toResponse()
+                }
+
+                let artifact: ScreenCaptureArtifact
+                do {
+                    artifact = try runtime.persistCaptureArtifact(image, format)
+                } catch let error as ScreenModuleError {
+                    return error.toResponse()
+                } catch {
+                    return ScreenModuleError.captureFailed(
+                        "Failed to persist capture artifact: \(error.localizedDescription)"
+                    ).toResponse()
+                }
+
+                let displayInfo = await runtime.displayMetadata()
+                let displayInfoArray: [Value] = displayInfo.map { display in
+                    .object([
+                        "index": .int(display.index),
+                        "width": .int(display.width),
+                        "height": .int(display.height),
+                        "isMain": .bool(display.isMain)
+                    ])
                 }
 
                 var response: [String: Value] = [
-                    "filePath": .string(filePath),
-                    "width": .int(cgImage.width),
-                    "height": .int(cgImage.height),
-                    "bytes": .int(fileSize),
-                    "format": .string(format),
+                    "filePath": .string(artifact.filePath),
+                    "width": .int(artifact.width),
+                    "height": .int(artifact.height),
+                    "bytes": .int(artifact.bytes),
+                    "format": .string(artifact.format),
                     "displayCount": .int(displayInfoArray.count),
                     "displays": .array(displayInfoArray)
                 ]
-                if resolved.isFallback {
-                    response["warning"] = .string("Configured output directory is invalid or not writable — fell back to /tmp")
+                if artifact.isFallback {
+                    response["warning"] = .string(
+                        "Configured output directory is invalid or not writable — fell back to /tmp"
+                    )
                 }
                 return .object(response)
             }
@@ -586,13 +344,13 @@ public enum ScreenModule {
                     if case .string(let value) = args["appName"] { return value }
                     return nil
                 }()
-                let region: (x: Int, y: Int, w: Int, h: Int)? = {
-                    if case .object(let r) = args["region"],
-                       case .int(let x) = r["x"],
-                       case .int(let y) = r["y"],
-                       case .int(let w) = r["w"],
-                       case .int(let h) = r["h"] {
-                        return (x: x, y: y, w: w, h: h)
+                let region: ScreenCaptureRegion? = {
+                    if case .object(let value) = args["region"],
+                       case .int(let x) = value["x"],
+                       case .int(let y) = value["y"],
+                       case .int(let width) = value["w"],
+                       case .int(let height) = value["h"] {
+                        return ScreenCaptureRegion(x: x, y: y, width: width, height: height)
                     }
                     return nil
                 }()
@@ -605,76 +363,78 @@ public enum ScreenModule {
                     return nil
                 }()
 
-                // Capture screen
-                let cgImage: CGImage
+                let request = ScreenCaptureRequest(
+                    target: target,
+                    windowId: windowId,
+                    bundleId: bundleId,
+                    appName: appName,
+                    region: region,
+                    displayIndex: displayIndex
+                )
+
+                let image: CGImage
                 do {
-                    cgImage = try await captureImage(
-                        target: target,
-                        windowId: windowId,
-                        bundleId: bundleId,
-                        appName: appName,
-                        region: region,
-                        displayIndex: displayIndex)
+                    image = try await runtime.captureImage(request)
                 } catch let error as ScreenModuleError {
                     return error.toResponse()
                 } catch {
-                    return ScreenModuleError.captureFailed("Screen capture failed: \(error.localizedDescription)").toResponse()
+                    return ScreenModuleError.captureFailed(
+                        "Screen capture failed: \(error.localizedDescription)"
+                    ).toResponse()
                 }
 
-                // Run Vision OCR
+                let observations: [ScreenOCRObservation]
                 do {
-                    let request = VNRecognizeTextRequest()
-                    request.recognitionLevel = .accurate
-                    request.recognitionLanguages = [language]
-                    request.usesLanguageCorrection = true
-
-                    let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-                    try handler.perform([request])
-
-                    guard let observations = request.results, !observations.isEmpty else {
-                        // Empty result is valid (blank screen, no visible text) — not an error
-                        return .object([
-                            "text": .string(""),
-                            "confidence": .double(0.0),
-                            "bounds": .array([])
-                        ])
-                    }
-
-                    var fullText = ""
-                    var totalConfidence: Float = 0
-                    var bounds: [Value] = []
-
-                    for observation in observations {
-                        guard let candidate = observation.topCandidates(1).first else { continue }
-                        fullText += candidate.string + "\n"
-                        totalConfidence += candidate.confidence
-
-                        let box = observation.boundingBox
-                        bounds.append(.object([
-                            "text": .string(candidate.string),
-                            "confidence": .double(Double(candidate.confidence)),
-                            "rect": .object([
-                                "x": .double(box.origin.x),
-                                "y": .double(box.origin.y),
-                                "width": .double(box.size.width),
-                                "height": .double(box.size.height)
-                            ])
-                        ]))
-                    }
-
-                    let avgConfidence = Double(totalConfidence) / Double(observations.count)
-
-                    return .object([
-                        "text": .string(fullText.trimmingCharacters(in: .whitespacesAndNewlines)),
-                        "confidence": .double((avgConfidence * 1000).rounded() / 1000),
-                        "bounds": .array(bounds)
-                    ])
+                    observations = try runtime.recognizeText(image, language)
                 } catch {
                     return .object([
                         "error": .string("ocr_failed"),
-                        "message": .string("Vision text recognition failed: \(error.localizedDescription)")
+                        "message": .string(
+                            "Vision text recognition failed: \(error.localizedDescription)"
+                        )
                     ])
                 }
+
+                guard !observations.isEmpty else {
+                    return .object([
+                        "text": .string(""),
+                        "confidence": .double(0.0),
+                        "bounds": .array([])
+                    ])
+                }
+
+                var fullText = ""
+                var totalConfidence: Float = 0
+                var bounds: [Value] = []
+
+                for observation in observations {
+                    guard let candidate = observation.candidate else { continue }
+                    fullText += candidate.text + "\n"
+                    totalConfidence += candidate.confidence
+
+                    let box = observation.boundingBox
+                    bounds.append(.object([
+                        "text": .string(candidate.text),
+                        "confidence": .double(Double(candidate.confidence)),
+                        "rect": .object([
+                            "x": .double(box.origin.x),
+                            "y": .double(box.origin.y),
+                            "width": .double(box.size.width),
+                            "height": .double(box.size.height)
+                        ])
+                    ]))
+                }
+
+                let averageConfidence = Double(totalConfidence) / Double(observations.count)
+                return .object([
+                    "text": .string(
+                        fullText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ),
+                    "confidence": .double(
+                        (averageConfidence * 1000).rounded() / 1000
+                    ),
+                    "bounds": .array(bounds)
+                ])
             }
         ))
     }
@@ -683,7 +443,7 @@ public enum ScreenModule {
 // MARK: - Errors
 
 /// Structured error types for ScreenModule — all return JSON responses, never crash.
-private enum ScreenModuleError: Error {
+package enum ScreenModuleError: Error, Sendable, Equatable {
     case screenRecordingDenied
     case noDisplays
     case windowNotFound(Int)
@@ -753,5 +513,457 @@ private enum ScreenModuleError: Error {
         return candidates.map { candidate in
             "\(candidate.windowId):\(candidate.appName ?? "unknown") [\(candidate.bundleId ?? "unknown")]"
         }.joined(separator: ", ")
+    }
+}
+
+// MARK: - Screen Runtime Dependencies
+
+package struct ScreenCaptureRegion: Sendable, Equatable {
+    package let x: Int
+    package let y: Int
+    package let width: Int
+    package let height: Int
+
+    package init(x: Int, y: Int, width: Int, height: Int) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
+package struct ScreenCaptureRequest: Sendable, Equatable {
+    package let target: String
+    package let windowId: Int?
+    package let bundleId: String?
+    package let appName: String?
+    package let region: ScreenCaptureRegion?
+    package let displayIndex: Int?
+
+    package init(
+        target: String,
+        windowId: Int?,
+        bundleId: String?,
+        appName: String?,
+        region: ScreenCaptureRegion?,
+        displayIndex: Int?
+    ) {
+        self.target = target
+        self.windowId = windowId
+        self.bundleId = bundleId
+        self.appName = appName
+        self.region = region
+        self.displayIndex = displayIndex
+    }
+}
+
+package struct ScreenCaptureArtifact: Sendable, Equatable {
+    package let filePath: String
+    package let width: Int
+    package let height: Int
+    package let bytes: Int
+    package let format: String
+    package let isFallback: Bool
+
+    package init(
+        filePath: String,
+        width: Int,
+        height: Int,
+        bytes: Int,
+        format: String,
+        isFallback: Bool
+    ) {
+        self.filePath = filePath
+        self.width = width
+        self.height = height
+        self.bytes = bytes
+        self.format = format
+        self.isFallback = isFallback
+    }
+}
+
+package struct ScreenDisplayInfo: Sendable, Equatable {
+    package let index: Int
+    package let width: Int
+    package let height: Int
+    package let isMain: Bool
+
+    package init(index: Int, width: Int, height: Int, isMain: Bool) {
+        self.index = index
+        self.width = width
+        self.height = height
+        self.isMain = isMain
+    }
+}
+
+package struct ScreenOCRCandidate: Sendable, Equatable {
+    package let text: String
+    package let confidence: Float
+
+    package init(text: String, confidence: Float) {
+        self.text = text
+        self.confidence = confidence
+    }
+}
+
+package struct ScreenOCRObservation: Sendable, Equatable {
+    package let candidate: ScreenOCRCandidate?
+    package let boundingBox: CGRect
+
+    package init(candidate: ScreenOCRCandidate?, boundingBox: CGRect) {
+        self.candidate = candidate
+        self.boundingBox = boundingBox
+    }
+}
+
+/// Explicit runtime dependencies for Screen handlers.
+///
+/// Production composition supplies the internal `.live` value. Tests must
+/// supply every dependency explicitly; there is no default-live registration
+/// path and no mutable global override.
+package struct ScreenModuleRuntime: Sendable {
+    package let frontmostBundleId: @MainActor @Sendable () -> String?
+    package let cleanupCaptureFiles: @Sendable () -> Void
+    package let captureImage: @MainActor @Sendable (ScreenCaptureRequest) async throws -> CGImage
+    package let persistCaptureArtifact: @Sendable (CGImage, String) throws -> ScreenCaptureArtifact
+    package let displayMetadata: @MainActor @Sendable () async -> [ScreenDisplayInfo]
+    package let recognizeText: @Sendable (CGImage, String) throws -> [ScreenOCRObservation]
+
+    package init(
+        frontmostBundleId: @escaping @MainActor @Sendable () -> String?,
+        cleanupCaptureFiles: @escaping @Sendable () -> Void,
+        captureImage: @escaping @MainActor @Sendable (ScreenCaptureRequest) async throws -> CGImage,
+        persistCaptureArtifact: @escaping @Sendable (CGImage, String) throws -> ScreenCaptureArtifact,
+        displayMetadata: @escaping @MainActor @Sendable () async -> [ScreenDisplayInfo],
+        recognizeText: @escaping @Sendable (CGImage, String) throws -> [ScreenOCRObservation]
+    ) {
+        self.frontmostBundleId = frontmostBundleId
+        self.cleanupCaptureFiles = cleanupCaptureFiles
+        self.captureImage = captureImage
+        self.persistCaptureArtifact = persistCaptureArtifact
+        self.displayMetadata = displayMetadata
+        self.recognizeText = recognizeText
+    }
+}
+
+extension ScreenModuleRuntime {
+    /// Production-only composition. `internal` keeps the live factory hidden
+    /// from the separate test target; only the explicitly gated probe below can
+    /// route through it.
+    internal static let live = ScreenModuleRuntime(
+        frontmostBundleId: { ScreenModuleLive.frontmostBundleId() },
+        cleanupCaptureFiles: { ScreenModuleLive.cleanupCaptureFiles() },
+        captureImage: { request in try await ScreenModuleLive.captureImage(request) },
+        persistCaptureArtifact: { image, format in
+            try ScreenModuleLive.persistCaptureArtifact(image, format: format)
+        },
+        displayMetadata: { await ScreenModuleLive.displayMetadata() },
+        recognizeText: { image, language in
+            try ScreenModuleLive.recognizeText(image, language: language)
+        }
+    )
+}
+
+extension ScreenModule {
+    /// Explicit opt-in bridge for the non-canonical live OCR probe. Canonical
+    /// tests cannot accidentally register live dependencies because this path
+    /// refuses to run unless the dedicated environment switch is present.
+    package static func registerLiveProbe(on router: ToolRouter) async -> Bool {
+        guard ProcessInfo.processInfo.environment["BRIDGE_SCREEN_LIVE_PROBE"] == "1" else {
+            return false
+        }
+        await register(on: router, runtime: .live)
+        return true
+    }
+}
+
+/// Live macOS implementation. Handler registration and response assembly do
+/// not call these frameworks or side effects directly.
+private enum ScreenModuleLive {
+    @MainActor
+    static func frontmostBundleId() -> String? {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    }
+
+    static func cleanupCaptureFiles() {
+        let resolved = ConfigManager.shared.resolvedScreenOutputDir()
+        let directory = resolved.path
+        let prefix = "nb-screen-"
+        let oneHourAgo = Date().addingTimeInterval(-3600)
+        let fileManager = FileManager.default
+
+        do {
+            let captureFiles = try fileManager.contentsOfDirectory(atPath: directory)
+                .filter { $0.hasPrefix(prefix) }
+
+            for name in captureFiles {
+                let path = "\(directory)/\(name)"
+                if let attributes = try? fileManager.attributesOfItem(atPath: path),
+                   let modified = attributes[.modificationDate] as? Date,
+                   modified < oneHourAgo {
+                    try? fileManager.removeItem(atPath: path)
+                }
+            }
+
+            let remaining = try fileManager.contentsOfDirectory(atPath: directory)
+                .filter { $0.hasPrefix(prefix) }
+                .compactMap { name -> (path: String, date: Date)? in
+                    let path = "\(directory)/\(name)"
+                    guard let attributes = try? fileManager.attributesOfItem(atPath: path),
+                          let modified = attributes[.modificationDate] as? Date else {
+                        return nil
+                    }
+                    return (path, modified)
+                }
+                .sorted { $0.date < $1.date }
+
+            if remaining.count > 20 {
+                for file in remaining.prefix(remaining.count - 20) {
+                    try? fileManager.removeItem(atPath: file.path)
+                }
+            }
+        } catch {
+            // Best-effort cleanup must never block capture.
+        }
+    }
+
+    private static func getShareableContent() async throws -> SCShareableContent {
+        guard CGPreflightScreenCaptureAccess() else {
+            throw ScreenModuleError.screenRecordingDenied
+        }
+        return try await SCKBoundary.fetchShareableContent()
+    }
+
+    @MainActor
+    static func captureImage(_ request: ScreenCaptureRequest) async throws -> CGImage {
+        let content = try await getShareableContent()
+
+        switch request.target {
+        case "window":
+            let candidates = content.windows.map { window in
+                ScreenModule.WindowCandidate(
+                    windowId: Int(window.windowID),
+                    bundleId: window.owningApplication?.bundleIdentifier,
+                    appName: window.owningApplication?.applicationName
+                )
+            }
+            let windowId: Int
+            switch ScreenModule.resolveWindowTarget(
+                windowId: request.windowId,
+                bundleId: request.bundleId,
+                appName: request.appName,
+                candidates: candidates
+            ) {
+            case .selected(let selected):
+                windowId = selected
+            case .missingIdentity:
+                throw ScreenModuleError.missingParameter(
+                    "windowId, bundleId, or appName required for window target"
+                )
+            case .windowIdNotFound(let id):
+                throw ScreenModuleError.windowNotFound(id)
+            case .appNotFound(let query, let available):
+                throw ScreenModuleError.windowNotFoundForApp(query: query, available: available)
+            case .ambiguous(let query, let matches):
+                throw ScreenModuleError.ambiguousWindowsForApp(query: query, matches: matches)
+            }
+            guard let window = content.windows.first(where: { $0.windowID == CGWindowID(windowId) }) else {
+                throw ScreenModuleError.windowNotFound(windowId)
+            }
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            let config = SCStreamConfiguration()
+            config.width = Int(window.frame.width) * 2
+            config.height = Int(window.frame.height) * 2
+            config.scalesToFit = false
+            return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+
+        case "region":
+            guard let region = request.region else {
+                throw ScreenModuleError.missingParameter("region {x,y,w,h} required for region target")
+            }
+            guard !content.displays.isEmpty else {
+                throw ScreenModuleError.noDisplays
+            }
+            let index = request.displayIndex ?? 0
+            guard index >= 0, index < content.displays.count else {
+                let available = content.displays.enumerated()
+                    .map { "\($0.offset): \($0.element.width)x\($0.element.height)" }
+                    .joined(separator: ", ")
+                throw ScreenModuleError.missingParameter(
+                    "displayIndex \(index) out of range. Available: [\(available)]"
+                )
+            }
+            let display = content.displays[index]
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let config = SCStreamConfiguration()
+            config.sourceRect = CGRect(
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height
+            )
+            config.width = region.width
+            config.height = region.height
+            config.scalesToFit = false
+            return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+
+        case "all_displays":
+            guard content.displays.count > 1 else {
+                throw ScreenModuleError.missingParameter(
+                    "all_displays requires 2+ displays; found \(content.displays.count)"
+                )
+            }
+            var images: [CGImage] = []
+            for display in content.displays {
+                let filter = SCContentFilter(display: display, excludingWindows: [])
+                let config = SCStreamConfiguration()
+                config.width = display.width * 2
+                config.height = display.height * 2
+                config.scalesToFit = false
+                images.append(
+                    try await SCScreenshotManager.captureImage(
+                        contentFilter: filter,
+                        configuration: config
+                    )
+                )
+            }
+            let totalWidth = images.reduce(0) { $0 + $1.width }
+            let maxHeight = images.map(\.height).max() ?? 0
+            guard let context = CGContext(
+                data: nil,
+                width: totalWidth,
+                height: maxHeight,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+            ) else {
+                throw ScreenModuleError.captureFailed(
+                    "Failed to create composite CGContext (\(totalWidth)x\(maxHeight))"
+                )
+            }
+            var xOffset = 0
+            for image in images {
+                context.draw(
+                    image,
+                    in: CGRect(
+                        x: xOffset,
+                        y: maxHeight - image.height,
+                        width: image.width,
+                        height: image.height
+                    )
+                )
+                xOffset += image.width
+            }
+            guard let composite = context.makeImage() else {
+                throw ScreenModuleError.captureFailed("Failed to finalize composite image")
+            }
+            return composite
+
+        default:
+            guard !content.displays.isEmpty else {
+                throw ScreenModuleError.noDisplays
+            }
+            let index = request.displayIndex ?? 0
+            guard index >= 0, index < content.displays.count else {
+                let available = content.displays.enumerated()
+                    .map { "\($0.offset): \($0.element.width)x\($0.element.height)" }
+                    .joined(separator: ", ")
+                throw ScreenModuleError.missingParameter(
+                    "displayIndex \(index) out of range. Available: [\(available)]"
+                )
+            }
+            let display = content.displays[index]
+            let filter = SCContentFilter(display: display, excludingWindows: [])
+            let config = SCStreamConfiguration()
+            config.width = display.width * 2
+            config.height = display.height * 2
+            config.scalesToFit = false
+            return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        }
+    }
+
+    static func persistCaptureArtifact(_ image: CGImage, format: String) throws -> ScreenCaptureArtifact {
+        let fileExtension = format == "jpg" ? "jpg" : "png"
+        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+        let resolved = ConfigManager.shared.resolvedScreenOutputDir()
+        let filePath = "\(resolved.path)/nb-screen-\(timestamp).\(fileExtension)"
+
+        do {
+            try writeImage(image, format: format, to: filePath)
+        } catch let error as ScreenModuleError {
+            try? FileManager.default.removeItem(atPath: filePath)
+            throw error
+        } catch {
+            try? FileManager.default.removeItem(atPath: filePath)
+            throw ScreenModuleError.captureFailed(
+                "Failed to write image to \(filePath): \(error.localizedDescription)"
+            )
+        }
+
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: filePath)[.size] as? Int) ?? 0
+        return ScreenCaptureArtifact(
+            filePath: filePath,
+            width: image.width,
+            height: image.height,
+            bytes: fileSize,
+            format: format,
+            isFallback: resolved.isFallback
+        )
+    }
+
+    @MainActor
+    static func displayMetadata() async -> [ScreenDisplayInfo] {
+        guard let content = try? await SCKBoundary.fetchShareableContent() else {
+            return []
+        }
+        return content.displays.enumerated().map { index, display in
+            ScreenDisplayInfo(
+                index: index,
+                width: display.width,
+                height: display.height,
+                isMain: index == 0
+            )
+        }
+    }
+
+    static func recognizeText(_ image: CGImage, language: String) throws -> [ScreenOCRObservation] {
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = [language]
+        request.usesLanguageCorrection = true
+
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+        try handler.perform([request])
+
+        return (request.results ?? []).map { observation in
+            let candidate = observation.topCandidates(1).first.map {
+                ScreenOCRCandidate(text: $0.string, confidence: $0.confidence)
+            }
+            return ScreenOCRObservation(
+                candidate: candidate,
+                boundingBox: observation.boundingBox
+            )
+        }
+    }
+
+    private static func writeImage(_ image: CGImage, format: String, to path: String) throws {
+        let url = URL(fileURLWithPath: path) as CFURL
+        let utType: CFString = format == "jpg"
+            ? UTType.jpeg.identifier as CFString
+            : UTType.png.identifier as CFString
+
+        guard let destination = CGImageDestinationCreateWithURL(url, utType, 1, nil) else {
+            throw ScreenModuleError.encodingFailed(format)
+        }
+
+        let options: [CFString: Any] = format == "jpg"
+            ? [kCGImageDestinationLossyCompressionQuality: 0.8]
+            : [:]
+        CGImageDestinationAddImage(destination, image, options as CFDictionary)
+
+        guard CGImageDestinationFinalize(destination) else {
+            throw ScreenModuleError.encodingFailed(format)
+        }
     }
 }

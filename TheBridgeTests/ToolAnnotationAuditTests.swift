@@ -108,6 +108,20 @@ func runToolAnnotationAuditTests() async {
                    "job_resume must be idempotentHint:true — resuming a running job is a noop")
     }
 
+    await test("screen_capture is Open-tier but not read-only because it writes and cleans capture artifacts") {
+        guard let registration = regs.first(where: { $0.name == "screen_capture" }) else {
+            throw TestError.assertion("screen_capture must be registered")
+        }
+        let annotation = ToolAnnotationCatalog.annotations(for: "screen_capture")
+        try expect(registration.tier == .open, "screen_capture tier remains .open by explicit policy")
+        try expect(annotation?.readOnlyHint == false,
+                   "screen_capture writes one artifact and deletes old capture files")
+        try expect(annotation?.destructiveHint == false,
+                   "bounded capture cleanup remains non-destructive metadata")
+        try expect(annotation?.requiresConfirmation == false,
+                   "Open-tier screen_capture remains ungated in this slice")
+    }
+
     await test("requiresConfirmation mirrors the Bridge security model (request/neverAutoApprove)") {
         for reg in regs {
             guard let ann = ToolAnnotationCatalog.annotations(for: reg.name) else { continue }

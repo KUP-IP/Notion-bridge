@@ -286,6 +286,11 @@ struct TheBridgeTestRunner {
     // The full test sequence. `nonisolated` so it runs on whatever (non-main)
     // executor the detached task provides, NOT the main actor.
     nonisolated static func runAllTests() async {
+        if ProcessInfo.processInfo.environment["BRIDGE_SCREEN_LIVE_PROBE"] == "1" {
+            await runScreenLiveProbe()
+            return
+        }
+
         await runVoiceMemoHubTrustTests() // PKT-MEM-106 0a: trust + identity core (run early — flake-avoidance)
         await runMemoryHubCockpitTests()  // PKT-MEM-106 0b: run early alongside 0a (same flake-avoidance)
         await runMemoryHubGuardrailTests() // PKT-MEM-106 0c: preview + guardrails + tabs (run early)

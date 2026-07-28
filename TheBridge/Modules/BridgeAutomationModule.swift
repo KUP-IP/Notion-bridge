@@ -165,12 +165,20 @@ public enum BridgeSettingsAutomation {
     /// enumeration the sibling `focusSettings()` already uses), opening the host
     /// via the AppDelegate when one is reachable and none is open yet.
     public static func navigate(to section: SettingsSection, anchor: String?) -> Bool {
+        navigate(to: section, anchor: anchor, app: NSApp)
+    }
+
+    package static func navigate(
+        to section: SettingsSection,
+        anchor: String?,
+        app: NSApplication?
+    ) -> Bool {
         // Always update the shared selection model — this is the source of
         // truth the SettingsView binds to, and what makes navigation work even
         // when the window is already open.
         SettingsNavigation.shared.go(section, anchor: anchor)
 
-        guard let app = NSApp else {
+        guard let app else {
             return false
         }
 
@@ -180,7 +188,7 @@ public enum BridgeSettingsAutomation {
         // isn't published yet. This is what actually opens the window under the
         // adaptor — the bare cast could miss and leave it closed.
         let alreadyOpen = app.windows.contains { isSettingsWindow($0) }
-        if !alreadyOpen, let delegate = liveAppDelegate() {
+        if !alreadyOpen, let delegate = liveAppDelegate(app: app) {
             delegate.openSettings(section: section)
         }
 
@@ -199,8 +207,8 @@ public enum BridgeSettingsAutomation {
     /// the `NSApp.delegate` cast for any host that set the delegate the classic
     /// way. PKT-1005: the bare cast alone is the bug — it can miss under the
     /// adaptor and strand the open path.
-    static func liveAppDelegate() -> AppDelegate? {
-        AppDelegate.shared ?? (NSApp.delegate as? AppDelegate)
+    static func liveAppDelegate(app: NSApplication?) -> AppDelegate? {
+        AppDelegate.shared ?? (app?.delegate as? AppDelegate)
     }
 
     /// Open the Settings window from a COLD / closed state and deep-link it to
@@ -215,19 +223,31 @@ public enum BridgeSettingsAutomation {
     /// to the requested section on its very first render (no post-open nav hop).
     @discardableResult
     public static func openSettings(section: SettingsSection?, anchor: String?) -> (opened: Bool, section: SettingsSection?) {
+        openSettings(section: section, anchor: anchor, app: NSApp)
+    }
+
+    package static func openSettings(
+        section: SettingsSection?,
+        anchor: String?,
+        app: NSApplication?
+    ) -> (opened: Bool, section: SettingsSection?) {
         if let section {
             SettingsNavigation.shared.go(section, anchor: anchor)
         }
 
-        let alreadyOpen = NSApp.windows.contains { isSettingsWindow($0) }
-        if !alreadyOpen, let delegate = liveAppDelegate() {
+        guard let app else {
+            return (opened: false, section: section)
+        }
+
+        let alreadyOpen = app.windows.contains { isSettingsWindow($0) }
+        if !alreadyOpen, let delegate = liveAppDelegate(app: app) {
             delegate.openSettings(section: section)
         } else if alreadyOpen, let section {
             // Already hosted — just (re)point it and bring it forward.
             SettingsNavigation.shared.go(section, anchor: anchor)
         }
 
-        let opened = NSApp.windows.contains { isSettingsWindow($0) }
+        let opened = app.windows.contains { isSettingsWindow($0) }
         return (opened: opened, section: section)
     }
 
@@ -237,10 +257,21 @@ public enum BridgeSettingsAutomation {
     /// Settings window was found and ordered front.
     @discardableResult
     public static func focusSettings(openIfNeeded: Bool) -> (windowFound: Bool, activated: Bool) {
+        focusSettings(openIfNeeded: openIfNeeded, app: NSApp)
+    }
+
+    package static func focusSettings(
+        openIfNeeded: Bool,
+        app: NSApplication?
+    ) -> (windowFound: Bool, activated: Bool) {
+        guard let app else {
+            return (windowFound: false, activated: false)
+        }
+
         // Ensure the window exists if requested and none is open yet.
         if openIfNeeded {
-            let alreadyOpen = NSApp.windows.contains { $0.isVisible && isSettingsWindow($0) }
-            if !alreadyOpen, let delegate = liveAppDelegate() {
+            let alreadyOpen = app.windows.contains { $0.isVisible && isSettingsWindow($0) }
+            if !alreadyOpen, let delegate = liveAppDelegate(app: app) {
                 delegate.openSettings(section: nil)
             }
         }
@@ -248,12 +279,12 @@ public enum BridgeSettingsAutomation {
         // Accessory (LSUIElement) windows hide when the app deactivates; flip to
         // .regular so the window can come fully frontmost and stay visible to a
         // following screen_capture.
-        if NSApp.activationPolicy() != .regular {
-            NSApp.setActivationPolicy(.regular)
+        if app.activationPolicy() != .regular {
+            app.setActivationPolicy(.regular)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        app.activate(ignoringOtherApps: true)
 
-        guard let window = NSApp.windows.first(where: { isSettingsWindow($0) }) else {
+        guard let window = app.windows.first(where: { isSettingsWindow($0) }) else {
             return (windowFound: false, activated: true)
         }
         if window.isMiniaturized {
@@ -312,6 +343,13 @@ public enum BridgeAutomationModule {
     }
 
     public static func register(on router: ToolRouter) async {
+        await register(on: router, applicationProvider: { NSApp })
+    }
+
+    package static func register(
+        on router: ToolRouter,
+        applicationProvider: @escaping @MainActor @Sendable () -> NSApplication?
+    ) async {
 
         // ── bridge_settings_navigate (open) ──────────────────────────────
         await router.register(ToolRegistration(
@@ -361,7 +399,12 @@ public enum BridgeAutomationModule {
                 // folded-in tab anchor (e.g. Credentials → security/vault).
                 let anchor = explicitAnchor ?? aliasAnchor
 
-                let windowDriven = await BridgeSettingsAutomation.navigate(to: section, anchor: anchor)
+                let application = await applicationProvider()
+                let windowDriven = await BridgeSettingsAutomation.navigate(
+                    to: section,
+                    anchor: anchor,
+                    app: application
+                )
                 var result: [String: Value] = [
                     "success": .bool(true),
                     "section": .string(section.rawValue),
@@ -377,7 +420,10 @@ public enum BridgeAutomationModule {
                 }
                 let shouldFocus = boolParam(params, "focus", default: true)
                 if shouldFocus {
-                    let focusOutcome = await BridgeSettingsAutomation.focusSettings(openIfNeeded: true)
+                    let focusOutcome = await BridgeSettingsAutomation.focusSettings(
+                        openIfNeeded: true,
+                        app: application
+                    )
                     result["focused"] = .bool(focusOutcome.windowFound)
                     result["activated"] = .bool(focusOutcome.activated)
                 }
@@ -433,7 +479,12 @@ public enum BridgeAutomationModule {
                     anchor = explicitAnchor ?? resolved.anchor
                 }
 
-                let outcome = await BridgeSettingsAutomation.openSettings(section: section, anchor: anchor)
+                let application = await applicationProvider()
+                let outcome = await BridgeSettingsAutomation.openSettings(
+                    section: section,
+                    anchor: anchor,
+                    app: application
+                )
                 var result: [String: Value] = [
                     "success": .bool(outcome.opened),
                     "opened": .bool(outcome.opened)
@@ -452,7 +503,7 @@ public enum BridgeAutomationModule {
             name: "bridge_focus_settings",
             module: moduleName,
             tier: .open,
-            description: "Bring The Bridge's Settings window frontmost and raise it so screen_capture or AX reads see it. The app is LSUIElement (accessory), so Settings can hide behind other apps after deactivation. Pair with bridge_settings_navigate or bridge_open_settings before capturing Settings.",
+            description: "Bring The Bridge's Settings window frontmost and raise it so screen_capture or AX reads see it. The app is LSUIElement (accessory), so Settings can hide behind other apps after deactivation. Pair with bridge_settings_navigate or bridge_open_settings before capturing Settings. success=true means a Settings window was found and raised; headless/no-host execution returns success=false.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -465,16 +516,26 @@ public enum BridgeAutomationModule {
             handler: { arguments in
                 let params = unwrap(arguments)
                 let openIfNeeded = boolParam(params, "openIfNeeded", default: true)
-                let outcome = await BridgeSettingsAutomation.focusSettings(openIfNeeded: openIfNeeded)
+                let application = await applicationProvider()
+                let outcome = await BridgeSettingsAutomation.focusSettings(
+                    openIfNeeded: openIfNeeded,
+                    app: application
+                )
                 var result: [String: Value] = [
-                    "success": .bool(true),
+                    "success": .bool(outcome.windowFound),
                     "focused": .bool(outcome.windowFound),
                     "activated": .bool(outcome.activated)
                 ]
                 if !outcome.windowFound {
-                    result["note"] = .string(openIfNeeded
-                        ? "App activated but no Settings window host present (headless/test context)."
-                        : "No Settings window found to focus.")
+                    let note: String
+                    if !outcome.activated {
+                        note = "No app window host present to activate (headless/test context)."
+                    } else if openIfNeeded {
+                        note = "App activated but no Settings window host present (headless/test context)."
+                    } else {
+                        note = "No Settings window found to focus."
+                    }
+                    result["note"] = .string(note)
                 }
                 return .object(result)
             }
