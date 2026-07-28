@@ -1,6 +1,6 @@
 import Foundation
 
-public enum StripeError: Error, LocalizedError {
+public enum StripeError: Error, LocalizedError, @unchecked Sendable {
     case authenticationFailed
     case cardDeclined(String)
     case insufficientFunds
@@ -12,6 +12,9 @@ public enum StripeError: Error, LocalizedError {
     case missingIdempotencyKey
     case invalidAmount
     case missingPriceID
+    case invalidInput(String)
+    case ambiguousResult(operation: String, count: Int)
+    case illegalInvoiceState(operation: String, status: String)
 
     public var errorDescription: String? {
         switch self {
@@ -37,6 +40,12 @@ public enum StripeError: Error, LocalizedError {
             return "Amount must be greater than zero."
         case .missingPriceID:
             return "No Stripe Price is configured for checkout. Set the live Price id (operator)."
+        case .invalidInput(let message):
+            return "Invalid Stripe input: \(message)"
+        case .ambiguousResult(let operation, let count):
+            return "Stripe \(operation) reconciliation is ambiguous: \(count) matching objects."
+        case .illegalInvoiceState(let operation, let status):
+            return "Cannot \(operation) a Stripe invoice in status \(status)."
         }
     }
 }

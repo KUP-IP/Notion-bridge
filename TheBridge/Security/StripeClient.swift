@@ -1,5 +1,53 @@
 import Foundation
 
+public struct StripeRequestEvidence: Sendable, Equatable {
+    public let operation: String
+    public let method: String
+    public let path: String
+    public let idempotencyKey: String?
+    public let requestAPIVersion: String
+    public let statusCode: Int?
+    public let requestID: String?
+    public let responseAPIVersion: String?
+
+    public init(
+        operation: String,
+        method: String,
+        path: String,
+        idempotencyKey: String?,
+        requestAPIVersion: String,
+        statusCode: Int?,
+        requestID: String?,
+        responseAPIVersion: String?
+    ) {
+        self.operation = operation
+        self.method = method
+        self.path = path
+        self.idempotencyKey = idempotencyKey
+        self.requestAPIVersion = requestAPIVersion
+        self.statusCode = statusCode
+        self.requestID = requestID
+        self.responseAPIVersion = responseAPIVersion
+    }
+}
+
+struct StripeHTTPResponse: Sendable {
+    let data: Data
+    let evidence: StripeRequestEvidence
+}
+
+enum StripeFailureDisposition: Sendable {
+    case definitive
+    case indeterminateExternalEffect
+}
+
+struct StripeTransportFailure: Error, @unchecked Sendable {
+    let error: StripeError
+    let disposition: StripeFailureDisposition
+    let evidence: StripeRequestEvidence
+}
+
+
 public struct PaymentIntentResult: Sendable, Equatable {
     public let id: String
     public let amount: Int
@@ -46,9 +94,10 @@ public struct StripeAccountInfo: Sendable, Equatable {
 
 public final class StripeClient: @unchecked Sendable {
     public static let shared = StripeClient()
+    public static let apiVersion = "2025-06-30.basil"
 
-    private let session: URLSession
-    private let apiKeyProvider: @Sendable () -> String?
+    let session: URLSession
+    let apiKeyProvider: @Sendable () -> String?
 
     public init(
         session: URLSession = .shared,
@@ -194,41 +243,112 @@ public final class StripeClient: @unchecked Sendable {
     }
 
     private func performRequest(_ request: URLRequest) async throws -> Data {
+        do {
+            return try await performEvidenceRequest(request, operation: request.url?.path ?? "stripe_request").data
+        } catch let failure as StripeTransportFailure {
+            throw failure.error
+        }
+    }
+
+    func performEvidenceRequest(_ request: URLRequest, operation: String) async throws -> StripeHTTPResponse {
+        let method = request.httpMethod ?? "GET"
+        let path = request.url?.path ?? ""
+        let idempotencyKey = request.value(forHTTPHeaderField: "Idempotency-Key")
+        let baseEvidence = StripeRequestEvidence(
+            operation: operation,
+            method: method,
+            path: path,
+            idempotencyKey: idempotencyKey,
+            requestAPIVersion: Self.apiVersion,
+            statusCode: nil,
+            requestID: nil,
+            responseAPIVersion: nil
+        )
+
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            throw StripeError.networkError(error)
+            throw StripeTransportFailure(
+                error: .networkError(error),
+                disposition: Self.isMutating(method) ? .indeterminateExternalEffect : .definitive,
+                evidence: baseEvidence
+            )
         }
 
         guard let http = response as? HTTPURLResponse else {
-            throw StripeError.invalidResponse
+            throw StripeTransportFailure(
+                error: .invalidResponse,
+                disposition: Self.isMutating(method) ? .indeterminateExternalEffect : .definitive,
+                evidence: baseEvidence
+            )
         }
+
+        let evidence = StripeRequestEvidence(
+            operation: operation,
+            method: method,
+            path: path,
+            idempotencyKey: idempotencyKey,
+            requestAPIVersion: Self.apiVersion,
+            statusCode: http.statusCode,
+            requestID: http.value(forHTTPHeaderField: "Request-Id"),
+            responseAPIVersion: http.value(forHTTPHeaderField: "Stripe-Version")
+        )
         guard (200...299).contains(http.statusCode) else {
-            throw Self.parseStripeError(statusCode: http.statusCode, data: data)
+            throw StripeTransportFailure(
+                error: Self.parseStripeError(statusCode: http.statusCode, data: data),
+                disposition: Self.isMutating(method) && (500...599).contains(http.statusCode)
+                    ? .indeterminateExternalEffect
+                    : .definitive,
+                evidence: evidence
+            )
         }
-        return data
+        return StripeHTTPResponse(data: data, evidence: evidence)
     }
 
-    private func authorizedRequest(
+    func authorizedRequest(
         method: String,
         endpoint: String,
+        idempotencyKey: String? = nil
+    ) throws -> URLRequest {
+        try authorizedRequest(method: method, path: endpoint, queryItems: [], idempotencyKey: idempotencyKey)
+    }
+
+    func authorizedRequest(
+        method: String,
+        path: String,
+        queryItems: [URLQueryItem],
         idempotencyKey: String? = nil
     ) throws -> URLRequest {
         guard let apiKey = apiKeyProvider()?.trimmingCharacters(in: .whitespacesAndNewlines), !apiKey.isEmpty else {
             throw StripeError.authenticationFailed
         }
-        guard let url = URL(string: "https://api.stripe.com/v1/\(endpoint)") else {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "api.stripe.com"
+        components.path = "/v1/\(path)"
+        if !queryItems.isEmpty {
+            components.queryItems = queryItems
+        }
+        guard let url = components.url else {
             throw StripeError.invalidResponse
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(Self.apiVersion, forHTTPHeaderField: "Stripe-Version")
         if let idempotencyKey {
             request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         }
         return request
+    }
+
+    private static func isMutating(_ method: String) -> Bool {
+        switch method.uppercased() {
+        case "POST", "PUT", "PATCH", "DELETE": return true
+        default: return false
+        }
     }
 
     public static func parseStripeError(statusCode: Int, data: Data) -> StripeError {
@@ -289,7 +409,7 @@ public final class StripeClient: @unchecked Sendable {
             .joined(separator: "&")
     }
 
-    private static func percentEncode(_ value: String) -> String {
+    static func percentEncode(_ value: String) -> String {
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
         return value
             .addingPercentEncoding(withAllowedCharacters: allowed)?

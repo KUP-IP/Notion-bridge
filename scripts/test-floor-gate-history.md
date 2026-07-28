@@ -2429,3 +2429,4 @@ set -euo pipefail
 # fallback and later-page cache fallback added (+2 hermetic). Exact list
 # N-1/N/N+1 and max-500 boundaries are covered inside the existing list test.
 # Measured 3416 passed, 0 failed. FLOOR 3414 -> 3416.
+- 2026-07-27 · PKT-1212 B0 · `3416 → 3481` (+65): Stripe API-version/evidence transport, customer and invoice lifecycle, deterministic idempotency, indeterminate-effect recovery, and retained suite coverage.
