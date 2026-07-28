@@ -2430,3 +2430,4 @@ set -euo pipefail
 # N-1/N/N+1 and max-500 boundaries are covered inside the existing list test.
 # Measured 3416 passed, 0 failed. FLOOR 3414 -> 3416.
 - 2026-07-27 · PKT-1212 B0 · `3416 → 3481` (+65): Stripe API-version/evidence transport, customer and invoice lifecycle, deterministic idempotency, indeterminate-effect recovery, and retained suite coverage.
+- 2026-07-28 · CI child-process harness hardening · `3481 → 3482` (+1): bounded calendar-registry child waits, executable forced-stall regression, and corrected CI watchdog ordering. Measured 3482 passed, 0 failed.

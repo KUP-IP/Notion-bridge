@@ -46,8 +46,10 @@ jobs:
         run: make build
 
       - name: Run test suite + floor gate
-        # Per-step timeout — local test run is ~5 min. 20min cap leaves
-        # the script's own perl-alarm watchdog (1500s) room to fire
-        # first and emit the test-output tail before this hard kill.
-        timeout-minutes: 20
+        # This step includes a cold debug build before the test binary starts.
+        # Give the binary a 15min internal watchdog, then leave the script enough
+        # time to retain and print its failure evidence before GitHub's hard kill.
+        timeout-minutes: 30
+        env:
+          TEST_WATCHDOG_SECONDS: "900"
         run: make test-floor

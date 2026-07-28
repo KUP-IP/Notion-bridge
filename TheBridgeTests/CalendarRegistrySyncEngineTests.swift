@@ -444,6 +444,41 @@ private func withTempDirectory(_ body: (URL) async throws -> Void) async throws 
     try await body(directory)
 }
 
+/// Child-process probes exercise real cross-process locking and crash recovery.
+/// Never let one stalled child wedge the entire custom test executable: CI's
+/// outer timeout cannot identify which probe is stuck or retain the harness log.
+private func waitForChildProcess(
+    _ process: Process,
+    label: String,
+    timeout: TimeInterval = 15,
+    terminationGrace: TimeInterval = 2
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while process.isRunning, Date() < deadline {
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    guard process.isRunning else { return }
+
+    let pid = process.processIdentifier
+    process.terminate()
+    let terminationDeadline = Date().addingTimeInterval(terminationGrace)
+    while process.isRunning, Date() < terminationDeadline {
+        try await Task.sleep(nanoseconds: 50_000_000)
+    }
+    if process.isRunning {
+        _ = Darwin.kill(pid, SIGKILL)
+        let killDeadline = Date().addingTimeInterval(terminationGrace)
+        while process.isRunning, Date() < killDeadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+    }
+
+    throw TestError.assertion(
+        "\(label) exceeded \(Int(timeout))s (pid=\(pid)); "
+            + (process.isRunning ? "SIGKILL did not reap child" : "child was terminated")
+    )
+}
+
 private func claim(
     _ store: any CalendarRegistryTransactionStoring,
     key: String,
@@ -1438,8 +1473,8 @@ func runCalendarRegistrySyncEngineTests() async {
             second.executableURL = binary
             second.arguments = ["--calendar-registry-process-probe", directory.path, key, "0"]
             try second.run()
-            second.waitUntilExit()
-            first.waitUntilExit()
+            try await waitForChildProcess(second, label: "CR50 competing child")
+            try await waitForChildProcess(first, label: "CR50 lock-owning child")
 
             try expect(first.terminationStatus == 0)
             try expect(second.terminationStatus == 42)
@@ -1447,6 +1482,29 @@ func runCalendarRegistrySyncEngineTests() async {
             let count = Int((try String(contentsOf: countURL, encoding: .utf8)).trimmingCharacters(in: .whitespacesAndNewlines))
             try expect(count == 1)
         }
+    }
+
+    await test("CR50a bounded child wait terminates a stalled probe") {
+        let stalled = Process()
+        stalled.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        stalled.arguments = ["30"]
+        try stalled.run()
+
+        do {
+            try await waitForChildProcess(
+                stalled,
+                label: "CR50a forced stalled child",
+                timeout: 0.1,
+                terminationGrace: 0.5
+            )
+            throw TestError.assertion("bounded child wait returned without timing out")
+        } catch {
+            try expect(
+                error.localizedDescription.contains("CR50a forced stalled child exceeded"),
+                "unexpected bounded-wait error: \(error.localizedDescription)"
+            )
+        }
+        try expect(!stalled.isRunning, "bounded wait must not leave the stalled child running")
     }
 
     await test("CR51 final calendar uniqueness detects a late duplicate") {
@@ -1957,7 +2015,10 @@ func runCalendarRegistrySyncEngineTests() async {
                     "--calendar-registry-crash-probe", directory.path, key, checkpoint.rawValue
                 ]
                 try crashed.run()
-                crashed.waitUntilExit()
+                try await waitForChildProcess(
+                    crashed,
+                    label: "CR\(81 + offset) checkpoint child \(checkpoint.rawValue)"
+                )
                 try expect(
                     crashed.terminationReason == .exit && crashed.terminationStatus == 86,
                     "checkpoint child did not terminate at \(checkpoint.rawValue): reason=\(crashed.terminationReason) status=\(crashed.terminationStatus)"
@@ -1970,7 +2031,10 @@ func runCalendarRegistrySyncEngineTests() async {
                         "--calendar-registry-crash-probe", directory.path, key, "recover"
                     ]
                     try recovery.run()
-                    recovery.waitUntilExit()
+                    try await waitForChildProcess(
+                        recovery,
+                        label: "CR\(81 + offset) recovery \(attempt) after \(checkpoint.rawValue)"
+                    )
                     try expect(
                         recovery.terminationReason == .exit && recovery.terminationStatus == 0,
                         "recovery \(attempt) failed after \(checkpoint.rawValue): reason=\(recovery.terminationReason) status=\(recovery.terminationStatus)"
