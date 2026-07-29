@@ -494,7 +494,7 @@ func runCommandPaletteTests() async {
             (name: "Email Signature", pageId: pidSig, enabled: true),
             (name: "Mailing Address", pageId: pidAddr, enabled: true),
         ])
-        let provider = RegistrySkillsCommandProvider(
+        let provider = isolatedRegistryProvider(
             suiteName: suite, storageKey: BridgeDefaults.skills)
         let got = await provider.descriptors()
         try expect(got.count == 2, "both enabled entries must map, got \(got.count)")
@@ -505,13 +505,46 @@ func runCommandPaletteTests() async {
                    "name is BOTH the descriptor name AND the abbreviation/trigger (registry has no short form)")
     }
 
+    await test("RegistryProvider explicit nil gate is hermetic from shared production exposure") {
+        let (d, suite) = makeIsolatedDefaults()
+        seedRegistry(d, key: BridgeDefaults.skills, [
+            (name: "Hermetic Command", pageId: pidSig, enabled: true),
+        ])
+        let got = await isolatedRegistryProvider(
+            suiteName: suite,
+            storageKey: BridgeDefaults.skills,
+            exposureGate: nil
+        ).descriptors()
+        try expect(got.map(\.id) == [pidSig],
+                   "an explicit nil gate must preserve legacy fixture projection regardless of machine state")
+    }
+
+    await test("RegistryProvider explicit gate enforces the command surface") {
+        let (d, suite) = makeIsolatedDefaults()
+        seedRegistry(d, key: BridgeDefaults.skills, [
+            (name: "Allowed Command", pageId: pidSig, enabled: true),
+            (name: "Routing Only", pageId: pidAddr, enabled: true),
+        ])
+        let gate = testExposureGate([
+            (pageID: pidSig, exposure: .command),
+            (pageID: pidAddr, exposure: .routing),
+        ])
+        let got = await isolatedRegistryProvider(
+            suiteName: suite,
+            storageKey: BridgeDefaults.skills,
+            exposureGate: gate
+        ).descriptors()
+        try expect(got.map(\.id) == [pidSig],
+                   "the command surface must include .command and exclude .routing entries, got \(got.map(\.id))")
+    }
+
     await test("RegistryProvider EXCLUDES disabled entries") {
         let (d, suite) = makeIsolatedDefaults()
         seedRegistry(d, key: BridgeDefaults.skills, [
             (name: "On Skill", pageId: pidSig, enabled: true),
             (name: "Off Skill", pageId: pidAddr, enabled: false),
         ])
-        let got = await RegistrySkillsCommandProvider(
+        let got = await isolatedRegistryProvider(
             suiteName: suite, storageKey: BridgeDefaults.skills).descriptors()
         try expect(got.count == 1, "only the enabled entry is selectable, got \(got.count)")
         try expect(got.first?.id == pidSig, "the disabled entry must be filtered out")
@@ -523,7 +556,7 @@ func runCommandPaletteTests() async {
             (name: "Has Page", pageId: pidSig, enabled: true),
             (name: "No Page", pageId: "   ", enabled: true),
         ])
-        let got = await RegistrySkillsCommandProvider(
+        let got = await isolatedRegistryProvider(
             suiteName: suite, storageKey: BridgeDefaults.skills).descriptors()
         try expect(got.count == 1 && got.first?.id == pidSig,
                    "a page-id-less row can never resolve a body — not a command, got \(got.map { $0.name })")
@@ -531,7 +564,7 @@ func runCommandPaletteTests() async {
 
     await test("RegistryProvider on a MISSING registry key → empty (no crash)") {
         let (_, suite) = makeIsolatedDefaults()  // nothing seeded
-        let got = await RegistrySkillsCommandProvider(
+        let got = await isolatedRegistryProvider(
             suiteName: suite, storageKey: BridgeDefaults.skills).descriptors()
         try expect(got.isEmpty, "an unset registry must yield an empty list, got \(got.count)")
     }
@@ -539,7 +572,7 @@ func runCommandPaletteTests() async {
     await test("RegistryProvider on MALFORMED registry data → empty (no crash)") {
         let (d, suite) = makeIsolatedDefaults()
         d.set(Data("not json".utf8), forKey: BridgeDefaults.skills)
-        let got = await RegistrySkillsCommandProvider(
+        let got = await isolatedRegistryProvider(
             suiteName: suite, storageKey: BridgeDefaults.skills).descriptors()
         try expect(got.isEmpty, "corrupt registry bytes must fail safe to empty, got \(got.count)")
     }
@@ -555,7 +588,7 @@ func runCommandPaletteTests() async {
             ["name": "Legacy", "notionPageId": pidSig, "visibility": "command"]
         ]
         d.set(try JSONSerialization.data(withJSONObject: legacy), forKey: BridgeDefaults.skills)
-        let got = await RegistrySkillsCommandProvider(
+        let got = await isolatedRegistryProvider(
             suiteName: suite, storageKey: BridgeDefaults.skills).descriptors()
         try expect(got.count == 1 && got.first?.name == "Legacy",
                    "a legacy row with no 'enabled' key must default to enabled, got \(got.map { $0.name })")
@@ -575,7 +608,7 @@ func runCommandPaletteTests() async {
         ])
         let mgr = CommandsManager(fetcher: { _ in mdJSON("body") })
         let coord = CommandPaletteCoordinator(
-            provider: RegistrySkillsCommandProvider(suiteName: suite, storageKey: BridgeDefaults.skills),
+            provider: isolatedRegistryProvider(suiteName: suite, storageKey: BridgeDefaults.skills),
             manager: mgr)
         let ranked = await coord.search("Email Signature")
         try expect(ranked.first?.descriptor.id == pidSig && ranked.first?.score == 1000,
@@ -606,7 +639,7 @@ func runCommandPaletteTests() async {
             (name: "Legacy AdminOnly", pageId: "eeee1111ffff222233334444aaaabbbb", enabled: true, visibility: "adminOnly"),
             (name: "Unknown Vis",  pageId: "ffff1111aaaa2222bbbb3333cccc4444", enabled: true, visibility: "totally-bogus"),
         ])
-        let got = await RegistrySkillsCommandProvider(
+        let got = await isolatedRegistryProvider(
             suiteName: suite, storageKey: BridgeDefaults.skills).descriptors()
         let names = Set(got.map { $0.name })
         try expect(got.count == 2,
@@ -628,7 +661,7 @@ func runCommandPaletteTests() async {
         seedRegistry(d, key: BridgeDefaults.skills, [
             (name: "Shared Key Skill", pageId: pidSig, enabled: true),
         ])
-        let got = await RegistrySkillsCommandProvider(suiteName: suite).descriptors()
+        let got = await isolatedRegistryProvider(suiteName: suite).descriptors()
         try expect(got.count == 1 && got.first?.name == "Shared Key Skill",
                    "the provider's default key must be com.notionbridge.skills, got \(got.map { $0.name })")
         try expect(BridgeDefaults.skills == "com.notionbridge.skills",
@@ -641,7 +674,7 @@ func runCommandPaletteTests() async {
             (name: "Zebra", pageId: pidSig, enabled: true),
             (name: "Apple", pageId: pidAddr, enabled: true),
         ])
-        let got = await RegistrySkillsCommandProvider(
+        let got = await isolatedRegistryProvider(
             suiteName: suite, storageKey: BridgeDefaults.skills).descriptors()
         try expect(got.map { $0.name } == ["Zebra", "Apple"],
                    "the provider must not re-order; ranking is CommandPaletteSearch's job, got \(got.map { $0.name })")
@@ -652,7 +685,7 @@ func runCommandPaletteTests() async {
         d.set(try JSONSerialization.data(withJSONObject: [[String: Any]]()), forKey: BridgeDefaults.skills)
         let mgr = CommandsManager(fetcher: { _ in mdJSON("x") })
         let coord = CommandPaletteCoordinator(
-            provider: RegistrySkillsCommandProvider(suiteName: suite, storageKey: BridgeDefaults.skills),
+            provider: isolatedRegistryProvider(suiteName: suite, storageKey: BridgeDefaults.skills),
             manager: mgr)
         let ranked = await coord.search("anything")
         try expect(ranked.isEmpty, "empty registry → no rows (and no crash), got \(ranked.count)")
@@ -762,7 +795,7 @@ func runCommandPaletteTests() async {
             return mdJSON("RESOLVED SIGNATURE BODY")
         })
         let coord = CommandPaletteCoordinator(
-            provider: RegistrySkillsCommandProvider(suiteName: suite, storageKey: BridgeDefaults.skills),
+            provider: isolatedRegistryProvider(suiteName: suite, storageKey: BridgeDefaults.skills),
             manager: mgr)
         let cb = InMemoryClipboard()
         let ctrl = await CommandBridgeController(clipboard: cb, coordinator: coord)

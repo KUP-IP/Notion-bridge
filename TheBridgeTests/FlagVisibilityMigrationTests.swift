@@ -172,7 +172,7 @@ func runFlagVisibilityMigrationTests() async {
         let data = try JSONSerialization.data(withJSONObject: rows)
         UserDefaults(suiteName: suite)!.set(data, forKey: BridgeDefaults.skills)
 
-        let provider = RegistrySkillsCommandProvider(suiteName: suite)
+        let provider = isolatedRegistryProvider(suiteName: suite)
         let descs = await provider.descriptors()
         let names = Set(descs.map(\.name))
         try expect(names == Set(["Legacy", "Flagged", "Combined"]),

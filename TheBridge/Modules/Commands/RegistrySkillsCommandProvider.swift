@@ -107,11 +107,14 @@ public struct RegistrySkillsCommandProvider: CommandDescriptorProviding {
     /// snapshot). Tests inject a closure over a private suite — zero
     /// process-global / network coupling.
     private let readBlob: @Sendable () -> Data?
+    private let readExposureGate: @Sendable () async -> SkillRuntimeExposureGate?
 
     /// Default: read the shared `BridgeDefaults.skills` from
-    /// `UserDefaults.standard` at every `descriptors()` call.
+    /// `UserDefaults.standard` and the active Runtime Exposure generation at
+    /// every `descriptors()` call.
     public init(storageKey: String = BridgeDefaults.skills) {
         self.readBlob = { UserDefaults.standard.data(forKey: storageKey) }
+        self.readExposureGate = { await SkillRuntimeGenerationStore.shared.gate() }
     }
 
     /// Test/diagnostic seam: read from a NAMED `UserDefaults` suite. Only
@@ -124,11 +127,38 @@ public struct RegistrySkillsCommandProvider: CommandDescriptorProviding {
         self.readBlob = {
             UserDefaults(suiteName: suiteName)?.data(forKey: storageKey)
         }
+        self.readExposureGate = { await SkillRuntimeGenerationStore.shared.gate() }
+    }
+
+    /// Hermetic projection seam. The registry fixture and resolved exposure
+    /// policy are explicit values, so tests never inherit machine-global
+    /// Runtime Exposure state.
+    @_spi(Testing)
+    public init(
+        suiteName: String,
+        storageKey: String = BridgeDefaults.skills,
+        exposureGate: SkillRuntimeExposureGate?
+    ) {
+        self.readBlob = {
+            UserDefaults(suiteName: suiteName)?.data(forKey: storageKey)
+        }
+        self.readExposureGate = { exposureGate }
     }
 
     /// Lowest-level seam: inject the blob reader directly.
     public init(readBlob: @escaping @Sendable () -> Data?) {
         self.readBlob = readBlob
+        self.readExposureGate = { await SkillRuntimeGenerationStore.shared.gate() }
+    }
+
+    /// Lowest-level hermetic seam for projection tests and diagnostics.
+    @_spi(Testing)
+    public init(
+        readBlob: @escaping @Sendable () -> Data?,
+        exposureGate: SkillRuntimeExposureGate?
+    ) {
+        self.readBlob = readBlob
+        self.readExposureGate = { exposureGate }
     }
 
     /// Decode the persisted registry and project the ENABLED entries onto
@@ -147,7 +177,7 @@ public struct RegistrySkillsCommandProvider: CommandDescriptorProviding {
         else {
             return []
         }
-        let exposureGate = await SkillRuntimeGenerationStore.shared.gate()
+        let exposureGate = await readExposureGate()
         return entries.compactMap { entry in
             // cmd-ux W4 (3.4.1): the palette shows skills with the
             // `inCommandPalette` flag set (and enabled). Routing-only
