@@ -452,8 +452,10 @@ extension SkillsModule {
             candidateIds = relationIds
         }
 
+        let exposureGate = await SkillRuntimeGenerationStore.shared.gate()
         var out: [NotionChildPageRef] = []
         for cid in candidateIds {
+            guard exposureGate?.allows(pageID: cid, surface: .specialist) ?? true else { continue }
             var props: [String: Any] = [:]
             var url = ""
             var resolvedTitle = ""

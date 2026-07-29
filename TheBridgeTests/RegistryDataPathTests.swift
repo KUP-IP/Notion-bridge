@@ -135,6 +135,9 @@ func runRegistryDataPathTests() async {
             "Activation Examples": .init(id: "id_act", type: "rich_text"),
             "Anti-Triggers": .init(id: "id_anti", type: "rich_text"),
             "Status": .init(id: "id_status", type: "status"),
+            "Maturity": .init(id: "id_maturity", type: "select"),
+            "Deprecation Date": .init(id: "id_deprecation", type: "date"),
+            "Runtime Exposure": .init(id: "id_runtime_exposure", type: "select"),
             "Domain": .init(id: "id_domain", type: "select"),
             "Specialist": .init(id: "id_spec", type: "relation"),
         ])

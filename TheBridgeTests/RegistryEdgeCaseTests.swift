@@ -490,7 +490,7 @@ func runRegistryEdgeCaseTests() async {
             let out = try await RegistryModule.makeEntities().handler(.object([:]))
             if case .object(let o) = out, case .array(let arr)? = o["entities"], case .object(let e)? = arr.first {
                 try expect(e["fullyBound"] == .bool(false), "config untouched — skill still unbound (no half-write)")
-                try expect((e["properties"].flatMap { if case .array(let p) = $0 { return p.count } else { return nil } }) == 8, "all 8 props intact")
+                try expect((e["properties"].flatMap { if case .array(let p) = $0 { return p.count } else { return nil } }) == 11, "all 11 props intact")
             } else { throw TestError.assertion("entities missing") }
         }
     }

@@ -902,6 +902,7 @@ await runSkillsCacheTests()
 // with stale-while-revalidate — CachedSkillBody + SkillBodyCacheStore +
 // envelope-equivalence between the cache-hit and network paths.
 await runSkillBodyCacheTests()
+await runSkillExposureAuthorityTests() // Runtime Exposure authority, lifecycle, authorization, generations
 await runSkillBodyCacheEvictionTests()
 await runSkillMutationTargetResolverTests()
 await runToolRouterListToolsReadyTests()

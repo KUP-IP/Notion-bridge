@@ -204,6 +204,9 @@ public enum ToolAnnotationCatalog {
         "keyboard_type": .init(readOnlyHint: false, destructiveHint: true, idempotentHint: false, requiresConfirmation: false, openWorld: true),
         // Sprint A · mcp-builder #14: list_routing_skills → skills_routing_list.
         "skills_routing_list": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: false),
+        "skills_exposure_status": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, requiresConfirmation: false, openWorld: false),
+        "skills_exposure_reconcile": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),
+        "skills_exposure_denylist": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: true, requiresConfirmation: false, openWorld: false),
         // v3.7·H (PKT-961): Apple Mail family. list/read/search are read-only
         // (.open → requiresConfirmation:false); draft is non-destructive but
         // writing (.notify → creates an UNSENT draft, requiresConfirmation:false);

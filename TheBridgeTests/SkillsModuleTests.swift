@@ -23,11 +23,9 @@ func runSkillsModuleTests() async {
     // MARK: - Tool Registration (fetch_skill, list_routing_skills, manage_skill)
     // ============================================================
 
-    await test("SkillsModule registers 7 tools (Sprint A · #14 alias + #2 5-way split)") {
+    await test("SkillsModule registers 10 tools including Runtime Exposure controls") {
         let tools = await router.registrations(forModule: "skills")
-        // 4 pre-Sprint-A (fetch_skill, list_routing_skills, manage_skill,
-        //               skills_routing_list-new) + 5 split primitives.
-        try expect(tools.count == 7, "Expected 7 skills tools, got \(tools.count)")
+        try expect(tools.count == 10, "Expected 10 skills tools, got \(tools.count)")
     }
 
     await test("Sprint A · #2: 5 skill_* split primitives are registered") {
@@ -37,6 +35,60 @@ func runSkillsModuleTests() async {
                           "skill_rename", "skill_sync_notion"] {
             try expect(names.contains(primitive),
                        "Missing \(primitive) — Sprint A · mcp-builder #2 split")
+        }
+    }
+
+    await test("Runtime Exposure control primitives are registered with bounded tiers") {
+        let tools = await router.registrations(forModule: "skills")
+        let byName = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0) })
+        try expect(byName["skills_exposure_status"]?.tier == .open,
+                   "skills_exposure_status must be open/read-only")
+        try expect(byName["skills_exposure_reconcile"]?.tier == .notify,
+                   "skills_exposure_reconcile must be notify")
+        try expect(byName["skills_exposure_denylist"]?.tier == .notify,
+                   "skills_exposure_denylist must be notify")
+    }
+
+    await test("Runtime Exposure status is available before first publication") {
+        let result = try await router.dispatch(
+            toolName: "skills_exposure_status",
+            arguments: .object([:])
+        )
+        guard case .object(let fields) = result,
+              case .bool = fields["active"],
+              case .int = fields["enabledBaselineCount"],
+              fields["latestReceipt"] != nil else {
+            throw TestError.assertion("Expected structured Runtime Exposure status")
+        }
+    }
+
+    await test("Runtime Exposure publish stops before network work when routeReceipt is absent") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "skills_exposure_reconcile",
+                arguments: .object(["mode": .string("publish")])
+            )
+            throw TestError.assertion("Expected missing routeReceipt error for publication")
+        } catch let error as ToolRouterError {
+            try expect(String(describing: error).contains("routeReceipt"),
+                       "Publication should identify the missing routeReceipt")
+        }
+    }
+
+    await test("Runtime Exposure denylist mutation stops when routeReceipt is absent") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "skills_exposure_denylist",
+                arguments: .object([
+                    "action": .string("add"),
+                    "name": .string("alpha"),
+                    "pageId": .string("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                ])
+            )
+            throw TestError.assertion("Expected missing routeReceipt error for denylist mutation")
+        } catch let error as ToolRouterError {
+            try expect(String(describing: error).contains("routeReceipt"),
+                       "Denylist mutation should identify the missing routeReceipt")
         }
     }
 
@@ -346,7 +398,8 @@ func runSkillsModuleTests() async {
 
     await test("Every skill mutation schema exposes routeReceipt") {
         let tools = await router.registrations(forModule: "skills")
-        for name in ["skill_create", "skill_delete", "skill_update", "skill_rename", "skill_sync_notion"] {
+        for name in ["skill_create", "skill_delete", "skill_update", "skill_rename", "skill_sync_notion",
+                     "skills_exposure_reconcile", "skills_exposure_denylist"] {
             guard let tool = tools.first(where: { $0.name == name }) else {
                 throw TestError.assertion("Missing \(name)")
             }

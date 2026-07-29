@@ -149,9 +149,15 @@ extension SkillsModule {
     /// per-path toggle when present, otherwise by frontmatter
     /// `visibility: routing`.
     public static func mergedRoutingSkills() async -> [Value] {
+        // Runtime Exposure v1: once a verified generation exists, it is the
+        // final gate for Notion-backed routing. No generation means migration
+        // has not cut over yet, so legacy installs remain byte-compatible.
+        let exposureGate = await SkillRuntimeGenerationStore.shared.gate()
         let notionSkills = readAllSkills().filter { s in
-            s.enabled && s.routingDiscoverable
+            let validLegacyRow = s.enabled && s.routingDiscoverable
                 && NotionPageRef.isValidStoredPageId(s.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines))
+            guard validLegacyRow else { return false }
+            return exposureGate?.allows(pageID: s.notionPageId, surface: .routing) ?? true
         }
         let fileSkills = await FilesystemSkillIndex.shared.allSkills().filter { fs in
             // Honour per-path disable.

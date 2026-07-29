@@ -147,6 +147,7 @@ public struct RegistrySkillsCommandProvider: CommandDescriptorProviding {
         else {
             return []
         }
+        let exposureGate = await SkillRuntimeGenerationStore.shared.gate()
         return entries.compactMap { entry in
             // cmd-ux W4 (3.4.1): the palette shows skills with the
             // `inCommandPalette` flag set (and enabled). Routing-only
@@ -163,6 +164,7 @@ public struct RegistrySkillsCommandProvider: CommandDescriptorProviding {
             guard case .notion(let rawPageId) = entry.source else { return nil }
             let pageId = rawPageId.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !pageId.isEmpty else { return nil }
+            guard exposureGate?.allows(pageID: pageId, surface: .command) ?? true else { return nil }
             let name = entry.name
             return CommandDescriptor(
                 id: pageId,

@@ -50,6 +50,7 @@ public enum BridgePaths {
         case skills         = "skills"          // user-installed SKILL.md files
         case skillsCache    = "skills-cache"    // Notion-synced routing-skill cache
         case skillsBodyCache = "skills-body-cache" // persistent per-skill BODY cache
+        case skillsExposure = "skills-exposure" // verified exposure generations + reconciliation receipts
         case standingOrders = "standing-orders"
         case jobs           = "jobs"
         case bgProcess      = "bg-process"
