@@ -43,6 +43,11 @@ public enum BridgeDefaults {
     /// Written by SkillsManager and SkillsModule, read at startup.
     public static let skills = "com.notionbridge.skills"
 
+    /// Emergency, monotonic denylist for Notion-backed skills. Encoded [String]
+    /// of normalized Notion page UUIDs. This may only reduce exposure; it can
+    /// never enroll or promote a skill.
+    public static let skillExposureEmergencyDenylist = "com.notionbridge.skillExposure.emergencyDenylist"
+
     /// W2 D7: per-path enable state for file-source skills (SKILL.md
     /// files in `Bundle.module/skills/` or the user dir). The .md file
     /// itself is read-only here — toggling never mutates it. Value is a

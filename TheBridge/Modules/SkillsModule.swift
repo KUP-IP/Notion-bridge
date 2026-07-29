@@ -421,6 +421,14 @@ public enum SkillsModule {
                     ])
                 }
 
+                if let exposureGate = await SkillRuntimeGenerationStore.shared.gate(),
+                   !exposureGate.allows(pageID: pageIdRaw, surface: .exactFetch) {
+                    return .object([
+                        "error": .string("Skill '\(name)' is not published in the active runtime generation."),
+                        "hint": .string("Review Runtime Exposure and the latest reconciliation receipt in Settings → Skills.")
+                    ])
+                }
+
                 // cmd-w4: includeNested / maxBlocks / maxDepth are retained
                 // for input-schema + cache-key stability (existing callers
                 // and cached entries keyed on them stay valid) but no
@@ -677,6 +685,7 @@ public enum SkillsModule {
 
         await registerListRoutingSkills(on: router)
         await registerSkillSplitPrimitives(on: router)
+        await registerExposurePrimitives(on: router)
     }
 
 }

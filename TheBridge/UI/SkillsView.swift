@@ -838,31 +838,28 @@ struct SkillsView: View {
         // cache + content (peek → expand-on-click)
         bodyCacheCard(skill)
 
-        // permissions & behavior — PKT-1003 Wave C toggle truth-up: each row's
-        // label matches the backend flag it writes. "List in routing index"
-        // writes routingDiscoverable; "Show in Commands palette" writes
-        // inCommandPalette; "Enabled" writes enabled.
+        // Runtime Exposure authority: Notion-backed visibility is a read-only
+        // projection of the verified generation. File-backed skills retain
+        // their local controls in fileDetail; this surface cannot create a
+        // competing local statement of intent.
         BridgeGlassCard {
             VStack(alignment: .leading, spacing: 0) {
-                BridgeCardLabel("Permissions & behavior")
+                BridgeCardLabel("Runtime exposure")
                     .padding(.bottom, 10)
-                permissionToggleRow(
-                    title: "List in routing index",
-                    sub: "List this skill when an MCP client enumerates routing skills.",
-                    isOn: Binding(
-                        get: { skill.routingDiscoverable },
-                        set: { _ = skillsManager.setRoutingDiscoverable(named: skill.name, to: $0) }
-                    ),
-                    axID: BridgeAXID.Skills.toggleRouting)
+                readOnlyAuthorityRow(
+                    title: "Published exposure",
+                    value: publishedExposureLabel(skill),
+                    sub: "Compiled from the SKILLS registry and verified before activation.")
                 tokenDivider
-                permissionToggleRow(
-                    title: "Enabled",
-                    sub: "When off, the skill is hidden from every surface and is not retrievable by name.",
-                    isOn: Binding(
-                        get: { skill.enabled },
-                        set: { _ in skillsManager.toggleSkill(named: skill.name) }
-                    ),
-                    axID: BridgeAXID.Skills.toggleEnabled)
+                readOnlyAuthorityRow(
+                    title: "Authority",
+                    value: "Notion · Runtime Exposure",
+                    sub: "Change desired exposure on the owning Notion row; local controls are read-only.")
+                tokenDivider
+                readOnlyAuthorityRow(
+                    title: "Local projection",
+                    value: "Read-only",
+                    sub: "Enrollment, routing, commands, and caches share one active generation.")
             }
         }
     }
@@ -1610,6 +1607,30 @@ struct SkillsView: View {
     // PKT-1005 (Pillar C): optional `axID` attaches a stable, label-independent
     // accessibilityIdentifier so the headless harness can target the toggle by
     // id (e.g. bridge.settings.skills.toggle.enabled) rather than its label.
+    private func publishedExposureLabel(_ skill: SkillsManager.Skill) -> String {
+        guard skill.enabled else { return "Off" }
+        if skill.inCommandPalette { return "Command" }
+        if skill.routingDiscoverable { return "Routing" }
+        return "Standard"
+    }
+
+    private func readOnlyAuthorityRow(title: String, value: String, sub: String) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(BridgeTokens.Typeface.detail)
+                    .foregroundStyle(BridgeTokens.fg1)
+                Text(sub)
+                    .font(BridgeTokens.Typeface.meta)
+                    .foregroundStyle(BridgeTokens.fg4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            BridgeBadge(value, tone: .info)
+        }
+        .padding(.vertical, 9)
+    }
+
     private func permissionToggleRow(title: String, sub: String, isOn: Binding<Bool>, isEnabled: Bool = true, axID: String? = nil) -> some View {
         HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 2) {

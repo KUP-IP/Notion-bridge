@@ -283,10 +283,12 @@ extension SkillBodyCacheStore.BodySource {
                 [(id: parent.parentId, title: parent.parentTitle)]
                     + parent.children.map { (id: $0.id, title: $0.title) }
             }
+            let gate = await SkillRuntimeGenerationStore.shared.gate()
             var seen: Set<String> = []
             return (configured + routed).filter { entry in
                 let id = CachedSkillBody.normalize(entry.id)
-                return !id.isEmpty && seen.insert(id).inserted
+                guard !id.isEmpty, seen.insert(id).inserted else { return false }
+                return gate?.allows(pageID: id, surface: .bodyCache) ?? true
             }
         })
     }

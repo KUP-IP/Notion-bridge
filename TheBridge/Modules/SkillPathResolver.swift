@@ -281,11 +281,13 @@ public enum SpecialistFilter {
     /// relation reader's "empty → fall back" contract. Pairs with
     /// `isSpecialist(title:)` as the second hydration-time guard.
     /// Pure + deterministic; never throws.
-    public static func isActiveSpecialist(properties: [String: Any]) -> Bool {
-        // 1) An explicit deprecation / sunset / retirement DATE retires the row.
-        if hasPopulatedDate(in: properties,
+    public static func isActiveSpecialist(properties: [String: Any], now: Date = Date()) -> Bool {
+        // 1) An effective deprecation / sunset / retirement DATE retires the row.
+        // Future-dated lifecycle changes remain active until their effective time.
+        if hasEffectiveDate(in: properties,
                             keys: ["Deprecation Date", "Deprecated On", "Deprecated",
-                                   "Sunset Date", "Sunset", "Retired On", "Archived On"]) {
+                                   "Sunset Date", "Sunset", "Retired On", "Archived On"],
+                            now: now) {
             return false
         }
         // 2) A lifecycle status/select in a known inactive state.
@@ -304,7 +306,8 @@ public enum SpecialistFilter {
     /// "Draft", "Experimental", "Production" — never hides a live specialist.
     static let inactiveStatusTokens: Set<String> = [
         "deprecated", "archived", "folded", "retired",
-        "sunset", "sunsetted", "removed", "obsolete", "inactive", "merged"
+        "sunset", "sunsetted", "removed", "obsolete", "inactive", "merged",
+        "revoked", "desolved", "dissolved"
     ]
 
     /// Lower-cased display name(s) of a `status` / `select` / `multi_select`
@@ -339,22 +342,39 @@ public enum SpecialistFilter {
         return out
     }
 
-    /// True when any of `keys` resolves to a `date`-typed property whose
-    /// `start` is a non-empty string (Notion's representation of a set date).
-    /// Case-insensitive on the key. Pure.
-    static func hasPopulatedDate(in properties: [String: Any], keys: [String]) -> Bool {
+    /// True when any of `keys` resolves to a Notion date whose start is at
+    /// or before `now`. A future date is scheduled retirement, not current
+    /// retirement. Malformed dates fail open and therefore cannot silently
+    /// empty the specialist surface.
+    static func hasEffectiveDate(in properties: [String: Any], keys: [String], now: Date) -> Bool {
         for key in keys {
             for (k, v) in properties where k.caseInsensitiveCompare(key) == .orderedSame {
                 guard let prop = v as? [String: Any],
                       (prop["type"] as? String) == "date",
                       let date = prop["date"] as? [String: Any],
-                      let start = date["start"] as? String else { continue }
-                if !start.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    return true
-                }
+                      let raw = date["start"] as? String,
+                      let parsed = parseNotionDate(raw) else { continue }
+                if parsed <= now { return true }
             }
         }
         return false
+    }
+
+    static func parseNotionDate(_ raw: String) -> Date? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) { return date }
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        if let date = standard.date(from: value) { return date }
+        let day = DateFormatter()
+        day.locale = Locale(identifier: "en_US_POSIX")
+        day.calendar = Calendar(identifier: .gregorian)
+        day.timeZone = TimeZone(secondsFromGMT: 0)
+        day.dateFormat = "yyyy-MM-dd"
+        return day.date(from: value)
     }
 }
 

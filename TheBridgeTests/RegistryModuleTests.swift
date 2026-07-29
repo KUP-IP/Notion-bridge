@@ -74,6 +74,9 @@ private func skillsSchema() -> DataSourceSchema {
         "Activation Examples": .init(id: "id_act", type: "rich_text"),
         "Anti-Triggers": .init(id: "id_anti", type: "rich_text"),
         "Status": .init(id: "id_status", type: "status"),
+        "Maturity": .init(id: "id_maturity", type: "select"),
+        "Deprecation Date": .init(id: "id_deprecation", type: "date"),
+        "Runtime Exposure": .init(id: "id_runtime_exposure", type: "select"),
         "Domain": .init(id: "id_domain", type: "select"),
         "Specialist": .init(id: "id_spec", type: "relation"),
     ])
@@ -197,9 +200,9 @@ func runRegistryModuleTests() async {
     await test("registry_introspect binds by name, persists, reports clean+fullyBound") {
         try await withRegistryModuleEnv(ModFakeGateway(schema: skillsSchema())) {
             let out = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
-            try expect(obj(out)["fullyBound"] == .bool(true), "all 8 properties bound")
+            try expect(obj(out)["fullyBound"] == .bool(true), "all 11 properties bound")
             try expect(obj(out)["clean"] == .bool(true), "no unmatched drift")
-            try expect(obj(out)["boundCount"] == .int(8), "8 bound")
+            try expect(obj(out)["boundCount"] == .int(11), "11 bound")
             // Persisted: a fresh entities call now shows fullyBound true.
             let after = try await RegistryModule.makeEntities().handler(.object([:]))
             if case .array(let arr)? = obj(after)["entities"], let first = arr.first {

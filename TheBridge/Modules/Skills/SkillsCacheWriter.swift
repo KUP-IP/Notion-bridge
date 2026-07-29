@@ -169,7 +169,10 @@ extension SkillsCacheWriter.ParentSource {
             guard !pid.isEmpty else { return nil }
             return Parent(id: pid, title: skill.name)
         }
-        return SkillsCacheWriter.ParentSource(load: { snapshot })
+        return SkillsCacheWriter.ParentSource(load: {
+            let gate = await SkillRuntimeGenerationStore.shared.gate()
+            return snapshot.filter { gate?.allows(pageID: $0.id, surface: .routing) ?? true }
+        })
     }
 }
 
@@ -224,8 +227,10 @@ extension SkillsCacheWriter.ChildEnumerator {
             candidateIds = relationIds
         }
 
+        let exposureGate = await SkillRuntimeGenerationStore.shared.gate()
         var out: [CachedSpecialist] = []
         for cid in candidateIds {
+            guard exposureGate?.allows(pageID: cid, surface: .specialist) ?? true else { continue }
             var title = ""
             var summary = ""
             // Fail-open: if the page can't be fetched we don't hide it on

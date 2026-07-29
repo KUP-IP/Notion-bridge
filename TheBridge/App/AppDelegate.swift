@@ -519,6 +519,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             SkillsManager().kickoffBackgroundCacheRefresh()
+            await SkillExposureReconciliationCoordinator.shared.start()
         }
 
         reopenSettingsIfRequested()
