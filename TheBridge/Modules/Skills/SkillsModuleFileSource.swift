@@ -149,10 +149,19 @@ extension SkillsModule {
     /// per-path toggle when present, otherwise by frontmatter
     /// `visibility: routing`.
     public static func mergedRoutingSkills() async -> [Value] {
+        let exposureGate = await SkillRuntimeGenerationStore.shared.gate()
+        return await mergedRoutingSkills(exposureGate: exposureGate)
+    }
+
+    /// Hermetic projection seam. Production resolves the shared gate above;
+    /// tests supply the exact policy value they intend to exercise.
+    @_spi(Testing)
+    public static func mergedRoutingSkills(
+        exposureGate: SkillRuntimeExposureGate?
+    ) async -> [Value] {
         // Runtime Exposure v1: once a verified generation exists, it is the
         // final gate for Notion-backed routing. No generation means migration
         // has not cut over yet, so legacy installs remain byte-compatible.
-        let exposureGate = await SkillRuntimeGenerationStore.shared.gate()
         let notionSkills = readAllSkills().filter { s in
             let validLegacyRow = s.enabled && s.routingDiscoverable
                 && NotionPageRef.isValidStoredPageId(s.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines))

@@ -43,7 +43,7 @@ func runListRoutingSkillsMergeTests() async {
         // Note: this still reads the shared FilesystemSkillIndex, which
         // may or may not have bundled skills in a dev tree. We assert
         // shape, not strict emptiness — every row must have a `name`.
-        let rows = await SkillsModule.mergedRoutingSkills()
+        let rows = await mergedRoutingSkillsForTesting(exposureGate: nil)
         for r in rows {
             if case .object(let o) = r {
                 try expect(o["name"] != nil, "every row must have a name")
@@ -62,7 +62,7 @@ func runListRoutingSkillsMergeTests() async {
                 "visibility": "routing"
             ]
         ])
-        let rows = await SkillsModule.mergedRoutingSkills()
+        let rows = await mergedRoutingSkillsForTesting(exposureGate: nil)
         var foundNotion = false
         for r in rows {
             if case .object(let o) = r,
@@ -78,13 +78,35 @@ func runListRoutingSkillsMergeTests() async {
         try expect(foundNotion, "TestRouting should be in merged routing list")
     }
 
+    await test("mergedRoutingSkills: explicit gate enforces the routing surface") {
+        let routingID = "aaaa1111bbbb2222cccc3333dddd4444"
+        let commandID = "bbbb1111cccc2222dddd3333eeee4444"
+        seedNotionSkills([
+            ["name": "Allowed Routing", "notionPageId": routingID, "enabled": true, "visibility": "routing"],
+            ["name": "Command Only", "notionPageId": commandID, "enabled": true, "visibility": "routing"],
+        ])
+        let gate = testExposureGate([
+            (pageID: routingID, exposure: .routing),
+            (pageID: commandID, exposure: .command),
+        ])
+        let rows = await mergedRoutingSkillsForTesting(exposureGate: gate)
+        let names = Set(rows.compactMap { row -> String? in
+            guard case .object(let object) = row, case .string(let name)? = object["name"] else { return nil }
+            return name
+        })
+        try expect(names.contains("Allowed Routing"),
+                   "the routing surface must include a .routing entry")
+        try expect(!names.contains("Command Only"),
+                   "the routing surface must exclude a .command entry")
+    }
+
     await test("mergedRoutingSkills: alphabetical ordering") {
         seedNotionSkills([
             ["name": "Zulu", "notionPageId": "aaaa1111bbbb2222cccc3333dddd4444", "enabled": true, "visibility": "routing"],
             ["name": "Alpha", "notionPageId": "bbbb1111cccc2222dddd3333eeee4444", "enabled": true, "visibility": "routing"],
             ["name": "Mike", "notionPageId": "cccc1111dddd2222eeee3333ffff4444", "enabled": true, "visibility": "routing"]
         ])
-        let rows = await SkillsModule.mergedRoutingSkills()
+        let rows = await mergedRoutingSkillsForTesting(exposureGate: nil)
         let names: [String] = rows.compactMap { r in
             guard case .object(let o) = r, case .string(let n)? = o["name"] else { return nil }
             return n
@@ -100,7 +122,7 @@ func runListRoutingSkillsMergeTests() async {
             ["name": "DisabledOne", "notionPageId": "aaaa1111bbbb2222cccc3333dddd4444",
              "enabled": false, "visibility": "routing"]
         ])
-        let rows = await SkillsModule.mergedRoutingSkills()
+        let rows = await mergedRoutingSkillsForTesting(exposureGate: nil)
         for r in rows {
             if case .object(let o) = r, case .string(let n)? = o["name"] {
                 try expect(n != "DisabledOne", "disabled skill leaked into merged list")
@@ -113,7 +135,7 @@ func runListRoutingSkillsMergeTests() async {
             ["name": "StdOnly", "notionPageId": "aaaa1111bbbb2222cccc3333dddd4444",
              "enabled": true, "visibility": "standard"]
         ])
-        let rows = await SkillsModule.mergedRoutingSkills()
+        let rows = await mergedRoutingSkillsForTesting(exposureGate: nil)
         for r in rows {
             if case .object(let o) = r, case .string(let n)? = o["name"] {
                 try expect(n != "StdOnly", "standard-visibility skill leaked into routing merge")
@@ -135,7 +157,7 @@ func runListRoutingSkillsMergeTests() async {
             return false
         }
 
-        let rows = await SkillsModule.mergedRoutingSkills()
+        let rows = await mergedRoutingSkillsForTesting(exposureGate: nil)
         let names: Set<String> = Set(rows.compactMap { r in
             guard case .object(let o) = r, case .string(let n)? = o["name"] else { return nil }
             return n
@@ -156,7 +178,7 @@ func runListRoutingSkillsMergeTests() async {
         UserDefaults.standard.removeObject(forKey: fileRoutingKey)
         UserDefaults.standard.removeObject(forKey: fileEnabledKey)
 
-        let rows = await SkillsModule.mergedRoutingSkills()
+        let rows = await mergedRoutingSkillsForTesting(exposureGate: nil)
         let names: Set<String> = Set(rows.compactMap { r in
             guard case .object(let o) = r, case .string(let n)? = o["name"] else { return nil }
             return n

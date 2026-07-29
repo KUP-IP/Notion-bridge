@@ -87,7 +87,7 @@ func runCommandVisibilityTests() async {
             ("Disabled C", "eeee1111ffff222233334444aaaabbbb", false, "command"),
             ("Admin X",    "ffff1111aaaa2222bbbb3333cccc4444", true,  "adminOnly"),
         ])
-        let got = await RegistrySkillsCommandProvider(
+        let got = await isolatedRegistryProvider(
             suiteName: suite, storageKey: BridgeDefaults.skills).descriptors()
         let names = Set(got.map { $0.name })
         try expect(names == ["Command A", "Command B"],
@@ -103,7 +103,7 @@ func runCommandVisibilityTests() async {
         UserDefaults(suiteName: suite)!.set(
             try JSONSerialization.data(withJSONObject: legacy),
             forKey: BridgeDefaults.skills)
-        let got = await RegistrySkillsCommandProvider(
+        let got = await isolatedRegistryProvider(
             suiteName: suite, storageKey: BridgeDefaults.skills).descriptors()
         try expect(got.isEmpty,
                    "a visibility-less legacy row defaults to .standard ⇒ NOT a palette command, got \(got.map { $0.name })")

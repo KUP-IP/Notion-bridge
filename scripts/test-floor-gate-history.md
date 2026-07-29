@@ -2431,3 +2431,5 @@ set -euo pipefail
 # Measured 3416 passed, 0 failed. FLOOR 3414 -> 3416.
 - 2026-07-27 · PKT-1212 B0 · `3416 → 3481` (+65): Stripe API-version/evidence transport, customer and invoice lifecycle, deterministic idempotency, indeterminate-effect recovery, and retained suite coverage.
 - 2026-07-28 · CI child-process harness hardening · `3481 → 3482` (+1): bounded calendar-registry child waits, executable forced-stall regression, and corrected CI watchdog ordering. Measured 3482 passed, 0 failed.
+
+- 2026-07-29 · Runtime Exposure hermetic projection seam · `3482 → 3504` (+22): restored 13 command/routing registry fixture tests that were incorrectly filtered by the live process-global exposure generation, and added 3 explicit nil/allow/deny surface tests. Measured 3504 passed, 0 failed with production exposure state present.
