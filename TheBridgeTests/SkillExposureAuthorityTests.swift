@@ -191,7 +191,12 @@ func runSkillExposureAuthorityTests() async {
             .appendingPathComponent("bridge-exposure-store-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let store = SkillRuntimeGenerationStore(baseDirectory: root)
-        let generation = publishedGeneration()
+        // Reconciliation timestamps normally carry fractional seconds. The
+        // persisted generation must preserve that precision or exact staged
+        // read-back verification rejects an otherwise valid publication.
+        let generation = publishedGeneration(
+            compiledAt: Date(timeIntervalSince1970: exposureNow.timeIntervalSince1970 + 0.875123456)
+        )
         _ = try await store.stage(generation)
         try expect(await store.activeGeneration() == nil, "staging must not activate")
         _ = try await store.promote(generationID: generation.generationID)

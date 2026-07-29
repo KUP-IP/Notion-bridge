@@ -130,13 +130,40 @@ public actor SkillRuntimeGenerationStore {
     private func encoder() -> JSONEncoder {
         let value = JSONEncoder()
         value.outputFormatting = [.prettyPrinted, .sortedKeys]
-        value.dateEncodingStrategy = .iso8601
+        value.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            // Date stores a binary Double. Persist that value directly so
+            // staged read-back verification remains exact even when the
+            // reconciliation timestamp carries sub-millisecond precision.
+            try container.encode(date.timeIntervalSinceReferenceDate)
+        }
         return value
     }
 
     private func decoder() -> JSONDecoder {
         let value = JSONDecoder()
-        value.dateDecodingStrategy = .iso8601
+        value.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            if let seconds = try? container.decode(Double.self) {
+                return Date(timeIntervalSinceReferenceDate: seconds)
+            }
+            let raw = try container.decode(String.self)
+
+            let fractional = ISO8601DateFormatter()
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = fractional.date(from: raw) { return date }
+
+            // Backward compatibility for generations and receipts written by
+            // v1.0.0, whose `.iso8601` strategy emitted whole-second values.
+            let standard = ISO8601DateFormatter()
+            standard.formatOptions = [.withInternetDateTime]
+            if let date = standard.date(from: raw) { return date }
+
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "Invalid ISO-8601 date: \(raw)"
+            )
+        }
         return value
     }
 
