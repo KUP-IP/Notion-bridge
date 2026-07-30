@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.0.2 (build 86) — C0 fail-closed enforcement pilot — 2026-07-30
+
+- **Pilot identity** — Build-only local candidate identity for the exact merged
+  `main` C0 enforcement source; marketing remains **4.0.2**.
+- **Scope** — This commit synchronizes `Version.swift`, root `Info.plist`, and
+  this changelog. No tag, DMG, appcast, Sparkle publication, or customer-facing
+  release is created.
+- **Promotion boundary** — Candidate smoke and an explicit installation Ship
+  Gate remain required before `/Applications` changes.
+
 ## v4.0.2 (build 85) — C0 installed-pilot candidate — 2026-07-30
 
 - **Pilot identity** — Build-only local candidate identity for the merged-main
