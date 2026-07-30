@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.0.2 (build 85) — C0 installed-pilot candidate — 2026-07-30
+
+- **Pilot identity** — Build-only local candidate identity for the merged-main
+  C0 Runtime Worktree Ownership integration; marketing remains **4.0.2**.
+- **Scope** — No behavior changes beyond the already-reviewed C0 merge. This
+  commit synchronizes `Version.swift`, root `Info.plist`, and this changelog.
+- **Promotion boundary** — No tag, DMG, appcast, Sparkle publication, or
+  customer-facing release. Installation still requires candidate smoke and a
+  separate explicit Ship Gate.
+
 ## v4.0.2 (build 84) — THREAD Messages C1 containment — 2026-07-26
 
 - **Containment** — Any THREAD-shaped `messages_send` request returns
