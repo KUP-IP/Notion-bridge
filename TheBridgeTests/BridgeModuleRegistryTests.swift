@@ -11,12 +11,17 @@ import TheBridgeLib
 func runBridgeModuleRegistryTests() async {
     print("\n\u{1F9E9} BridgeModuleRegistry (PKT v3.0·0.4 · single-source)")
 
-    func buildRouter() async -> ToolRouter {
+    func buildRouter(worktreeOwnershipEnabled: Bool = false) async -> ToolRouter {
         let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
-        let router = ToolRouter(securityGate: gate, auditLog: log)
+        let router = ToolRouter(
+            securityGate: gate,
+            auditLog: log,
+            worktreeOwnershipEnabled: worktreeOwnershipEnabled
+        )
         await BridgeModuleRegistry.registerStaticFeatureModules(
             on: router,
+            worktreeOwnershipEnabled: worktreeOwnershipEnabled,
             registerSession: { r in await SessionModule.register(on: r, auditLog: log) }
         )
         return router
@@ -37,6 +42,24 @@ func runBridgeModuleRegistryTests() async {
         let names = regs.map(\.name)
         try expect(Set(names).count == names.count,
                    "duplicate registrations: \(Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys.sorted())")
+    }
+
+    await test("C0 tools are absent by default and require explicit enablement") {
+        let disabled = Set(await (buildRouter()).allRegistrations().map(\.name))
+        try expect(!disabled.contains("worktree_claim"))
+        try expect(!disabled.contains("worktree_release"))
+
+        let enabled = Set(
+            await (buildRouter(worktreeOwnershipEnabled: true))
+                .allRegistrations()
+                .map(\.name)
+        )
+        try expect(enabled.contains("worktree_claim"))
+        try expect(enabled.contains("worktree_release"))
+        try expect(
+            enabled.count == BridgeConstants.staticFeatureModuleToolCount + 2,
+            "enabled C0 surface must add exactly two tools"
+        )
     }
 
     await test("registry is deterministic — Stripe fully removed, no prod/test delta") {

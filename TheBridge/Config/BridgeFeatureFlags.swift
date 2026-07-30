@@ -7,8 +7,9 @@
 // disabled. While a flag is off the app must never request the underlying
 // macOS permission; the rows render an inert "feature disabled" state.
 //
-//   - BRIDGE_ENABLE_HTTP  → Network Listening (remote MCP, WS-F)
-//   - BRIDGE_ENABLE_VOICE → Microphone        (Handy STT sidecar, WS-E)
+//   - BRIDGE_ENABLE_HTTP              → Network Listening (remote MCP, WS-F)
+//   - BRIDGE_ENABLE_VOICE             → Microphone        (Handy STT sidecar, WS-E)
+//   - BRIDGE_ENABLE_WORKTREE_OWNERSHIP → Experimental C0 runtime enforcement
 //
 // HTTP reuses TransportRouter.httpEnableEnvKey so the router and the
 // permission UI cannot disagree about whether HTTP is enabled.
@@ -20,13 +21,21 @@ public struct BridgeFeatureFlags: Sendable, Equatable {
     /// Reused from the WS-B transport router — one key, one truth.
     public static let httpEnableEnvKey = TransportRouter.httpEnableEnvKey
     public static let voiceEnableEnvKey = "BRIDGE_ENABLE_VOICE"
+    public static let worktreeOwnershipEnableEnvKey = "BRIDGE_ENABLE_WORKTREE_OWNERSHIP"
 
     public let httpEnabled: Bool
     public let voiceEnabled: Bool
+    public let worktreeOwnershipEnabled: Bool
+
+    public var worktreeOwnershipMode: String {
+        worktreeOwnershipEnabled ? "experimental" : "disabled"
+    }
 
     /// - Parameter environment: process environment (injectable for tests).
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         self.httpEnabled = environment[Self.httpEnableEnvKey] == "1"
         self.voiceEnabled = environment[Self.voiceEnableEnvKey] == "1"
+        self.worktreeOwnershipEnabled =
+            environment[Self.worktreeOwnershipEnableEnvKey] == "1"
     }
 }

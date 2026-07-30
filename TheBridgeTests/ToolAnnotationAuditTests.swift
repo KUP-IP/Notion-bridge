@@ -34,7 +34,7 @@ func runToolAnnotationAuditTests() async {
         try expect(!regs.isEmpty, "router registered no tools")
     }
 
-    await test("annotation catalog has no stale entries (catalog ⊆ live ∪ {stripe_reconnect, bridge_status})") {
+    await test("annotation catalog has no stale entries outside conditional tools") {
         // Tools registered outside the module surface this static router
         // builds: stripe_reconnect (StripeMcpModule — network-dependent).
         // Sprint A · mcp-builder #8: `echo` removed from this allowlist
@@ -44,7 +44,10 @@ func runToolAnnotationAuditTests() async {
         // the static surface), so it carries a catalog annotation without
         // appearing in this cloud-off static router — same shape as
         // stripe_reconnect's network-gated exclusion.
-        let allowedDynamic: Set<String> = ["stripe_reconnect", "bridge_status"]
+        let allowedDynamic: Set<String> = [
+            "stripe_reconnect", "bridge_status",
+            "worktree_claim", "worktree_release",
+        ]
         let stale = Set(ToolAnnotationCatalog.entries.keys)
             .subtracting(liveNames)
             .subtracting(allowedDynamic)

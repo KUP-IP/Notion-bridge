@@ -2083,6 +2083,46 @@ func runWorktreeOwnershipTests() async {
         )
     }
 
+    await test("C0 disabled router preserves mutation dispatch without opening the claim database") {
+        let fixture = try C0GitFixture()
+        let databaseURL = fixture.databaseURL("disabled-router")
+        let store = WorktreeOwnershipStore(databaseURL: databaseURL)
+        let probe = C0InvocationProbe()
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog(),
+            worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: false,
+            licenseStatusProvider: { .grandfathered }
+        )
+        await router.register(
+            ToolRegistration(
+                name: "file_write",
+                module: "dev",
+                tier: .open,
+                description: "C0 disabled-path test probe",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([:])
+                ])
+            ) { _ in
+                await probe.mark()
+                return .object(["ok": .bool(true)])
+            }
+        )
+
+        _ = try await router.dispatch(
+            toolName: "file_write",
+            arguments: .object(["path": .string(fixture.linked.appendingPathComponent("probe.txt").path)])
+        )
+
+        try await expect(probe.value() == 1)
+        try expect(
+            !FileManager.default.fileExists(atPath: databaseURL.path),
+            "disabled C0 dispatch created the claim database"
+        )
+    }
+
     await test("C0 actual shell denial starts no handler mutation") {
         let fixture = try C0GitFixture()
         let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL())
@@ -2091,6 +2131,7 @@ func runWorktreeOwnershipTests() async {
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog(),
             worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: true,
             licenseStatusProvider: { .grandfathered }
         )
         await ShellModule.register(on: router)
@@ -2121,6 +2162,7 @@ func runWorktreeOwnershipTests() async {
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog(),
             worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: true,
             licenseStatusProvider: { .grandfathered }
         )
         await BgProcessModule.register(on: router)
@@ -2149,6 +2191,7 @@ func runWorktreeOwnershipTests() async {
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog(),
             worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: true,
             licenseStatusProvider: { .grandfathered }
         )
         await router.register(ToolRegistration(
@@ -2213,6 +2256,7 @@ func runWorktreeOwnershipTests() async {
         let router = ToolRouter(
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog(),
+            worktreeOwnershipEnabled: true,
             licenseStatusProvider: { .grandfathered }
         )
         await ShellModule.register(on: router)
@@ -2242,6 +2286,6 @@ func runWorktreeOwnershipTests() async {
         let releaseAnnotation = ToolAnnotationCatalog.annotations(for: "worktree_release")
         try expect(claimAnnotation?.idempotentHint == true)
         try expect(releaseAnnotation?.idempotentHint == false)
-        try expect(BridgeConstants.staticFeatureModuleToolCount == 216)
+        try expect(BridgeConstants.staticFeatureModuleToolCount == 214)
     }
 }

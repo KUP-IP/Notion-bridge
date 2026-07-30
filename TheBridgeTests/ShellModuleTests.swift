@@ -28,6 +28,12 @@ func runShellModuleTests() async {
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await ShellModule.register(on: router)
+    let c0Router = ToolRouter(
+        securityGate: gate,
+        auditLog: log,
+        worktreeOwnershipEnabled: true
+    )
+    await ShellModule.register(on: c0Router)
     let nonGitWorkingDirectory = FileManager.default.temporaryDirectory.path
 
     // Verify registration
@@ -213,7 +219,7 @@ func runShellModuleTests() async {
     // run_script: opaque script execution fails closed before handler invocation.
     await test("run_script fails closed without a verifiable target contract") {
         let code = await shellTestErrorCode {
-            _ = try await router.dispatch(
+            _ = try await c0Router.dispatch(
                 toolName: "run_script",
                 arguments: .object(["scriptName": .string("nonexistent_xyz_script.sh")])
             )
@@ -224,7 +230,7 @@ func runShellModuleTests() async {
     // run_script: missing scriptName remains fail-closed at the shared guard.
     await test("run_script missing scriptName remains fail closed") {
         let code = await shellTestErrorCode {
-            _ = try await router.dispatch(
+            _ = try await c0Router.dispatch(
                 toolName: "run_script",
                 arguments: .object([:])
             )
@@ -242,7 +248,7 @@ func runShellModuleTests() async {
     // Opaque run_script arguments cannot bypass the shared fail-closed guard.
     await test("run_script path traversal remains fail closed") {
         let code = await shellTestErrorCode {
-            _ = try await router.dispatch(
+            _ = try await c0Router.dispatch(
                 toolName: "run_script",
                 arguments: .object(["scriptName": .string("../../etc/passwd")])
             )
@@ -252,7 +258,7 @@ func runShellModuleTests() async {
 
     await test("run_script absolute path remains fail closed") {
         let code = await shellTestErrorCode {
-            _ = try await router.dispatch(
+            _ = try await c0Router.dispatch(
                 toolName: "run_script",
                 arguments: .object(["scriptName": .string("/etc/passwd")])
             )

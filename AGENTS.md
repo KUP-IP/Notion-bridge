@@ -81,6 +81,15 @@ Set the HTTP/SSE port (default 9700):
 NOTION_BRIDGE_PORT=9701 .build/release/TheBridge
 ```
 
+Worktree ownership enforcement is experimental and disabled by default. For an
+isolated, non-production test runtime only, enable it with the exact value `1`:
+```bash
+BRIDGE_ENABLE_WORKTREE_OWNERSHIP=1 .build/release/TheBridge
+```
+Do not set this flag in the normal app launch environment or use it with the
+real Bridge Application Support directory. The standard build, install, and
+release paths intentionally leave it unset.
+
 Set the Notion API token (resolution priority order):
 1. `NOTION_API_TOKEN` environment variable
 2. `NOTION_API_KEY` environment variable (legacy)
