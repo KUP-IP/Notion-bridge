@@ -334,7 +334,8 @@ public enum FileModule {
                 "properties": .object([
                     "path": .object(["type": .string("string"), "description": .string("Absolute path to file")]),
                     "content": .object(["type": .string("string"), "description": .string("Text content to write")]),
-                    "createDirs": .object(["type": .string("boolean"), "description": .string("Create parent directories if needed (default: false)")])
+                    "createDirs": .object(["type": .string("boolean"), "description": .string("Create parent directories if needed (default: false)")]),
+                    "ownerSession": .object(["type": .string("string"), "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")])
                 ]),
                 "required": .array([.string("path"), .string("content")])
             ]),
@@ -376,7 +377,8 @@ public enum FileModule {
                 "type": .string("object"),
                 "properties": .object([
                     "path": .object(["type": .string("string"), "description": .string("Absolute path to file")]),
-                    "content": .object(["type": .string("string"), "description": .string("Text content to append")])
+                    "content": .object(["type": .string("string"), "description": .string("Text content to append")]),
+                    "ownerSession": .object(["type": .string("string"), "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")])
                 ]),
                 "required": .array([.string("path"), .string("content")])
             ]),
@@ -410,7 +412,8 @@ public enum FileModule {
                 "type": .string("object"),
                 "properties": .object([
                     "sourcePath": .object(["type": .string("string"), "description": .string("Source file or directory path")]),
-                    "destinationPath": .object(["type": .string("string"), "description": .string("Destination path")])
+                    "destinationPath": .object(["type": .string("string"), "description": .string("Destination path")]),
+                    "ownerSession": .object(["type": .string("string"), "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")])
                 ]),
                 "required": .array([.string("sourcePath"), .string("destinationPath")])
             ]),
@@ -452,7 +455,8 @@ public enum FileModule {
                 "type": .string("object"),
                 "properties": .object([
                     "path": .object(["type": .string("string"), "description": .string("Absolute path to file or directory")]),
-                    "newName": .object(["type": .string("string"), "description": .string("New file or directory name")])
+                    "newName": .object(["type": .string("string"), "description": .string("New file or directory name")]),
+                    "ownerSession": .object(["type": .string("string"), "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")])
                 ]),
                 "required": .array([.string("path"), .string("newName")])
             ]),
@@ -486,7 +490,8 @@ public enum FileModule {
                 "properties": .object([
                     "sourcePath": .object(["type": .string("string"), "description": .string("Source file or directory path")]),
                     "destinationPath": .object(["type": .string("string"), "description": .string("Destination path")]),
-                    "overwrite": .object(["type": .string("boolean"), "description": .string("If true, remove destination before copying (default: false)")])
+                    "overwrite": .object(["type": .string("boolean"), "description": .string("If true, remove destination before copying (default: false)")]),
+                    "ownerSession": .object(["type": .string("string"), "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")])
                 ]),
                 "required": .array([.string("sourcePath"), .string("destinationPath")])
             ]),
@@ -524,7 +529,8 @@ public enum FileModule {
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "path": .object(["type": .string("string"), "description": .string("Absolute path for new directory")])
+                    "path": .object(["type": .string("string"), "description": .string("Absolute path for new directory")]),
+                    "ownerSession": .object(["type": .string("string"), "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")])
                 ]),
                 "required": .array([.string("path")])
             ]),

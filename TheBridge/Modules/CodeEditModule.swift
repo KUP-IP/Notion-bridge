@@ -81,7 +81,8 @@ public enum CodeEditModule {
                     "replaceAllMatches": .object(["type": .string("boolean")]),
                     "preview": .object(["type": .string("boolean")]),
                     "patch": .object(["type": .string("string"), "description": .string("Unified-diff text (mode='patch').")]),
-                    "stripLevel": .object(["type": .string("integer"), "description": .string("Strip count for patch paths (mode='patch', default 0).")])
+                    "stripLevel": .object(["type": .string("integer"), "description": .string("Strip count for patch paths (mode='patch', default 0).")]),
+                    "ownerSession": .object(["type": .string("string"), "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")])
                 ]),
                 "required": .array([.string("mode")])
             ]),

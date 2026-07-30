@@ -60,6 +60,7 @@ public enum BridgeModuleRegistry {
         await DevModule.register(on: router)
         await GhModule.register(on: router)
         await GitModule.register(on: router)
+        await WorktreeOwnershipModule.register(on: router)
         await CodeEditModule.register(on: router)
         await SpotlightModule.register(on: router)
         await SyntheticInputModule.register(on: router)

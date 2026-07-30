@@ -95,6 +95,10 @@ public enum ShellModule {
                     "stderrTailLines": .object([
                         "type": .string("integer"),
                         "description": .string("Optional number of stderr lines to keep from the tail of large output.")
+                    ]),
+                    "ownerSession": .object([
+                        "type": .string("string"),
+                        "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")
                     ])
                 ]),
                 "required": .array([.string("command")])
@@ -226,7 +230,7 @@ public enum ShellModule {
             name: "run_script",
             module: moduleName,
             tier: .request,
-            description: "Run an allow-listed script from The Bridge's scripts folder. Requires user approval. Last resort after dedicated tools and shell_exec.",
+            description: "Compatibility surface for allow-listed scripts. Execution currently fails closed because arbitrary scripts cannot prove a complete worktree mutation target set; use shell_exec with an explicit command and workingDir.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -238,6 +242,10 @@ public enum ShellModule {
                         "type": .string("array"),
                         "items": .object(["type": .string("string")]),
                         "description": .string("Optional arguments to pass to the script")
+                    ]),
+                    "ownerSession": .object([
+                        "type": .string("string"),
+                        "description": .string("Runtime worktree owner session. Reserved for a future verifiable run_script mutation-target contract; currently cannot override fail-closed behavior.")
                     ])
                 ]),
                 "required": .array([.string("scriptName")])

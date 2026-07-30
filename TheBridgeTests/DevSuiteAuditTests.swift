@@ -21,6 +21,7 @@ private func makeDevRouter() async -> ToolRouter {
     await DevModule.register(on: router)
     await GhModule.register(on: router)
     await GitModule.register(on: router)
+    await WorktreeOwnershipModule.register(on: router)
     await CodeEditModule.register(on: router)
     await ArtifactModule.register(on: router)
     return router
@@ -57,6 +58,7 @@ func runDevSuiteAuditTests() async {
         // git_worktree split (alias kept):
         "git_worktree", "git_worktree_list", "git_worktree_add", "git_worktree_remove",
         "git_create_branch", 
+        "worktree_claim", "worktree_release",
         "code_search",
         // file_edit merge:
         "file_edit",

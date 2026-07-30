@@ -462,7 +462,9 @@ public enum BridgeConstants {
     /// Runtime Exposure authority (2026-07-28): +3
     ///   (skills_exposure_status + skills_exposure_reconcile +
     ///   skills_exposure_denylist; existing skills family). 211 + 3 = 214.
-    public static let staticFeatureModuleToolCount = 214
+    /// C0 runtime worktree ownership (2026-07-29): +2
+    ///   (worktree_claim + worktree_release; existing dev family). 214 + 2 = 216.
+    public static let staticFeatureModuleToolCount = 216
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.

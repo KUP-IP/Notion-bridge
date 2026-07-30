@@ -214,6 +214,7 @@ public actor ToolRouter {
     private let securityGate: SecurityGate
     private let auditLog: AuditLog
     private let sessionRegistry: SessionRegistry
+    private let worktreeOwnershipStore: WorktreeOwnershipStore
 
     /// PKT-909 (Sell/Distribute v3 · 1) — license-gate seam. Production
     /// callers default to `LicenseManager.shared.currentStatus`; tests
@@ -228,11 +229,13 @@ public actor ToolRouter {
         securityGate: SecurityGate,
         auditLog: AuditLog,
         sessionRegistry: SessionRegistry = .shared,
+        worktreeOwnershipStore: WorktreeOwnershipStore = .shared,
         licenseStatusProvider: @escaping LicenseStatusProvider = { await LicenseManager.shared.currentStatus() }
     ) {
         self.securityGate = securityGate
         self.auditLog = auditLog
         self.sessionRegistry = sessionRegistry
+        self.worktreeOwnershipStore = worktreeOwnershipStore
         self.licenseStatusProvider = licenseStatusProvider
     }
 
@@ -671,17 +674,34 @@ public actor ToolRouter {
             ? SecurityApprovalReceipt.issue(toolName: toolName, arguments: arguments, context: context)
             : nil
         do {
+            // C0: one shared fail-closed guard after authorization/governance gates
+            // and immediately before the handler can mutate Git or files.
+            let worktreeAuthorization = try await WorktreeOwnershipGuard.authorizeToolMutation(
+                toolName: toolName,
+                arguments: arguments,
+                store: worktreeOwnershipStore
+            )
+            defer { worktreeAuthorization?.release() }
             let invokeHandler: @Sendable () async throws -> Value = {
                 try await tool.handler(arguments)
             }
+            let invokeApprovedHandler: @Sendable () async throws -> Value = {
+                if let exactApprovalReceipt {
+                    return try await SecurityApprovalReceipt.$current.withValue(
+                        exactApprovalReceipt,
+                        operation: invokeHandler
+                    )
+                }
+                return try await invokeHandler()
+            }
             let result: Value
-            if let exactApprovalReceipt {
-                result = try await SecurityApprovalReceipt.$current.withValue(
-                    exactApprovalReceipt,
-                    operation: invokeHandler
+            if let worktreeAuthorization {
+                result = try await WorktreeOwnershipGuard.$currentPermit.withValue(
+                    worktreeAuthorization.permit,
+                    operation: invokeApprovedHandler
                 )
             } else {
-                result = try await invokeHandler()
+                result = try await invokeApprovedHandler()
             }
             let governed = await isGoverned(context)
             let governanceNote: String?

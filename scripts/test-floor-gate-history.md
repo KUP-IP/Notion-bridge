@@ -2433,3 +2433,4 @@ set -euo pipefail
 - 2026-07-28 · CI child-process harness hardening · `3481 → 3482` (+1): bounded calendar-registry child waits, executable forced-stall regression, and corrected CI watchdog ordering. Measured 3482 passed, 0 failed.
 
 - 2026-07-29 · Runtime Exposure hermetic projection seam · `3482 → 3504` (+22): restored 13 command/routing registry fixture tests that were incorrectly filtered by the live process-global exposure generation, and added 3 explicit nil/allow/deny surface tests. Measured 3504 passed, 0 failed with production exposure state present.
+- 2026-07-30 · C0 runtime worktree ownership enforcement · `3504 → 3553` (+49): added durable canonical worktree claim/release, cross-process exclusion, pre-handler ownership permits, Git/file/shell/background/build/promotion target coverage, GNU Make final-directory semantics, static interpreter-stdin authorization, and fail-closed opaque `run_script`. Measured 3553 passed, 0 failed; C0 49/49.

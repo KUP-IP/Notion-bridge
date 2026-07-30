@@ -228,7 +228,8 @@ public enum ArtifactModule {
                 "properties": .object([
                     "sourcePath": .object(["type": .string("string")]),
                     "archivePath": .object(["type": .string("string")]),
-                    "includeRoot": .object(["type": .string("boolean")])
+                    "includeRoot": .object(["type": .string("boolean")]),
+                    "ownerSession": .object(["type": .string("string"), "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")])
                 ]),
                 "required": .array([.string("sourcePath"), .string("archivePath")])
             ]),
@@ -260,7 +261,8 @@ public enum ArtifactModule {
                 "type": .string("object"),
                 "properties": .object([
                     "archivePath": .object(["type": .string("string")]),
-                    "destinationPath": .object(["type": .string("string")])
+                    "destinationPath": .object(["type": .string("string")]),
+                    "ownerSession": .object(["type": .string("string"), "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")])
                 ]),
                 "required": .array([.string("archivePath"), .string("destinationPath")])
             ]),
