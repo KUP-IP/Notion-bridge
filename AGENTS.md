@@ -81,6 +81,14 @@ Set the HTTP/SSE port (default 9700):
 NOTION_BRIDGE_PORT=9701 .build/release/TheBridge
 ```
 
+Worktree ownership enforcement is enabled in the normal runtime. Before a
+mutation in a Git worktree, claim that worktree with `worktree_claim` and pass
+the same `ownerSession` to the admitted mutation tool. Read-only Git remains
+available without a lease. Opaque executable, Make/Just, Swift package, and
+file-backed interpreter paths fail closed because their complete worktree target
+set cannot be proven; use explicit Bridge mutation tools or a separately
+reviewed target contract instead.
+
 Set the Notion API token (resolution priority order):
 1. `NOTION_API_TOKEN` environment variable
 2. `NOTION_API_KEY` environment variable (legacy)

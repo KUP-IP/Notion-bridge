@@ -1058,6 +1058,21 @@ public enum WorktreeOwnershipGuard {
             )
         }
 
+        // C0 promises that read-only Git stays available without a lease.
+        // This narrow parser accepts only statically recognizable Git reads;
+        // a mixed command, redirect, dynamic configuration, or unknown Git
+        // verb falls through to the normal ownership/deny path below.
+        if toolName == "shell_exec",
+           let command = string(args["command"]),
+           args["env"] == nil,
+           isReadOnlyGitShellCommand(
+                command,
+                relativeTo: string(args["workingDir"])
+                    ?? FileManager.default.currentDirectoryPath
+           ) {
+            return nil
+        }
+
         let ownerSession = string(args["ownerSession"])
         let paths: [String]
         let repositoryRequired: Bool
@@ -1189,9 +1204,43 @@ public enum WorktreeOwnershipGuard {
         "add", "remove", "move", "prune", "lock", "unlock", "repair"
     ]
 
+    /// An unknown Git subcommand can resolve through a configured alias or an
+    /// external `git-<name>` executable. Both can write outside the claimed
+    /// worktree, so only recognized built-ins reach the ownership path.
+    private static let knownGitVerbs: Set<String> = [
+        "add", "am", "annotate", "apply", "archive", "bisect", "blame",
+        "branch", "bundle", "cat-file", "check-attr", "check-ignore",
+        "check-mailmap", "check-ref-format", "checkout", "cherry", "cherry-pick",
+        "clean", "clone", "commit", "config", "count-objects", "describe",
+        "diff", "difftool", "fetch", "for-each-ref", "fsck", "gc", "grep",
+        "help", "init", "interpret-trailers", "log", "maintenance", "merge",
+        "merge-base", "mergetool", "mktag", "mv", "name-rev", "notes",
+        "pack-objects", "pack-refs", "patch-id", "prune", "pull", "push",
+        "range-diff", "read-tree", "rebase", "reflog", "remote", "repack",
+        "replace", "request-pull", "reset", "restore", "revert", "rev-list",
+        "rev-parse", "rm", "send-email", "shortlog", "show", "show-branch",
+        "show-index", "show-ref", "sparse-checkout", "stash", "status", "submodule",
+        "switch", "symbolic-ref", "tag", "unpack-objects", "update-index",
+        "update-ref", "verify-commit", "verify-pack", "verify-tag", "version",
+        "whatchanged", "worktree", "write-tree"
+    ]
+
     private static let promotionTargets: Set<String> = [
         "install", "install-copy", "install-agent-safe", "release", "dmg",
         "notarize", "sign", "appcast", "promote", "promotion", "deploy"
+    ]
+
+    /// Commands whose write targets are parsed by `analyzeOrdinaryMutation`.
+    /// Everything else that is executable code is opaque: a claim for the
+    /// launch directory cannot prove where that code will write.
+    private static let staticallyResolvedShellMutators: Set<String> = [
+        "rm", "mkdir", "touch", "tee", "mv", "cp", "ln"
+    ]
+
+    /// These commands have no mutation semantics on their own. Redirections
+    /// are still independently analyzed above the command dispatcher.
+    private static let knownReadOnlyShellCommands: Set<String> = [
+        "pwd", "echo", "printf", "true", "false", "test", "["
     ]
 
     private struct CommandAnalysis {
@@ -1382,11 +1431,17 @@ public enum WorktreeOwnershipGuard {
                     Array(tokens[executableIndex...]),
                     relativeTo: executionDirectory
                 ))
+                analysis.reject(
+                    "\(executableName) has opaque recipe semantics and cannot prove its complete worktree target set; use an explicit Bridge mutation tool or a reviewed target contract"
+                )
             } else if executableName == "swift" {
                 analysis.merge(analyzeSwiftPackageTool(
                     Array(tokens[executableIndex...]),
                     relativeTo: executionDirectory
                 ))
+                analysis.reject(
+                    "swift package execution has opaque plugin and build-script semantics and cannot prove its complete worktree target set; use an explicit Bridge mutation tool or a reviewed target contract"
+                )
             } else {
                 analysis.add(executionDirectory)
                 let executableToken = tokens[executableIndex]
@@ -1400,11 +1455,17 @@ public enum WorktreeOwnershipGuard {
                         analysis.reject("executable path: \(error.localizedDescription)")
                     }
                 }
-                analysis.merge(analyzeOrdinaryMutation(
-                    executable: executableName,
-                    tokens: Array(tokens.dropFirst(executableIndex + 1)),
-                    relativeTo: executionDirectory
-                ))
+                if staticallyResolvedShellMutators.contains(executableName) {
+                    analysis.merge(analyzeOrdinaryMutation(
+                        executable: executableName,
+                        tokens: Array(tokens.dropFirst(executableIndex + 1)),
+                        relativeTo: executionDirectory
+                    ))
+                } else if !knownReadOnlyShellCommands.contains(executableName) {
+                    analysis.reject(
+                        "\(executableName) has opaque execution semantics and cannot prove its complete worktree target set; use an explicit Bridge mutation tool or a statically supported command"
+                    )
+                }
             }
 
             if promotionTargets.contains(where: { executableName.contains($0) }) {
@@ -1608,15 +1669,17 @@ public enum WorktreeOwnershipGuard {
                 }
                 let assignment = tokens[index + 1]
                 let lower = assignment.lowercased()
-                if lower.hasPrefix("core.worktree=") {
-                    let value = String(assignment.dropFirst("core.worktree=".count))
-                    guard value.hasPrefix("/") else {
-                        analysis.reject("git -c core.worktree requires an absolute static path")
-                        break
-                    }
-                    if let resolved = resolveTarget(value, label: "git -c core.worktree") {
-                        addTarget(resolved)
-                    }
+                guard lower.hasPrefix("core.worktree=") else {
+                    analysis.reject("git -c configuration has opaque execution semantics and cannot prove its complete worktree target set")
+                    break
+                }
+                let value = String(assignment.dropFirst("core.worktree=".count))
+                guard value.hasPrefix("/") else {
+                    analysis.reject("git -c core.worktree requires an absolute static path")
+                    break
+                }
+                if let resolved = resolveTarget(value, label: "git -c core.worktree") {
+                    addTarget(resolved)
                 }
                 index += 2
                 continue
@@ -1624,46 +1687,37 @@ public enum WorktreeOwnershipGuard {
             if token.hasPrefix("-c"), token.count > 2 {
                 let assignment = String(token.dropFirst(2))
                 let lower = assignment.lowercased()
-                if lower.hasPrefix("core.worktree=") {
-                    let value = String(assignment.dropFirst("core.worktree=".count))
-                    guard value.hasPrefix("/") else {
-                        analysis.reject("git -c core.worktree requires an absolute static path")
-                        break
-                    }
-                    if let resolved = resolveTarget(value, label: "git -c core.worktree") {
-                        addTarget(resolved)
-                    }
+                guard lower.hasPrefix("core.worktree=") else {
+                    analysis.reject("git -c configuration has opaque execution semantics and cannot prove its complete worktree target set")
+                    break
+                }
+                let value = String(assignment.dropFirst("core.worktree=".count))
+                guard value.hasPrefix("/") else {
+                    analysis.reject("git -c core.worktree requires an absolute static path")
+                    break
+                }
+                if let resolved = resolveTarget(value, label: "git -c core.worktree") {
+                    addTarget(resolved)
                 }
                 index += 1
                 continue
             }
             if token == "--config-env" {
-                guard index + 1 < tokens.count else {
-                    analysis.reject("git --config-env is missing its config assignment")
-                    break
-                }
-                if tokens[index + 1].lowercased().hasPrefix("core.worktree=") {
-                    analysis.reject("git --config-env core.worktree is dynamic and unsupported")
-                    break
-                }
-                index += 2
-                continue
+                analysis.reject("git --config-env has opaque configuration semantics and cannot prove its complete worktree target set")
+                break
             }
             if token.hasPrefix("--config-env=") {
-                if String(token.dropFirst("--config-env=".count)).lowercased().hasPrefix("core.worktree=") {
-                    analysis.reject("git --config-env core.worktree is dynamic and unsupported")
-                    break
-                }
-                index += 1
-                continue
+                analysis.reject("git --config-env has opaque configuration semantics and cannot prove its complete worktree target set")
+                break
             }
-            if ["--namespace", "--exec-path"].contains(token), index + 1 < tokens.count {
-                index += 2
-                continue
+            if token == "--namespace" || token == "--exec-path"
+                || token.hasPrefix("--namespace=") || token.hasPrefix("--exec-path=") {
+                analysis.reject("git namespace or executable-path selection has opaque execution semantics and cannot prove its complete worktree target set")
+                break
             }
             if token.hasPrefix("-") {
-                index += 1
-                continue
+                analysis.reject("unsupported git global option: \(token)")
+                break
             }
             break
         }
@@ -1672,6 +1726,13 @@ public enum WorktreeOwnershipGuard {
         guard index < tokens.count else { return analysis }
         let verb = tokens[index].lowercased()
         let verbArguments = Array(tokens.dropFirst(index + 1))
+
+        guard knownGitVerbs.contains(verb) else {
+            analysis.reject(
+                "git subcommand \(verb) is opaque because it may resolve through an alias or external executable; use a recognized Git command or a reviewed target contract"
+            )
+            return analysis
+        }
 
         if verb == "worktree" {
             var operationIndex = index + 1
@@ -1729,6 +1790,139 @@ public enum WorktreeOwnershipGuard {
         default:
             return false
         }
+    }
+
+    /// Classifies only the conservative read-only subset that C0 promises to
+    /// leave lease-free. It intentionally refuses command redirection,
+    /// `env`/`GIT_*` wrapper state, dynamic config, mixed shell chains, and
+    /// unknown Git verbs so they stay on the governed fail-closed path.
+    private static func isReadOnlyGitShellCommand(
+        _ command: String,
+        relativeTo workingDirectory: String
+    ) -> Bool {
+        guard unsupportedShellSyntaxReason(command) == nil else { return false }
+        var sawGit = false
+
+        for segment in shellSegments(command) {
+            let tokens = shellWords(segment)
+            guard !tokens.isEmpty else { continue }
+            guard (try? outputRedirectionTargets(
+                segment,
+                relativeTo: workingDirectory
+            ))?.isEmpty == true,
+            (try? inputRedirectionTargets(
+                segment,
+                relativeTo: workingDirectory
+            ))?.isEmpty == true else {
+                return false
+            }
+
+            let resolution = resolveExecutable(tokens, relativeTo: workingDirectory)
+            guard case .resolved(let executableIndex, _) = resolution else {
+                return false
+            }
+            let executable = URL(fileURLWithPath: tokens[executableIndex])
+                .lastPathComponent.lowercased()
+            guard executable == "git" else { return false }
+
+            let wrappers = tokens[..<executableIndex]
+            guard !wrappers.contains(where: { token in
+                let name = URL(fileURLWithPath: token).lastPathComponent.lowercased()
+                return name == "env" || token.uppercased().hasPrefix("GIT_")
+            }) else {
+                return false
+            }
+            guard gitTokensAreReadOnly(
+                Array(tokens[executableIndex...]),
+                relativeTo: workingDirectory
+            ) else {
+                return false
+            }
+            sawGit = true
+        }
+        return sawGit
+    }
+
+    private static func gitTokensAreReadOnly(
+        _ tokens: [String],
+        relativeTo workingDirectory: String
+    ) -> Bool {
+        guard tokens.count > 1 else { return false }
+        var index = 1
+
+        func hasStaticPath(_ raw: String, requiresAbsolutePath: Bool = false) -> Bool {
+            guard !requiresAbsolutePath || raw.hasPrefix("/") else { return false }
+            return (try? resolveStaticCommandPath(
+                raw,
+                relativeTo: workingDirectory
+            )) != nil
+        }
+
+        while index < tokens.count {
+            let token = tokens[index]
+            if token == "-C" || token == "--work-tree" || token == "--git-dir" {
+                guard index + 1 < tokens.count else { return false }
+                guard hasStaticPath(tokens[index + 1]) else { return false }
+                index += 2
+                continue
+            }
+            if (token.hasPrefix("-C") && token.count > 2)
+                || token.hasPrefix("--work-tree=")
+                || token.hasPrefix("--git-dir=") {
+                let raw: String
+                if token.hasPrefix("-C") {
+                    raw = String(token.dropFirst(2))
+                } else if token.hasPrefix("--work-tree=") {
+                    raw = String(token.dropFirst("--work-tree=".count))
+                } else {
+                    raw = String(token.dropFirst("--git-dir=".count))
+                }
+                guard hasStaticPath(raw) else { return false }
+                index += 1
+                continue
+            }
+            if token == "-c" {
+                guard index + 1 < tokens.count else { return false }
+                let assignment = tokens[index + 1]
+                guard assignment.lowercased().hasPrefix("core.worktree=") else {
+                    return false
+                }
+                let raw = String(assignment.dropFirst("core.worktree=".count))
+                guard hasStaticPath(raw, requiresAbsolutePath: true) else {
+                    return false
+                }
+                index += 2
+                continue
+            }
+            if token.hasPrefix("-c") && token.count > 2 {
+                let assignment = String(token.dropFirst(2))
+                guard assignment.lowercased().hasPrefix("core.worktree=") else {
+                    return false
+                }
+                let raw = String(assignment.dropFirst("core.worktree=".count))
+                guard hasStaticPath(raw, requiresAbsolutePath: true) else {
+                    return false
+                }
+                index += 1
+                continue
+            }
+            if token == "--config-env" || token.hasPrefix("--config-env=") {
+                return false
+            }
+            if token.hasPrefix("-") { return false }
+            break
+        }
+
+        guard index < tokens.count else { return false }
+        let verb = tokens[index].lowercased()
+        let arguments = Array(tokens.dropFirst(index + 1))
+        if verb == "worktree" {
+            guard let operation = arguments.first(where: { !$0.hasPrefix("-") }) else {
+                return false
+            }
+            return operation.lowercased() == "list"
+        }
+        return isReadOnlyGitInvocation(verb: verb, arguments: arguments)
     }
 
     private static func branchInvocationIsReadOnly(_ arguments: [String]) -> Bool {
@@ -2408,7 +2602,7 @@ public enum WorktreeOwnershipGuard {
             "-o", "+o", "-O", "+O", "--rcfile", "--init-file"
         ]
 
-        func analyzeStaticStdin() {
+        func rejectFileBackedScript(_ form: String) {
             do {
                 let targets = try inputRedirectionTargets(
                     segment,
@@ -2416,13 +2610,16 @@ public enum WorktreeOwnershipGuard {
                 )
                 guard !targets.isEmpty else {
                     analysis.reject(
-                        "shell stdin mode requires a statically resolvable < file input; pipes and ambient stdin are not supported"
+                        "\(form) has opaque file-backed script semantics and cannot prove its complete worktree target set"
                     )
                     return
                 }
                 for target in targets { analysis.add(target) }
+                analysis.reject(
+                    "\(form) has opaque file-backed script semantics and cannot prove its complete worktree target set"
+                )
             } catch {
-                analysis.reject("shell stdin source: \(error.localizedDescription)")
+                analysis.reject("\(form) source: \(error.localizedDescription)")
             }
         }
 
@@ -2433,7 +2630,7 @@ public enum WorktreeOwnershipGuard {
                 break
             }
             if option == "-" {
-                analyzeStaticStdin()
+                rejectFileBackedScript("shell stdin execution")
                 return analysis
             }
             if optionsWithValues.contains(option) {
@@ -2458,7 +2655,7 @@ public enum WorktreeOwnershipGuard {
                     return analysis
                 }
                 if flags.contains("s") {
-                    analyzeStaticStdin()
+                    rejectFileBackedScript("shell stdin execution")
                     return analysis
                 }
             }
@@ -2467,7 +2664,7 @@ public enum WorktreeOwnershipGuard {
         }
 
         if index >= tokens.count || tokens[index].hasPrefix("<") {
-            analyzeStaticStdin()
+            rejectFileBackedScript("shell stdin execution")
             return analysis
         }
         do {
@@ -2475,6 +2672,9 @@ public enum WorktreeOwnershipGuard {
                 tokens[index],
                 relativeTo: executionDirectory
             ))
+            analysis.reject(
+                "shell script-file execution has opaque mutation semantics and cannot prove its complete worktree target set; use shell -c with a static command"
+            )
         } catch {
             analysis.reject("shell script path: \(error.localizedDescription)")
         }

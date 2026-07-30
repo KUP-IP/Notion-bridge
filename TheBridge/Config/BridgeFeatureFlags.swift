@@ -7,8 +7,8 @@
 // disabled. While a flag is off the app must never request the underlying
 // macOS permission; the rows render an inert "feature disabled" state.
 //
-//   - BRIDGE_ENABLE_HTTP  → Network Listening (remote MCP, WS-F)
-//   - BRIDGE_ENABLE_VOICE → Microphone        (Handy STT sidecar, WS-E)
+//   - BRIDGE_ENABLE_HTTP              → Network Listening (remote MCP, WS-F)
+//   - BRIDGE_ENABLE_VOICE             → Microphone        (Handy STT sidecar, WS-E)
 //
 // HTTP reuses TransportRouter.httpEnableEnvKey so the router and the
 // permission UI cannot disagree about whether HTTP is enabled.
@@ -23,10 +23,19 @@ public struct BridgeFeatureFlags: Sendable, Equatable {
 
     public let httpEnabled: Bool
     public let voiceEnabled: Bool
+    public let worktreeOwnershipEnabled: Bool
+
+    public var worktreeOwnershipMode: String {
+        worktreeOwnershipEnabled ? "enforced" : "disabled"
+    }
 
     /// - Parameter environment: process environment (injectable for tests).
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         self.httpEnabled = environment[Self.httpEnableEnvKey] == "1"
         self.voiceEnabled = environment[Self.voiceEnableEnvKey] == "1"
+        // C0 is no longer an experimental opt-in. The admitted command
+        // surface is fail-closed for opaque execution, so the app runtime
+        // always registers the ownership guard and its claim/release tools.
+        self.worktreeOwnershipEnabled = true
     }
 }

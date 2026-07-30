@@ -1228,7 +1228,29 @@ func runWorktreeOwnershipTests() async {
         }
     }
 
-    await test("C0 shell Git -C authorizes the effective worktree, not the launch directory") {
+    await test("C0 shell Git reads remain lease-free, including -C") {
+        let fixture = try C0GitFixture()
+        let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL())
+        let command = "git -C '\(fixture.linked.path)' status --porcelain"
+        try await WorktreeOwnershipGuard.authorizeToolMutation(
+            toolName: "shell_exec",
+            arguments: .object([
+                "workingDir": .string(fixture.repo.path),
+                "command": .string(command)
+            ]),
+            store: store
+        )
+        try await WorktreeOwnershipGuard.authorizeToolMutation(
+            toolName: "shell_exec",
+            arguments: .object([
+                "workingDir": .string(fixture.repo.path),
+                "command": .string("git -C '\(fixture.linked.path)' worktree list")
+            ]),
+            store: store
+        )
+    }
+
+    await test("C0 Git worktree mutations authorize the effective worktree, not the launch directory") {
         let fixture = try C0GitFixture()
         let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL())
         _ = try await c0Claim(
@@ -1238,7 +1260,7 @@ func runWorktreeOwnershipTests() async {
             branch: "main",
             owner: "owner-a"
         )
-        let command = "git -C '\(fixture.linked.path)' status --porcelain"
+        let command = "git -C '\(fixture.linked.path)' switch --detach"
         let wrongOwnerArguments: Value = .object([
             "workingDir": .string(fixture.repo.path),
             "command": .string(command),
@@ -1642,7 +1664,7 @@ func runWorktreeOwnershipTests() async {
         try expect(dynamic == "worktree_target_unresolved")
     }
 
-    await test("C0 git core.worktree config requires target ownership") {
+    await test("C0 static Git configuration is lease-free only for core.worktree reads") {
         let fixture = try C0GitFixture()
         let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL("core-worktree"))
         let commands = [
@@ -1650,37 +1672,14 @@ func runWorktreeOwnershipTests() async {
             "git -ccore.worktree='\(fixture.linked.path)' status --porcelain"
         ]
         for command in commands {
-            let missing = await c0ErrorCode {
-                _ = try await WorktreeOwnershipGuard.authorizeToolMutation(
-                    toolName: "shell_exec",
-                    arguments: .object([
-                        "workingDir": .string(fixture.root.path),
-                        "command": .string(command)
-                    ]),
-                    store: store
-                )
-            }
-            try expect(missing == "worktree_ownership_required")
-        }
-
-        _ = try await c0Claim(
-            store,
-            fixture: fixture,
-            worktree: fixture.linked,
-            branch: "packet/c0-linked",
-            owner: "owner"
-        )
-        for command in commands {
-            let authorization = try await WorktreeOwnershipGuard.authorizeToolMutation(
+            try await WorktreeOwnershipGuard.authorizeToolMutation(
                 toolName: "shell_exec",
                 arguments: .object([
                     "workingDir": .string(fixture.root.path),
-                    "command": .string(command),
-                    "ownerSession": .string("owner")
+                    "command": .string(command)
                 ]),
                 store: store
             )
-            authorization?.release()
         }
 
         for command in [
@@ -1700,9 +1699,34 @@ func runWorktreeOwnershipTests() async {
             }
             try expect(unresolved == "worktree_target_unresolved")
         }
+
+        _ = try await c0Claim(
+            store,
+            fixture: fixture,
+            worktree: fixture.linked,
+            branch: "packet/c0-linked",
+            owner: "owner"
+        )
+        for command in [
+            "git -c alias.c0-opaque='!touch /tmp/c0-foreign-target' c0-opaque",
+            "git c0-opaque"
+        ] {
+            let aliasEscape = await c0ErrorCode {
+                _ = try await WorktreeOwnershipGuard.authorizeToolMutation(
+                    toolName: "shell_exec",
+                    arguments: .object([
+                        "workingDir": .string(fixture.linked.path),
+                        "command": .string(command),
+                        "ownerSession": .string("owner")
+                    ]),
+                    store: store
+                )
+            }
+            try expect(aliasEscape == "worktree_target_unresolved")
+        }
     }
 
-    await test("C0 SwiftPM package and output paths require ownership union") {
+    await test("C0 Swift package commands fail closed even when every visible worktree is claimed") {
         let fixture = try C0GitFixture()
         let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL("swiftpm-paths"))
         let output = fixture.repo.appendingPathComponent(".build-c0").path
@@ -1715,7 +1739,7 @@ func runWorktreeOwnershipTests() async {
             branch: "packet/c0-linked",
             owner: "owner"
         )
-        let missingOutput = await c0ErrorCode {
+        let unowned = await c0ErrorCode {
             _ = try await WorktreeOwnershipGuard.authorizeToolMutation(
                 toolName: "shell_exec",
                 arguments: .object([
@@ -1726,7 +1750,7 @@ func runWorktreeOwnershipTests() async {
                 store: store
             )
         }
-        try expect(missingOutput == "worktree_ownership_required")
+        try expect(unowned == "worktree_target_unresolved")
 
         _ = try await c0Claim(
             store,
@@ -1735,16 +1759,18 @@ func runWorktreeOwnershipTests() async {
             branch: "main",
             owner: "owner"
         )
-        let authorization = try await WorktreeOwnershipGuard.authorizeToolMutation(
-            toolName: "shell_exec",
-            arguments: .object([
-                "workingDir": .string(fixture.root.path),
-                "command": .string(command),
-                "ownerSession": .string("owner")
-            ]),
-            store: store
-        )
-        authorization?.release()
+        let owned = await c0ErrorCode {
+            _ = try await WorktreeOwnershipGuard.authorizeToolMutation(
+                toolName: "shell_exec",
+                arguments: .object([
+                    "workingDir": .string(fixture.root.path),
+                    "command": .string(command),
+                    "ownerSession": .string("owner")
+                ]),
+                store: store
+            )
+        }
+        try expect(owned == "worktree_target_unresolved")
 
         let dynamic = await c0ErrorCode {
             _ = try await WorktreeOwnershipGuard.authorizeToolMutation(
@@ -1760,16 +1786,14 @@ func runWorktreeOwnershipTests() async {
         try expect(dynamic == "worktree_target_unresolved")
     }
 
-    await test("C0 generic worktree shell commands require ownership but unknown commands remain usable when owned") {
+    await test("C0 admits statically analyzable shell mutations under ownership") {
         let fixture = try C0GitFixture()
         let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL())
         let commands = [
-            "pwd",
-            "git status --porcelain",
-            "./scripts/update-fixture.sh",
             "rm README.md",
             "cp source.txt copied.txt",
-            "printf x > redirected.txt"
+            "printf x > redirected.txt",
+            "bash -c 'printf x > inline-interpreter.txt'"
         ]
         for command in commands {
             let missing = await c0ErrorCode {
@@ -1807,6 +1831,15 @@ func runWorktreeOwnershipTests() async {
             )
         }
 
+        try await WorktreeOwnershipGuard.authorizeToolMutation(
+            toolName: "shell_exec",
+            arguments: .object([
+                "workingDir": .string(fixture.linked.path),
+                "command": .string("git status --porcelain")
+            ]),
+            store: store
+        )
+
         let scriptDirectory = fixture.linked.appendingPathComponent("scripts", isDirectory: true)
         let buildDirectory = fixture.linked.appendingPathComponent("build", isDirectory: true)
         try FileManager.default.createDirectory(at: scriptDirectory, withIntermediateDirectories: true)
@@ -1816,8 +1849,10 @@ func runWorktreeOwnershipTests() async {
         let makefile = fixture.linked.appendingPathComponent("Makefile").path
         let nestedBuildDirectory = buildDirectory.appendingPathComponent("nested", isDirectory: true)
         try FileManager.default.createDirectory(at: nestedBuildDirectory, withIntermediateDirectories: true)
-        let governedTargetCommands = [
+        let opaqueTargetCommands = [
             directScript,
+            "python3 -c 'print(\"opaque\")'",
+            "npm run build",
             "bash '\(interpretedScript)'",
             "sh '\(interpretedScript)'",
             "command bash '\(interpretedScript)'",
@@ -1846,8 +1881,8 @@ func runWorktreeOwnershipTests() async {
             "make -f ../../Makefile --file ../../Release.mk -C '\(nestedBuildDirectory.path)' install"
         ]
         let targetStore = WorktreeOwnershipStore(databaseURL: fixture.databaseURL("script-and-make-targets"))
-        for command in governedTargetCommands {
-            let missing = await c0ErrorCode {
+        for command in opaqueTargetCommands {
+            let code = await c0ErrorCode {
                 _ = try await WorktreeOwnershipGuard.authorizeToolMutation(
                     toolName: "shell_exec",
                     arguments: .object([
@@ -1858,8 +1893,8 @@ func runWorktreeOwnershipTests() async {
                 )
             }
             try expect(
-                missing == "worktree_ownership_required",
-                "expected target ownership denial for \(command), got \(missing ?? "nil")"
+                code == "worktree_target_unresolved",
+                "expected opaque target denial for \(command), got \(code ?? "nil")"
             )
         }
         _ = try await c0Claim(
@@ -1869,17 +1904,22 @@ func runWorktreeOwnershipTests() async {
             branch: "packet/c0-linked",
             owner: "target-owner"
         )
-        for command in governedTargetCommands {
-            let authorization = try await WorktreeOwnershipGuard.authorizeToolMutation(
-                toolName: "shell_exec",
-                arguments: .object([
-                    "workingDir": .string(fixture.root.path),
-                    "command": .string(command),
-                    "ownerSession": .string("target-owner")
-                ]),
-                store: targetStore
+        for command in opaqueTargetCommands {
+            let code = await c0ErrorCode {
+                _ = try await WorktreeOwnershipGuard.authorizeToolMutation(
+                    toolName: "shell_exec",
+                    arguments: .object([
+                        "workingDir": .string(fixture.root.path),
+                        "command": .string(command),
+                        "ownerSession": .string("target-owner")
+                    ]),
+                    store: targetStore
+                )
+            }
+            try expect(
+                code == "worktree_target_unresolved",
+                "owned opaque command was admitted: \(command) (\(code ?? "nil"))"
             )
-            authorization?.release()
         }
     }
 
@@ -2083,6 +2123,46 @@ func runWorktreeOwnershipTests() async {
         )
     }
 
+    await test("C0 disabled router preserves mutation dispatch without opening the claim database") {
+        let fixture = try C0GitFixture()
+        let databaseURL = fixture.databaseURL("disabled-router")
+        let store = WorktreeOwnershipStore(databaseURL: databaseURL)
+        let probe = C0InvocationProbe()
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog(),
+            worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: false,
+            licenseStatusProvider: { .grandfathered }
+        )
+        await router.register(
+            ToolRegistration(
+                name: "file_write",
+                module: "dev",
+                tier: .open,
+                description: "C0 disabled-path test probe",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([:])
+                ])
+            ) { _ in
+                await probe.mark()
+                return .object(["ok": .bool(true)])
+            }
+        )
+
+        _ = try await router.dispatch(
+            toolName: "file_write",
+            arguments: .object(["path": .string(fixture.linked.appendingPathComponent("probe.txt").path)])
+        )
+
+        try await expect(probe.value() == 1)
+        try expect(
+            !FileManager.default.fileExists(atPath: databaseURL.path),
+            "disabled C0 dispatch created the claim database"
+        )
+    }
+
     await test("C0 actual shell denial starts no handler mutation") {
         let fixture = try C0GitFixture()
         let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL())
@@ -2091,6 +2171,7 @@ func runWorktreeOwnershipTests() async {
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog(),
             worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: true,
             licenseStatusProvider: { .grandfathered }
         )
         await ShellModule.register(on: router)
@@ -2121,6 +2202,7 @@ func runWorktreeOwnershipTests() async {
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog(),
             worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: true,
             licenseStatusProvider: { .grandfathered }
         )
         await BgProcessModule.register(on: router)
@@ -2149,6 +2231,7 @@ func runWorktreeOwnershipTests() async {
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog(),
             worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: true,
             licenseStatusProvider: { .grandfathered }
         )
         await router.register(ToolRegistration(
@@ -2213,6 +2296,7 @@ func runWorktreeOwnershipTests() async {
         let router = ToolRouter(
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog(),
+            worktreeOwnershipEnabled: true,
             licenseStatusProvider: { .grandfathered }
         )
         await ShellModule.register(on: router)

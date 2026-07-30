@@ -160,6 +160,7 @@ public actor SSEServer {
     private let sessionCleanupInterval: TimeInterval
     private let maxHTTPSessions: Int
     private let toolAllowlist: Set<String>?
+    private let worktreeOwnershipEnabled: Bool
 
     /// PKT-800 S2: connector bearer/scope enforcement bundle. **`nil` in
     /// every default configuration** (stdio-only — `BRIDGE_ENABLE_HTTP`
@@ -257,6 +258,7 @@ public actor SSEServer {
         sessionCleanupInterval: TimeInterval = 30,
         maxHTTPSessions: Int = 48,
         toolAllowlist: Set<String>? = nil,
+        worktreeOwnershipEnabled: Bool = false,
         connectorAuth: ConnectorAuthContext? = nil,
         authFailureAudit: TunnelAuthFailureAudit = .shared,
         sessionStore: SessionPersistenceStore = .shared,
@@ -276,6 +278,7 @@ public actor SSEServer {
             : max(5, min(normalizedSessionTimeout, sessionCleanupInterval))
         self.maxHTTPSessions = max(8, maxHTTPSessions)
         self.toolAllowlist = toolAllowlist
+        self.worktreeOwnershipEnabled = worktreeOwnershipEnabled
         self.connectorAuth = connectorAuth
         self.authFailureAudit = authFailureAudit
         self.sessionStore = sessionStore
@@ -590,7 +593,9 @@ public actor SSEServer {
             "priorRunEndedCleanly": priorRunClean,
             "remoteAuthMode": Self.remoteAuthMode(connectorAuth: connectorAuth),
             "remoteOAuthReady": oauthReadiness.ready,
-            "remoteOAuthStatus": oauthReadiness.status
+            "remoteOAuthStatus": oauthReadiness.status,
+            "worktreeOwnershipEnabled": worktreeOwnershipEnabled,
+            "worktreeOwnershipMode": worktreeOwnershipEnabled ? "enforced" : "disabled"
         ]
 
         return (try? JSONSerialization.data(withJSONObject: health, options: [.sortedKeys])) ?? Data()

@@ -9,29 +9,46 @@ import TheBridgeLib
 func runBridgeFeatureFlagsTests() async {
     print("\n\u{1F510} BridgeFeatureFlags (PKT-798 · WS-C)")
 
-    await test("default (empty env): both gates OFF") {
+    await test("default (empty env): transport gates are OFF and C0 is enforced") {
         let f = BridgeFeatureFlags(environment: [:])
-        try expect(f.httpEnabled == false && f.voiceEnabled == false,
-                   "fail-closed default violated: \(f)")
+        try expect(
+            f.httpEnabled == false
+                && f.voiceEnabled == false
+                && f.worktreeOwnershipEnabled == true,
+                   "runtime defaults drifted: \(f)")
+        try expect(f.worktreeOwnershipMode == "enforced")
     }
 
     await test("BRIDGE_ENABLE_HTTP=1 enables only HTTP") {
         let f = BridgeFeatureFlags(environment: ["BRIDGE_ENABLE_HTTP": "1"])
-        try expect(f.httpEnabled == true && f.voiceEnabled == false, "got \(f)")
+        try expect(
+            f.httpEnabled == true && f.voiceEnabled == false
+                && f.worktreeOwnershipEnabled == true,
+            "got \(f)"
+        )
     }
 
     await test("BRIDGE_ENABLE_VOICE=1 enables only Voice") {
         let f = BridgeFeatureFlags(environment: ["BRIDGE_ENABLE_VOICE": "1"])
-        try expect(f.voiceEnabled == true && f.httpEnabled == false, "got \(f)")
+        try expect(
+            f.voiceEnabled == true
+                && f.httpEnabled == false
+                && f.worktreeOwnershipEnabled == true,
+            "got \(f)"
+        )
     }
 
-    await test("non-\"1\" values stay disabled (true/0/yes)") {
+    await test("legacy C0 opt-in values cannot disable enforced mode") {
         for v in ["true", "0", "yes", "", "TRUE"] {
             let f = BridgeFeatureFlags(environment: [
                 "BRIDGE_ENABLE_HTTP": v, "BRIDGE_ENABLE_VOICE": v,
+                "BRIDGE_ENABLE_WORKTREE_OWNERSHIP": v,
             ])
-            try expect(f.httpEnabled == false && f.voiceEnabled == false,
-                       "value \"\(v)\" must not enable, got \(f)")
+            try expect(
+                f.httpEnabled == false
+                    && f.voiceEnabled == false
+                    && f.worktreeOwnershipEnabled == true,
+                       "legacy value \"\(v)\" changed enforced mode: \(f)")
         }
     }
 

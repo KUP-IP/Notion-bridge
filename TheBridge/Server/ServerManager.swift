@@ -120,7 +120,13 @@ public actor ServerManager {
         self.securityGate = securityGate
         let auditLog = AuditLog()
         self.auditLog = auditLog
-        let router = ToolRouter(securityGate: securityGate, auditLog: auditLog)
+        let featureFlags = BridgeFeatureFlags()
+        let worktreeOwnershipEnabled = featureFlags.worktreeOwnershipEnabled
+        let router = ToolRouter(
+            securityGate: securityGate,
+            auditLog: auditLog,
+            worktreeOwnershipEnabled: worktreeOwnershipEnabled
+        )
         self.router = router
 
         let onToolCall = self.onToolCall
@@ -187,6 +193,7 @@ public actor ServerManager {
             onClientConnected: onClientConnected,
             onClientDisconnected: onClientDisconnected,
             sessionTimeout: ConfigManager.shared.sessionTimeout,
+            worktreeOwnershipEnabled: worktreeOwnershipEnabled,
             connectorAuth: connectorAuth
         )
         self.sseServer = sseServer
@@ -200,6 +207,7 @@ public actor ServerManager {
         // live diagnosticsProvider; the registry owns module ordering.
         await BridgeModuleRegistry.registerStaticFeatureModules(
             on: router,
+            worktreeOwnershipEnabled: worktreeOwnershipEnabled,
             registerSession: { sessionRouter in
                 await SessionModule.register(
                     on: sessionRouter,
