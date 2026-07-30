@@ -33,7 +33,7 @@ public enum BridgeModuleRegistry {
     ///     only an auditLog.
     public static func registerStaticFeatureModules(
         on router: ToolRouter,
-        worktreeOwnershipEnabled: Bool = false,
+        worktreeOwnershipEnabled: Bool = true,
         registerSession: (ToolRouter) async -> Void
     ) async {
         await ShellModule.register(on: router)

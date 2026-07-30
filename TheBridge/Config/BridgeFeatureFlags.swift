@@ -9,7 +9,6 @@
 //
 //   - BRIDGE_ENABLE_HTTP              → Network Listening (remote MCP, WS-F)
 //   - BRIDGE_ENABLE_VOICE             → Microphone        (Handy STT sidecar, WS-E)
-//   - BRIDGE_ENABLE_WORKTREE_OWNERSHIP → Experimental C0 runtime enforcement
 //
 // HTTP reuses TransportRouter.httpEnableEnvKey so the router and the
 // permission UI cannot disagree about whether HTTP is enabled.
@@ -21,21 +20,22 @@ public struct BridgeFeatureFlags: Sendable, Equatable {
     /// Reused from the WS-B transport router — one key, one truth.
     public static let httpEnableEnvKey = TransportRouter.httpEnableEnvKey
     public static let voiceEnableEnvKey = "BRIDGE_ENABLE_VOICE"
-    public static let worktreeOwnershipEnableEnvKey = "BRIDGE_ENABLE_WORKTREE_OWNERSHIP"
 
     public let httpEnabled: Bool
     public let voiceEnabled: Bool
     public let worktreeOwnershipEnabled: Bool
 
     public var worktreeOwnershipMode: String {
-        worktreeOwnershipEnabled ? "experimental" : "disabled"
+        worktreeOwnershipEnabled ? "enforced" : "disabled"
     }
 
     /// - Parameter environment: process environment (injectable for tests).
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         self.httpEnabled = environment[Self.httpEnableEnvKey] == "1"
         self.voiceEnabled = environment[Self.voiceEnableEnvKey] == "1"
-        self.worktreeOwnershipEnabled =
-            environment[Self.worktreeOwnershipEnableEnvKey] == "1"
+        // C0 is no longer an experimental opt-in. The admitted command
+        // surface is fail-closed for opaque execution, so the app runtime
+        // always registers the ownership guard and its claim/release tools.
+        self.worktreeOwnershipEnabled = true
     }
 }

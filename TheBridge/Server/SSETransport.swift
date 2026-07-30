@@ -595,7 +595,7 @@ public actor SSEServer {
             "remoteOAuthReady": oauthReadiness.ready,
             "remoteOAuthStatus": oauthReadiness.status,
             "worktreeOwnershipEnabled": worktreeOwnershipEnabled,
-            "worktreeOwnershipMode": worktreeOwnershipEnabled ? "experimental" : "disabled"
+            "worktreeOwnershipMode": worktreeOwnershipEnabled ? "enforced" : "disabled"
         ]
 
         return (try? JSONSerialization.data(withJSONObject: health, options: [.sortedKeys])) ?? Data()

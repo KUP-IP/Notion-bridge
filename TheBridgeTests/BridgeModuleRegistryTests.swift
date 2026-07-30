@@ -11,7 +11,7 @@ import TheBridgeLib
 func runBridgeModuleRegistryTests() async {
     print("\n\u{1F9E9} BridgeModuleRegistry (PKT v3.0·0.4 · single-source)")
 
-    func buildRouter(worktreeOwnershipEnabled: Bool = false) async -> ToolRouter {
+    func buildRouter(worktreeOwnershipEnabled: Bool = true) async -> ToolRouter {
         let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
         let router = ToolRouter(
@@ -44,21 +44,13 @@ func runBridgeModuleRegistryTests() async {
                    "duplicate registrations: \(Dictionary(grouping: names, by: { $0 }).filter { $0.value.count > 1 }.keys.sorted())")
     }
 
-    await test("C0 tools are absent by default and require explicit enablement") {
-        let disabled = Set(await (buildRouter()).allRegistrations().map(\.name))
-        try expect(!disabled.contains("worktree_claim"))
-        try expect(!disabled.contains("worktree_release"))
-
-        let enabled = Set(
-            await (buildRouter(worktreeOwnershipEnabled: true))
-                .allRegistrations()
-                .map(\.name)
-        )
+    await test("C0 claim and release tools are in the canonical static surface") {
+        let enabled = Set(await (buildRouter()).allRegistrations().map(\.name))
         try expect(enabled.contains("worktree_claim"))
         try expect(enabled.contains("worktree_release"))
         try expect(
-            enabled.count == BridgeConstants.staticFeatureModuleToolCount + 2,
-            "enabled C0 surface must add exactly two tools"
+            enabled.count == BridgeConstants.staticFeatureModuleToolCount,
+            "enforced C0 surface must match the canonical count"
         )
     }
 
