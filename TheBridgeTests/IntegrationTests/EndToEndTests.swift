@@ -55,7 +55,10 @@ func runEndToEndTests() async {
     await test("E2E: SecurityGate no longer handoffs sudo through shell_exec") {
         let result = try await router.dispatch(
             toolName: "shell_exec",
-            arguments: .object(["command": .string(sudoStr + " -n true")])
+            arguments: .object([
+                "command": .string(sudoStr + " -n true"),
+                "workingDir": .string(FileManager.default.temporaryDirectory.path)
+            ])
         )
         if case .object(let dict) = result {
             try expect(dict["exitCode"] != nil, "Expected shell_exec result payload")
@@ -141,7 +144,10 @@ func runEndToEndTests() async {
     await test("E2E: Cross-module — shell_exec output is valid structured response") {
         let result = try await router.dispatch(
             toolName: "shell_exec",
-            arguments: .object(["command": .string("echo 'hello notionbridge'")])
+            arguments: .object([
+                "command": .string("echo 'hello notionbridge'"),
+                "workingDir": .string(FileManager.default.temporaryDirectory.path)
+            ])
         )
         if case .object(let dict) = result {
             if case .string(let stdout) = dict["stdout"] {

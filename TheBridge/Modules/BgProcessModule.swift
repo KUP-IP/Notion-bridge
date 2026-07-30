@@ -207,6 +207,10 @@ public enum BgProcessModule {
                     "label": .object([
                         "type": .string("string"),
                         "description": .string("Optional human-readable label echoed back for your own tracking.")
+                    ]),
+                    "ownerSession": .object([
+                        "type": .string("string"),
+                        "description": .string("Runtime worktree owner session. Required only when the operation resolves inside a claimed Git worktree.")
                     ])
                 ]),
                 "required": .array([.string("command")])

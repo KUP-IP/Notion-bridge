@@ -594,7 +594,8 @@ extension GitModule {
                 "check":         boolProp("Pass --check for dry-run validation (no files written)."),
                 "p":             intProp("Strip count for diff path prefixes (-p<n>; default 1)."),
                 "commit":        boolProp("After successful apply, run `git commit -m <message>`. Requires index:true to stage changes."),
-                "commitMessage": strProp("Commit message used when commit:true (default 'apply patch via git_apply_patch').")
+                "commitMessage": strProp("Commit message used when commit:true (default 'apply patch via git_apply_patch')."),
+                "ownerSession": strProp("Required runtime worktree ownership session for a non-read-only operation.")
             ], required: ["diff"]),
             handler: { arguments in
                 if let capVal = await ensureCapability("git_apply_patch", runtime: runtime) { return capVal }
@@ -682,7 +683,8 @@ extension GitModule {
                 "fromRef": strProp("Optional ref to branch from (defaults to HEAD)."),
                 "switch":  boolProp("Also check out the new branch after creation."),
                 "force":   boolProp("Pass -f to overwrite an existing branch of the same name."),
-                "cwd":     strProp("Optional working directory.")
+                "cwd":     strProp("Optional working directory."),
+                "ownerSession": strProp("Required runtime worktree ownership session for this mutation.")
             ], required: ["branch"]),
             handler: { arguments in
                 let tool = "git_create_branch"

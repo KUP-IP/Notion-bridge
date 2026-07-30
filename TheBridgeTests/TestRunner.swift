@@ -152,6 +152,9 @@ struct TheBridgeTestRunner {
     // a live run loop (that was the teardown SIGTRAP / hang). `runAllTests()` is
     // `nonisolated` so its body inherits the detached (non-main) executor.
     static func main() {
+        if let probeExitCode = worktreeOwnershipProcessProbeExitCodeIfRequested() {
+            exit(probeExitCode)
+        }
         if let probeExitCode = calendarRegistryProcessProbeExitCodeIfRequested() {
             exit(probeExitCode)
         }
@@ -762,6 +765,7 @@ await runMemorySettingsTests()         // PKT-MEM-102: Memory Settings section +
 await runOllamaModuleTests()           // Local Ollama client + module (Wave 2a)
 await runGhModuleTests()
 await runGitModuleTests()
+await runWorktreeOwnershipTests()
 await runWSHMenuBarTests()        // PKT-804 (v2.3): menu-bar quick-page
 await runSnippetsModuleTests()    // PKT-2135a9e9 (v2.3 · WS-D): snippets module
 await runCommandsModuleTests()    // PKT-1061: CommandStore commands_* MCP surface

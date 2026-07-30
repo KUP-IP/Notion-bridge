@@ -9,6 +9,22 @@ import Foundation
 import MCP
 import TheBridgeLib
 
+private func claimGitMutationFixture(
+    store: WorktreeOwnershipStore,
+    cwd: String,
+    ownerSession: String
+) async throws {
+    let identity = try WorktreeOwnershipGuard.liveIdentity(for: cwd)
+    _ = try await store.claim(
+        repoRoot: identity.repoRoot,
+        worktreePath: identity.worktreePath,
+        branch: identity.branch,
+        baseSHA: identity.headSHA,
+        ownerSession: ownerSession,
+        ttlSeconds: 300
+    )
+}
+
 func runGitModuleTests() async {
     print("\n\u{1F500} GitModule Tests (PKT-740 W1 v2.2 · 2.1)")
 
@@ -415,7 +431,10 @@ func runGitModuleTests() async {
         await GitModule.register(on: router, runtime: runtime)
         let result = try await router.dispatch(
             toolName: "git_apply_patch",
-            arguments: .object(["diff": .string("dummy")])
+            arguments: .object([
+                "diff": .string("dummy"),
+                "check": .bool(true)
+            ])
         )
         guard case .object(let dict) = result else {
             throw TestError.assertion("expected object result")
@@ -483,13 +502,26 @@ func runGitModuleTests() async {
 
         let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let log = AuditLog()
-        let router = ToolRouter(securityGate: gate, auditLog: log)
+        let ownershipStore = WorktreeOwnershipStore(
+            databaseURL: URL(fileURLWithPath: tmp).appendingPathComponent(".c0-claims.sqlite")
+        )
+        try await claimGitMutationFixture(
+            store: ownershipStore,
+            cwd: tmp,
+            ownerSession: "git-apply-test"
+        )
+        let router = ToolRouter(
+            securityGate: gate,
+            auditLog: log,
+            worktreeOwnershipStore: ownershipStore
+        )
         await GitModule.register(on: router, runtime: runtime)
         let result = try await router.dispatch(
             toolName: "git_apply_patch",
             arguments: .object([
                 "cwd":  .string(tmp),
-                "diff": .string(diffRun.stdout)
+                "diff": .string(diffRun.stdout),
+                "ownerSession": .string("git-apply-test")
             ])
         )
         guard case .object(let dict) = result else {
@@ -573,13 +605,22 @@ func runGitModuleTests() async {
     }
 
     await test("git_create_branch schema requires 'branch'") {
-        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog()
+        )
         await GitModule.register(on: router)
-        // git_create_branch missing 'branch'
-        let cb = try await router.dispatch(toolName: "git_create_branch", arguments: .object([:]))
-        if case .object(let d) = cb, case .bool(let ok) = d["ok"] {
-            try expect(ok == false, "git_create_branch with no 'branch' must fail")
-        } else { throw TestError.assertion("git_create_branch envelope shape unexpected") }
+        let registrations = await router.registrations(forModule: "dev")
+        guard let createBranch = registrations.first(where: { $0.name == "git_create_branch" }),
+              case .object(let schema) = createBranch.inputSchema,
+              case .array(let required)? = schema["required"] else {
+            throw TestError.assertion("git_create_branch schema missing")
+        }
+        let names = required.compactMap { value -> String? in
+            if case .string(let name) = value { return name }
+            return nil
+        }
+        try expect(names.contains("branch"), "git_create_branch required missing 'branch'")
     }
 
     await test("git_create_branch DoD: creates new branch + switches, then cleans up (live)") {
@@ -598,12 +639,25 @@ func runGitModuleTests() async {
         _ = try await runtime.runGit(["add", "a.txt"], cwd: tmp.path)
         _ = try await runtime.runGit(["commit", "-q", "-m", "init"], cwd: tmp.path)
 
-        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
+        let ownershipStore = WorktreeOwnershipStore(
+            databaseURL: tmp.appendingPathComponent(".c0-claims.sqlite")
+        )
+        try await claimGitMutationFixture(
+            store: ownershipStore,
+            cwd: tmp.path,
+            ownerSession: "git-create-branch-test"
+        )
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog(),
+            worktreeOwnershipStore: ownershipStore
+        )
         await GitModule.register(on: router)
         let res = try await router.dispatch(toolName: "git_create_branch", arguments: .object([
             "branch": .string("w3-feature"),
             "switch": .bool(true),
-            "cwd":    .string(tmp.path)
+            "cwd":    .string(tmp.path),
+            "ownerSession": .string("git-create-branch-test")
         ]))
         guard case .object(let d) = res, case .bool(let ok) = d["ok"], ok else {
             throw TestError.assertion("git_create_branch DoD failed: \(res)")

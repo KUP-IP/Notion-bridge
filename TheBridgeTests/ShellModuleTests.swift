@@ -7,6 +7,19 @@ import TheBridgeLib
 
 // MARK: - ShellModule Tests
 
+private func shellTestErrorCode(
+    _ operation: () async throws -> Void
+) async -> String? {
+    do {
+        try await operation()
+        return nil
+    } catch let error as WorktreeOwnershipError {
+        return error.code
+    } catch {
+        return nil
+    }
+}
+
 func runShellModuleTests() async {
     print("\n🐚 ShellModule Tests")
 
@@ -15,6 +28,7 @@ func runShellModuleTests() async {
     let log = AuditLog()
     let router = ToolRouter(securityGate: gate, auditLog: log)
     await ShellModule.register(on: router)
+    let nonGitWorkingDirectory = FileManager.default.temporaryDirectory.path
 
     // Verify registration
     await test("ShellModule registers 2 tools") {
@@ -41,7 +55,10 @@ func runShellModuleTests() async {
     await test("shell_exec runs echo and returns stdout") {
         let result = try await router.dispatch(
             toolName: "shell_exec",
-            arguments: .object(["command": .string("echo hello_notionbridge")])
+            arguments: .object([
+                "command": .string("echo hello_notionbridge"),
+                "workingDir": .string(nonGitWorkingDirectory)
+            ])
         )
         if case .object(let dict) = result,
            case .string(let stdout) = dict["stdout"],
@@ -61,7 +78,10 @@ func runShellModuleTests() async {
     await test("shell_exec captures stderr") {
         let result = try await router.dispatch(
             toolName: "shell_exec",
-            arguments: .object(["command": .string("echo err_msg >&2")])
+            arguments: .object([
+                "command": .string("echo err_msg >&2"),
+                "workingDir": .string(nonGitWorkingDirectory)
+            ])
         )
         if case .object(let dict) = result,
            case .string(let stderr) = dict["stderr"] {
@@ -75,7 +95,10 @@ func runShellModuleTests() async {
     await test("shell_exec returns non-zero exit code") {
         let result = try await router.dispatch(
             toolName: "shell_exec",
-            arguments: .object(["command": .string("exit 42")])
+            arguments: .object([
+                "command": .string("exit 42"),
+                "workingDir": .string(nonGitWorkingDirectory)
+            ])
         )
         if case .object(let dict) = result,
            case .int(let exitCode) = dict["exitCode"],
@@ -95,7 +118,10 @@ func runShellModuleTests() async {
     await test("shell_exec returns duration field") {
         let result = try await router.dispatch(
             toolName: "shell_exec",
-            arguments: .object(["command": .string("echo fast")])
+            arguments: .object([
+                "command": .string("echo fast"),
+                "workingDir": .string(nonGitWorkingDirectory)
+            ])
         )
         if case .object(let dict) = result,
            case .double(let duration) = dict["duration"] {
@@ -130,6 +156,7 @@ func runShellModuleTests() async {
             toolName: "shell_exec",
             arguments: .object([
                 "command": .string("sleep 10 && echo done"),
+                "workingDir": .string(nonGitWorkingDirectory),
                 "timeout": .int(1)
             ])
         )
@@ -151,6 +178,7 @@ func runShellModuleTests() async {
             toolName: "shell_exec",
             arguments: .object([
                 "command": .string("printf '%s\n' \"$NB_TEST_ENV\"; printf 'line1\nline2\nline3\nline4\n'"),
+                "workingDir": .string(nonGitWorkingDirectory),
                 "env": .object(["NB_TEST_ENV": .string("bridge-env-ok")]),
                 "stdoutHeadLines": .int(2),
                 "stdoutTailLines": .int(1)
@@ -182,32 +210,26 @@ func runShellModuleTests() async {
         }
     }
 
-    // run_script: rejects unapproved script
-    await test("run_script rejects unapproved script name") {
-        let result = try await router.dispatch(
-            toolName: "run_script",
-            arguments: .object(["scriptName": .string("nonexistent_xyz_script.sh")])
-        )
-        if case .object(let dict) = result,
-           case .string(let error) = dict["error"] {
-            try expect(error.contains("not on the approved list") || error.contains("does not exist") || error.contains("No approved scripts"),
-                       "Expected rejection message, got: \(error)")
-        } else {
-            throw TestError.assertion("Expected error object for unapproved script")
+    // run_script: opaque script execution fails closed before handler invocation.
+    await test("run_script fails closed without a verifiable target contract") {
+        let code = await shellTestErrorCode {
+            _ = try await router.dispatch(
+                toolName: "run_script",
+                arguments: .object(["scriptName": .string("nonexistent_xyz_script.sh")])
+            )
         }
+        try expect(code == "worktree_target_unresolved")
     }
 
-    // run_script: missing scriptName param
-    await test("run_script rejects missing scriptName") {
-        do {
+    // run_script: missing scriptName remains fail-closed at the shared guard.
+    await test("run_script missing scriptName remains fail closed") {
+        let code = await shellTestErrorCode {
             _ = try await router.dispatch(
                 toolName: "run_script",
                 arguments: .object([:])
             )
-            throw TestError.assertion("Expected error for missing scriptName")
-        } catch is ToolRouterError {
-            // Expected
         }
+        try expect(code == "worktree_target_unresolved")
     }
 
     // Verify tier assignment for high-risk shell execution.
@@ -217,34 +239,25 @@ func runShellModuleTests() async {
         try expect(shellExec.tier == .request, "shell_exec must be request tier")
     }
 
-    // P2-3: Path traversal prevention in run_script (PKT-373)
-    await test("run_script rejects path traversal attempts") {
-        let result = try await router.dispatch(
-            toolName: "run_script",
-            arguments: .object(["scriptName": .string("../../etc/passwd")])
-        )
-        if case .object(let dict) = result,
-           case .string(let error) = dict["error"] {
-            try expect(error.contains("outside") || error.contains("traversal") || error.contains("not on the approved list") || error.contains("does not exist") || error.contains("Invalid"),
-                       "Expected path traversal rejection, got: \(error)")
-        } else {
-            throw TestError.assertion("Expected error object for path traversal attempt")
+    // Opaque run_script arguments cannot bypass the shared fail-closed guard.
+    await test("run_script path traversal remains fail closed") {
+        let code = await shellTestErrorCode {
+            _ = try await router.dispatch(
+                toolName: "run_script",
+                arguments: .object(["scriptName": .string("../../etc/passwd")])
+            )
         }
+        try expect(code == "worktree_target_unresolved")
     }
 
-    // P2-3: run_script rejects absolute path injection (PKT-373)
-    await test("run_script rejects absolute path in scriptName") {
-        let result = try await router.dispatch(
-            toolName: "run_script",
-            arguments: .object(["scriptName": .string("/etc/passwd")])
-        )
-        if case .object(let dict) = result,
-           case .string(let error) = dict["error"] {
-            try expect(error.contains("outside") || error.contains("not on the approved list") || error.contains("does not exist") || error.contains("Invalid") || error.contains("absolute"),
-                       "Expected rejection for absolute path, got: \(error)")
-        } else {
-            throw TestError.assertion("Expected error object for absolute path attempt")
+    await test("run_script absolute path remains fail closed") {
+        let code = await shellTestErrorCode {
+            _ = try await router.dispatch(
+                toolName: "run_script",
+                arguments: .object(["scriptName": .string("/etc/passwd")])
+            )
         }
+        try expect(code == "worktree_target_unresolved")
     }
 
 }

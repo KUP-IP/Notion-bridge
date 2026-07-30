@@ -63,6 +63,7 @@ public enum BridgePaths {
         case voiceMemos     = "voice-memos"     // Voice Memos curator manifest + state
         case memoryHub      = "memory-hub"      // Memory Hub: activity.jsonl, registry-cache/, plan-snapshots/
         case messages       = "messages"        // recoverable Messages action ledger
+        case worktreeOwnership = "worktree-ownership" // durable local worktree ownership ledger
     }
 
     // MARK: - Logs

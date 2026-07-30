@@ -31,7 +31,11 @@ private func bgWithTempHome(_ body: (URL) async throws -> Void) async throws {
 
 /// Dispatch a tool by name on a freshly-registered router and return the result.
 private func bgDispatch(_ router: ToolRouter, _ name: String, _ args: Value) async throws -> Value {
-    try await router.dispatch(toolName: name, arguments: args)
+    if name == "bg_run", case .object(var object) = args, object["workingDir"] == nil {
+        object["workingDir"] = .string(FileManager.default.temporaryDirectory.path)
+        return try await router.dispatch(toolName: name, arguments: .object(object))
+    }
+    return try await router.dispatch(toolName: name, arguments: args)
 }
 
 /// Pull a string field out of an `.object` result.
@@ -323,7 +327,7 @@ func runBgProcessModuleTests() async {
             // Emit ~60k short lines (~0.5 MB) — comfortably past the 256 KB tail
             // window. The job exits, then we poll for the tail.
             let run = try await bgDispatch(router, "bg_run", .object([
-                "command": .string("for i in $(seq 1 60000); do echo \"line-$i\"; done")
+                "command": .string("/usr/bin/jot -w 'line-%d' 60000")
             ]))
             guard let jobId = bgString(run, "jobId") else { throw TestError.assertion("no jobId") }
             let logPath = bgString(run, "logPath") ?? ""
