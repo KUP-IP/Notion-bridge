@@ -308,9 +308,9 @@ public enum AppVersion {
     ///   Sale-ready V4 cut: W5B bundle-id cutover + continuity, Notion Views
     ///   write tools, Wave A Settings UI-ITER polish, license public-key +
     ///   WorkOS OAuth bake secrets present for release.yml inject. Floor 3391.
-    /// v4.0.2 C0 installed-pilot candidate: 85 -> 86 -- local-only build identity
-    /// after the fail-closed enforcement merge; no tag, appcast, or release.
-    public static let build = "86"
+    /// v4.0.2 C0 installed-pilot candidate: 86 -> 87 -- local-only build identity
+    /// after the denial-diagnostics remediation merge; no tag, appcast, or release.
+    public static let build = "87"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
