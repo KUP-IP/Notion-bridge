@@ -1,5 +1,16 @@
 # Changelog
 
+## v4.0.2 (build 87) — C0 denial-diagnostics installed pilot — 2026-07-31
+
+- **Pilot identity** — Build-only local candidate identity for exact merged
+  `main` after PR #136 denial-diagnostics remediation; marketing remains **4.0.2**.
+- **Scope** — This commit synchronizes `Version.swift`, root `Info.plist`, and
+  this changelog. No tag, DMG, appcast, Sparkle publication, or customer-facing
+  release is created.
+- **Promotion boundary** — Candidate smoke and an explicit installation Ship
+  Gate remain required before `/Applications` changes. Retained b86 archives
+  embed pre-fix SHA `14694765…` and must not be installed.
+
 ## v4.0.2 (build 86) — C0 fail-closed enforcement pilot — 2026-07-30
 
 - **Pilot identity** — Build-only local candidate identity for the exact merged
