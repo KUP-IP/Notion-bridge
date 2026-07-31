@@ -46,6 +46,47 @@ public struct WorktreeClaimRecord: Codable, Sendable, Equatable {
     }
 }
 
+public enum WorktreeOwnershipTargetState: String, Codable, Sendable, Equatable {
+    case resolved
+    case unresolved
+}
+
+public enum WorktreeOwnershipOwnerState: String, Codable, Sendable, Equatable {
+    case claimedByAnotherSession = "claimed_by_another_session"
+    case noActiveClaim = "no_active_claim"
+    case claimExpired = "claim_expired"
+    case ownerSessionMissing = "owner_session_missing"
+    case authorizationInProgress = "authorization_in_progress"
+    case identityChanged = "identity_changed"
+    case storageUnavailable = "storage_unavailable"
+    case notEvaluated = "not_evaluated"
+}
+
+/// The operator-facing C0 denial contract. It identifies what was blocked,
+/// states ownership without exposing another session identifier, and gives the
+/// caller one concrete next action.
+public struct WorktreeOwnershipDenialContext: Codable, Sendable, Equatable {
+    public let target: String
+    public let targetState: WorktreeOwnershipTargetState
+    public let ownerState: WorktreeOwnershipOwnerState
+    public let remedy: String
+
+    public init(
+        target: String,
+        targetState: WorktreeOwnershipTargetState,
+        ownerState: WorktreeOwnershipOwnerState,
+        remedy: String
+    ) {
+        self.target = target
+        self.targetState = targetState
+        self.ownerState = ownerState
+        self.remedy = remedy
+    }
+}
+
+/// Preserve the existing error cases and code surface while allowing every C0
+/// denial to carry the same target / owner-state / remedy context through
+/// direct throws and structured tool results.
 public enum WorktreeOwnershipError: Error, LocalizedError, Sendable, Equatable {
     case invalid(String)
     case conflict(String)
@@ -57,6 +98,7 @@ public enum WorktreeOwnershipError: Error, LocalizedError, Sendable, Equatable {
     case targetUnresolved(String)
     case backgroundUnsupported(String)
     case storage(String)
+    case contextual(code: String, detail: String, context: WorktreeOwnershipDenialContext)
 
     public var code: String {
         switch self {
@@ -70,21 +112,34 @@ public enum WorktreeOwnershipError: Error, LocalizedError, Sendable, Equatable {
         case .conflict: return "worktree_claim_conflict"
         case .invalid: return "invalid_arguments"
         case .storage: return "worktree_ownership_storage_failed"
+        case .contextual(let code, _, _): return code
         }
     }
 
-    private var detail: String {
+    fileprivate var detail: String {
         switch self {
         case .invalid(let value), .conflict(let value), .busy(let value),
              .ownershipRequired(let value), .foreignOwnership(let value),
              .identityChanged(let value), .staleRecoveryRequired(let value),
              .targetUnresolved(let value), .backgroundUnsupported(let value),
-             .storage(let value):
+             .storage(let value), .contextual(_, let value, _):
             return value
         }
     }
 
-    public var errorDescription: String? { "\(code): \(detail)" }
+    public var denialContext: WorktreeOwnershipDenialContext? {
+        guard case .contextual(_, _, let context) = self else { return nil }
+        return context
+    }
+
+    public func withDenialContext(_ context: WorktreeOwnershipDenialContext) -> WorktreeOwnershipError {
+        .contextual(code: code, detail: detail, context: context)
+    }
+
+    public var errorDescription: String? {
+        guard let denialContext else { return "\(code): \(detail)" }
+        return "\(code): target=\(denialContext.target) (target_state=\(denialContext.targetState.rawValue)); owner_state=\(denialContext.ownerState.rawValue); remedy=\(denialContext.remedy)"
+    }
 }
 
 public final class WorktreeExecutionAuthorization: @unchecked Sendable {
@@ -1040,6 +1095,25 @@ public enum WorktreeOwnershipGuard {
         arguments: Value,
         store: WorktreeOwnershipStore = .shared
     ) async throws -> WorktreeExecutionAuthorization? {
+        do {
+            return try await authorizeToolMutationImpl(
+                toolName: toolName,
+                arguments: arguments,
+                store: store
+            )
+        } catch let error as WorktreeOwnershipError {
+            guard error.denialContext == nil else { throw error }
+            throw error.withDenialContext(
+                denialContext(for: error, toolName: toolName, arguments: arguments)
+            )
+        }
+    }
+
+    private static func authorizeToolMutationImpl(
+        toolName: String,
+        arguments: Value,
+        store: WorktreeOwnershipStore
+    ) async throws -> WorktreeExecutionAuthorization? {
         guard directMutationTools.contains(toolName)
                 || toolName == "shell_exec"
                 || toolName == "bg_run" else { return nil }
@@ -1177,6 +1251,101 @@ public enum WorktreeOwnershipGuard {
         default:
             return ([], false)
         }
+    }
+
+    private static func denialContext(
+        for error: WorktreeOwnershipError,
+        toolName: String,
+        arguments: Value
+    ) -> WorktreeOwnershipDenialContext {
+        let targets: [String]
+        if error.code == "worktree_target_unresolved" {
+            targets = []
+        } else {
+            targets = diagnosticTargets(toolName: toolName, arguments: arguments)
+        }
+        let targetState: WorktreeOwnershipTargetState = targets.isEmpty ? .unresolved : .resolved
+        let target = targets.isEmpty ? "unresolved" : targets.joined(separator: ", ")
+        let ownerState: WorktreeOwnershipOwnerState
+        let remedy: String
+
+        switch error.code {
+        case "worktree_claim_conflict", "worktree_foreign_ownership":
+            ownerState = .claimedByAnotherSession
+            remedy = "Use a different claimed worktree, or ask the current owner to release this claim."
+        case "worktree_ownership_required":
+            if error.detail.localizedCaseInsensitiveContains("ownerSession") {
+                ownerState = .ownerSessionMissing
+                remedy = "Provide the ownerSession for the session that owns this worktree, then retry."
+            } else {
+                ownerState = .noActiveClaim
+                remedy = "Claim this worktree with worktree_claim before mutating it."
+            }
+        case "worktree_stale_recovery_required":
+            ownerState = .claimExpired
+            remedy = "Release the expired claim with abandoned_with_recovery_note before retrying."
+        case "worktree_target_unresolved":
+            ownerState = .notEvaluated
+            remedy = toolName == "run_script"
+                ? "Use shell_exec with an explicit command and workingDir."
+                : "Use a supported command with an explicit, statically resolvable worktree target."
+        case "worktree_background_unsupported":
+            ownerState = .notEvaluated
+            remedy = "Use foreground shell_exec with an explicit command and workingDir."
+        case "worktree_identity_changed":
+            ownerState = .identityChanged
+            remedy = "Re-read the live worktree path, branch, and base SHA, then submit a matching claim."
+        case "worktree_busy":
+            ownerState = .authorizationInProgress
+            remedy = "Wait for the active worktree authorization to finish, then retry."
+        case "worktree_ownership_storage_failed":
+            ownerState = .storageUnavailable
+            remedy = "Stop and preserve worktree state; restore ownership storage before retrying."
+        default:
+            ownerState = .notEvaluated
+            remedy = "Correct the required arguments and retry."
+        }
+
+        return WorktreeOwnershipDenialContext(
+            target: target,
+            targetState: targetState,
+            ownerState: ownerState,
+            remedy: remedy
+        )
+    }
+
+    private static func diagnosticTargets(toolName: String, arguments: Value) -> [String] {
+        guard case .object(let object) = arguments else { return [] }
+        let rawTargets: [String]
+        switch toolName {
+        case "worktree_claim", "worktree_release":
+            rawTargets = compact([string(object["worktreePath"])])
+        case "shell_exec", "bg_run":
+            let workingDirectory = string(object["workingDir"])
+                ?? FileManager.default.currentDirectoryPath
+            if let command = string(object["command"]) {
+                let analysis = analyzeCommand(command, relativeTo: workingDirectory)
+                rawTargets = analysis.directories.isEmpty ? [workingDirectory] : analysis.directories
+            } else {
+                rawTargets = [workingDirectory]
+            }
+        case "run_script":
+            rawTargets = []
+        default:
+            rawTargets = mutationTargets(toolName: toolName, arguments: object).0
+        }
+
+        var targets: [String] = []
+        for rawTarget in rawTargets {
+            let absoluteTarget = rawTarget.hasPrefix("/")
+                ? rawTarget
+                : resolveCommandPath(rawTarget, relativeTo: FileManager.default.currentDirectoryPath)
+            let target = (try? liveIdentity(for: absoluteTarget).worktreePath)
+                ?? (try? canonicalPath(absoluteTarget))
+                ?? absoluteTarget
+            if !targets.contains(target) { targets.append(target) }
+        }
+        return targets.sorted()
     }
 
     private static func compact(_ values: [String?]) -> [String] {
@@ -3141,14 +3310,31 @@ public enum WorktreeOwnershipGuard {
         }
     }
 
-    public static func errorValue(tool: String, error: Error) -> Value {
+    public static func errorValue(
+        tool: String,
+        error: Error,
+        arguments: Value? = nil
+    ) -> Value {
         let ownershipError = error as? WorktreeOwnershipError
-        return .object([
+        let context = ownershipError?.denialContext ?? ownershipError.map {
+            denialContext(for: $0, toolName: tool, arguments: arguments ?? .object([:]))
+        }
+        let renderedError = ownershipError.flatMap { ownershipError in
+            context.map(ownershipError.withDenialContext)
+        }
+        var value: [String: Value] = [
             "ok": .bool(false),
             "tool": .string(tool),
-            "status": .string(ownershipError?.code ?? "worktree_ownership_failed"),
-            "error": .string(error.localizedDescription)
-        ])
+            "status": .string(renderedError?.code ?? "worktree_ownership_failed"),
+            "error": .string(renderedError?.localizedDescription ?? error.localizedDescription)
+        ]
+        if let context {
+            value["target"] = .string(context.target)
+            value["targetState"] = .string(context.targetState.rawValue)
+            value["ownerState"] = .string(context.ownerState.rawValue)
+            value["remedy"] = .string(context.remedy)
+        }
+        return .object(value)
     }
 }
 
@@ -3211,7 +3397,8 @@ public enum WorktreeOwnershipModule {
                       case .int(let ttlSeconds) = object["ttlSeconds"] else {
                     return WorktreeOwnershipGuard.errorValue(
                         tool: "worktree_claim",
-                        error: WorktreeOwnershipError.invalid("required claim tuple is incomplete")
+                        error: WorktreeOwnershipError.invalid("required claim tuple is incomplete"),
+                        arguments: args
                     )
                 }
                 do {
@@ -3233,7 +3420,11 @@ public enum WorktreeOwnershipModule {
                         "expiresAt": .string(ISO8601DateFormatter().string(from: claim.expiresAt))
                     ])
                 } catch {
-                    return WorktreeOwnershipGuard.errorValue(tool: "worktree_claim", error: error)
+                    return WorktreeOwnershipGuard.errorValue(
+                        tool: "worktree_claim",
+                        error: error,
+                        arguments: args
+                    )
                 }
             }
         ))
@@ -3260,7 +3451,8 @@ public enum WorktreeOwnershipModule {
                       let disposition = WorktreeReleaseDisposition(rawValue: rawDisposition) else {
                     return WorktreeOwnershipGuard.errorValue(
                         tool: "worktree_release",
-                        error: WorktreeOwnershipError.invalid("required release tuple is incomplete")
+                        error: WorktreeOwnershipError.invalid("required release tuple is incomplete"),
+                        arguments: args
                     )
                 }
                 do {
@@ -3279,7 +3471,11 @@ public enum WorktreeOwnershipModule {
                     if let count = evidence.uniqueCommitCount { result["uniqueCommitCount"] = .int(count) }
                     return .object(result)
                 } catch {
-                    return WorktreeOwnershipGuard.errorValue(tool: "worktree_release", error: error)
+                    return WorktreeOwnershipGuard.errorValue(
+                        tool: "worktree_release",
+                        error: error,
+                        arguments: args
+                    )
                 }
             }
         ))

@@ -2292,6 +2292,141 @@ func runWorktreeOwnershipTests() async {
         try expect(await probe.value() == 1)
     }
 
+    await test("C0 formatted foreign mutation denial identifies target, owner state, and remedy") {
+        let fixture = try C0GitFixture()
+        let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL())
+        _ = try await c0Claim(
+            store,
+            fixture: fixture,
+            worktree: fixture.linked,
+            branch: "packet/c0-linked",
+            owner: "owner-a"
+        )
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog(),
+            worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: true,
+            licenseStatusProvider: { .grandfathered }
+        )
+        await router.register(ToolRegistration(
+            name: "file_write",
+            module: "dev",
+            tier: .open,
+            description: "C0 formatted denial probe",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { _ in .object(["ok": .bool(true)]) }
+        ))
+
+        let denied = await router.dispatchFormatted(
+            toolName: "file_write",
+            arguments: .object([
+                "path": .string(fixture.linked.appendingPathComponent("blocked.txt").path),
+                "ownerSession": .string("owner-b")
+            ])
+        )
+
+        try expect(denied.isError)
+        try expect(denied.text.contains("worktree_foreign_ownership"))
+        try expect(denied.text.contains("target=\(fixture.linked.path)"))
+        try expect(denied.text.contains("target_state=resolved"))
+        try expect(denied.text.contains("owner_state=claimed_by_another_session"))
+        try expect(denied.text.contains("remedy=Use a different claimed worktree"))
+        try expect(!denied.text.contains("owner-a"), "denial must not disclose another ownerSession")
+    }
+
+    await test("C0 claim and release denial results carry the same structured context") {
+        let fixture = try C0GitFixture()
+        let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL())
+        _ = try await c0Claim(
+            store,
+            fixture: fixture,
+            worktree: fixture.linked,
+            branch: "packet/c0-linked",
+            owner: "owner-a"
+        )
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog(),
+            worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: true,
+            licenseStatusProvider: { .grandfathered }
+        )
+        await WorktreeOwnershipModule.register(on: router, store: store)
+        let claimResult = try await router.dispatch(
+            toolName: "worktree_claim",
+            arguments: .object([
+                "repoRoot": .string(fixture.repo.path),
+                "worktreePath": .string(fixture.linked.path),
+                "branch": .string("packet/c0-linked"),
+                "baseSHA": .string(fixture.baseSHA),
+                "ownerSession": .string("owner-b"),
+                "ttlSeconds": .int(300)
+            ])
+        )
+        guard case .object(let claim) = claimResult,
+              case .string(let status)? = claim["status"],
+              case .string(let target)? = claim["target"],
+              case .string(let targetState)? = claim["targetState"],
+              case .string(let ownerState)? = claim["ownerState"],
+              case .string(let remedy)? = claim["remedy"],
+              case .string(let errorText)? = claim["error"] else {
+            throw TestError.assertion("claim conflict must return a structured C0 denial")
+        }
+        try expect(status == "worktree_claim_conflict")
+        try expect(target == fixture.linked.path)
+        try expect(targetState == "resolved")
+        try expect(ownerState == "claimed_by_another_session")
+        try expect(remedy.contains("different claimed worktree"))
+        try expect(!errorText.contains("owner-a"), "claim denial must not disclose another ownerSession")
+
+        let releaseResult = try await router.dispatch(
+            toolName: "worktree_release",
+            arguments: .object([
+                "worktreePath": .string(fixture.linked.path),
+                "ownerSession": .string("owner-b"),
+                "disposition": .string(WorktreeReleaseDisposition.preserveForReview.rawValue)
+            ])
+        )
+        guard case .object(let release) = releaseResult,
+              case .string(let releaseTarget)? = release["target"],
+              case .string(let releaseOwnerState)? = release["ownerState"],
+              case .string(let releaseError)? = release["error"] else {
+            throw TestError.assertion("release denial must return a structured C0 denial")
+        }
+        try expect(releaseTarget == fixture.linked.path)
+        try expect(releaseOwnerState == "claimed_by_another_session")
+        try expect(!releaseError.contains("owner-a"), "release denial must redact another ownerSession")
+    }
+
+    await test("C0 unresolved run_script denial identifies unresolved target and remedy") {
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog(),
+            worktreeOwnershipEnabled: true,
+            licenseStatusProvider: { .grandfathered }
+        )
+        await router.register(ToolRegistration(
+            name: "run_script",
+            module: "shell",
+            tier: .open,
+            description: "C0 unresolved denial probe",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { _ in .object(["ok": .bool(true)]) }
+        ))
+
+        let denied = await router.dispatchFormatted(
+            toolName: "run_script",
+            arguments: .object(["scriptName": .string("opaque.sh")])
+        )
+        try expect(denied.isError)
+        try expect(denied.text.contains("worktree_target_unresolved"))
+        try expect(denied.text.contains("target=unresolved"))
+        try expect(denied.text.contains("target_state=unresolved"))
+        try expect(denied.text.contains("owner_state=not_evaluated"))
+        try expect(denied.text.contains("remedy=Use shell_exec with an explicit command and workingDir"))
+    }
+
     await test("C0 guarded public schemas expose ownerSession and tools are annotated") {
         let router = ToolRouter(
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
