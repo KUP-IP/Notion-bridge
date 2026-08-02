@@ -1,29 +1,93 @@
-// CommandStore.swift — Markdown-backed store for user-authored Commands.
-// PKT-6 (v3.5).
+// CommandStore.swift — public command API backed by durable local custody.
 //
-// Layout:
-//   ~/Library/Application Support/The Bridge/commands/
-//       index.json                      (ordered metadata + slot map)
-//       <slug>.md                       (one markdown file per command)
-//
-// Why markdown-per-command:
-//   • Diffable in git if the user version-controls their config
-//   • Hand-editable in any text editor
-//   • Matches the "literal markdown payload" design — what's on disk is
-//     exactly what the Command Bridge popup copies to the clipboard
-//
-// The index.json carries metadata (icon, color, key slot, lastUsed) so
-// the list view can render without parsing every body. Source of truth
-// for the body remains the .md file.
+// Schema v2 separates application-owned product defaults from revisioned
+// operator state. `CommandCustodyBackend` handles immutable identities,
+// migration from the v1 index-plus-markdown layout, activation, validation,
+// recovery, and body isolation. This façade deliberately preserves the
+// established UI/MCP API while exposing immutable command IDs in responses.
 
 import Foundation
 
 public final class CommandStore: @unchecked Sendable {
     public static let shared = CommandStore()
 
+    /// Schema-v1 CommandStore identified built-ins by their mutable display
+    /// slug. This is the complete, closed mapping for the production v1
+    /// palette. The values are durable identities; neither a renamed command
+    /// nor a changed body can alter them.
+    public static let legacyBuiltInIdentityMap: [String: String] = [
+        "initiate": "bridge.command.builtin.initiate",
+        "propose": "bridge.command.builtin.propose",
+        "scope-cut": "bridge.command.builtin.scope-cut",
+        "validate": "bridge.command.builtin.validate",
+        "execute": "bridge.command.builtin.execute",
+        "review": "bridge.command.builtin.review",
+        "refocus": "bridge.command.builtin.refocus",
+        "open-loops": "bridge.command.builtin.open-loops",
+        "close-agent": "bridge.command.builtin.close-agent",
+        "hand-off": "bridge.command.builtin.hand-off",
+    ]
+
+    /// Product defaults are supplied by the application bundle. They are read
+    /// as an authority layer and are never written into an operator's local
+    /// custody store merely because the application is replaced.
+    public struct ProductDefault: Equatable, Sendable {
+        public var id: String
+        public var slug: String
+        public var name: String
+        public var icon: Icon
+        public var color: NotionColor?
+        public var initialKeySlot: Int?
+        public var body: String
+
+        public init(
+            id: String,
+            slug: String,
+            name: String,
+            icon: Icon,
+            color: NotionColor? = nil,
+            initialKeySlot: Int? = nil,
+            body: String
+        ) {
+            self.id = id
+            self.slug = slug
+            self.name = name
+            self.icon = icon
+            self.color = color
+            self.initialKeySlot = initialKeySlot
+            self.body = body
+        }
+    }
+
+    /// Deterministic fault points used only by the custody regression suite.
+    /// They model process interruption without relying on timing.
+    public enum TestFaultPoint: Sendable, Equatable {
+        case beforeRevisionFinalize
+        case beforeActivation
+    }
+
+    private let custody: CommandCustodyBackend
+
+    /// The default initializer remains dynamic with BridgePaths so existing
+    /// temporary-home tests and the production shared instance keep their
+    /// established behaviour. A fixed root is available for isolated custody
+    /// fixture tests.
+    public init(
+        storageRoot: URL? = nil,
+        productDefaults: [ProductDefault]? = nil
+    ) {
+        self.custody = CommandCustodyBackend(
+            storageRoot: storageRoot,
+            productDefaults: productDefaults
+        )
+    }
+
     // MARK: - Public model
 
     public struct Command: Equatable, Sendable, Codable {
+        /// Stable command identity. Legacy Codable payloads that predate this
+        /// field decode as an empty ID and receive custody during migration.
+        public var id: String
         public var slug: String           // derived from name; immutable post-create
         public var name: String           // display name
         public var icon: Icon
@@ -33,6 +97,7 @@ public final class CommandStore: @unchecked Sendable {
         public var body: String           // markdown payload
 
         public init(
+            id: String = "",
             slug: String,
             name: String,
             icon: Icon,
@@ -41,6 +106,7 @@ public final class CommandStore: @unchecked Sendable {
             lastUsedAt: Date? = nil,
             body: String
         ) {
+            self.id = id
             self.slug = slug
             self.name = name
             self.icon = icon
@@ -48,6 +114,22 @@ public final class CommandStore: @unchecked Sendable {
             self.keySlot = keySlot
             self.lastUsedAt = lastUsedAt
             self.body = body
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case id, slug, name, icon, color, keySlot, lastUsedAt, body
+        }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            self.id = try values.decodeIfPresent(String.self, forKey: .id) ?? ""
+            self.slug = try values.decode(String.self, forKey: .slug)
+            self.name = try values.decode(String.self, forKey: .name)
+            self.icon = try values.decode(Icon.self, forKey: .icon)
+            self.color = try values.decodeIfPresent(NotionColor.self, forKey: .color)
+            self.keySlot = try values.decodeIfPresent(Int.self, forKey: .keySlot)
+            self.lastUsedAt = try values.decodeIfPresent(Date.self, forKey: .lastUsedAt)
+            self.body = try values.decode(String.self, forKey: .body)
         }
     }
 
@@ -74,6 +156,9 @@ public final class CommandStore: @unchecked Sendable {
         case slugNotFound(String)
         case invalidName(String)
         case slotOutOfRange(Int)
+        case legacyIdentityAmbiguous(String)
+        case corruptRevision(String)
+        case injectedFailure(TestFaultPoint)
         case ioFailure(underlying: Error)
 
         public var errorDescription: String? {
@@ -82,41 +167,27 @@ public final class CommandStore: @unchecked Sendable {
             case .slugNotFound(let s): return "No command with slug '\(s)'."
             case .invalidName(let n): return "Invalid command name: '\(n)'."
             case .slotOutOfRange(let s): return "Key slot must be 0–9 (got \(s))."
+            case .legacyIdentityAmbiguous(let detail):
+                return "Legacy command migration stopped safely: \(detail)"
+            case .corruptRevision(let detail):
+                return "Command custody revision is corrupt: \(detail)"
+            case .injectedFailure(let point):
+                return "Injected command custody failure at \(point)."
             case .ioFailure(let e): return "Command store I/O failed: \(e.localizedDescription)"
             }
         }
     }
 
-    // MARK: - Paths
-
-    private var dir: URL { BridgePaths.applicationSupport(.commands) }
-    private var indexURL: URL { dir.appendingPathComponent("index.json") }
-    private func bodyURL(_ slug: String) -> URL { dir.appendingPathComponent("\(slug).md") }
-
     // MARK: - Lifecycle
 
     public func resetForTesting() throws {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: dir.path) {
-            try fm.removeItem(at: dir)
-        }
+        try custody.resetForTesting()
     }
 
     /// First-run seed: populate the 10-slot Command Bridge palette if the
     /// store is empty. Idempotent.
     public func seedIfEmpty() throws {
-        try ensureDir()
-        if FileManager.default.fileExists(atPath: indexURL.path) { return }
-        for (idx, seed) in Self.firstRunSeeds.enumerated() {
-            let slot = idx == 9 ? 0 : idx + 1
-            _ = try create(
-                name: seed.name,
-                icon: seed.icon,
-                color: seed.color,
-                body: seed.body,
-                keySlot: slot
-            )
-        }
+        try custody.seedIfEmpty()
     }
 
     // MARK: - List / read
@@ -124,16 +195,11 @@ public final class CommandStore: @unchecked Sendable {
     /// All commands, sorted by lastUsedAt desc (most-recent first); names
     /// without lastUsedAt sort alphabetically at the end.
     public func list() throws -> [Command] {
-        try ensureDir()
-        let index = try loadIndex()
-        return try index.map { try loadCommand(slug: $0.slug) }.sortedByRecency()
+        try custody.list()
     }
 
     public func get(slug: String) throws -> Command? {
-        try ensureDir()
-        let index = try loadIndex()
-        guard index.contains(where: { $0.slug == slug }) else { return nil }
-        return try loadCommand(slug: slug)
+        try custody.get(slug: slug)
     }
 
     /// Substring match on name. Recency-sorted (matching the popup spec).
@@ -158,165 +224,33 @@ public final class CommandStore: @unchecked Sendable {
         body: String,
         keySlot: Int? = nil
     ) throws -> Command {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty else { throw StoreError.invalidName(name) }
-        let slug = Self.slugify(trimmedName)
-        guard !slug.isEmpty else { throw StoreError.invalidName(name) }
-
-        var idx = try loadIndex()
-        if idx.contains(where: { $0.slug == slug }) {
-            throw StoreError.slugTaken(slug)
-        }
-        if let slot = keySlot {
-            try assertSlotInRange(slot)
-            // Evict any current holder.
-            idx = idx.map { entry in
-                var e = entry
-                if e.keySlot == slot { e.keySlot = nil }
-                return e
-            }
-        }
-
-        let cmd = Command(
-            slug: slug,
-            name: trimmedName,
+        try custody.create(
+            name: name,
             icon: icon,
             color: color,
-            keySlot: keySlot,
-            lastUsedAt: nil,
-            body: body
+            body: body,
+            keySlot: keySlot
         )
-        try ensureDir()
-        try writeBody(cmd)
-        idx.append(IndexEntry(from: cmd))
-        try writeIndex(idx)
-        return cmd
     }
 
     @discardableResult
     public func update(_ command: Command) throws -> Command {
-        var idx = try loadIndex()
-        guard let row = idx.firstIndex(where: { $0.slug == command.slug }) else {
-            throw StoreError.slugNotFound(command.slug)
-        }
-        if let slot = command.keySlot {
-            try assertSlotInRange(slot)
-            // Evict any other holder of this slot.
-            for i in idx.indices where i != row && idx[i].keySlot == slot {
-                idx[i].keySlot = nil
-            }
-        }
-        try writeBody(command)
-        idx[row] = IndexEntry(from: command)
-        try writeIndex(idx)
-        return command
+        try custody.update(command)
     }
 
     public func delete(slug: String) throws {
-        var idx = try loadIndex()
-        guard idx.contains(where: { $0.slug == slug }) else {
-            throw StoreError.slugNotFound(slug)
-        }
-        let fm = FileManager.default
-        let body = bodyURL(slug)
-        if fm.fileExists(atPath: body.path) {
-            try fm.removeItem(at: body)
-        }
-        idx.removeAll(where: { $0.slug == slug })
-        try writeIndex(idx)
+        try custody.delete(slug: slug)
     }
 
     /// Reassign (or clear) a command's key slot. Atomically evicts any
     /// other command currently holding the target slot.
     public func setKeySlot(slug: String, slot: Int?) throws {
-        if let s = slot { try assertSlotInRange(s) }
-        var idx = try loadIndex()
-        guard let row = idx.firstIndex(where: { $0.slug == slug }) else {
-            throw StoreError.slugNotFound(slug)
-        }
-        if let s = slot {
-            for i in idx.indices where i != row && idx[i].keySlot == s {
-                idx[i].keySlot = nil
-            }
-        }
-        idx[row].keySlot = slot
-        try writeIndex(idx)
+        try custody.setKeySlot(slug: slug, slot: slot)
     }
 
     /// Stamp lastUsedAt to now. Called when the command fires from the popup.
     public func recordUse(slug: String, at when: Date = Date()) throws {
-        var idx = try loadIndex()
-        guard let row = idx.firstIndex(where: { $0.slug == slug }) else {
-            throw StoreError.slugNotFound(slug)
-        }
-        idx[row].lastUsedAt = when
-        try writeIndex(idx)
-    }
-
-    // MARK: - Persistence helpers
-
-    private struct IndexEntry: Codable, Equatable {
-        var slug: String
-        var name: String
-        var icon: Icon
-        var color: NotionColor?
-        var keySlot: Int?
-        var lastUsedAt: Date?
-
-        init(from c: Command) {
-            self.slug = c.slug
-            self.name = c.name
-            self.icon = c.icon
-            self.color = c.color
-            self.keySlot = c.keySlot
-            self.lastUsedAt = c.lastUsedAt
-        }
-    }
-
-    private func ensureDir() throws {
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    }
-
-    private func loadIndex() throws -> [IndexEntry] {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: indexURL.path) else { return [] }
-        let data = try Data(contentsOf: indexURL)
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return try decoder.decode([IndexEntry].self, from: data)
-    }
-
-    private func writeIndex(_ entries: [IndexEntry]) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(entries)
-        try data.write(to: indexURL, options: .atomic)
-    }
-
-    private func loadCommand(slug: String) throws -> Command {
-        let idx = try loadIndex()
-        guard let entry = idx.first(where: { $0.slug == slug }) else {
-            throw StoreError.slugNotFound(slug)
-        }
-        let body = (try? String(contentsOf: bodyURL(slug), encoding: .utf8)) ?? ""
-        return Command(
-            slug: entry.slug,
-            name: entry.name,
-            icon: entry.icon,
-            color: entry.color,
-            keySlot: entry.keySlot,
-            lastUsedAt: entry.lastUsedAt,
-            body: body
-        )
-    }
-
-    private func writeBody(_ c: Command) throws {
-        try c.body.write(to: bodyURL(c.slug), atomically: true, encoding: .utf8)
-    }
-
-    private func assertSlotInRange(_ slot: Int) throws {
-        if slot < 0 || slot > 9 { throw StoreError.slotOutOfRange(slot) }
+        try custody.recordUse(slug: slug, at: when)
     }
 
     // MARK: - Slugification
@@ -461,11 +395,81 @@ public final class CommandStore: @unchecked Sendable {
         Seed(name: "Hand Off",    icon: .emoji("📨"),  color: .brown,
              body: handOffSeedBody),
     ]
+
+    /// The repository-owned default layer. Its bodies are the existing seed
+    /// bodies above, intentionally carried verbatim through A0.
+    public static var defaultProductCatalog: [ProductDefault] {
+        firstRunSeeds.enumerated().map { index, seed in
+            let slug = slugify(seed.name)
+            let slot = index == 9 ? 0 : index + 1
+            return ProductDefault(
+                id: legacyBuiltInIdentityMap[slug]!,
+                slug: slug,
+                name: seed.name,
+                icon: seed.icon,
+                color: seed.color,
+                initialKeySlot: slot,
+                body: seed.body
+            )
+        }
+    }
+
+    /// A byte-for-byte representative of the pre-A0 production store: the
+    /// legacy index format carried no immutable ID and kept each body in an
+    /// adjacent markdown file.
+    public static var currentLegacyProductionFixture: [Command] {
+        defaultProductCatalog.map {
+            Command(
+                id: "",
+                slug: $0.slug,
+                name: $0.name,
+                icon: $0.icon,
+                color: $0.color,
+                keySlot: $0.initialKeySlot,
+                lastUsedAt: nil,
+                body: $0.body
+            )
+        }
+    }
+
+    // MARK: - Custody test seams
+
+    public func installLegacyFixtureForTesting(_ commands: [Command]) throws {
+        try custody.installLegacyFixtureForTesting(commands)
+    }
+
+    public func setFaultPointForTesting(_ fault: TestFaultPoint?) {
+        custody.setFaultPointForTesting(fault)
+    }
+
+    public func activeRevisionIDForTesting() throws -> String? {
+        try custody.activeRevisionIDForTesting()
+    }
+
+    public func custodyRootForTesting() -> URL {
+        custody.custodyRootForTesting()
+    }
+
+    public func legacyBodyDataForTesting(slug: String) throws -> Data {
+        try custody.legacyBodyDataForTesting(slug: slug)
+    }
+
+    public func activeBodyDataForTesting(commandID: String) throws -> Data {
+        try custody.activeBodyDataForTesting(commandID: commandID)
+    }
+
+    public func corruptActiveBodyForTesting(commandID: String) throws {
+        try custody.corruptActiveBodyForTesting(commandID: commandID)
+    }
+
+    public func stateDataForTesting() throws -> Data? {
+        try custody.stateDataForTesting()
+    }
 }
 
 // MARK: - Sort by recency
 
-private extension Array where Element == CommandStore.Command {
+extension Array where Element == CommandStore.Command {
     func sortedByRecency() -> [CommandStore.Command] {
         sorted { a, b in
             switch (a.lastUsedAt, b.lastUsedAt) {

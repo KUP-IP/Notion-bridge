@@ -255,9 +255,11 @@ func runCommandBridgeControllerTests() async {
     // ── (H) Search query routing — empty resets panelMode to .none ──
 
     await test("ViewModel.queryDidChange: empty input clears search panel") {
+        let fixture = try commandBridgeTestStore()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
         let queryNotNone = await MainActor.run { () -> Bool in
             let vm = CommandBridgeViewModel(
-                store: CommandStore.shared, recents: CommandBridgeRecents(cap: 1))
+                store: fixture.store, recents: CommandBridgeRecents(cap: 1))
             vm.queryDidChange("close")
             if case .none = vm.panelMode { return false }
             return true
@@ -265,7 +267,7 @@ func runCommandBridgeControllerTests() async {
         try expect(queryNotNone, "non-empty query must set panelMode to .search")
         let nowNone = await MainActor.run { () -> Bool in
             let vm = CommandBridgeViewModel(
-                store: CommandStore.shared, recents: CommandBridgeRecents(cap: 1))
+                store: fixture.store, recents: CommandBridgeRecents(cap: 1))
             vm.queryDidChange("anything")
             vm.queryDidChange("")
             if case .none = vm.panelMode { return true }
@@ -277,9 +279,11 @@ func runCommandBridgeControllerTests() async {
     // ── (I) W4 keyboard traversal — the selection model behind ↓/↑/Enter ──
 
     await test("ViewModel.moveSelection: ↓ from the closed tray opens recents + selects first") {
+        let fixture = try commandBridgeTestStore()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
         let r = await MainActor.run { () -> (Bool, String) in
             let vm = CommandBridgeViewModel(
-                store: CommandStore.shared, recents: CommandBridgeRecents(cap: 5))
+                store: fixture.store, recents: CommandBridgeRecents(cap: 5))
             let a = cmd("Alpha", slot: 1); let b = cmd("Bravo", slot: 2)
             vm.recentRows = CommandBridgeViewModel.buildRecentRows(
                 from: [a, b], order: ["alpha", "bravo"])
@@ -293,9 +297,11 @@ func runCommandBridgeControllerTests() async {
     }
 
     await test("ViewModel.moveSelection/commitSelected: ↓/↑ traverse + clamp; Enter fires the SELECTED row") {
+        let fixture = try commandBridgeTestStore()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
         let result = await MainActor.run { () -> [String] in
             let vm = CommandBridgeViewModel(
-                store: CommandStore.shared, recents: CommandBridgeRecents(cap: 5))
+                store: fixture.store, recents: CommandBridgeRecents(cap: 5))
             let a = cmd("Alpha", slot: 1); let b = cmd("Bravo", slot: 2); let c = cmd("Charlie", slot: 3)
             vm.recentRows = CommandBridgeViewModel.buildRecentRows(
                 from: [a, b, c], order: ["alpha", "bravo", "charlie"])
@@ -316,4 +322,14 @@ func runCommandBridgeControllerTests() async {
         try expect(result[3] == "bravo",   "↑ charlie→bravo, got \(result[3])")
         try expect(result[4] == "bravo",   "Enter fires the SELECTED row (bravo), not the first, got \(result[4])")
     }
+}
+
+/// `CommandBridgeViewModel` reloads its store during initialization. Keep the
+/// controller's pure interaction tests away from the operator's command store
+/// so an ordinary test run cannot trigger a legacy migration.
+private func commandBridgeTestStore() throws -> (store: CommandStore, root: URL) {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("CommandBridge-test-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    return (CommandStore(storageRoot: root), root)
 }

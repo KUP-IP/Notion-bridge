@@ -847,8 +847,12 @@ await runDeliveryLogTests()
 // labels ("Fetched ✓" only on a real read; never "Honored").
 await runDeliveryAuditWave3Tests()
 
-// PKT-6 (v3.5): CommandStore (markdown-per-command + index.json).
+// PKT-6 (v3.5): CommandStore public CRUD compatibility surface.
 await runCommandStoreTests()
+
+// GitHub #140 A0: immutable identities, layered custody, migration, and
+// recovery proof for the legacy command store.
+await runCommandCustodyTests()
 
 // PKT-876 (v3.6.1): Settings sections Liquid Glass reskin.
 await runSettingsSectionsLGTests()

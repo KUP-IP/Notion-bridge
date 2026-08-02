@@ -144,9 +144,15 @@ func runPKT879IconPickerTests() async {
     // ── CommandStore round-trip — picker selections persist ───────────
     // This is the contract that wires the picker to the data layer:
     // applying an icon/color via CommandStore.update() must round-trip
-    // through the index.json + body file.
+    // through isolated local custody storage. This must not exercise the
+    // operator's live command store while the standalone test binary runs.
     await test("CommandStore round-trips icon picker selections") {
-        let store = CommandStore.shared
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("PKT879-CommandStore-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let store = CommandStore(storageRoot: root)
         // Use a slug that's vanishingly unlikely to collide with seeds.
         let baseName = "PKT-879 picker test \(UUID().uuidString.prefix(6))"
         let created = try store.create(

@@ -49,6 +49,7 @@ func runCommandsModuleTests() async {
             let (listText, _) = try await router.dispatchFormatted(toolName: "commands_list", arguments: .object([:]))
             try expect(listText.contains("\"ok\":true") || listText.contains("\"ok\" : true"))
             try expect(listText.contains("smoke"))
+            try expect(listText.contains("\"id\""), "commands_list must expose the immutable command ID")
             let (getText, _) = try await router.dispatchFormatted(
                 toolName: "commands_get",
                 arguments: .object(["slugOrName": .string("Smoke")])

@@ -30,6 +30,7 @@ public enum CommandsModule {
 
     private static func commandValue(_ c: CommandStore.Command, includeBody: Bool) -> Value {
         var d: [String: Value] = [
+            "id": .string(c.id),
             "slug": .string(c.slug),
             "name": .string(c.name),
             "icon": iconValue(c.icon),
