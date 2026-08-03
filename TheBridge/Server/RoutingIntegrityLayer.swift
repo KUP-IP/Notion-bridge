@@ -40,6 +40,11 @@ public struct ToolSkillBinding: Sendable, Codable, Equatable, Hashable {
             .map { "\($0.slug) (\($0.role))" }
             .joined(separator: ", ")
     }
+
+    /// Exact acknowledgement scope. Scopes are intentionally tool-specific:
+    /// acknowledging Messages reads never authorizes Notion or calendar work,
+    /// and no process-wide/global marker exists.
+    public var scopeID: String { "tool:\(toolName)" }
 }
 
 public struct RoutingIntegrityReceipt: Sendable, Codable, Equatable {
@@ -255,12 +260,45 @@ public enum ToolSkillBindingRegistry {
         manifestMarkerTools.contains(toolName)
     }
 
+    public static var allScopeIDs: Set<String> {
+        Set(bindings.map(\.scopeID))
+    }
+
+    public static func scopeID(for toolName: String) -> String? {
+        binding(for: toolName)?.scopeID
+    }
+
+    public static func scopeIDs(governedBy authoritySlug: String) -> Set<String> {
+        let normalized = normalizeAuthoritySlug(authoritySlug)
+        return Set(bindings.compactMap { binding in
+            binding.governingSkills.contains { normalizeAuthoritySlug($0.slug) == normalized }
+                ? binding.scopeID
+                : nil
+        })
+    }
+
+    public static func normalizeAuthoritySlug(_ raw: String) -> String {
+        let lowered = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased(with: Locale(identifier: "en_US_POSIX"))
+        let words = lowered.split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        return words.joined(separator: "-")
+    }
+
     public static func callSatisfiesManifestMarker(toolName: String, result: Value) -> Bool {
         guard isManifestMarkerTool(toolName) else { return false }
         if toolName == BridgeInitializeModule.toolName,
            case .object(let dict) = result,
            case .string(let finalState)? = dict["finalState"] {
             return finalState != StandingOrdersStore.InitializationState.incomplete.rawValue
+        }
+        if toolName == "skills_routing_list",
+           case .object(let dict) = result,
+           case .string(SkillRoutingSnapshotStatus.healthy.rawValue)? = dict["status"],
+           case .int(let count)? = dict["count"] {
+            return count > 0
+        }
+        if toolName == "fetch_skill", case .object(let dict) = result {
+            return dict["error"] == nil && (dict["title"] != nil || dict["slug"] != nil || dict["content"] != nil)
         }
         return true
     }
