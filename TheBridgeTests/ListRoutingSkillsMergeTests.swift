@@ -100,6 +100,30 @@ func runListRoutingSkillsMergeTests() async {
                    "the routing surface must exclude a .command entry")
     }
 
+    await test("Runtime Exposure maps the complete authorized routing-owner set to eight exact identities") {
+        let expected: [(String, String)] = [
+            ("CONTENT Keepr", "11111111111111111111111111111111"),
+            ("executor", "22222222222222222222222222222222"),
+            ("FOCUS Keepr", "33333333333333333333333333333333"),
+            ("MAC Keepr", "44444444444444444444444444444444"),
+            ("NOTION Keepr", "55555555555555555555555555555555"),
+            ("PEOPLE Keepr", "66666666666666666666666666666666"),
+            ("SKILLS Keepr", "77777777777777777777777777777777"),
+            ("TIME Keepr", "88888888888888888888888888888888"),
+        ]
+        seedNotionSkills(expected.map { name, pageID in
+            ["name": name, "notionPageId": pageID, "enabled": true, "visibility": "routing"]
+        })
+        let gate = testExposureGate(expected.map { (pageID: $0.1, exposure: .routing) })
+        let rows = await mergedRoutingSkillsForTesting(exposureGate: gate)
+        let actual = Set(rows.compactMap { row -> String? in
+            guard case .object(let object) = row, case .string(let name)? = object["name"] else { return nil }
+            return name
+        })
+        try expect(actual == Set(expected.map(\.0)), "authorized routing-owner set drifted: \(actual.sorted())")
+        try expect(rows.count == 8, "Runtime Exposure must surface exactly eight routing owners")
+    }
+
     await test("mergedRoutingSkills: alphabetical ordering") {
         seedNotionSkills([
             ["name": "Zulu", "notionPageId": "aaaa1111bbbb2222cccc3333dddd4444", "enabled": true, "visibility": "routing"],

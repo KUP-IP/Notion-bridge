@@ -22,19 +22,24 @@ extension SkillsModule {
             handler: { _ in
                 let store = SkillRuntimeGenerationStore.shared
                 let active = await store.activeGeneration()
+                let gate = await store.gate()
                 let latest = await store.latestReceipt()
                 let denylist = await store.emergencyDenylist().sorted()
                 let baseline = await MainActor.run {
                     SkillExposureBaselineEntry.fromSkillsManager(SkillsManager())
                 }
                 let now = Date()
+                let routingSnapshot = await Self.routingSnapshot(now: now)
                 var result: [String: Value] = [
                     "active": .bool(active != nil),
                     "activeGenerationId": active.map { .string($0.generationID) } ?? .null,
                     "activeEntryCount": .int(active?.entries.count ?? 0),
                     "compiledAt": active.map { .string(Self.exposureISO8601($0.compiledAt)) } ?? .null,
                     "ageSeconds": active.map { .double(max(0, now.timeIntervalSince($0.compiledAt))) } ?? .null,
-                    "degraded": .bool(active.map { now.timeIntervalSince($0.compiledAt) > SkillRuntimeExposureGate.degradedGraceInterval } ?? false),
+                    "freshnessAt": gate.map { .string(Self.exposureISO8601($0.freshnessReferenceDate)) } ?? .null,
+                    "freshnessAgeSeconds": gate.map { .double(max(0, now.timeIntervalSince($0.freshnessReferenceDate))) } ?? .null,
+                    "degraded": .bool(routingSnapshot.metadata.status == .degraded),
+                    "routingSnapshot": routingSnapshot.value,
                     "enabledBaselineCount": .int(baseline.count),
                     "emergencyDenylist": .array(denylist.map(Value.string)),
                     "emergencyDenylistCount": .int(denylist.count),

@@ -718,7 +718,8 @@ func runMemoryModuleTests() async {
         // The global flag is UserDefaults.standard — in tests (hermetic temp
         // config env) it should be absent/false. asyncComposition must be
         // identical to the sync path when the flag is not set.
-        let sync = StandingOrdersDelivery.composition(clientName: nil)
+        let routingSnapshot = await SkillsModule.routingSnapshot()
+        let sync = StandingOrdersDelivery.composition(clientName: nil, routingSnapshot: routingSnapshot)
         let async_ = await StandingOrdersDelivery.asyncComposition(clientName: nil)
         try expect(sync.instructionsMarkdown == async_.instructionsMarkdown,
                    "async composition must match sync when auto-inject is OFF")

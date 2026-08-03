@@ -277,7 +277,8 @@ private func withRemoteGovernanceHarness(
                 mode: .execute,
                 includeConstitution: false,
                 sessionRegistry: registry,
-                receiptStore: receiptStore
+                receiptStore: receiptStore,
+                routingSnapshot: remoteGovernanceHealthyRoutingSnapshot()
             )
             return BridgeInitializeModule.receiptValue(receipt)
         }
@@ -302,4 +303,17 @@ private func withRemoteGovernanceHarness(
     ))
 
     try await body(.init(root: root, registry: registry, router: router))
+}
+
+private func remoteGovernanceHealthyRoutingSnapshot() -> SkillRoutingSnapshot {
+    .init(
+        metadata: .init(
+            status: .healthy,
+            source: .runtimeExposureGeneration,
+            snapshotID: "remote-governance-test",
+            count: 3,
+            reason: "test"
+        ),
+        skills: (0..<3).map { .object(["name": .string("Routing \($0)")]) }
+    )
 }

@@ -347,6 +347,10 @@ public enum OperatorSummary {
 
         // Routing roster — state + quality + warnings.
         var routingLine = "Routing roster: \(r.routingRosterState) (\(r.routingRosterQuality.rawValue))"
+        if let snapshot = r.routingSnapshot {
+            routingLine += " · status=\(snapshot.status.rawValue) source=\(snapshot.source.rawValue)"
+                + " snapshot=\(snapshot.snapshotID) count=\(snapshot.count) reason=\(snapshot.reason)"
+        }
         if !r.routingWarnings.isEmpty {
             routingLine += " — " + r.routingWarnings.joined(separator: "; ")
         }

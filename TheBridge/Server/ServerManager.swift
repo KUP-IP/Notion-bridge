@@ -375,7 +375,7 @@ public actor ServerManager {
                 sessionID: Self.stdioSessionID,
                 clientName: "stdio",
                 uri: params.uri,
-                contentHash: StandingOrdersDelivery.composition().contentHash
+                contentHash: await StandingOrdersDelivery.asyncComposition(clientName: "stdio").contentHash
             )
             return result
         }

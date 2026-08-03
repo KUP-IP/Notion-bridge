@@ -1,6 +1,7 @@
 // SkillExposureAuthorityTests.swift — Runtime enrollment/exposure contract
 
 import Foundation
+import MCP
 import TheBridgeLib
 
 private let exposureNow = Date(timeIntervalSince1970: 1_785_196_800) // 2026-07-28T00:00:00Z; fixed
@@ -201,6 +202,112 @@ func runSkillExposureAuthorityTests() async {
         try expect(await store.activeGeneration() == nil, "staging must not activate")
         _ = try await store.promote(generationID: generation.generationID)
         try expect(await store.activeGeneration() == generation, "promoted generation failed read-back")
+    }
+
+    await test("routing snapshot is healthy only with a fresh non-empty Runtime Exposure projection") {
+        let row: Value = .object(["name": .string("Alpha"), "source": .string("notion")])
+        let freshGate = SkillRuntimeExposureGate(generation: publishedGeneration())
+        let healthy = runtimeRoutingSnapshotForTesting(items: [row], gate: freshGate, now: exposureNow)
+        try expect(healthy.metadata.status == .healthy)
+        try expect(healthy.metadata.source == .runtimeExposureGeneration)
+        try expect(healthy.metadata.snapshotID == "generation-1")
+        try expect(healthy.metadata.count == 1)
+        try expect(healthy.skills.count == 1)
+
+        let empty = runtimeRoutingSnapshotForTesting(items: [], gate: freshGate, now: exposureNow)
+        try expect(empty.metadata.status == .empty, "zero routing entries must never be healthy")
+        try expect(empty.metadata.count == 0)
+    }
+
+    await test("stale Runtime Exposure suppresses routing and reports degraded evidence") {
+        let row: Value = .object(["name": .string("Alpha")])
+        let stale = SkillRuntimeExposureGate(
+            generation: publishedGeneration(compiledAt: exposureNow.addingTimeInterval(-25 * 3600))
+        )
+        let snapshot = runtimeRoutingSnapshotForTesting(items: [row], gate: stale, now: exposureNow)
+        try expect(snapshot.metadata.status == .degraded)
+        try expect(snapshot.metadata.count == 0, "suppressed routing must report the effective zero count")
+        try expect(snapshot.skills.isEmpty, "degraded ambient routing must fail closed")
+        try expect(snapshot.metadata.reason == "runtime_exposure_freshness_expired")
+    }
+
+    await test("unchanged complete shadow renews freshness without publishing a generation") {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bridge-exposure-renewal-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SkillRuntimeGenerationStore(baseDirectory: root)
+        let staleGeneration = publishedGeneration(compiledAt: exposureNow.addingTimeInterval(-48 * 3600))
+        _ = try await store.stage(staleGeneration)
+        _ = try await store.promote(generationID: staleGeneration.generationID)
+        let receipt = SkillExposureReconciliationReceipt(
+            mode: .shadow,
+            outcome: .shadowReady,
+            attemptedAt: exposureNow,
+            snapshotID: staleGeneration.snapshotID,
+            candidateGenerationID: "unpublished-candidate",
+            activeGenerationID: staleGeneration.generationID,
+            errors: [],
+            warnings: [],
+            changes: []
+        )
+        try await store.writeReceipt(receipt)
+        guard case .active(let gate) = await store.routingAuthority() else {
+            throw TestError.assertion("expected active routing authority")
+        }
+        try expect(!gate.isDegraded(now: exposureNow), "unchanged shadow must renew freshness")
+        try expect(gate.freshnessRenewedAt == exposureNow)
+        try expect(await store.activeGenerationID() == staleGeneration.generationID,
+                   "shadow renewal must not activate its candidate")
+    }
+
+    await test("changed shadow does not renew freshness and still requires publish") {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bridge-exposure-changed-shadow-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SkillRuntimeGenerationStore(baseDirectory: root)
+        let staleGeneration = publishedGeneration(compiledAt: exposureNow.addingTimeInterval(-48 * 3600))
+        _ = try await store.stage(staleGeneration)
+        _ = try await store.promote(generationID: staleGeneration.generationID)
+        try await store.writeReceipt(.init(
+            mode: .shadow, outcome: .shadowReady, attemptedAt: exposureNow,
+            snapshotID: staleGeneration.snapshotID,
+            candidateGenerationID: "changed-unpublished-candidate",
+            activeGenerationID: staleGeneration.generationID,
+            errors: [], warnings: [], changes: ["exposure:Alpha:Routing->Standard"]
+        ))
+        guard case .active(let gate) = await store.routingAuthority() else {
+            throw TestError.assertion("expected active routing authority")
+        }
+        try expect(gate.isDegraded(now: exposureNow), "a changed shadow must not renew active policy")
+        try expect(gate.freshnessRenewedAt == nil)
+        try expect(await store.activeGenerationID() == staleGeneration.generationID)
+    }
+
+    await test("corrupt active generation pointer is explicit missing authority, never legacy fallback") {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bridge-exposure-corrupt-pointer-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("{\"generationID\":\"missing-generation\"}".utf8)
+            .write(to: root.appendingPathComponent("active.json"), options: .atomic)
+        let store = SkillRuntimeGenerationStore(baseDirectory: root)
+        guard case .corrupt(let pointerID) = await store.routingAuthority() else {
+            throw TestError.assertion("corrupt pointer must not fall back to legacy routing")
+        }
+        try expect(pointerID == "missing-generation")
+    }
+
+    await test("malformed active pointer is explicit missing authority, never legacy fallback") {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bridge-exposure-malformed-pointer-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("not-json".utf8).write(to: root.appendingPathComponent("active.json"), options: .atomic)
+        let store = SkillRuntimeGenerationStore(baseDirectory: root)
+        guard case .corrupt(let pointerID) = await store.routingAuthority() else {
+            throw TestError.assertion("malformed pointer must not fall back to legacy routing")
+        }
+        try expect(pointerID == "unreadable-active-pointer")
     }
 
     await test("specialist lifecycle recognizes Revoked, Desolved, and effective dates") {

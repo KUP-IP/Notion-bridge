@@ -4,6 +4,7 @@
 // and per-client overlay matching.
 
 import Foundation
+import MCP
 import TheBridgeLib
 
 func runStandingOrdersTests() async {
@@ -172,7 +173,17 @@ func runStandingOrdersTests() async {
             try StandingOrdersStore.shared.resetForTesting()
             _ = try StandingOrdersStore.shared.write("# Standing Orders\n\ncanonical")
 
-            let composition = StandingOrdersDelivery.composition()
+            let routingSnapshot = SkillRoutingSnapshot(
+                metadata: .init(
+                    status: .healthy,
+                    source: .runtimeExposureGeneration,
+                    snapshotID: "standing-orders-test",
+                    count: 3,
+                    reason: "test"
+                ),
+                skills: (0..<3).map { .object(["name": .string("Routing \($0)")]) }
+            )
+            let composition = StandingOrdersDelivery.composition(routingSnapshot: routingSnapshot)
             try expect(composition.initializationReceipt.supplementalOrderCount == 0)
             try expect(composition.initializationReceipt.initializationState == .complete)
             try expect(composition.instructionsMarkdown.contains("- Supplemental orders: 0"))

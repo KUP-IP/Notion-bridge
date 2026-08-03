@@ -78,6 +78,16 @@ func runCapabilityPreflightTests() async {
         BridgeInitializeContext(client: "test", connectionState: connectionState,
                                 macToolsAvailable: macTools, bridgeState: "running", now: fixedClock)
     }
+    let healthyRouting = SkillRoutingSnapshot(
+        metadata: .init(
+            status: .healthy,
+            source: .runtimeExposureGeneration,
+            snapshotID: "preflight-test",
+            count: 8,
+            reason: "test"
+        ),
+        skills: (0..<8).map { .object(["name": .string("Routing \($0)")]) }
+    )
 
     // ── intent classification ──────────────────────────────────────────
     await test("Preflight: classify() is data-minimal (.none) by default") {
@@ -212,7 +222,8 @@ func runCapabilityPreflightTests() async {
                 probes: [RemindersCapabilityProbe(store: spy)]).run(intent: .remindersRead)
             let receipt = BridgeInitializeService.buildReceipt(
                 context: ctx(connectionState: "local", macTools: true), supplemental: [],
-                telemetryEventRef: "evt-p2", intent: .remindersRead, probeResults: probeResults)
+                telemetryEventRef: "evt-p2", intent: .remindersRead, probeResults: probeResults,
+                routingSnapshot: healthyRouting)
             try expect(receipt.finalState == .complete,
                        "init axis stays COMPLETE — a domain gap is NOT an init failure")
             try expect(receipt.capabilityState == .limited,

@@ -89,7 +89,8 @@ public struct ConstitutionStore: Sendable {
 
     public func assemble(
         supplementalStore: StandingOrdersRecordStore = .shared,
-        commandStore: CommandStore = .shared
+        commandStore: CommandStore = .shared,
+        routingSnapshot suppliedRoutingSnapshot: SkillRoutingSnapshot? = nil
     ) async throws -> ConstitutionBundle {
         try StandingOrdersStore.shared.ensureInitializationContract()
         let report = StandingOrdersStore.shared.initializationReport()
@@ -126,6 +127,12 @@ public struct ConstitutionStore: Sendable {
             )
         }
 
+        let routingSnapshot: SkillRoutingSnapshot
+        if let suppliedRoutingSnapshot {
+            routingSnapshot = suppliedRoutingSnapshot
+        } else {
+            routingSnapshot = await SkillsModule.routingSnapshot()
+        }
         return ConstitutionBundle(
             tier0: tier0,
             doctrineCore: doctrineCoreResult.markdown,
@@ -133,7 +140,7 @@ public struct ConstitutionStore: Sendable {
             doctrineVersion: doctrineVersion,
             orders: orders,
             commandsIndex: commands,
-            routingRoster: SkillsModule.buildRoutingInstructions()
+            routingRoster: SkillsModule.renderRoutingInstructions(snapshot: routingSnapshot)
         )
     }
 

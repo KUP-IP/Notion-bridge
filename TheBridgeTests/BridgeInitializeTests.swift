@@ -33,6 +33,26 @@ func runBridgeInitializeTests() async {
         )
     }
 
+    func routingSnapshot(
+        status: SkillRoutingSnapshotStatus,
+        count: Int,
+        reason: String = "test"
+    ) -> SkillRoutingSnapshot {
+        let rows: [Value] = (0..<count).map { index in
+            .object(["name": .string("Routing \(index)"), "source": .string("notion")])
+        }
+        return .init(
+            metadata: .init(
+                status: status,
+                source: .runtimeExposureGeneration,
+                snapshotID: "generation-test",
+                count: count,
+                reason: reason
+            ),
+            skills: rows
+        )
+    }
+
     // ── COMPLETE path: doctrine + manifest + metadata all present ──────
     await test("Init: fully-seeded doctrine classifies COMPLETE with matching hashes") {
         try await withInitTempHome {
@@ -41,7 +61,8 @@ func runBridgeInitializeTests() async {
             let receipt = BridgeInitializeService.buildReceipt(
                 context: ctx(),
                 supplemental: [],
-                telemetryEventRef: "evt-1"
+                telemetryEventRef: "evt-1",
+                routingSnapshot: routingSnapshot(status: .healthy, count: 8)
             )
             try expect(receipt.finalState == .complete, "expected COMPLETE, got \(receipt.finalState.rawValue)")
             try expect(receipt.expectedHash != nil, "manifest must carry an expected doctrine hash")
@@ -69,7 +90,8 @@ func runBridgeInitializeTests() async {
             defer { StandingOrdersStore.bundledSeedOverrideForTesting = nil }
             try StandingOrdersStore.shared.seedIfEmpty()
             let receipt = BridgeInitializeService.buildReceipt(
-                context: ctx(), supplemental: [], telemetryEventRef: "evt-1b")
+                context: ctx(), supplemental: [], telemetryEventRef: "evt-1b",
+                routingSnapshot: routingSnapshot(status: .healthy, count: 8))
             try expect(receipt.doctrineVersion == "v9.1.2",
                        "doctrineVersion from bundled seed manifest, got \(receipt.doctrineVersion)")
             try expect(receipt.finalState == .complete)
@@ -95,6 +117,52 @@ func runBridgeInitializeTests() async {
         }
     }
 
+    await test("Init: zero-entry routing snapshot is INCOMPLETE and never reported healthy") {
+        try await withInitTempHome {
+            try StandingOrdersStore.shared.resetForTesting()
+            _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v7.0.2\n\nx")
+            let receipt = BridgeInitializeService.buildReceipt(
+                context: ctx(), supplemental: [], telemetryEventRef: "evt-zero-routing",
+                routingSnapshot: routingSnapshot(
+                    status: .empty,
+                    count: 0,
+                    reason: "verified_runtime_exposure_contains_no_routing_skills"
+                )
+            )
+            try expect(receipt.finalState == .incomplete)
+            try expect(receipt.routingRosterState == "missing")
+            try expect(receipt.routingRosterQuality == .empty)
+            try expect(receipt.routingSnapshot?.status == .empty)
+            try expect(receipt.routingSnapshot?.count == 0)
+            try expect(receipt.routingWarnings.contains(where: { $0.contains("contains_no_routing_skills") }))
+        }
+    }
+
+    await test("Init: healthy Runtime Exposure snapshot binds exact source, id, count, and reason") {
+        try await withInitTempHome {
+            try StandingOrdersStore.shared.resetForTesting()
+            _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v7.0.2\n\nx")
+            let supplied = routingSnapshot(status: .healthy, count: 8, reason: "verified_active_runtime_exposure_generation")
+            let receipt = BridgeInitializeService.buildReceipt(
+                context: ctx(), supplemental: [], telemetryEventRef: "evt-healthy-routing",
+                routingSnapshot: supplied
+            )
+            try expect(receipt.finalState == .complete)
+            try expect(receipt.routingRosterState == "loaded")
+            try expect(receipt.routingRosterQuality == .healthy)
+            try expect(receipt.routingSnapshot == supplied.metadata)
+            guard case .object(let value) = BridgeInitializeModule.receiptValue(receipt),
+                  case .object(let snapshot)? = value["routingSnapshot"] else {
+                throw TestError.assertion("bridge_initialize must serialize routingSnapshot evidence")
+            }
+            try expect(snapshot["status"] == .string("healthy"))
+            try expect(snapshot["source"] == .string("runtime_exposure_generation"))
+            try expect(snapshot["snapshot"] == .string("generation-test"))
+            try expect(snapshot["count"] == .int(8))
+            try expect(snapshot["reason"] == .string("verified_active_runtime_exposure_generation"))
+        }
+    }
+
     // ── DEGRADED path: doctrine present but hash drift ─────────────────
     await test("Init: doctrine hash drift classifies DEGRADED (integrity, not required-source)") {
         try await withInitTempHome {
@@ -108,7 +176,8 @@ func runBridgeInitializeTests() async {
             let receipt = BridgeInitializeService.buildReceipt(
                 context: ctx(),
                 supplemental: [],
-                telemetryEventRef: "evt-3"
+                telemetryEventRef: "evt-3",
+                routingSnapshot: routingSnapshot(status: .healthy, count: 8)
             )
             try expect(receipt.finalState == .degraded,
                        "hash drift must be DEGRADED, got \(receipt.finalState.rawValue)")
@@ -172,7 +241,8 @@ func runBridgeInitializeTests() async {
             let unavail = BridgeInitializeService.buildReceipt(
                 context: ctx(connectionState: "offline", macTools: false),
                 supplemental: [],
-                telemetryEventRef: "evt-5b"
+                telemetryEventRef: "evt-5b",
+                routingSnapshot: routingSnapshot(status: .healthy, count: 8)
             )
             try expect(unavail.finalState == .complete, "init is COMPLETE (doctrine seeded)")
             try expect(unavail.capabilityState == .unavailable,
@@ -226,7 +296,7 @@ func runBridgeInitializeTests() async {
                 "macToolsAvailable", "doctrineVersion", "integrityResult",
                 "routingRosterState", "routingWarnings", "supplementalOrderCounts",
                 "connectionState", "telemetryEventRef", "capabilityState",
-                "capabilityMatrix", "finalState",
+                "capabilityMatrix", "routingSnapshot", "finalState",
             ]
             for key in required {
                 try expect(d[key] != nil, "receipt Value missing required field '\(key)'")

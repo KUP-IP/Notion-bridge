@@ -85,6 +85,9 @@ public struct HandshakeReceipt: Codable, Sendable, Equatable {
     public let routingRosterState: String
     /// Richer routing-roster quality (HEALTHY / SPARSE / EMPTY) — PKT-1065C.
     public let routingRosterQuality: RoutingRosterQuality
+    /// Authoritative Runtime Exposure snapshot used by every routing surface.
+    /// Optional only so pre-WU1 persisted receipts remain decodable.
+    public let routingSnapshot: SkillRoutingSnapshotMetadata?
     public let routingWarnings: [String]
     public let supplementalOrderCounts: SupplementalOrderCounts
     public let connectionState: String
@@ -116,6 +119,7 @@ public struct HandshakeReceipt: Codable, Sendable, Equatable {
         integrityResult: String,
         routingRosterState: String,
         routingRosterQuality: RoutingRosterQuality = .empty,
+        routingSnapshot: SkillRoutingSnapshotMetadata? = nil,
         routingWarnings: [String],
         supplementalOrderCounts: SupplementalOrderCounts,
         connectionState: String,
@@ -141,6 +145,7 @@ public struct HandshakeReceipt: Codable, Sendable, Equatable {
         self.integrityResult = integrityResult
         self.routingRosterState = routingRosterState
         self.routingRosterQuality = routingRosterQuality
+        self.routingSnapshot = routingSnapshot
         self.routingWarnings = routingWarnings
         self.supplementalOrderCounts = supplementalOrderCounts
         self.connectionState = connectionState
@@ -195,7 +200,7 @@ public struct BridgeInitializeContext: Sendable {
 public enum BridgeInitializeService {
 
     /// Current receipt schema contract version. Bump on any shape change.
-    public static let schemaVersion = 3
+    public static let schemaVersion = 4
 
     /// A supplemental order is deliberately inert ("ignored") when it is
     /// archived OR explicitly marked as a no-op / TEMP directive. The marker
@@ -237,7 +242,8 @@ public enum BridgeInitializeService {
         intent: PreflightIntent = .none,
         probeResults: [CapabilityProbeResult] = [],
         session: BrokerSessionRecord? = nil,
-        constitution: ConstitutionBundle? = nil
+        constitution: ConstitutionBundle? = nil,
+        routingSnapshot suppliedRoutingSnapshot: SkillRoutingSnapshot? = nil
     ) -> HandshakeReceipt {
         // 1–3: doctrine load + hash verify + integrity policy (init axis).
         try? StandingOrdersStore.shared.ensureInitializationContract()
@@ -253,15 +259,27 @@ public enum BridgeInitializeService {
         let expectedHash = StandingOrdersStore.shared.manifestDoctrineHash()
 
         // 4: routing roster state + quality + warnings (init axis — required source).
-        let routingIndex = SkillsModule.buildRoutingInstructions()
-        let routingLoaded = !routingIndex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let routingQuality = RoutingRosterQuality.assess(rendered: routingIndex)
+        let routingSnapshot = suppliedRoutingSnapshot ?? SkillsModule.legacyRoutingSnapshotSync()
+        let routingLoaded = routingSnapshot.metadata.count > 0
+        let routingQuality: RoutingRosterQuality = routingSnapshot.metadata.count == 0
+            ? .empty
+            : (routingSnapshot.metadata.count < 3 ? .sparse : .healthy)
         var routingWarnings: [String] = []
         var finalState = report.state
-        if !routingLoaded {
-            routingWarnings.append("Required routing roster is empty.")
+        switch routingSnapshot.metadata.status {
+        case .empty:
+            routingWarnings.append("Required routing roster is empty: \(routingSnapshot.metadata.reason).")
             finalState = .incomplete
-        } else if routingQuality == .sparse {
+        case .missing:
+            routingWarnings.append("Required routing snapshot is missing: \(routingSnapshot.metadata.reason).")
+            finalState = .incomplete
+        case .degraded:
+            routingWarnings.append("Routing snapshot is degraded: \(routingSnapshot.metadata.reason).")
+            if finalState == .complete { finalState = .degraded }
+        case .healthy:
+            break
+        }
+        if routingQuality == .sparse {
             routingWarnings.append("Routing roster is sparse — routing may be unreliable.")
         }
         if constitution?.doctrineFreshness == .stale && finalState == .complete {
@@ -338,6 +356,7 @@ public enum BridgeInitializeService {
             integrityResult: integrityResult,
             routingRosterState: routingLoaded ? "loaded" : "missing",
             routingRosterQuality: routingQuality,
+            routingSnapshot: routingSnapshot.metadata,
             routingWarnings: routingWarnings,
             supplementalOrderCounts: counts,
             connectionState: context.connectionState,
@@ -367,7 +386,8 @@ public enum BridgeInitializeService {
         intent: PreflightIntent = .none,
         preflight: CapabilityPreflightRegistry? = nil,
         constitutionStore: ConstitutionStore = ConstitutionStore(),
-        commandStore: CommandStore = .shared
+        commandStore: CommandStore = .shared,
+        routingSnapshot suppliedRoutingSnapshot: SkillRoutingSnapshot? = nil
     ) async -> HandshakeReceipt {
         let supplemental = await store.list(includeArchived: true)
         let handshakeId = UUID().uuidString
@@ -377,6 +397,12 @@ public enum BridgeInitializeService {
         // Intent-sensitive capability preflight — a domain probe runs ONLY when
         // the opening intent requires it. `.none` (universal init) runs NONE.
         let probeResults = await preflight?.run(intent: intent) ?? []
+        let routingSnapshot: SkillRoutingSnapshot
+        if let suppliedRoutingSnapshot {
+            routingSnapshot = suppliedRoutingSnapshot
+        } else {
+            routingSnapshot = await SkillsModule.routingSnapshot(now: context.now)
+        }
         let dispatchContext = ToolDispatchContext.current
         let transportSessionId = dispatchContext?.transportSessionId ?? ServerManager.stdioSessionID
         let brokerSession = try? await sessionRegistry.open(
@@ -389,7 +415,8 @@ public enum BridgeInitializeService {
         let constitution = includeConstitution
             ? (try? await constitutionStore.assemble(
                 supplementalStore: store,
-                commandStore: commandStore
+                commandStore: commandStore,
+                routingSnapshot: routingSnapshot
             ))
             : nil
         let receipt = buildReceipt(
@@ -400,7 +427,8 @@ public enum BridgeInitializeService {
             intent: intent,
             probeResults: probeResults,
             session: brokerSession,
-            constitution: constitution
+            constitution: constitution,
+            routingSnapshot: routingSnapshot
         )
         // Persist durably (best-effort; a write failure must not crash a
         // handshake — the receipt is still returned and telemetry still fires).
