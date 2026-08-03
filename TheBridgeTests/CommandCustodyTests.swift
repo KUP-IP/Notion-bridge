@@ -245,7 +245,7 @@ func runCommandCustodyTests() async {
             guard let executeIndex = fixture.firstIndex(where: { $0.slug == "execute" }) else {
                 throw TestError.assertion("fixture missing Execute")
             }
-            fixture[executeIndex].body = "legacy-read-override\\r\\nexact"
+            fixture[executeIndex].body = "legacy-read-override\r\nexact"
             try store.installLegacyFixtureForTesting(fixture)
             let beforeLegacy = try legacyTree(root: root)
 
