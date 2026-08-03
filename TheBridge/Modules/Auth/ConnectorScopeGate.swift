@@ -99,7 +99,7 @@ public struct ConnectorScopeGate: ScopeGating {
     /// docs/operator/mcp-builder-audit-report.md but not currently
     /// registered anywhere in the codebase; add them here if/when they ship.
     private static let runnerExecTools: Set<String> = [
-        "shell_exec", "run_script",
+        "shell_exec", "run_script", "worktree_command_run",
         "bg_run", "bg_poll", "bg_kill",
         "job_create", "job_run", "job_update", "job_delete",
         "job_pause", "job_resume", "job_duplicate", "job_import",

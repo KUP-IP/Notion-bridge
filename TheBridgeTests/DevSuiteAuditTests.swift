@@ -58,7 +58,7 @@ func runDevSuiteAuditTests() async {
         // git_worktree split (alias kept):
         "git_worktree", "git_worktree_list", "git_worktree_add", "git_worktree_remove",
         "git_create_branch", 
-        "worktree_claim", "worktree_release",
+        "worktree_claim", "worktree_release", "worktree_command_run",
         "code_search",
         // file_edit merge:
         "file_edit",

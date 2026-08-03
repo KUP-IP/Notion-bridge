@@ -184,6 +184,7 @@ public enum ToolAnnotationCatalog {
         "git_status": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: false, requiresConfirmation: true, openWorld: true),
         "worktree_claim": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: true, requiresConfirmation: true, openWorld: false),
         "worktree_release": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: true, openWorld: false),
+        "worktree_command_run": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: true, openWorld: false),
         // Sprint A · mcp-builder #6: git_worktree split into 3 primitives.
         "http_fetch": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: true, openWorld: true),
         "job_create": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: false),

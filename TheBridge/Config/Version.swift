@@ -467,7 +467,7 @@ public enum BridgeConstants {
     /// C0 runtime worktree ownership (2026-07-29): +2 tools
     ///   (worktree_claim + worktree_release; existing dev family). C0 is
     ///   default-ON only after opaque execution paths fail closed.
-    public static let staticFeatureModuleToolCount = 216
+    public static let staticFeatureModuleToolCount = 217
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.

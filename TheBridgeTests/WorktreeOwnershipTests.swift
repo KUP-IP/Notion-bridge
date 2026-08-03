@@ -2427,6 +2427,205 @@ func runWorktreeOwnershipTests() async {
         try expect(denied.text.contains("remedy=Use shell_exec with an explicit command and workingDir"))
     }
 
+    await test("WU0 command contract accepts only reviewed argv build/test families and bounded roots") {
+        let fixture = try C0GitFixture()
+        let accepted = try WorktreeCommandContract.validate(.init(
+            worktreePath: fixture.linked.path,
+            ownerSession: "owner",
+            expectedBranch: "packet/c0-linked",
+            expectedHead: fixture.baseSHA,
+            executable: "/usr/bin/make",
+            argv: ["test"],
+            declaredWriteRoots: [".build"],
+            timeoutSeconds: 60
+        ))
+        try expect(accepted.argv == ["test"])
+        try expect(accepted.declaredWriteRoots == [fixture.linked.appendingPathComponent(".build").path])
+
+        for (executable, argv) in [
+            ("/bin/bash", ["-c", "make test"]),
+            ("/usr/bin/git", ["push", "origin", "main"]),
+            ("/usr/bin/make", ["install-copy"]),
+            ("/usr/bin/make", ["release"]),
+        ] {
+            do {
+                _ = try WorktreeCommandContract.validate(.init(
+                    worktreePath: fixture.linked.path,
+                    ownerSession: "owner",
+                    expectedBranch: "packet/c0-linked",
+                    expectedHead: fixture.baseSHA,
+                    executable: executable,
+                    argv: argv,
+                    declaredWriteRoots: [".build"],
+                    timeoutSeconds: 60
+                ))
+                throw TestError.assertion("unexpectedly admitted \(executable) \(argv)")
+            } catch is WorktreeCommandError {
+                // expected
+            }
+        }
+
+        for root in [".", "../escaped"] {
+            do {
+                _ = try WorktreeCommandContract.validate(.init(
+                    worktreePath: fixture.linked.path,
+                    ownerSession: "owner",
+                    expectedBranch: "packet/c0-linked",
+                    expectedHead: fixture.baseSHA,
+                    executable: "/usr/bin/make",
+                    argv: ["debug"],
+                    declaredWriteRoots: [root],
+                    timeoutSeconds: 60
+                ))
+                throw TestError.assertion("unexpectedly admitted write root \(root)")
+            } catch is WorktreeCommandError {
+                // expected
+            }
+        }
+    }
+
+    await test("WU0 command runner requires the claimed owner before process launch") {
+        let fixture = try C0GitFixture()
+        let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL("wu0-owner"))
+        let missing = await c0ErrorCode {
+            _ = try await WorktreeOwnershipGuard.authorizeToolMutation(
+                toolName: "worktree_command_run",
+                arguments: .object([
+                    "worktreePath": .string(fixture.linked.path),
+                    "ownerSession": .string("owner")
+                ]),
+                store: store
+            )
+        }
+        try expect(missing == "worktree_ownership_required")
+        _ = try await c0Claim(
+            store,
+            fixture: fixture,
+            worktree: fixture.linked,
+            branch: "packet/c0-linked",
+            owner: "owner"
+        )
+        let authorization = try await WorktreeOwnershipGuard.authorizeToolMutation(
+            toolName: "worktree_command_run",
+            arguments: .object([
+                "worktreePath": .string(fixture.linked.path),
+                "ownerSession": .string("owner")
+            ]),
+            store: store
+        )
+        try expect(authorization != nil)
+        authorization?.release()
+    }
+
+    await test("WU0 command runner executes argv directly and returns branch, HEAD, and digest evidence") {
+        let fixture = try C0GitFixture()
+        let makefile = "debug:\n\t@mkdir -p .build\n\t@printf 'runner-ok\\n' > .build/wu0-marker\n\t@printf 'wu0-stdout\\n'\n"
+        try makefile.write(
+            to: fixture.linked.appendingPathComponent("Makefile"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try c0Run("/usr/bin/git", ["add", "Makefile"], cwd: fixture.linked)
+        try c0Run("/usr/bin/git", ["commit", "-m", "add runner fixture"], cwd: fixture.linked)
+        let expectedHead = try c0Run("/usr/bin/git", ["rev-parse", "HEAD"], cwd: fixture.linked).stdout
+        let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL("wu0-live"))
+        _ = try await store.claim(
+            repoRoot: fixture.repo.path,
+            worktreePath: fixture.linked.path,
+            branch: "packet/c0-linked",
+            baseSHA: expectedHead,
+            ownerSession: "wu0-live",
+            ttlSeconds: 300
+        )
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog(),
+            worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: true,
+            licenseStatusProvider: { .grandfathered }
+        )
+        await WorktreeOwnershipModule.register(on: router, store: store)
+        let value = try await router.dispatch(
+            toolName: "worktree_command_run",
+            arguments: .object([
+                "worktreePath": .string(fixture.linked.path),
+                "ownerSession": .string("wu0-live"),
+                "expectedBranch": .string("packet/c0-linked"),
+                "expectedHead": .string(expectedHead),
+                "executable": .string("/usr/bin/make"),
+                "argv": .array([.string("debug")]),
+                "declaredWriteRoots": .array([.string(".build")]),
+                "timeoutSeconds": .int(30)
+            ])
+        )
+        guard case .object(let object) = value else {
+            throw TestError.assertion("expected worktree command object")
+        }
+        try expect(object["ok"] == .bool(true), "runner failed: \(value)")
+        try expect(object["headSHA"] == .string(expectedHead))
+        try expect(object["branch"] == .string("packet/c0-linked"))
+        try expect(object["stdout"] == .string("wu0-stdout\n"))
+        guard case .string(let commandDigest) = object["commandSHA256"] else {
+            throw TestError.assertion("missing command digest")
+        }
+        try expect(commandDigest.count == 64)
+        let marker = try String(
+            contentsOf: fixture.linked.appendingPathComponent(".build/wu0-marker"),
+            encoding: .utf8
+        )
+        try expect(marker == "runner-ok\n")
+    }
+
+    await test("WU0 command runner detects writes outside the declared roots") {
+        let fixture = try C0GitFixture()
+        let makefile = "debug:\n\t@printf 'outside\\n' > outside.txt\n"
+        try makefile.write(
+            to: fixture.linked.appendingPathComponent("Makefile"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try c0Run("/usr/bin/git", ["add", "Makefile"], cwd: fixture.linked)
+        try c0Run("/usr/bin/git", ["commit", "-m", "add scope fixture"], cwd: fixture.linked)
+        let expectedHead = try c0Run("/usr/bin/git", ["rev-parse", "HEAD"], cwd: fixture.linked).stdout
+        let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL("wu0-scope"))
+        _ = try await store.claim(
+            repoRoot: fixture.repo.path,
+            worktreePath: fixture.linked.path,
+            branch: "packet/c0-linked",
+            baseSHA: expectedHead,
+            ownerSession: "wu0-scope",
+            ttlSeconds: 300
+        )
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog(),
+            worktreeOwnershipStore: store,
+            worktreeOwnershipEnabled: true,
+            licenseStatusProvider: { .grandfathered }
+        )
+        await WorktreeOwnershipModule.register(on: router, store: store)
+        let value = try await router.dispatch(
+            toolName: "worktree_command_run",
+            arguments: .object([
+                "worktreePath": .string(fixture.linked.path),
+                "ownerSession": .string("wu0-scope"),
+                "expectedBranch": .string("packet/c0-linked"),
+                "expectedHead": .string(expectedHead),
+                "executable": .string("/usr/bin/make"),
+                "argv": .array([.string("debug")]),
+                "declaredWriteRoots": .array([.string(".build")]),
+                "timeoutSeconds": .int(30)
+            ])
+        )
+        guard case .object(let object) = value else {
+            throw TestError.assertion("expected worktree command object")
+        }
+        try expect(object["ok"] == .bool(false))
+        try expect(object["status"] == .string("write_scope_violation"))
+        try expect(object["outsideDeclaredWriteRoots"] == .array([.string("outside.txt")]))
+        try expect(object["headSHA"] == .string(expectedHead))
+    }
+
     await test("C0 guarded public schemas expose ownerSession and tools are annotated") {
         let router = ToolRouter(
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
@@ -2444,7 +2643,7 @@ func runWorktreeOwnershipTests() async {
         await WorktreeOwnershipModule.register(on: router)
         let registrations = await router.allRegistrations()
         let guarded = Set([
-            "shell_exec", "run_script", "bg_run", "file_edit", "file_write", "file_append",
+            "shell_exec", "run_script", "bg_run", "worktree_command_run", "file_edit", "file_write", "file_append",
             "file_move", "file_rename", "file_copy", "dir_create", "file_zip",
             "file_unzip", "git_apply_patch", "git_create_branch"
         ])
@@ -2459,8 +2658,10 @@ func runWorktreeOwnershipTests() async {
         try expect(byName["worktree_release"] != nil)
         let claimAnnotation = ToolAnnotationCatalog.annotations(for: "worktree_claim")
         let releaseAnnotation = ToolAnnotationCatalog.annotations(for: "worktree_release")
+        let commandAnnotation = ToolAnnotationCatalog.annotations(for: "worktree_command_run")
         try expect(claimAnnotation?.idempotentHint == true)
         try expect(releaseAnnotation?.idempotentHint == false)
-        try expect(BridgeConstants.staticFeatureModuleToolCount == 216)
+        try expect(commandAnnotation?.requiresConfirmation == true)
+        try expect(BridgeConstants.staticFeatureModuleToolCount == 217)
     }
 }

@@ -357,7 +357,7 @@ func runRemoteOAuthBearerTests() async {
     }
 
     await test("ScopeGate: runners.exec gates command/exec tools") {
-        for tool in ["shell_exec", "run_script", "bg_run", "job_run"] {
+        for tool in ["shell_exec", "run_script", "worktree_command_run", "bg_run", "job_run"] {
             let denied = await gate.evaluate(
                 toolName: tool, grantedScopes: [ConnectorScope(name: "snippets.read")]
             )
