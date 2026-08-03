@@ -73,6 +73,12 @@ func runCommandCustodyTests() async {
                 )
             }
 
+            let readableLegacy = try store.list()
+            try expect(effectiveState(readableLegacy) == effectiveState(beforeCommands),
+                       "live legacy effective state changed before migration")
+            try expect(try store.stateDataForTesting() == nil,
+                       "a read-only live fixture check activated custody")
+            try activateCustodyForTesting(store, commands: readableLegacy)
             let migrated = try store.list()
             try expect(effectiveState(migrated) == effectiveState(beforeCommands),
                        "live legacy effective state changed in the isolated migration")
@@ -156,6 +162,12 @@ func runCommandCustodyTests() async {
             let legacyOverrideBytes = try store.legacyBodyDataForTesting(slug: "execute")
             let legacyCustomBytes = try store.legacyBodyDataForTesting(slug: "operator-custody")
 
+            let readableLegacy = try store.list()
+            try expect(effectiveState(readableLegacy) == before,
+                       "legacy effective command state changed before migration")
+            try expect(try store.stateDataForTesting() == nil,
+                       "legacy read activated custody before a command-state mutation")
+            try activateCustodyForTesting(store, commands: readableLegacy)
             let migrated = try store.list()
             try expect(effectiveState(migrated) == before, "pre/post effective command state changed")
             try expect(Set(migrated.map(\.id)).count == migrated.count, "migration created duplicate IDs")
@@ -227,6 +239,43 @@ func runCommandCustodyTests() async {
         }
     }
 
+    await test("A0 command reads and seeding leave a legacy store byte-identical until mutation") {
+        try await withCustodyStore { store, root in
+            var fixture = CommandStore.currentLegacyProductionFixture
+            guard let executeIndex = fixture.firstIndex(where: { $0.slug == "execute" }) else {
+                throw TestError.assertion("fixture missing Execute")
+            }
+            fixture[executeIndex].body = "legacy-read-override\\r\\nexact"
+            try store.installLegacyFixtureForTesting(fixture)
+            let beforeLegacy = try legacyTree(root: root)
+
+            let listed = try store.list()
+            _ = try store.get(slug: "execute")
+            _ = try store.search("exec")
+            _ = try store.command(forKeySlot: 5)
+            try store.seedIfEmpty()
+
+            var replacementCatalog = CommandStore.defaultProductCatalog
+            replacementCatalog[0].body = "replacement bundle product default"
+            let replacement = CommandStore(storageRoot: root, productDefaults: replacementCatalog)
+            _ = try replacement.list()
+
+            try expect(try store.stateDataForTesting() == nil,
+                       "read-only command access activated custody")
+            try expect(!FileManager.default.fileExists(
+                atPath: root.appendingPathComponent("custody", isDirectory: true).path
+            ), "read-only command access created a custody tree")
+            try expect(try legacyTree(root: root) == beforeLegacy,
+                       "read-only command access changed legacy bytes")
+
+            try activateCustodyForTesting(store, commands: listed)
+            try expect(try store.activeRevisionIDForTesting() != nil,
+                       "requested command-state mutation did not activate custody")
+            try expect(try legacyTree(root: root) == beforeLegacy,
+                       "migration rewrote legacy source bytes")
+        }
+    }
+
     await test("A0 migrates legacy absence into a hidden-default tombstone without resurrection") {
         try await withCustodyStore { store, _ in
             var fixture = CommandStore.currentLegacyProductionFixture
@@ -236,6 +285,11 @@ func runCommandCustodyTests() async {
             try expect(try store.get(slug: "scope-cut") == nil)
             try store.seedIfEmpty()
             try expect(try store.get(slug: "scope-cut") == nil, "hidden default resurrected after reseed")
+
+            let listed = try store.list()
+            try activateCustodyForTesting(store, commands: listed)
+            try expect(try store.get(slug: "scope-cut") == nil,
+                       "hidden default resurrected during migration")
 
             let replacement = CommandStore(storageRoot: store.custodyRootForTesting().deletingLastPathComponent())
             try expect(try replacement.get(slug: "scope-cut") == nil, "hidden default resurrected after restart")
@@ -264,7 +318,7 @@ func runCommandCustodyTests() async {
         }
     }
 
-    await test("A0 rejects a corrupt new revision and recovers the prior valid revision") {
+    await test("A0 rejects a corrupt new revision without mutating reads, then recovers on mutation") {
         try await withCustodyStore { store, root in
             let original = try store.create(name: "Recoverable", icon: .emoji("🛟"), body: "body-v1")
             guard let priorRevision = try store.activeRevisionIDForTesting() else {
@@ -281,9 +335,21 @@ func runCommandCustodyTests() async {
             try store.corruptActiveBodyForTesting(commandID: original.id)
 
             let reopened = CommandStore(storageRoot: root)
+            let stateBeforeRead = try reopened.stateDataForTesting()
             let recovered = try reopened.get(slug: original.slug)
             try expect(recovered?.body == "body-v1", "corrupt revision was accepted instead of rejected")
-            try expect(try reopened.activeRevisionIDForTesting() == priorRevision)
+            try expect(try reopened.stateDataForTesting() == stateBeforeRead,
+                       "a read repaired the active pointer")
+            try expect(try reopened.activeRevisionIDForTesting() == corruptRevision,
+                       "a read changed the active revision")
+
+            guard let recovered else {
+                throw TestError.assertion("prior valid revision was not readable")
+            }
+            try reopened.setKeySlot(slug: recovered.slug, slot: recovered.keySlot)
+            try expect(try reopened.activeRevisionIDForTesting() != corruptRevision,
+                       "command-state mutation did not repair the corrupt active revision")
+            try expect(try reopened.get(slug: recovered.slug)?.body == "body-v1")
         }
     }
 
@@ -329,9 +395,10 @@ func runCommandCustodyTests() async {
             try store.installLegacyFixtureForTesting(fixture)
             let before = try store.legacyBodyDataForTesting(slug: "execute")
 
+            let readableLegacy = try store.list()
             store.setFaultPointForTesting(.beforeRevisionFinalize)
             do {
-                _ = try store.list()
+                try activateCustodyForTesting(store, commands: readableLegacy)
                 throw TestError.assertion("expected injected migration failure")
             } catch CommandStore.StoreError.injectedFailure(.beforeRevisionFinalize) {
                 // Expected: no active pointer and no legacy mutation.
@@ -389,6 +456,19 @@ private func effectiveState(_ commands: [CommandStore.Command]) -> [EffectiveCom
         .sorted { $0.slug < $1.slug }
 }
 
+/// Enter the migration boundary through a no-op favorite assignment, preserving
+/// the effective command state while exercising the same requested mutation
+/// path used by real command edits.
+private func activateCustodyForTesting(
+    _ store: CommandStore,
+    commands: [CommandStore.Command]
+) throws {
+    guard let command = commands.first else {
+        throw TestError.assertion("fixture has no command to reaffirm for migration")
+    }
+    try store.setKeySlot(slug: command.slug, slot: command.keySlot)
+}
+
 private func matchesProductDefault(
     _ command: CommandStore.Command,
     _ productDefault: CommandStore.ProductDefault
@@ -433,6 +513,26 @@ private func custodyTree(root: URL) throws -> [String: Data] {
         let values = try url.resourceValues(forKeys: [.isRegularFileKey])
         guard values.isRegularFile == true else { continue }
         let relative = url.path.replacingOccurrences(of: custodyRoot.path + "/", with: "")
+        result[relative] = try Data(contentsOf: url)
+    }
+    return result
+}
+
+private func legacyTree(root: URL) throws -> [String: Data] {
+    let fm = FileManager.default
+    let custodyRoot = root.appendingPathComponent("custody", isDirectory: true).standardizedFileURL.path
+    let enumerator = fm.enumerator(
+        at: root,
+        includingPropertiesForKeys: [.isRegularFileKey],
+        options: [.skipsHiddenFiles]
+    )
+    var result: [String: Data] = [:]
+    while let url = enumerator?.nextObject() as? URL {
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey])
+        guard values.isRegularFile == true else { continue }
+        let path = url.standardizedFileURL.path
+        guard path != custodyRoot, !path.hasPrefix(custodyRoot + "/") else { continue }
+        let relative = path.replacingOccurrences(of: root.standardizedFileURL.path + "/", with: "")
         result[relative] = try Data(contentsOf: url)
     }
     return result

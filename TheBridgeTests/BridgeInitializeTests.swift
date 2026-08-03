@@ -253,6 +253,53 @@ func runBridgeInitializeTests() async {
         }
     }
 
+    await test("Init: bridge_initialize reads a legacy command store without activating custody") {
+        try await withInitTempHome {
+            try StandingOrdersStore.shared.resetForTesting()
+            _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v7.0.2\n\nx")
+
+            let commandRoot = BridgePaths.applicationSupport(.commands)
+            let commandStore = CommandStore(storageRoot: commandRoot)
+            try commandStore.resetForTesting()
+            let fixture = CommandStore.currentLegacyProductionFixture
+            try commandStore.installLegacyFixtureForTesting(fixture)
+
+            let legacyURLs = [commandRoot.appendingPathComponent("index.json")]
+                + fixture.map { commandRoot.appendingPathComponent("\($0.slug).md") }
+            let legacyBefore = try Dictionary(uniqueKeysWithValues: legacyURLs.map {
+                ($0.lastPathComponent, try Data(contentsOf: $0))
+            })
+
+            let supplementalStore = StandingOrdersRecordStore(
+                storeURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("nb-init-commands-\(UUID().uuidString).json")
+            )
+            let receiptStore = HandshakeReceiptStore(
+                baseDir: FileManager.default.temporaryDirectory
+                    .appendingPathComponent("nb-init-commands-receipts-\(UUID().uuidString)", isDirectory: true)
+            )
+            receiptStore.resetForTesting()
+
+            let receipt = await BridgeInitializeService.run(
+                context: ctx(),
+                store: supplementalStore,
+                receiptStore: receiptStore,
+                commandStore: commandStore
+            )
+
+            try expect(receipt.constitution?.commandsIndex.count == fixture.count,
+                       "bridge_initialize lost legacy commands from its constitution index")
+            try expect(try commandStore.stateDataForTesting() == nil,
+                       "bridge_initialize activated a command custody revision")
+            try expect(!FileManager.default.fileExists(atPath: commandStore.custodyRootForTesting().path),
+                       "bridge_initialize created a command custody tree")
+            for url in legacyURLs {
+                try expect(try Data(contentsOf: url) == legacyBefore[url.lastPathComponent],
+                           "bridge_initialize changed legacy bytes: \(url.lastPathComponent)")
+            }
+        }
+    }
+
     await test("Init: each handshake is a DISTINCT receipt (distinct id + file)") {
         try await withInitTempHome {
             try StandingOrdersStore.shared.resetForTesting()

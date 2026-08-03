@@ -40,6 +40,8 @@ The layer also records whether product defaults have been activated. A fresh
 `seedIfEmpty()` activation exposes the catalog and its initial slots. A
 custom-only pre-seed store remains custom-only, preserving the former API's
 behavior instead of silently materializing defaults during an unrelated create.
+An existing legacy index is already an initialized palette: `seedIfEmpty()`,
+startup, and command reads leave it untouched.
 
 ## Immutable production mapping
 
@@ -63,6 +65,16 @@ never `slot -> body` or `slot -> mutable display name`.
 
 ## Migration and recovery
 
+Command observation is non-mutating. `list`, `get`, `search`, key-slot lookup,
+constitution assembly for `bridge_initialize`, app startup, and application
+replacement may read legacy or custody state but cannot create a custody
+revision, rewrite legacy bytes, or repair an active pointer. A command fire may
+write the separate live-telemetry overlay; it never writes a custody revision
+or a command body.
+
+The first requested command-state mutation (`create`, `update`, `delete`, or
+favorite reassignment) is the migration boundary:
+
 1. Read and validate the complete legacy index and every UTF-8 body before
    writing local custody. Duplicate/unsafe slugs, duplicate slots, missing
    bodies, and mapping conflicts fail closed.
@@ -72,10 +84,12 @@ never `slot -> body` or `slot -> mutable display name`.
 3. Write a fully-contained staging revision, hash every payload, and rename it
    into `revisions/`. It is not active until the atomic `state.json` write.
 4. Keep prior revision IDs in `state.json`. On a hash, manifest, or payload
-   failure, validate prior revisions in order and atomically repoint to the
-   first valid one. No valid prior revision is treated as corruption, not as an
-   empty command set. Recovery never scans arbitrary revision directories, so
-   a revision finalized before an interrupted activation can never be promoted.
+   failure, a read may serve the first manifest-valid prior revision without
+   changing `state.json`; the next command-state mutation atomically repairs
+   the pointer before publishing its new revision. No valid prior revision is
+   treated as corruption, not as an empty command set. Recovery never scans
+   arbitrary revision directories, so a revision finalized before an
+   interrupted activation can never be promoted.
 
 The legacy files are not removed or rewritten by A0. Thus a migration failure
 before activation leaves the previous source exactly available for a retry; an
@@ -87,9 +101,13 @@ the still-active pointer.
 `CommandCustodyTests.swift` uses `CommandStore.currentLegacyProductionFixture`
 as the v1 production fixture and proves exact effective-state read-back,
 byte-for-byte custom and override body survival, hidden-default behavior,
-favorite independence, idempotence, app-replacement non-mutation, permissions,
-interrupted-write rollback, corrupt-revision recovery, failed-migration retry,
-and fail-closed ambiguous identities.
+favorite independence, non-mutating legacy reads and seeding, idempotence,
+app-replacement non-mutation, permissions, interrupted-write rollback,
+non-mutating corrupt-revision fallback plus mutation-time repair,
+failed-migration retry, and fail-closed ambiguous identities.
+`BridgeInitializeTests.swift` invokes `BridgeInitializeService.run` with an
+isolated legacy command store and proves that `bridge_initialize` builds its
+command index without creating custody or changing any legacy byte.
 
 For an operator-specific verification without committing private command bodies,
 run the same suite with `BRIDGE_A0_LEGACY_FIXTURE_ROOT` set to the legacy

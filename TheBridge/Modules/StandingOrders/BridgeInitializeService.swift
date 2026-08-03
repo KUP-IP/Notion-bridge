@@ -366,7 +366,8 @@ public enum BridgeInitializeService {
         receiptStore: HandshakeReceiptStore = .shared,
         intent: PreflightIntent = .none,
         preflight: CapabilityPreflightRegistry? = nil,
-        constitutionStore: ConstitutionStore = ConstitutionStore()
+        constitutionStore: ConstitutionStore = ConstitutionStore(),
+        commandStore: CommandStore = .shared
     ) async -> HandshakeReceipt {
         let supplemental = await store.list(includeArchived: true)
         let handshakeId = UUID().uuidString
@@ -386,7 +387,10 @@ public enum BridgeInitializeService {
             principalKey: dispatchContext?.governancePrincipal
         )
         let constitution = includeConstitution
-            ? (try? await constitutionStore.assemble(supplementalStore: store, commandStore: .shared))
+            ? (try? await constitutionStore.assemble(
+                supplementalStore: store,
+                commandStore: commandStore
+            ))
             : nil
         let receipt = buildReceipt(
             context: context,

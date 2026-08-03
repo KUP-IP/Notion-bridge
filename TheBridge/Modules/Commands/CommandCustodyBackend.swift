@@ -89,9 +89,12 @@ final class CommandCustodyBackend: @unchecked Sendable {
     func seedIfEmpty() throws {
         lock.lock()
         defer { lock.unlock() }
-        if try activeSnapshotLocked() != nil { return }
+        // Seeding is an app-startup convenience, not an authorization to
+        // convert an existing operator store. A legacy index is already an
+        // initialized palette and must stay readable until a command-state
+        // mutation explicitly enters the migration boundary.
+        if try activeSnapshotLocked(repairing: false) != nil { return }
         if legacyExistsLocked() {
-            _ = try migrateLegacyLocked()
             return
         }
 
@@ -328,30 +331,42 @@ final class CommandCustodyBackend: @unchecked Sendable {
     // MARK: - Read / migration
 
     private func readableSnapshotLocked() throws -> Snapshot? {
-        if let active = try activeSnapshotLocked() {
+        if let active = try activeSnapshotLocked(repairing: false) {
             return active
         }
         if legacyExistsLocked() {
-            return try migrateLegacyLocked()
+            // Reads—including bridge_initialize's constitution bundle—must
+            // observe legacy state without creating custody revisions.
+            return try readLegacySnapshotLocked()
         }
         return nil
     }
 
     private func mutableSnapshotLocked() throws -> Snapshot {
-        try readableSnapshotLocked() ?? .empty
+        if let active = try activeSnapshotLocked(repairing: true) {
+            return active
+        }
+        if legacyExistsLocked() {
+            // The first requested command-state mutation is the sole legacy
+            // migration boundary. Publication remains atomic and fail-closed.
+            return try migrateLegacyLocked()
+        }
+        return .empty
     }
 
     private func legacyExistsLocked() -> Bool {
         FileManager.default.fileExists(atPath: legacyIndexURL.path)
     }
 
-    private func activeSnapshotLocked() throws -> Snapshot? {
+    private func activeSnapshotLocked(repairing: Bool) throws -> Snapshot? {
         guard FileManager.default.fileExists(atPath: stateURL.path) else { return nil }
         do {
             let state = try readStateLocked()
             return try readRevisionLocked(id: state.activeRevisionID, mergeLiveTelemetry: true)
         } catch {
-            return try recoverPriorValidRevisionLocked(after: error)
+            // A read may select a valid prior revision for its response, but
+            // only a command-state mutation may repair the active pointer.
+            return try recoverPriorValidRevisionLocked(after: error, activating: repairing)
         }
     }
 
@@ -469,11 +484,23 @@ final class CommandCustodyBackend: @unchecked Sendable {
             // not a request to seed it again.
             snapshot.tombstones.insert(defaultCommand.id)
         }
+        // A command fire may write ordinary usage telemetry before a later
+        // command-state mutation activates custody. Merge that overlay while
+        // reading legacy so recency remains visible and is captured exactly
+        // when migration eventually occurs.
+        if let live = readLiveTelemetryLocked() {
+            for (id, date) in live {
+                snapshot.usage[id] = date
+            }
+        }
         try validate(snapshot)
         return snapshot
     }
 
-    private func recoverPriorValidRevisionLocked(after error: Error) throws -> Snapshot {
+    private func recoverPriorValidRevisionLocked(
+        after error: Error,
+        activating: Bool
+    ) throws -> Snapshot {
         // Recovery authority is the atomically activated state pointer alone.
         // A directory that exists beneath `revisions/` may be an orphan from a
         // write interrupted after finalization but before activation, so it
@@ -488,18 +515,20 @@ final class CommandCustodyBackend: @unchecked Sendable {
 
         for id in decodedState.priorRevisionIDs {
             if let snapshot = try? readRevisionLocked(id: id, mergeLiveTelemetry: true) {
-                let history = unique(
-                    [decodedState.activeRevisionID]
-                    + decodedState.priorRevisionIDs
-                    + [id]
-                ).filter { $0 != id }
-                try writeStateLocked(
-                    ActiveState(
-                        schemaVersion: Self.schemaVersion,
-                        activeRevisionID: id,
-                        priorRevisionIDs: history
+                if activating {
+                    let history = unique(
+                        [decodedState.activeRevisionID]
+                        + decodedState.priorRevisionIDs
+                        + [id]
+                    ).filter { $0 != id }
+                    try writeStateLocked(
+                        ActiveState(
+                            schemaVersion: Self.schemaVersion,
+                            activeRevisionID: id,
+                            priorRevisionIDs: history
+                        )
                     )
-                )
+                }
                 return snapshot
             }
         }
