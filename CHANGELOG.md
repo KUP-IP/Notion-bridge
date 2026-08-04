@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.0.2 (build 91) — routing-custody land + freshness renewal — 2026-08-03
+
+- **Land identity** — Monotonic main build after routing-custody WU0–WU2 plus
+  init-await freshness (`3a415ff` lineage) and unchanged-shadow renewal keyed on
+  `activeGenerationID` + empty exposure `changes` (not `snapshotID` equality).
+  Marketing remains **4.0.2**. Local unmerged pilots occupied builds 88–90.
+- **Scope** — Runtime routing authority, restart-safe bootstrap, staged
+  install-copy without resign, cold-init join of in-flight shadow refresh, and
+  the renewal predicate that prevents `runtime_exposure_freshness_expired` empty
+  roster after Notion `lastEditedTime` drift. No tag, DMG, appcast, or Sparkle.
+- **Promotion boundary** — Loopback cold-init accept required after install;
+  customer release still requires a separate Ship Gate GO.
+
 ## v4.0.2 (build 87) — C0 denial-diagnostics installed pilot — 2026-07-31
 
 - **Pilot identity** — Build-only local candidate identity for exact merged

@@ -310,7 +310,11 @@ public enum AppVersion {
     ///   WorkOS OAuth bake secrets present for release.yml inject. Floor 3391.
     /// v4.0.2 C0 installed-pilot candidate: 86 -> 87 -- local-only build identity
     /// after the denial-diagnostics remediation merge; no tag, appcast, or release.
-    public static let build = "87"
+    /// v4.0.2 routing-custody land: 87 -> 91 -- main integration of WU0–WU2 plus
+    /// init-await freshness and unchanged-shadow renewal (activeGenerationID).
+    /// Local unmerged pilots used 88–90; this build is the monotonic main land.
+    /// No tag, appcast, or Sparkle release.
+    public static let build = "91"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
