@@ -54,7 +54,7 @@ func runRoutingIntegrityLayerTests() async {
                 supplemental: [],
                 telemetryEventRef: "evt-ril"
             )
-            try expect(receipt.schemaVersion == 3, "receipt schema must bump for RIL")
+            try expect(receipt.schemaVersion == 4, "receipt schema must include authoritative routing snapshot evidence")
             try expect(receipt.routingIntegrity.registryVersion == ToolSkillBindingRegistry.registryVersion)
             try expect(receipt.routingIntegrity.boundToolCount == ToolSkillBindingRegistry.bindings.count)
             try expect(receipt.routingIntegrity.manifestMarkerTools.contains(BridgeInitializeModule.toolName))
@@ -130,7 +130,19 @@ func runRoutingIntegrityLayerTests() async {
                         now: rilDate("2026-07-07")
                     )
                 },
-                preflightProvider: { CapabilityPreflightRegistry(probes: []) }
+                preflightProvider: { CapabilityPreflightRegistry(probes: []) },
+                routingSnapshotProvider: { _ in
+                    SkillRoutingSnapshot(
+                        metadata: .init(
+                            status: .healthy,
+                            source: .runtimeExposureGeneration,
+                            snapshotID: "ril-session-test",
+                            count: 3,
+                            reason: "test"
+                        ),
+                        skills: (0..<3).map { .object(["name": .string("Routing \($0)")]) }
+                    )
+                }
             ))
             await MessagesModule.register(on: router)
 

@@ -168,13 +168,21 @@ extension SkillsModule {
             guard validLegacyRow else { return false }
             return exposureGate?.allows(pageID: s.notionPageId, surface: .routing) ?? true
         }
-        let fileSkills = await FilesystemSkillIndex.shared.allSkills().filter { fs in
-            // Honour per-path disable.
-            guard isFileSkillEnabled(path: fs.path) else { return false }
-            return isFileSkillRoutingDiscoverable(
-                path: fs.path,
-                frontmatter: fs.frontmatter
-            )
+        // After Runtime Exposure cutover, the verified generation is the sole
+        // authority for ambient routing. File-source skills remain exact-fetch
+        // capable but cannot silently join the routing roster outside that
+        // reviewed identity set. Legacy installations retain their prior merge.
+        let fileSkills: [ParsedSkill]
+        if exposureGate != nil {
+            fileSkills = []
+        } else {
+            fileSkills = await FilesystemSkillIndex.shared.allSkills().filter { fs in
+                guard isFileSkillEnabled(path: fs.path) else { return false }
+                return isFileSkillRoutingDiscoverable(
+                    path: fs.path,
+                    frontmatter: fs.frontmatter
+                )
+            }
         }
         let notionNames = Set(notionSkills.map { $0.name.lowercased() })
         var rows: [Value] = []

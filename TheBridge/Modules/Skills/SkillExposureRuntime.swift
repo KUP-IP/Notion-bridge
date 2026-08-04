@@ -64,9 +64,35 @@ public actor SkillRuntimeGenerationStore {
         return try? decoder().decode(SkillRuntimeGeneration.self, from: data)
     }
 
+    public enum RoutingAuthority: Sendable {
+        case legacy
+        case active(SkillRuntimeExposureGate)
+        case corrupt(pointerID: String)
+    }
+
     public func gate() -> SkillRuntimeExposureGate? {
         guard let generation = activeGeneration() else { return nil }
-        return .init(generation: generation, emergencyDenylist: emergencyDenylist())
+        return .init(
+            generation: generation,
+            emergencyDenylist: emergencyDenylist(),
+            freshnessRenewedAt: unchangedShadowRenewal(for: generation)
+        )
+    }
+
+    public func routingAuthority() -> RoutingAuthority {
+        guard FileManager.default.fileExists(atPath: pointerURL.path) else { return .legacy }
+        guard let data = try? Data(contentsOf: pointerURL),
+              let pointer = try? decoder().decode(ActivePointer.self, from: data),
+              !pointer.generationID.isEmpty else {
+            return .corrupt(pointerID: "unreadable-active-pointer")
+        }
+        let pointerID = pointer.generationID
+        guard let generation = generation(id: pointerID) else { return .corrupt(pointerID: pointerID) }
+        return .active(.init(
+            generation: generation,
+            emergencyDenylist: emergencyDenylist(),
+            freshnessRenewedAt: unchangedShadowRenewal(for: generation)
+        ))
     }
 
     @discardableResult
@@ -103,6 +129,17 @@ public actor SkillRuntimeGenerationStore {
     public func latestReceipt() -> SkillExposureReconciliationReceipt? {
         guard let data = try? Data(contentsOf: root.appendingPathComponent("latest-receipt.json")) else { return nil }
         return try? decoder().decode(SkillExposureReconciliationReceipt.self, from: data)
+    }
+
+    private func unchangedShadowRenewal(for generation: SkillRuntimeGeneration) -> Date? {
+        guard let receipt = latestReceipt(),
+              receipt.mode == .shadow,
+              receipt.outcome == .shadowReady,
+              receipt.errors.isEmpty,
+              receipt.changes.isEmpty,
+              receipt.snapshotID == generation.snapshotID
+        else { return nil }
+        return receipt.attemptedAt
     }
 
     public func emergencyDenylist() -> Set<String> {

@@ -307,16 +307,27 @@ public struct SkillRuntimeExposureGate: Sendable {
     public static let degradedGraceInterval: TimeInterval = 24 * 3600
     public let generation: SkillRuntimeGeneration
     public let emergencyDenylist: Set<String>
+    public let freshnessRenewedAt: Date?
 
-    public init(generation: SkillRuntimeGeneration, emergencyDenylist: Set<String> = []) {
+    public init(generation: SkillRuntimeGeneration, emergencyDenylist: Set<String> = [],
+                freshnessRenewedAt: Date? = nil) {
         self.generation = generation
         self.emergencyDenylist = Set(emergencyDenylist.map(SkillExposureIdentity.normalize))
+        self.freshnessRenewedAt = freshnessRenewedAt
+    }
+
+    public var freshnessReferenceDate: Date {
+        max(generation.compiledAt, freshnessRenewedAt ?? generation.compiledAt)
+    }
+
+    public func isDegraded(now: Date = Date()) -> Bool {
+        now.timeIntervalSince(freshnessReferenceDate) > Self.degradedGraceInterval
     }
 
     public func allows(pageID: String, surface: SkillExposureSurface, now: Date = Date()) -> Bool {
         let id = SkillExposureIdentity.normalize(pageID)
         guard !emergencyDenylist.contains(id), let entry = generation.entry(pageID: id) else { return false }
-        if now.timeIntervalSince(generation.compiledAt) > Self.degradedGraceInterval {
+        if isDegraded(now: now) {
             switch surface {
             case .exactFetch, .bodyCache: return true
             case .routing, .command, .specialist: return false

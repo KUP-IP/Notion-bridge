@@ -13,7 +13,7 @@ extension SkillsModule {
             name: "skills_routing_list",
             module: moduleName,
             tier: .open,
-            description: "Refresh the skill routing index (summaries + trigger phrases). Initial index is provided in server instructions at connection time — only call after a skill change.",
+            description: "Read the authoritative Runtime Exposure routing snapshot used by handshake instructions and bridge_initialize. Returns status, source, snapshot, count, reason, and the exact routable skill identities.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -27,11 +27,7 @@ extension SkillsModule {
                 // Collisions annotate the Notion-source row with a
                 // `shadows: file:<path>` field for operator clarity;
                 // Notion wins on collision (D4).
-                let items = await Self.mergedRoutingSkills()
-                return .object([
-                    "skills": .array(items),
-                    "count": .int(items.count)
-                ])
+                return await Self.routingSnapshot().value
             }
         )
         await router.register(skillsRoutingList)

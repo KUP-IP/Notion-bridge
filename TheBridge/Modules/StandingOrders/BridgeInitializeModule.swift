@@ -23,6 +23,7 @@ public enum BridgeInitializeModule {
     /// handshake. Injectable so tests drive the Reminders adapter with the mock
     /// seam. Default binds the live EventKit-backed reminders store.
     public typealias PreflightProvider = @Sendable () -> CapabilityPreflightRegistry
+    public typealias RoutingSnapshotProvider = @Sendable (_ now: Date) async -> SkillRoutingSnapshot
 
     /// Default preflight: the Reminders adapter over the live EventKit store.
     /// The registry runs NO probe unless the opening intent requires it, so
@@ -31,6 +32,9 @@ public enum BridgeInitializeModule {
         CapabilityPreflightRegistry(probes: [
             RemindersCapabilityProbe(store: EventKitRemindersStore())
         ])
+    }
+    public static let defaultRoutingSnapshotProvider: RoutingSnapshotProvider = { now in
+        await SkillsModule.routingSnapshot(now: now)
     }
 
     /// Resolves the live runtime context (connection + capability + clock) for a
@@ -68,16 +72,19 @@ public enum BridgeInitializeModule {
     public static func register(
         on router: ToolRouter,
         contextProvider: @escaping ContextProvider = defaultContextProvider,
-        preflightProvider: @escaping PreflightProvider = defaultPreflightProvider
+        preflightProvider: @escaping PreflightProvider = defaultPreflightProvider,
+        routingSnapshotProvider: @escaping RoutingSnapshotProvider = defaultRoutingSnapshotProvider
     ) async {
         await router.register(makeTool(contextProvider: contextProvider,
-                                       preflightProvider: preflightProvider))
+                                       preflightProvider: preflightProvider,
+                                       routingSnapshotProvider: routingSnapshotProvider))
     }
 
     /// Factory for the `bridge_initialize` registration (exposed for tests).
     public static func makeTool(
         contextProvider: @escaping ContextProvider = defaultContextProvider,
-        preflightProvider: @escaping PreflightProvider = defaultPreflightProvider
+        preflightProvider: @escaping PreflightProvider = defaultPreflightProvider,
+        routingSnapshotProvider: @escaping RoutingSnapshotProvider = defaultRoutingSnapshotProvider
     ) -> ToolRegistration {
         ToolRegistration(
             name: toolName,
@@ -168,6 +175,7 @@ public enum BridgeInitializeModule {
                     return true
                 }()
                 let context = await contextProvider(client)
+                let routingSnapshot = await routingSnapshotProvider(context.now)
                 // Only build a preflight registry when an intent unlocks a probe
                 // — the universal, data-minimal path stays probe-free.
                 let preflight = intent == .none ? nil : preflightProvider()
@@ -176,7 +184,8 @@ public enum BridgeInitializeModule {
                     mode: mode,
                     includeConstitution: includeConstitution,
                     intent: intent,
-                    preflight: preflight
+                    preflight: preflight,
+                    routingSnapshot: routingSnapshot
                 )
                 return receiptValue(receipt)
             }
@@ -209,6 +218,15 @@ public enum BridgeInitializeModule {
             "connectionState": .string(r.connectionState),
             "telemetryEventRef": .string(r.telemetryEventRef),
             "routingRosterQuality": .string(r.routingRosterQuality.rawValue),
+            "routingSnapshot": r.routingSnapshot.map { snapshot in
+                .object([
+                    "status": .string(snapshot.status.rawValue),
+                    "source": .string(snapshot.source.rawValue),
+                    "snapshot": .string(snapshot.snapshotID),
+                    "count": .int(snapshot.count),
+                    "reason": .string(snapshot.reason),
+                ])
+            } ?? .null,
             "routingIntegrity": .object([
                 "registryVersion": .int(r.routingIntegrity.registryVersion),
                 "boundToolCount": .int(r.routingIntegrity.boundToolCount),

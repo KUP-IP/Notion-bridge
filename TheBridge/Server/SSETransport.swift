@@ -1128,7 +1128,7 @@ public actor SSEServer {
                     sessionID: sessionID,
                     clientName: nil,
                     uri: uri,
-                    contentHash: StandingOrdersDelivery.composition().contentHash
+                    contentHash: await StandingOrdersDelivery.asyncComposition().contentHash
                 )
                 let data = buildRPCResponse(id: requestId, result: [
                     "contents": [[
@@ -1295,7 +1295,7 @@ public actor SSEServer {
                 sessionID: resourceSessionID,
                 clientName: resourceClientName,
                 uri: params.uri,
-                contentHash: StandingOrdersDelivery.composition(clientName: resourceClientName).contentHash
+                contentHash: await StandingOrdersDelivery.asyncComposition(clientName: resourceClientName).contentHash
             )
             return result
         }
@@ -1593,7 +1593,9 @@ public actor SSEServer {
                         sessionID: sessionID,
                         clientName: legacy.clientName(sessionID: sessionID),
                         uri: uri,
-                        contentHash: StandingOrdersDelivery.composition().contentHash
+                        contentHash: await StandingOrdersDelivery.asyncComposition(
+                            clientName: legacy.clientName(sessionID: sessionID)
+                        ).contentHash
                     )
                 }
                 return buildRPCResponse(id: requestId, result: [

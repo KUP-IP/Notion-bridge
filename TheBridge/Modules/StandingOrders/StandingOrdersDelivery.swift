@@ -119,9 +119,9 @@ public enum BridgeResources {
     public static func markdown(for uri: String, clientName: String? = nil) async throws -> String {
         switch uri {
         case standingOrdersURI:
-            return StandingOrdersDelivery.composition(clientName: clientName).instructionsMarkdown
+            return await StandingOrdersDelivery.asyncComposition(clientName: clientName).instructionsMarkdown
         case routingSkillsURI:
-            return StandingOrdersDelivery.composition(clientName: clientName).routingIndexMarkdown
+            return await StandingOrdersDelivery.asyncComposition(clientName: clientName).routingIndexMarkdown
         case memoryURI:
             return await memoryMarkdown()
         default:
@@ -160,6 +160,7 @@ public enum StandingOrdersDelivery {
         public let bridgeState: String
         public let doctrineVersion: String
         public let routingRosterState: String
+        public let routingSnapshot: SkillRoutingSnapshotMetadata
         public let supplementalOrderCount: Int
         public let initializationState: StandingOrdersStore.InitializationState
         public let issues: [String]
@@ -171,6 +172,7 @@ public enum StandingOrdersDelivery {
                 "- Bridge state: \(bridgeState)",
                 "- Doctrine version: \(doctrineVersion)",
                 "- Routing roster: \(routingRosterState)",
+                "- Routing snapshot: status=\(routingSnapshot.status.rawValue) source=\(routingSnapshot.source.rawValue) snapshot=\(routingSnapshot.snapshotID) count=\(routingSnapshot.count) reason=\(routingSnapshot.reason)",
                 "- Supplemental orders: \(supplementalOrderCount)",
                 "- Initialization: \(initializationState.rawValue)",
             ]
@@ -215,8 +217,12 @@ public enum StandingOrdersDelivery {
     /// receipt. Missing required doctrine never silently becomes “no standing
     /// orders”: the handshake remains available, but reports INCOMPLETE or
     /// DEGRADED with the exact failed assertion.
-    public static func composition(clientName: String? = nil) -> Composition {
-        let routingIndex = SkillsModule.buildRoutingInstructions()
+    public static func composition(
+        clientName: String? = nil,
+        routingSnapshot suppliedRoutingSnapshot: SkillRoutingSnapshot? = nil
+    ) -> Composition {
+        let routingSnapshot = suppliedRoutingSnapshot ?? SkillsModule.legacyRoutingSnapshotSync()
+        let routingIndex = SkillsModule.renderRoutingInstructions(snapshot: routingSnapshot)
 
         // Migrate legacy installations by creating only missing integrity files.
         // Existing mismatches are never overwritten; the report below surfaces them.
@@ -226,10 +232,19 @@ public enum StandingOrdersDelivery {
 
         var issues = report.issues
         var finalState = report.state
-        let routingRosterLoaded = !routingIndex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        if !routingRosterLoaded {
-            issues.append("Required routing roster is empty.")
+        let routingRosterLoaded = routingSnapshot.metadata.count > 0
+        switch routingSnapshot.metadata.status {
+        case .empty:
+            issues.append("Required routing roster is empty: \(routingSnapshot.metadata.reason).")
             finalState = .incomplete
+        case .missing:
+            issues.append("Required routing snapshot is missing: \(routingSnapshot.metadata.reason).")
+            finalState = .incomplete
+        case .degraded:
+            issues.append("Routing snapshot is degraded: \(routingSnapshot.metadata.reason).")
+            if finalState == .complete { finalState = .degraded }
+        case .healthy:
+            break
         }
         if !supplemental.loaded {
             if let issue = supplemental.issue { issues.append(issue) }
@@ -240,6 +255,7 @@ public enum StandingOrdersDelivery {
             bridgeState: "running",
             doctrineVersion: report.doctrineVersion,
             routingRosterState: routingRosterLoaded ? "loaded" : "missing",
+            routingSnapshot: routingSnapshot.metadata,
             supplementalOrderCount: supplemental.activeCount,
             initializationState: finalState,
             issues: issues
@@ -295,7 +311,8 @@ public enum StandingOrdersDelivery {
     /// Best-effort: a store read failure logs and omits the slice (degrades
     /// gracefully — the base composition is still delivered).
     public static func asyncComposition(clientName: String? = nil) async -> Composition {
-        let base = composition(clientName: clientName)
+        let routingSnapshot = await SkillsModule.routingSnapshot()
+        let base = composition(clientName: clientName, routingSnapshot: routingSnapshot)
 
         // Resolve auto-inject flag: per-client override wins over global.
         let shouldInject: Bool = {

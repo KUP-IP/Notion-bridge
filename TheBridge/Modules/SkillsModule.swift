@@ -113,38 +113,7 @@ public enum SkillsModule {
     """
 
     public static func buildRoutingInstructions() -> String {
-        let skills = readAllSkills().filter { skill in
-            guard skill.enabled, skill.routingDiscoverable else { return false }
-            switch skill.source {
-            case .notion(let pid):
-                return NotionPageRef.isValidStoredPageId(pid.trimmingCharacters(in: .whitespacesAndNewlines))
-            case .file:
-                // W2 D6: file-source routing skills are merged in via
-                // `list_routing_skills` (see registerListRoutingSkills);
-                // the initial instructions block sticks to Notion skills
-                // to preserve the existing wire shape.
-                return true
-            }
-        }
-        guard !skills.isEmpty else {
-            return "The Bridge MCP server. Call skills_routing_list to discover available skill-based capabilities.\n\n\(dispatchContract)"
-        }
-        // Build compact JSON routing index
-        var lines: [String] = []
-        for s in skills {
-            var entry = "\(s.name)"
-            if !s.summary.isEmpty { entry += " — \(s.summary)" }
-            if !s.triggerPhrases.isEmpty { entry += " [triggers: \(s.triggerPhrases.joined(separator: ", "))]" }
-            if !s.antiTriggerPhrases.isEmpty { entry += " [avoid: \(s.antiTriggerPhrases.joined(separator: ", "))]" }
-            lines.append(entry)
-        }
-        return """
-        The Bridge MCP server. \(skills.count) routing skill(s) available:
-        \(lines.joined(separator: "\n"))
-        Use fetch_skill to load full skill content by name. Call skills_routing_list to refresh this index.
-
-        \(dispatchContract)
-        """
+        renderRoutingInstructions(snapshot: legacyRoutingSnapshotSync())
     }
 
     /// Register the `fetch_skill` tool on the given router.

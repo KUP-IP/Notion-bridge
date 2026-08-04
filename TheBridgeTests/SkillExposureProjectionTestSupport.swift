@@ -24,6 +24,14 @@ func mergedRoutingSkillsForTesting(
     await SkillsModule.mergedRoutingSkills(exposureGate: exposureGate)
 }
 
+func runtimeRoutingSnapshotForTesting(
+    items: [Value],
+    gate: SkillRuntimeExposureGate,
+    now: Date
+) -> SkillRoutingSnapshot {
+    SkillsModule.runtimeRoutingSnapshot(items: items, gate: gate, now: now)
+}
+
 func testExposureGate(
     _ entries: [(pageID: String, exposure: SkillRuntimeExposure)],
     compiledAt: Date = Date()
