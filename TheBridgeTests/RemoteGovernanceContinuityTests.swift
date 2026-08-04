@@ -135,7 +135,7 @@ func runRemoteGovernanceContinuityTests() async {
         }
     }
 
-    await test("routing-manifest marker follows principal across session rotation") {
+    await test("principal continuation survives rotation but route acknowledgement stays session-scoped") {
         try await withRemoteGovernanceHarness { harness in
             let principal = SessionRegistry.principalKey(subject: "manifest-user")!
             let sessionA = "manifest-a-\(UUID().uuidString)"
@@ -152,8 +152,35 @@ func runRemoteGovernanceContinuityTests() async {
             )
             try expect(!initResult.isError)
             try expect(await harness.router.hasRoutingManifestMarker(sessionID: sessionA))
-            try expect(await harness.router.hasRoutingManifestMarker(sessionID: principal),
-                       "bridge_initialize must mark the verified principal for churn continuity")
+            try expect(!(await harness.router.hasRoutingManifestMarker(sessionID: principal)),
+                       "verified principal must never become a client acknowledgement bucket")
+            try expect(try await harness.registry.isGoverned(
+                transportSessionId: sessionB,
+                principalKey: principal
+            ), "verified principal continuation must still govern the rotated session")
+
+            let beforeAck = await harness.router.dispatchFormatted(
+                toolName: "notion_page_create",
+                arguments: .object([:]),
+                context: .init(
+                    transportSessionId: sessionB,
+                    origin: .remote,
+                    governancePrincipal: principal
+                )
+            )
+            try expect(beforeAck.isError, "rotated session must require its own route acknowledgement")
+            try expect(beforeAck.text.contains("route_ack_required"), "unexpected recovery error: \(beforeAck.text)")
+
+            let roster = await harness.router.dispatchFormatted(
+                toolName: "skills_routing_list",
+                arguments: .object([:]),
+                context: .init(
+                    transportSessionId: sessionB,
+                    origin: .remote,
+                    governancePrincipal: principal
+                )
+            )
+            try expect(!roster.isError, "routing roster acknowledgement must succeed: \(roster.text)")
 
             let bound = await harness.router.dispatchFormatted(
                 toolName: "notion_page_create",
@@ -164,10 +191,8 @@ func runRemoteGovernanceContinuityTests() async {
                     governancePrincipal: principal
                 )
             )
-            try expect(!bound.isError, "manifest-bound notify on rotated session must pass: \(bound.text)")
+            try expect(!bound.isError, "manifest-bound notify after exact client ack must pass: \(bound.text)")
             try expect(bound.text.contains("notion-create-ok"), "unexpected body: \(bound.text)")
-            try expect(!bound.text.contains("routing manifest"),
-                       "must not re-demand routing manifest after principal-marked initialize: \(bound.text)")
         }
     }
 
@@ -248,7 +273,10 @@ private func withRemoteGovernanceHarness(
     let router = ToolRouter(
         securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
         auditLog: AuditLog(),
-        sessionRegistry: registry
+        sessionRegistry: registry,
+        routingCustodyStore: RoutingCustodyStore(
+            root: root.appendingPathComponent("routing-custody", isDirectory: true)
+        )
     )
     let receiptStore = HandshakeReceiptStore(
         baseDir: root.appendingPathComponent("handshakes", isDirectory: true)
@@ -282,6 +310,14 @@ private func withRemoteGovernanceHarness(
             )
             return BridgeInitializeModule.receiptValue(receipt)
         }
+    ))
+    await router.register(ToolRegistration(
+        name: "skills_routing_list",
+        module: "skills",
+        tier: .open,
+        description: "authoritative routing snapshot",
+        inputSchema: .object(["type": .string("object")]),
+        handler: { _ in remoteGovernanceHealthyRoutingSnapshot().value }
     ))
     await router.register(ToolRegistration(
         name: "governance_write_probe",

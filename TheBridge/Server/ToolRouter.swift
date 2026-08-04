@@ -209,11 +209,17 @@ public actor ToolRouter {
     /// FB-4: withhold `tools/list` until `BridgeModuleRegistry` finishes so
     /// clients never cache a partial surface during startup registration.
     private var modulesRegistrationComplete = false
-    private var routingManifestSessionIDs: Set<String> = []
+    /// Ephemeral, exact-scope acknowledgements. A new transport session starts
+    /// empty even when the same verified principal has durable continuation.
+    private var clientRouteAuthorities: [String: [String: Set<String>]] = [:]
+    /// One-time receipts support local callers that genuinely have no stable
+    /// session identifier. Receipts never survive process restart or replay.
+    private var issuedRouteReceipts: [String: RoutingAcknowledgementReceipt] = [:]
     private var dispatchMissWindows: [DispatchMissKey: Date] = [:]
     private let securityGate: SecurityGate
     private let auditLog: AuditLog
     private let sessionRegistry: SessionRegistry
+    private let routingCustodyStore: RoutingCustodyStore
     private let worktreeOwnershipStore: WorktreeOwnershipStore
     private let worktreeOwnershipEnabled: Bool
 
@@ -230,6 +236,7 @@ public actor ToolRouter {
         securityGate: SecurityGate,
         auditLog: AuditLog,
         sessionRegistry: SessionRegistry = .shared,
+        routingCustodyStore: RoutingCustodyStore = .shared,
         worktreeOwnershipStore: WorktreeOwnershipStore = .shared,
         worktreeOwnershipEnabled: Bool = false,
         licenseStatusProvider: @escaping LicenseStatusProvider = { await LicenseManager.shared.currentStatus() }
@@ -237,6 +244,7 @@ public actor ToolRouter {
         self.securityGate = securityGate
         self.auditLog = auditLog
         self.sessionRegistry = sessionRegistry
+        self.routingCustodyStore = routingCustodyStore
         self.worktreeOwnershipStore = worktreeOwnershipStore
         self.worktreeOwnershipEnabled = worktreeOwnershipEnabled
         self.licenseStatusProvider = licenseStatusProvider
@@ -288,44 +296,212 @@ public actor ToolRouter {
         modulesRegistrationComplete
     }
 
-    /// Test/diagnostic seam for PKT-1094: a session is marked only after a
-    /// successful bridge_initialize / fetch_skill / routing-skill manifest call.
-    /// Marks may be transport session ids or verified principal keys.
+    /// Compatibility diagnostic: true when this exact client session has at
+    /// least one exact-scope acknowledgement. Principal keys are never client
+    /// acknowledgement buckets.
     public func hasRoutingManifestMarker(sessionID: String) -> Bool {
-        routingManifestSessionIDs.contains(sessionID)
+        clientRouteAuthorities[sessionID]?.isEmpty == false
     }
 
+    /// Compatibility test seam. It grants the explicit registered scopes to
+    /// this one session, never a process-global marker.
     public func markRoutingManifestFetched(sessionID: String) {
-        routingManifestSessionIDs.insert(sessionID)
+        acknowledgeAllScopes(clientKey: sessionID)
+    }
+
+    public func hasRouteAcknowledgement(sessionID: String, scopeID: String) -> Bool {
+        guard let required = ToolSkillBindingRegistry.bindings.first(where: { $0.scopeID == scopeID }) else { return false }
+        let present = clientRouteAuthorities[sessionID]?[scopeID] ?? []
+        return Set(required.governingSkills.map(\.slug)).isSubset(of: present)
     }
 
     private func isGoverned(_ context: ToolDispatchContext) async -> Bool? {
-        try? await sessionRegistry.isGoverned(
+        if (try? await sessionRegistry.isGoverned(
             transportSessionId: context.transportSessionId,
             principalKey: context.governancePrincipal
+        )) == true { return true }
+        guard let principal = context.governancePrincipal else { return false }
+        return (try? routingCustodyStore.hasPrincipalContinuation(principal)) == true
+    }
+
+    private func acknowledge(scopes: Set<String>, authorityIDs: Set<String>, clientKey: String) {
+        var byScope = clientRouteAuthorities[clientKey] ?? [:]
+        for scope in scopes {
+            byScope[scope, default: []].formUnion(authorityIDs)
+        }
+        clientRouteAuthorities[clientKey] = byScope
+    }
+
+    private func acknowledgeAllScopes(clientKey: String) {
+        for binding in ToolSkillBindingRegistry.bindings {
+            acknowledge(
+                scopes: Set([binding.scopeID]),
+                authorityIDs: Set(binding.governingSkills.map(\.slug)),
+                clientKey: clientKey
+            )
+        }
+    }
+
+    private func hasRouteAcknowledgement(context: ToolDispatchContext, binding: ToolSkillBinding) -> Bool {
+        guard let clientKey = context.transportSessionId, !clientKey.isEmpty else { return false }
+        let present = clientRouteAuthorities[clientKey]?[binding.scopeID] ?? []
+        return Set(binding.governingSkills.map(\.slug)).isSubset(of: present)
+    }
+
+    private func clientAuthorityDigest(_ context: ToolDispatchContext) -> String {
+        if let principal = context.governancePrincipal {
+            return RoutingCustodyStore.principalDigest("verified:\(principal)")
+        }
+        if let session = context.transportSessionId, !session.isEmpty {
+            return RoutingCustodyStore.principalDigest("session:\(session)")
+        }
+        return RoutingCustodyStore.principalDigest(
+            "local-no-session:\(context.origin.rawValue):\(context.client ?? "anonymous")"
         )
     }
 
-    private func hasRoutingManifestMarker(context: ToolDispatchContext) -> Bool {
-        if let sessionID = context.transportSessionId,
-           !sessionID.isEmpty,
-           routingManifestSessionIDs.contains(sessionID) {
-            return true
+    private func consumeRouteReceipts(
+        arguments: Value,
+        context: ToolDispatchContext,
+        binding: ToolSkillBinding,
+        now: Date
+    ) -> Bool {
+        guard case .object(let object) = arguments else { return false }
+        var values: [Value] = []
+        if let single = object["_routingReceipt"] { values.append(single) }
+        if case .array(let multiple)? = object["_routingReceipts"] { values.append(contentsOf: multiple) }
+        let parsed = values.compactMap(RoutingAcknowledgementReceipt.parse)
+        guard parsed.count == values.count, !parsed.isEmpty else { return false }
+
+        let expectedDigest = clientAuthorityDigest(context)
+        var authorities = Set<String>()
+        var nonces: [String] = []
+        for receipt in parsed {
+            guard receipt.scopeID == binding.scopeID,
+                  receipt.principalDigest == expectedDigest,
+                  receipt.issuedAt <= now,
+                  receipt.expiresAt > now,
+                  issuedRouteReceipts[receipt.nonce] == receipt else { return false }
+            authorities.formUnion(receipt.authorityIDs)
+            nonces.append(receipt.nonce)
         }
-        if let principal = context.governancePrincipal,
-           routingManifestSessionIDs.contains(principal) {
-            return true
-        }
-        return false
+        let required = Set(binding.governingSkills.map(\.slug))
+        guard required.isSubset(of: authorities) else { return false }
+        for nonce in nonces { issuedRouteReceipts.removeValue(forKey: nonce) }
+        return true
     }
 
-    private func markRoutingManifestFetched(context: ToolDispatchContext) {
-        if let sessionID = context.transportSessionId, !sessionID.isEmpty {
-            routingManifestSessionIDs.insert(sessionID)
+    private func issueReceipt(
+        authorityIDs: Set<String>,
+        scopeID: String,
+        context: ToolDispatchContext,
+        now: Date
+    ) -> RoutingAcknowledgementReceipt {
+        issuedRouteReceipts = issuedRouteReceipts.filter { $0.value.expiresAt > now }
+        let roundedNow = Date(timeIntervalSince1970: floor(now.timeIntervalSince1970 * 1_000) / 1_000)
+        let receipt = RoutingAcknowledgementReceipt(
+            authorityIDs: Array(authorityIDs),
+            scopeID: scopeID,
+            principalDigest: clientAuthorityDigest(context),
+            issuedAt: roundedNow,
+            expiresAt: roundedNow.addingTimeInterval(300)
+        )
+        issuedRouteReceipts[receipt.nonce] = receipt
+        return receipt
+    }
+
+    private func argumentsWithoutRoutingReceipts(_ arguments: Value) -> Value {
+        guard case .object(var object) = arguments else { return arguments }
+        object.removeValue(forKey: "_routingReceipt")
+        object.removeValue(forKey: "_routingReceipts")
+        return .object(object)
+    }
+
+    private func routingSnapshotEvidence(toolName: String, result: Value) -> (id: String, source: String, count: Int)? {
+        guard case .object(let outer) = result else { return nil }
+        let object: [String: Value]
+        if toolName == BridgeInitializeModule.toolName,
+           case .object(let nested)? = outer["routingSnapshot"] {
+            object = nested
+        } else {
+            object = outer
         }
-        if let principal = context.governancePrincipal {
-            routingManifestSessionIDs.insert(principal)
+        guard case .string(SkillRoutingSnapshotStatus.healthy.rawValue)? = object["status"],
+              case .string(let source)? = object["source"],
+              case .string(let snapshot)? = object["snapshot"],
+              case .int(let count)? = object["count"], count > 0 else { return nil }
+        return (snapshot, source, count)
+    }
+
+    private func fetchedAuthorityIDs(arguments: Value, result: Value) -> Set<String> {
+        var candidates: [String] = []
+        if case .object(let object) = result {
+            for key in ["slug", "title", "name"] {
+                if case .string(let value)? = object[key] { candidates.append(value) }
+            }
         }
+        if case .object(let object) = arguments, case .string(let name)? = object["name"] {
+            candidates.append(contentsOf: name.split(separator: "/").map(String.init))
+        }
+        let known = Set(ToolSkillBindingRegistry.bindings.flatMap { $0.governingSkills.map(\.slug) })
+        return Set(candidates.map(ToolSkillBindingRegistry.normalizeAuthoritySlug)).intersection(known)
+    }
+
+    private func applyRoutingEvidence(
+        toolName: String,
+        arguments: Value,
+        result: Value,
+        context: ToolDispatchContext,
+        now: Date
+    ) throws -> Value {
+        guard ToolSkillBindingRegistry.callSatisfiesManifestMarker(toolName: toolName, result: result) else {
+            return result
+        }
+
+        if let evidence = routingSnapshotEvidence(toolName: toolName, result: result) {
+            _ = try routingCustodyStore.recordBootstrap(
+                snapshotID: evidence.id,
+                source: evidence.source,
+                count: evidence.count,
+                verifiedAt: now
+            )
+            if toolName == BridgeInitializeModule.toolName,
+               let principal = context.governancePrincipal {
+                try routingCustodyStore.recordPrincipalContinuation(
+                    principalKey: principal,
+                    authorityID: BridgeInitializeModule.toolName,
+                    at: now
+                )
+            }
+        }
+
+        var byScope: [String: Set<String>] = [:]
+        if toolName == BridgeInitializeModule.toolName || toolName == "skills_routing_list" {
+            for binding in ToolSkillBindingRegistry.bindings {
+                byScope[binding.scopeID] = Set(binding.governingSkills.map(\.slug))
+            }
+        } else if toolName == "fetch_skill" {
+            let fetched = fetchedAuthorityIDs(arguments: arguments, result: result)
+            for binding in ToolSkillBindingRegistry.bindings {
+                let relevant = Set(binding.governingSkills.map(\.slug)).intersection(fetched)
+                if !relevant.isEmpty { byScope[binding.scopeID] = relevant }
+            }
+        }
+
+        if let clientKey = context.transportSessionId, !clientKey.isEmpty {
+            for (scope, authorities) in byScope {
+                acknowledge(scopes: Set([scope]), authorityIDs: authorities, clientKey: clientKey)
+            }
+            return result
+        }
+
+        let receipts = byScope.sorted { $0.key < $1.key }.map {
+            issueReceipt(authorityIDs: $0.value, scopeID: $0.key, context: context, now: now).value
+        }
+        guard !receipts.isEmpty, case .object(var object) = result else { return result }
+        object["routingReceipts"] = .array(receipts)
+        object["routingReceiptTTLSeconds"] = .int(300)
+        return .object(object)
     }
 
     /// Surface for MCP `tools/list` — empty until startup registration completes (FB-4).
@@ -578,41 +754,81 @@ public actor ToolRouter {
             }
         }
 
-        // PKT-1094: per-tool routing manifest gate. Runs AFTER the broker's
-        // origin-level gates above (control-plane block, governed-remote-session)
-        // so a foundational "you're not initialized" rejection always takes
-        // precedence over this finer-grained "you haven't fetched THIS tool's
-        // governing skill route" one — calling bridge_initialize satisfies both
-        // at once (it is itself a manifest-marker tool), so there is no case
-        // where reordering costs a legitimate caller an extra round trip.
-        // Remote OAuth principals share the marker across Mcp-Session-Id churn.
-        // No correlatable identity (nil transport + nil principal) keeps the
-        // legacy skip — same as the prior `if let sessionID` gate.
-        let hasCorrelatableIdentity =
-            (context.transportSessionId?.isEmpty == false)
-            || (context.governancePrincipal != nil)
-        if hasCorrelatableIdentity,
-           ToolSkillBindingRegistry.requiresManifestFetch(toolName),
-           !hasRoutingManifestMarker(context: context) {
-            let binding = ToolSkillBindingRegistry.binding(for: toolName)
-            let governance = binding?.governanceSummary ?? "unregistered"
-            let duration = ContinuousClock.now - start
-            let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
-                + Double(duration.components.seconds) * 1000.0
-            await auditLog.append(AuditEntry(
-                timestamp: Date(),
-                toolName: toolName,
-                tier: tool.tier,
-                inputSummary: stringifySummary(arguments),
-                outputSummary: "REJECTED: routing manifest required (\(governance))",
-                durationMs: ms,
-                approvalStatus: .rejected,
-                transportSessionId: context.transportSessionId
-            ))
-            throw ToolRouterError.routingManifestRequired(
-                toolName: toolName,
-                governingSkills: governance
-            )
+        // Routing receipts are control-plane metadata, never tool input.
+        let executionArguments = argumentsWithoutRoutingReceipts(arguments)
+
+        // Routing custody has three deliberately separate states:
+        // 1. durable server readiness, 2. durable verified-principal
+        // continuation, 3. ephemeral exact client-route acknowledgement.
+        // A restart may preserve 1+2, but it never invents 3 for a new client
+        // session. This makes the recovery instruction honest and prevents a
+        // single principal marker from authorizing unrelated tool families.
+        let hasClientIdentity = context.transportSessionId?.isEmpty == false
+            || context.governancePrincipal != nil
+            || context.client?.isEmpty == false
+        if hasClientIdentity,
+           let binding = ToolSkillBindingRegistry.binding(for: toolName),
+           binding.requiresManifestFetch {
+            let readiness: ServerRoutingReadiness?
+            do {
+                readiness = try routingCustodyStore.serverReadiness()
+            } catch {
+                await auditLog.append(AuditEntry(
+                    timestamp: Date(),
+                    toolName: toolName,
+                    tier: effectiveTier,
+                    inputSummary: stringifySummary(executionArguments),
+                    outputSummary: "REJECTED: bootstrap_required routing_custody_corrupt",
+                    durationMs: Self.elapsedMs(since: start),
+                    approvalStatus: .rejected,
+                    origin: context.origin,
+                    transportSessionId: context.transportSessionId
+                ))
+                throw ToolRouterError.bootstrapRequired(
+                    toolName: toolName,
+                    reason: "routing_custody_corrupt: \(error.localizedDescription)"
+                )
+            }
+            guard readiness != nil else {
+                await auditLog.append(AuditEntry(
+                    timestamp: Date(),
+                    toolName: toolName,
+                    tier: effectiveTier,
+                    inputSummary: stringifySummary(executionArguments),
+                    outputSummary: "REJECTED: bootstrap_required no_verified_routing_snapshot",
+                    durationMs: Self.elapsedMs(since: start),
+                    approvalStatus: .rejected,
+                    origin: context.origin,
+                    transportSessionId: context.transportSessionId
+                ))
+                throw ToolRouterError.bootstrapRequired(
+                    toolName: toolName,
+                    reason: "no_verified_routing_snapshot"
+                )
+            }
+            let acknowledged = hasRouteAcknowledgement(context: context, binding: binding)
+                || consumeRouteReceipts(arguments: arguments, context: context, binding: binding, now: Date())
+            if !acknowledged {
+                let governance = binding.governanceSummary
+                let duration = ContinuousClock.now - start
+                let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
+                    + Double(duration.components.seconds) * 1000.0
+                await auditLog.append(AuditEntry(
+                    timestamp: Date(),
+                    toolName: toolName,
+                    tier: tool.tier,
+                    inputSummary: stringifySummary(executionArguments),
+                    outputSummary: "REJECTED: route_ack_required scope=\(binding.scopeID) (\(governance))",
+                    durationMs: ms,
+                    approvalStatus: .rejected,
+                    transportSessionId: context.transportSessionId
+                ))
+                throw ToolRouterError.routeAcknowledgementRequired(
+                    toolName: toolName,
+                    scopeID: binding.scopeID,
+                    governingSkills: governance
+                )
+            }
         }
 
         // SecurityGate enforcement (async for request-tier approvals)
@@ -620,7 +836,7 @@ public actor ToolRouter {
             toolName: toolName,
             tier: effectiveTier,
             neverAutoApprove: neverAutoApprove,
-            arguments: arguments,
+            arguments: executionArguments,
             module: tool.module
         )
 
@@ -636,7 +852,7 @@ public actor ToolRouter {
                 timestamp: Date(),
                 toolName: toolName,
                 tier: effectiveTier,
-                inputSummary: stringifySummary(arguments),
+                inputSummary: stringifySummary(executionArguments),
                 outputSummary: "REJECTED: \(reason)",
                 durationMs: ms,
                 approvalStatus: .rejected,
@@ -653,7 +869,7 @@ public actor ToolRouter {
                 timestamp: Date(),
                 toolName: toolName,
                 tier: effectiveTier,
-                inputSummary: stringifySummary(arguments),
+                inputSummary: stringifySummary(executionArguments),
                 outputSummary: "HANDOFF: \(command)",
                 durationMs: ms,
                 approvalStatus: .escalated,
@@ -674,7 +890,7 @@ public actor ToolRouter {
         // caller cannot manufacture it through MCP arguments.
         let exactApprovalReceipt: SecurityApprovalReceipt? =
             effectiveTier == .request && neverAutoApprove
-            ? SecurityApprovalReceipt.issue(toolName: toolName, arguments: arguments, context: context)
+            ? SecurityApprovalReceipt.issue(toolName: toolName, arguments: executionArguments, context: context)
             : nil
         do {
             // C0: one shared fail-closed guard after authorization/governance gates
@@ -683,7 +899,7 @@ public actor ToolRouter {
             if worktreeOwnershipEnabled {
                 worktreeAuthorization = try await WorktreeOwnershipGuard.authorizeToolMutation(
                     toolName: toolName,
-                    arguments: arguments,
+                    arguments: executionArguments,
                     store: worktreeOwnershipStore
                 )
             } else {
@@ -691,7 +907,7 @@ public actor ToolRouter {
             }
             defer { worktreeAuthorization?.release() }
             let invokeHandler: @Sendable () async throws -> Value = {
-                try await tool.handler(arguments)
+                try await tool.handler(executionArguments)
             }
             let invokeApprovedHandler: @Sendable () async throws -> Value = {
                 if let exactApprovalReceipt {
@@ -711,6 +927,13 @@ public actor ToolRouter {
             } else {
                 result = try await invokeApprovedHandler()
             }
+            let routedResult = try applyRoutingEvidence(
+                toolName: toolName,
+                arguments: executionArguments,
+                result: result,
+                context: context,
+                now: Date()
+            )
             let governed = await isGoverned(context)
             let governanceNote: String?
             let returnedResult: Value
@@ -720,14 +943,10 @@ public actor ToolRouter {
                 governed: governed
             ) {
                 governanceNote = "ungoverned_session"
-                returnedResult = Self.annotatedResult(result)
+                returnedResult = Self.annotatedResult(routedResult)
             } else {
                 governanceNote = nil
-                returnedResult = result
-            }
-
-            if ToolSkillBindingRegistry.callSatisfiesManifestMarker(toolName: toolName, result: result) {
-                markRoutingManifestFetched(context: context)
+                returnedResult = routedResult
             }
 
             // F2 + PKT-552: Fire-and-forget Notify-tier notification with structured context.
@@ -735,8 +954,8 @@ public actor ToolRouter {
             if effectiveTier == .notify {
                 let context = ToolRouter.makeExecutionContext(
                     toolName: toolName,
-                    arguments: arguments,
-                    summary: stringifySummary(arguments)
+                    arguments: executionArguments,
+                    summary: stringifySummary(executionArguments)
                 )
                 await securityGate.sendExecutionNotification(context: context)
             }
@@ -748,7 +967,7 @@ public actor ToolRouter {
                 timestamp: Date(),
                 toolName: toolName,
                 tier: effectiveTier,
-                inputSummary: stringifySummary(arguments),
+                inputSummary: stringifySummary(executionArguments),
                 outputSummary: stringifySummary(returnedResult),
                 durationMs: ms,
                 approvalStatus: .approved,
@@ -766,7 +985,7 @@ public actor ToolRouter {
                 timestamp: Date(),
                 toolName: toolName,
                 tier: effectiveTier,
-                inputSummary: stringifySummary(arguments),
+                inputSummary: stringifySummary(executionArguments),
                 outputSummary: "ERROR: \(error.localizedDescription)",
                 durationMs: ms,
                 approvalStatus: .error,
@@ -921,9 +1140,45 @@ public actor ToolRouter {
             }()
             return (text: text, isError: structuredFailure)
         } catch {
-            // v3.0·0.5: central param-misnomer recovery. If the agent sent
-            // a known wrong key, append a did-you-mean so it self-corrects
-            // without reading source. Applies to all 162 tools at once.
+            // v3.0·0.5: central param-misnomer recovery. Structured routing
+            // recovery is resolved first; every error path remains single-shot
+            // and never invokes the handler a second time.
+            // Recovery-state failures are structured on every transport. The
+            // human message remains present, but clients can branch on the
+            // stable `error` code without scraping prose.
+            if let routingError = error as? ToolRouterError {
+                let value: Value?
+                switch routingError {
+                case .bootstrapRequired(let name, let reason):
+                    value = .object([
+                        "ok": .bool(false),
+                        "error": .string("bootstrap_required"),
+                        "tool": .string(name),
+                        "reason": .string(reason),
+                        "recoveryTools": .array([.string(BridgeInitializeModule.toolName), .string("skills_routing_list")])
+                    ])
+                case .routeAcknowledgementRequired(let name, let scopeID, let governance):
+                    value = .object([
+                        "ok": .bool(false),
+                        "error": .string("route_ack_required"),
+                        "tool": .string(name),
+                        "scopeID": .string(scopeID),
+                        "governingSkills": .string(governance),
+                        "recoveryTools": .array([.string("fetch_skill"), .string("skills_routing_list")])
+                    ])
+                default:
+                    value = nil
+                }
+                if let value {
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                    let data = try? encoder.encode(value)
+                    return (text: data.flatMap { String(data: $0, encoding: .utf8) } ?? routingError.localizedDescription,
+                            isError: true)
+                }
+            }
+            // If the agent sent a known wrong key, append a did-you-mean so it
+            // self-corrects without reading source. Applies to all tools at once.
             var msg = "Error: \(error.localizedDescription)"
             let acceptedKeys: Set<String> = {
                 guard let registration = registry[toolName],
@@ -1007,7 +1262,8 @@ public enum ToolRouterError: Error, LocalizedError {
     case unknownTool(String)
     case invalidArguments(toolName: String, reason: String)
     case securityRejection(toolName: String, reason: String)
-    case routingManifestRequired(toolName: String, governingSkills: String)
+    case bootstrapRequired(toolName: String, reason: String)
+    case routeAcknowledgementRequired(toolName: String, scopeID: String, governingSkills: String)
 
     public var errorDescription: String? {
         switch self {
@@ -1017,8 +1273,10 @@ public enum ToolRouterError: Error, LocalizedError {
             return "\(name): \(reason)"
         case .securityRejection(let name, let reason):
             return "Security gate rejected \(name): \(reason)"
-        case .routingManifestRequired(let name, let governingSkills):
-            return "\(name) requires a routing manifest before dispatch. Fetch the governing skill route first (\(governingSkills)) or run bridge_initialize for this session."
+        case .bootstrapRequired(let name, let reason):
+            return "bootstrap_required: \(name) cannot dispatch until bridge_initialize or skills_routing_list establishes a non-empty verified routing snapshot (reason=\(reason))."
+        case .routeAcknowledgementRequired(let name, let scopeID, let governingSkills):
+            return "route_ack_required: \(name) requires the exact route scope \(scopeID). Call fetch_skill for the governing route (\(governingSkills)) or skills_routing_list on this client connection. bridge_initialize is also valid when a full initialization receipt is required."
         }
     }
 }

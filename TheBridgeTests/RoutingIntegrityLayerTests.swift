@@ -16,7 +16,13 @@ func runRoutingIntegrityLayerTests() async {
             tier: .open,
             description: "Send an iMessage or SMS after explicit approval.",
             inputSchema: .object(["type": .string("object")]),
-            handler: { _ in .object(["ok": .bool(true), "sent": .bool(true)]) }
+            handler: { arguments in
+                if case .object(let object) = arguments,
+                   object["_routingReceipt"] != nil || object["_routingReceipts"] != nil {
+                    throw TestError.assertion("routing control metadata reached the tool handler")
+                }
+                return .object(["ok": .bool(true), "sent": .bool(true)])
+            }
         )
     }
 
@@ -71,12 +77,15 @@ func runRoutingIntegrityLayerTests() async {
         }
     }
 
-    await test("RIL gate: fresh session cannot dispatch messages_send before manifest marker") {
+    await test("RIL gate: fresh install reports bootstrap_required before any route acknowledgement") {
         try await withRILTempHome {
             let log = AuditLog()
             let router = ToolRouter(
                 securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
                 auditLog: log,
+                routingCustodyStore: RoutingCustodyStore(
+                    root: BridgePaths.applicationSupport(.routingCustody)
+                ),
                 licenseStatusProvider: { .trial(daysRemaining: 5) }
             )
             await MessagesModule.register(on: router)
@@ -93,19 +102,17 @@ func runRoutingIntegrityLayerTests() async {
                     )
                     throw TestError.assertion("messages_send reached handler without manifest marker")
                 } catch let error as ToolRouterError {
-                    if case .routingManifestRequired(let toolName, let governingSkills) = error {
+                    if case .bootstrapRequired(let toolName, let reason) = error {
                         try expect(toolName == "messages_send")
-                        try expect(governingSkills.contains("people-keepr"))
+                        try expect(reason.contains("no_verified_routing_snapshot"))
                     } else {
                         throw TestError.assertion("wrong ToolRouterError case: \(error)")
                     }
                 }
             }
             let entries = await log.entries(forSessionID: "ril-session-a")
-            try expect(entries.count == 1, "expected exactly one rejected audit entry, got \(entries.count)")
-            try expect(entries[0].toolName == "messages_send")
-            try expect(entries[0].approvalStatus == .rejected)
-            try expect(entries[0].outputSummary.contains("routing manifest required"))
+            try expect(entries.count == 1 && entries[0].approvalStatus == .rejected,
+                       "bootstrap rejection must be audited exactly once")
         }
     }
 
@@ -118,6 +125,9 @@ func runRoutingIntegrityLayerTests() async {
             let router = ToolRouter(
                 securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
                 auditLog: log,
+                routingCustodyStore: RoutingCustodyStore(
+                    root: BridgePaths.applicationSupport(.routingCustody)
+                ),
                 licenseStatusProvider: { .trial(daysRemaining: 5) }
             )
             await router.register(BridgeInitializeModule.makeTool(
@@ -187,7 +197,11 @@ func runRoutingIntegrityLayerTests() async {
                     )
                     throw TestError.assertion("marker leaked across sessions")
                 } catch let error as ToolRouterError {
-                    if case .routingManifestRequired = error { /* expected */ }
+                    if case .routeAcknowledgementRequired(let tool, let scope, let governance) = error {
+                        try expect(tool == "messages_send")
+                        try expect(scope == "tool:messages_send")
+                        try expect(governance.contains("people-keepr"))
+                    }
                     else { throw TestError.assertion("wrong error for unmarked second session: \(error)") }
                 }
             }
@@ -197,6 +211,170 @@ func runRoutingIntegrityLayerTests() async {
                        "session b audit sequence drift: \(bTools)")
             let cEntries = await log.entries(forSessionID: "ril-session-c")
             try expect(cEntries.count == 1 && cEntries[0].approvalStatus == .rejected)
+        }
+    }
+
+    await test("RIL restart: durable readiness survives replacement while client route acknowledgement does not") {
+        try await withRILTempHome {
+            let store = RoutingCustodyStore(root: BridgePaths.applicationSupport(.routingCustody))
+            _ = try store.recordBootstrap(
+                snapshotID: "restart-snapshot",
+                source: "runtime_exposure_generation",
+                count: 8,
+                verifiedAt: rilDate("2026-07-07")
+            )
+            try store.recordPrincipalContinuation(
+                principalKey: "oauth-sub:restart-user",
+                authorityID: BridgeInitializeModule.toolName,
+                at: rilDate("2026-07-07")
+            )
+
+            let routerBefore = ToolRouter(
+                securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+                auditLog: AuditLog(),
+                routingCustodyStore: store,
+                licenseStatusProvider: { .trial(daysRemaining: 5) }
+            )
+            await registerRILRoutingList(on: routerBefore)
+            await routerBefore.register(fakeMessagesSendRegistration())
+            let context = ToolDispatchContext(
+                transportSessionId: "restart-session",
+                origin: .remote,
+                client: "connector",
+                governancePrincipal: "oauth-sub:restart-user"
+            )
+            _ = try await routerBefore.dispatch(toolName: "skills_routing_list", arguments: .object([:]), context: context)
+            _ = try await routerBefore.dispatch(toolName: "messages_send", arguments: .object([:]), context: context)
+
+            // Simulates replacing/relaunching the app: same Application Support
+            // state, fresh ToolRouter memory.
+            let replacementStore = RoutingCustodyStore(root: BridgePaths.applicationSupport(.routingCustody))
+            let routerAfter = ToolRouter(
+                securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+                auditLog: AuditLog(),
+                routingCustodyStore: replacementStore,
+                licenseStatusProvider: { .trial(daysRemaining: 5) }
+            )
+            await registerRILRoutingList(on: routerAfter)
+            await routerAfter.register(fakeMessagesSendRegistration())
+
+            let rejected = await routerAfter.dispatchFormatted(
+                toolName: "messages_send", arguments: .object([:]), context: context
+            )
+            try expect(rejected.isError && rejected.text.contains("route_ack_required"),
+                       "replacement must retain bootstrap but demand a fresh client ack: \(rejected.text)")
+            let roster = await routerAfter.dispatchFormatted(
+                toolName: "skills_routing_list", arguments: .object([:]), context: context
+            )
+            try expect(!roster.isError)
+            let allowed = await routerAfter.dispatchFormatted(
+                toolName: "messages_send", arguments: .object([:]), context: context
+            )
+            try expect(!allowed.isError && allowed.text.contains("sent"))
+        }
+    }
+
+    await test("RIL no-session receipt is exact-scope, principal-bound, expiring, and one-time") {
+        try await withRILTempHome {
+            let store = RoutingCustodyStore(root: BridgePaths.applicationSupport(.routingCustody))
+            let router = ToolRouter(
+                securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+                auditLog: AuditLog(),
+                routingCustodyStore: store,
+                licenseStatusProvider: { .trial(daysRemaining: 5) }
+            )
+            await registerRILRoutingList(on: router)
+            await router.register(fakeMessagesSendRegistration())
+            let context = ToolDispatchContext(
+                transportSessionId: nil,
+                origin: .local,
+                client: "no-stable-session"
+            )
+            let roster = try await router.dispatch(
+                toolName: "skills_routing_list", arguments: .object([:]), context: context
+            )
+            guard case .object(let rosterObject) = roster,
+                  case .array(let receipts)? = rosterObject["routingReceipts"],
+                  let receipt = receipts.first(where: {
+                      guard case .object(let object) = $0,
+                            case .string("tool:messages_send")? = object["scopeID"] else { return false }
+                      return true
+                  }) else {
+                throw TestError.assertion("routing list did not issue an exact messages_send receipt")
+            }
+
+            let args: Value = .object(["_routingReceipt": receipt])
+            let first = await router.dispatchFormatted(toolName: "messages_send", arguments: args, context: context)
+            try expect(!first.isError, "fresh receipt must authorize once: \(first.text)")
+            let replay = await router.dispatchFormatted(toolName: "messages_send", arguments: args, context: context)
+            try expect(replay.isError && replay.text.contains("route_ack_required"),
+                       "receipt replay must fail closed: \(replay.text)")
+
+            let wrongClient = await router.dispatchFormatted(
+                toolName: "messages_send",
+                arguments: args,
+                context: ToolDispatchContext(transportSessionId: nil, origin: .local, client: "other-client")
+            )
+            try expect(wrongClient.isError && wrongClient.text.contains("route_ack_required"))
+        }
+    }
+
+    await test("RIL fetch_skill acknowledgements compose required authorities without leaking scopes") {
+        try await withRILTempHome {
+            let store = RoutingCustodyStore(root: BridgePaths.applicationSupport(.routingCustody))
+            _ = try store.recordBootstrap(
+                snapshotID: "scope-snapshot",
+                source: "runtime_exposure_generation",
+                count: 8,
+                verifiedAt: rilDate("2026-07-07")
+            )
+            let router = ToolRouter(
+                securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+                auditLog: AuditLog(),
+                routingCustodyStore: store,
+                licenseStatusProvider: { .trial(daysRemaining: 5) }
+            )
+            await router.register(ToolRegistration(
+                name: "fetch_skill", module: "skills", tier: .open,
+                description: "route authority fixture",
+                inputSchema: .object(["type": .string("object")]),
+                handler: { arguments in
+                    guard case .object(let object) = arguments,
+                          case .string(let name)? = object["name"] else { return .object(["error": .string("missing")]) }
+                    return .object(["title": .string(name), "content": .string("fixture")])
+                }
+            ))
+            await router.register(fakeMessagesSendRegistration())
+            await router.register(ToolRegistration(
+                name: "notion_page_create", module: "notion", tier: .open,
+                description: "unrelated scope fixture", inputSchema: .object(["type": .string("object")]),
+                handler: { _ in .object(["created": .bool(true)]) }
+            ))
+            let context = ToolDispatchContext(transportSessionId: "scope-session", origin: .local)
+            _ = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("PEOPLE Keepr")]),
+                context: context
+            )
+            let partial = await router.dispatchFormatted(
+                toolName: "messages_send", arguments: .object([:]), context: context
+            )
+            try expect(partial.isError && partial.text.contains("route_ack_required"),
+                       "people authority alone must not satisfy mac-message")
+            _ = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("mac-message")]),
+                context: context
+            )
+            let messages = await router.dispatchFormatted(
+                toolName: "messages_send", arguments: .object([:]), context: context
+            )
+            try expect(!messages.isError)
+            let notion = await router.dispatchFormatted(
+                toolName: "notion_page_create", arguments: .object([:]), context: context
+            )
+            try expect(notion.isError && notion.text.contains("route_ack_required"),
+                       "Messages route must not authorize Notion")
         }
     }
 
@@ -279,4 +457,26 @@ private func restore(defaults: UserDefaults, key: String, value: Any?) {
     } else {
         defaults.removeObject(forKey: key)
     }
+}
+
+private func registerRILRoutingList(on router: ToolRouter) async {
+    await router.register(ToolRegistration(
+        name: "skills_routing_list",
+        module: "skills",
+        tier: .open,
+        description: "healthy routing fixture",
+        inputSchema: .object(["type": .string("object")]),
+        handler: { _ in
+            SkillRoutingSnapshot(
+                metadata: .init(
+                    status: .healthy,
+                    source: .runtimeExposureGeneration,
+                    snapshotID: "ril-routing-list",
+                    count: 8,
+                    reason: "test"
+                ),
+                skills: (0..<8).map { .object(["name": .string("Routing \($0)")]) }
+            ).value
+        }
+    ))
 }

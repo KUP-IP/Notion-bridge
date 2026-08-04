@@ -198,7 +198,7 @@ func runToolArgumentAliasTests() async {
             .deletingLastPathComponent()
             .appendingPathComponent("TheBridge/Server/ToolRouter.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let handlerCalls = source.components(separatedBy: "try await tool.handler(arguments)").count - 1
+        let handlerCalls = source.components(separatedBy: "try await tool.handler(").count - 1
         try expect(handlerCalls == 1, "ToolRouter handler call-site count drifted to \(handlerCalls)")
 
         guard let catchRange = source.range(of: "        } catch {\n            // v3.0·0.5: central param-misnomer recovery"),

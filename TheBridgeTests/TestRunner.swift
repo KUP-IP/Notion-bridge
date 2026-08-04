@@ -774,6 +774,7 @@ await runBridgeInitializeTests()  // PKT-1065A: canonical bridge_initialize init
 await runWave1BrokerTests()       // Bridge Evolution Contract W1: session broker + constitution bundle + D9c remote block
 await runGovernancePropagationTests() // PKT-1124 W2C: real Streamable-HTTP governance session key propagation
 await runRemoteGovernanceContinuityTests() // principal-keyed remote governance + routing-manifest continuity across session churn
+await runRoutingCustodyStoreTests() // WU2: atomic durable routing bootstrap + checksum recovery
 await runCapabilityPreflightTests() // PKT-1065C: intent-sensitive capability preflight + Reminders adapter
 await runShortcutsModuleTests()   // PKT-959 (v3.7·F): shortcuts_* MCP tools (mock CLI seam)
 await runCommandsDataTests()      // cmd-w2: Commands data layer (CommandsManager + MentionResolver + cache)
