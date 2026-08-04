@@ -1116,7 +1116,8 @@ public enum WorktreeOwnershipGuard {
     ) async throws -> WorktreeExecutionAuthorization? {
         guard directMutationTools.contains(toolName)
                 || toolName == "shell_exec"
-                || toolName == "bg_run" else { return nil }
+                || toolName == "bg_run"
+                || toolName == "worktree_command_run" else { return nil }
         guard case .object(let args) = arguments else { return nil }
 
         if toolName == "git_apply_patch",
@@ -1151,7 +1152,15 @@ public enum WorktreeOwnershipGuard {
         let paths: [String]
         let repositoryRequired: Bool
 
-        if toolName == "shell_exec" || toolName == "bg_run" {
+        if toolName == "worktree_command_run" {
+            guard let worktreePath = string(args["worktreePath"]) else {
+                throw WorktreeOwnershipError.targetUnresolved(
+                    "worktree_command_run requires an explicit worktreePath"
+                )
+            }
+            paths = [worktreePath]
+            repositoryRequired = true
+        } else if toolName == "shell_exec" || toolName == "bg_run" {
             guard let command = string(args["command"]) else { return nil }
             let workingDirectory = string(args["workingDir"])
                 ?? FileManager.default.currentDirectoryPath
@@ -1319,6 +1328,8 @@ public enum WorktreeOwnershipGuard {
         let rawTargets: [String]
         switch toolName {
         case "worktree_claim", "worktree_release":
+            rawTargets = compact([string(object["worktreePath"])])
+        case "worktree_command_run":
             rawTargets = compact([string(object["worktreePath"])])
         case "shell_exec", "bg_run":
             let workingDirectory = string(object["workingDir"])
@@ -3374,6 +3385,7 @@ public enum WorktreeOwnershipModule {
         on router: ToolRouter,
         store: WorktreeOwnershipStore = .shared
     ) async {
+        await WorktreeCommandModule.register(on: router)
         await router.register(ToolRegistration(
             name: "worktree_claim",
             module: moduleName,
