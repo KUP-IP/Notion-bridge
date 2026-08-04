@@ -24,6 +24,7 @@ public enum BridgeInitializeModule {
     /// seam. Default binds the live EventKit-backed reminders store.
     public typealias PreflightProvider = @Sendable () -> CapabilityPreflightRegistry
     public typealias RoutingSnapshotProvider = @Sendable (_ now: Date) async -> SkillRoutingSnapshot
+    public typealias RoutingFreshnessRefresher = @Sendable () async -> Void
 
     /// Default preflight: the Reminders adapter over the live EventKit store.
     /// The registry runs NO probe unless the opening intent requires it, so
@@ -34,7 +35,29 @@ public enum BridgeInitializeModule {
         ])
     }
     public static let defaultRoutingSnapshotProvider: RoutingSnapshotProvider = { now in
-        await SkillsModule.routingSnapshot(now: now)
+        await routingSnapshotForInitialize(
+            now: now,
+            snapshotProvider: { await SkillsModule.routingSnapshot(now: $0) },
+            refresh: { _ = await SkillExposureReconciliationCoordinator.shared.runShadow() }
+        )
+    }
+
+    /// A stale Runtime Exposure generation is expected to recover through the
+    /// startup shadow reconciliation. The MCP server becomes reachable before
+    /// that network-backed refresh completes, so the first handshake must join
+    /// the in-flight refresh instead of returning a transient empty manifest.
+    @_spi(Testing)
+    public static func routingSnapshotForInitialize(
+        now: Date,
+        snapshotProvider: @escaping RoutingSnapshotProvider,
+        refresh: @escaping RoutingFreshnessRefresher
+    ) async -> SkillRoutingSnapshot {
+        let initial = await snapshotProvider(now)
+        guard initial.metadata.status == .degraded,
+              initial.metadata.reason == "runtime_exposure_freshness_expired"
+        else { return initial }
+        await refresh()
+        return await snapshotProvider(Date())
     }
 
     /// Resolves the live runtime context (connection + capability + clock) for a

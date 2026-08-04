@@ -131,13 +131,22 @@ public actor SkillRuntimeGenerationStore {
         return try? decoder().decode(SkillExposureReconciliationReceipt.self, from: data)
     }
 
+    /// An unchanged shadow renews the active generation's freshness window.
+    ///
+    /// Key off empty exposure `changes` + the receipt's `activeGenerationID`,
+    /// not `snapshotID` equality. The registry snapshot hash includes
+    /// `notionLastEditedTime`, so ordinary page edits change the snapshot
+    /// while leaving published Runtime Exposure policy unchanged
+    /// (`changes == []`). Requiring snapshot equality left cold starts stuck
+    /// on `runtime_exposure_freshness_expired` after a successful shadowReady
+    /// (build 89 local pilot, 2026-08-03).
     private func unchangedShadowRenewal(for generation: SkillRuntimeGeneration) -> Date? {
         guard let receipt = latestReceipt(),
               receipt.mode == .shadow,
               receipt.outcome == .shadowReady,
               receipt.errors.isEmpty,
               receipt.changes.isEmpty,
-              receipt.snapshotID == generation.snapshotID
+              receipt.activeGenerationID == generation.generationID
         else { return nil }
         return receipt.attemptedAt
     }
@@ -454,7 +463,12 @@ public actor SkillExposureReconciliationCoordinator {
     public static let intervalNanoseconds: UInt64 = 6 * 60 * 60 * 1_000_000_000
 
     private var loopTask: Task<Void, Never>?
-    private var running = false
+    private struct ActiveRun {
+        let id: UUID
+        let mode: SkillExposureReconciliationReceipt.Mode
+        let task: Task<SkillExposureReconciliationReceipt?, Never>
+    }
+    private var activeRun: ActiveRun?
 
     public func start() {
         guard loopTask == nil else { return }
@@ -486,16 +500,28 @@ public actor SkillExposureReconciliationCoordinator {
         mode: SkillExposureReconciliationReceipt.Mode,
         approvals: [SkillExposureApproval]
     ) async -> SkillExposureReconciliationReceipt? {
-        guard !running else { return nil }
-        running = true
-        defer { running = false }
-        let baseline = await MainActor.run {
-            SkillExposureBaselineEntry.fromSkillsManager(SkillsManager())
+        if let active = activeRun {
+            let result = await active.task.value
+            if activeRun?.id == active.id { activeRun = nil }
+            if active.mode == mode, approvals.isEmpty {
+                return result
+            }
+            return await run(mode: mode, approvals: approvals)
         }
-        return await SkillExposureReconciler().reconcile(
-            mode: mode,
-            baseline: baseline,
-            approvals: approvals
-        )
+        let id = UUID()
+        let task = Task { () -> SkillExposureReconciliationReceipt? in
+            let baseline = await MainActor.run {
+                SkillExposureBaselineEntry.fromSkillsManager(SkillsManager())
+            }
+            return await SkillExposureReconciler().reconcile(
+                mode: mode,
+                baseline: baseline,
+                approvals: approvals
+            )
+        }
+        activeRun = ActiveRun(id: id, mode: mode, task: task)
+        let result = await task.value
+        if activeRun?.id == id { activeRun = nil }
+        return result
     }
 }

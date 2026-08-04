@@ -12,7 +12,33 @@
 
 import Foundation
 import MCP
-import TheBridgeLib
+@_spi(Testing) import TheBridgeLib
+
+private actor RoutingRefreshProbe {
+    private var refreshed = false
+    private(set) var refreshCount = 0
+
+    func snapshot() -> SkillRoutingSnapshot {
+        let status: SkillRoutingSnapshotStatus = refreshed ? .healthy : .degraded
+        return .init(
+            metadata: .init(
+                status: status,
+                source: .runtimeExposureGeneration,
+                snapshotID: "cold-start-generation",
+                count: refreshed ? 1 : 0,
+                reason: refreshed
+                    ? "verified_unchanged_shadow_renewed_freshness"
+                    : "runtime_exposure_freshness_expired"
+            ),
+            skills: refreshed ? [.object(["name": .string("FOCUS Keepr")])] : []
+        )
+    }
+
+    func refresh() {
+        refreshCount += 1
+        refreshed = true
+    }
+}
 
 func runBridgeInitializeTests() async {
     print("\n\u{1F91D} BridgeInitialize (PKT-1065A · init-core + handshake receipt)")
@@ -51,6 +77,19 @@ func runBridgeInitializeTests() async {
             ),
             skills: rows
         )
+    }
+
+    await test("Init: cold stale routing joins freshness refresh before returning") {
+        let probe = RoutingRefreshProbe()
+        let resolved = await BridgeInitializeModule.routingSnapshotForInitialize(
+            now: fixedClock,
+            snapshotProvider: { _ in await probe.snapshot() },
+            refresh: { await probe.refresh() }
+        )
+        try expect(resolved.metadata.status == .healthy)
+        try expect(resolved.metadata.count == 1)
+        try expect(resolved.metadata.reason == "verified_unchanged_shadow_renewed_freshness")
+        try expect(await probe.refreshCount == 1, "stale cold start must perform exactly one refresh")
     }
 
     // ── COMPLETE path: doctrine + manifest + metadata all present ──────

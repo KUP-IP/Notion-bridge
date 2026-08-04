@@ -260,6 +260,37 @@ func runSkillExposureAuthorityTests() async {
                    "shadow renewal must not activate its candidate")
     }
 
+    await test("unchanged shadow renews freshness when Notion snapshot hash drifts without exposure changes") {
+        // Live failure mode (build 89 pilot): shadowReady + changes=[] but
+        // receipt.snapshotID != active generation.snapshotID because the
+        // registry hash includes notionLastEditedTime.
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bridge-exposure-renewal-drift-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SkillRuntimeGenerationStore(baseDirectory: root)
+        let staleGeneration = publishedGeneration(compiledAt: exposureNow.addingTimeInterval(-48 * 3600))
+        _ = try await store.stage(staleGeneration)
+        _ = try await store.promote(generationID: staleGeneration.generationID)
+        try await store.writeReceipt(.init(
+            mode: .shadow,
+            outcome: .shadowReady,
+            attemptedAt: exposureNow,
+            snapshotID: "2d19aa6a333c259b", // ≠ staleGeneration.snapshotID
+            candidateGenerationID: "9e3da411-634c-4b23-adc3-3e87a432ea1a",
+            activeGenerationID: staleGeneration.generationID,
+            errors: [],
+            warnings: [],
+            changes: []
+        ))
+        guard case .active(let gate) = await store.routingAuthority() else {
+            throw TestError.assertion("expected active routing authority")
+        }
+        try expect(!gate.isDegraded(now: exposureNow),
+                   "empty exposure changes must renew even when snapshot hash drifted")
+        try expect(gate.freshnessRenewedAt == exposureNow)
+        try expect(await store.activeGenerationID() == staleGeneration.generationID)
+    }
+
     await test("changed shadow does not renew freshness and still requires publish") {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("bridge-exposure-changed-shadow-\(UUID().uuidString)")
