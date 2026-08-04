@@ -131,13 +131,22 @@ public actor SkillRuntimeGenerationStore {
         return try? decoder().decode(SkillExposureReconciliationReceipt.self, from: data)
     }
 
+    /// An unchanged shadow renews the active generation's freshness window.
+    ///
+    /// Key off empty exposure `changes` + the receipt's `activeGenerationID`,
+    /// not `snapshotID` equality. The registry snapshot hash includes
+    /// `notionLastEditedTime`, so ordinary page edits change the snapshot
+    /// while leaving published Runtime Exposure policy unchanged
+    /// (`changes == []`). Requiring snapshot equality left cold starts stuck
+    /// on `runtime_exposure_freshness_expired` after a successful shadowReady
+    /// (build 89 local pilot, 2026-08-03).
     private func unchangedShadowRenewal(for generation: SkillRuntimeGeneration) -> Date? {
         guard let receipt = latestReceipt(),
               receipt.mode == .shadow,
               receipt.outcome == .shadowReady,
               receipt.errors.isEmpty,
               receipt.changes.isEmpty,
-              receipt.snapshotID == generation.snapshotID
+              receipt.activeGenerationID == generation.generationID
         else { return nil }
         return receipt.attemptedAt
     }
