@@ -14,6 +14,9 @@ BUILD_DIR       = .build
 RELEASE_DIR     = $(BUILD_DIR)/release
 DEBUG_DIR       = $(BUILD_DIR)/debug
 APP_BUNDLE      = $(BUILD_DIR)/TheBridge.app
+STAGED_APP      ?=
+EXPECTED_GIT_SHA ?=
+EXPECTED_BINARY_SHA256 ?=
 FRAMEWORKS_DIR  = $(APP_BUNDLE)/Contents/Frameworks
 # PKT-551: Notification Content Extension (.appex) paths
 PLUGINS_DIR     = $(APP_BUNDLE)/Contents/PlugIns
@@ -69,7 +72,7 @@ SPARKLE_ARTIFACT_DIR = $(BUILD_DIR)/artifacts/sparkle/Sparkle
 SPARKLE_FRAMEWORK = $(SPARKLE_ARTIFACT_DIR)/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework
 SPARKLE_TOOLS_DIR = $(SPARKLE_ARTIFACT_DIR)/bin
 
-.PHONY: debug build test test-floor test-clean check-counter-collisions app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-agent-safe clean-tcc patch-deps check-stale-build check-clean-tree inject-license-key inject-remote-access
+.PHONY: debug build test test-floor test-clean check-counter-collisions app extension jobrunner appcast dmg dmg-background sign notarize verify verify-sparkle-feed check-update-flow check-appcast release clean install install-copy install-copy-staged install-agent-safe clean-tcc patch-deps check-stale-build check-clean-tree check-staged-candidate inject-license-key inject-remote-access
 
 # ── Debug Build ────────────────────────────────────────────────
 debug:
@@ -298,6 +301,30 @@ check-clean-tree:
 		exit 1; \
 	fi
 
+# ── Immutable staged-candidate guard ───────────────────────────
+# `install-copy` intentionally builds and signs before copying. That is useful
+# for ordinary development, but code-signing with `--timestamp` changes the
+# executable bytes on every invocation. Promotion workflows therefore use this
+# guard plus `install-copy-staged` to copy the exact already-reviewed bundle
+# without rebuilding or re-signing it between approval and installation.
+check-staged-candidate: check-clean-tree check-stale-build
+	@if [ -z "$(STAGED_APP)" ] || [ -z "$(EXPECTED_GIT_SHA)" ] || [ -z "$(EXPECTED_BINARY_SHA256)" ]; then \
+		echo "❌ STAGED_APP, EXPECTED_GIT_SHA, and EXPECTED_BINARY_SHA256 are required."; exit 1; \
+	fi
+	@if [ ! -d "$(STAGED_APP)" ]; then \
+		echo "❌ Staged app not found: $(STAGED_APP)"; exit 1; \
+	fi
+	@codesign --verify --deep --strict --verbose=2 "$(STAGED_APP)"
+	@SHA=$$(/usr/libexec/PlistBuddy -c "Print :BridgeGitSHA" "$(STAGED_APP)/Contents/Info.plist" 2>/dev/null); \
+		DIRTY=$$(/usr/libexec/PlistBuddy -c "Print :BridgeGitDirty" "$(STAGED_APP)/Contents/Info.plist" 2>/dev/null); \
+		if [ "$$SHA" != "$(EXPECTED_GIT_SHA)" ] || [ "$$DIRTY" != "false" ]; then \
+			echo "❌ Staged provenance mismatch: sha=$$SHA dirty=$$DIRTY expected=$(EXPECTED_GIT_SHA)/false"; exit 1; \
+		fi
+	@ACTUAL=$$(shasum -a 256 "$(STAGED_APP)/Contents/MacOS/$(BINARY_NAME)" | awk '{print $$1}'); \
+		if [ "$$ACTUAL" != "$(EXPECTED_BINARY_SHA256)" ]; then \
+			echo "❌ Staged binary hash mismatch: $$ACTUAL != $(EXPECTED_BINARY_SHA256)"; exit 1; \
+		fi; \
+		echo "✅ Staged candidate verified: sha=$(EXPECTED_GIT_SHA) binary=$$ACTUAL"
 # ── Local-install safety (2026-06-04 incident) ─────────────────────────
 # `install`/`install-copy` write directly into the Sparkle-managed
 # /Applications bundle. If the app is running or Sparkle has a staged update
@@ -360,6 +387,23 @@ install-copy: check-clean-tree check-stale-build sign
 	@echo "Installed: /Applications/The Bridge.app"
 	@echo "Restart The Bridge manually to pick up changes."
 	@echo "Reconnect every MCP client after relaunch so it re-runs initialize + tools/list."
+
+# Exact-candidate promotion path. Unlike `install-copy`, this target has no
+# build/sign prerequisite: the approved signed bundle is the sole source.
+install-copy-staged: check-staged-candidate
+	@echo "⚠️  Installing the exact staged candidate without rebuilding or re-signing."
+	$(PREINSTALL_SAFETY)
+	@rm -rf "/Applications/The Bridge.app" "/Applications/TheBridge.app"
+	@ditto "$(STAGED_APP)" "/Applications/The Bridge.app"
+	@echo "🔄 Re-registering with Launch Services..."
+	@/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "/Applications/The Bridge.app"
+	$(VERIFY_INSTALL)
+	@ACTUAL=$$(shasum -a 256 "/Applications/The Bridge.app/Contents/MacOS/$(BINARY_NAME)" | awk '{print $$1}'); \
+		if [ "$$ACTUAL" != "$(EXPECTED_BINARY_SHA256)" ]; then \
+			echo "❌ Installed binary hash mismatch: $$ACTUAL != $(EXPECTED_BINARY_SHA256)"; exit 1; \
+		fi; \
+		echo "✅ Exact staged candidate installed: binary=$$ACTUAL"
+	@echo "Restart The Bridge manually to pick up changes."
 
 # Alias for agents / remote MCP sessions: same as install-copy (no notarize; does not kill The Bridge).
 install-agent-safe: install-copy
