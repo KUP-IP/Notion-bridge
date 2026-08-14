@@ -1007,7 +1007,13 @@ public actor SSEServer {
         let requestId = json["id"]
         let requestSessionID = request.header(HTTPHeaderName.sessionID)
         let sessionID = requestSessionID ?? UUID().uuidString
-        let brokerSessionID = requestSessionID ?? (origin == .remote ? "remote-connector-json" : sessionID)
+        // Compact connector clients can add, change, or omit Mcp-Session-Id
+        // between calls. Keep a stable audit label for this compatibility path,
+        // but never treat that shared label as routing authority: remote calls
+        // use explicit, principal-bound route receipts in ToolRouter.
+        let brokerSessionID = origin == .remote
+            ? ToolDispatchContext.remoteConnectorJSONSessionID
+            : (requestSessionID ?? sessionID)
         let principal = governancePrincipal ?? SessionRegistry.principalKey(subject: token.subject)
         let headers = Self.connectorJSONHeaders(sessionID: sessionID)
 
@@ -1096,7 +1102,8 @@ public actor SSEServer {
                     transportSessionId: brokerSessionID,
                     origin: origin,
                     client: origin == .remote ? "remote-connector" : nil,
-                    governancePrincipal: principal
+                    governancePrincipal: principal,
+                    routeAcknowledgementMode: origin == .remote ? .explicitReceipt : .transportSession
                 )
             )
             if !isError { await MainActor.run { onToolCall() } }

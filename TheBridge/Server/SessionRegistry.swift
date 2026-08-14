@@ -61,25 +61,38 @@ public enum ToolDispatchOrigin: String, Codable, Sendable, Equatable {
 public struct ToolDispatchContext: Sendable, Equatable {
     @TaskLocal public static var current: ToolDispatchContext?
 
+    public enum RouteAcknowledgementMode: Sendable, Equatable {
+        case transportSession
+        case explicitReceipt
+    }
+
+    /// Stable audit/session label for the compact connector compatibility
+    /// path. Routing authority is never stored under this shared label; calls
+    /// on this path must present explicit, principal-bound receipts.
+    public static let remoteConnectorJSONSessionID = "remote-connector-json"
+
     public let transportSessionId: String?
     public let origin: ToolDispatchOrigin
     public let client: String?
     public let clientVersion: String?
     /// Verified OAuth subject key (`oauth-sub:<sub>`). Never request-supplied.
     public let governancePrincipal: String?
+    public let routeAcknowledgementMode: RouteAcknowledgementMode
 
     public init(
         transportSessionId: String?,
         origin: ToolDispatchOrigin,
         client: String? = nil,
         clientVersion: String? = nil,
-        governancePrincipal: String? = nil
+        governancePrincipal: String? = nil,
+        routeAcknowledgementMode: RouteAcknowledgementMode = .transportSession
     ) {
         self.transportSessionId = transportSessionId
         self.origin = origin
         self.client = client
         self.clientVersion = clientVersion
         self.governancePrincipal = SessionRegistry.normalizedPrincipalKey(governancePrincipal)
+        self.routeAcknowledgementMode = routeAcknowledgementMode
     }
 
     public static let localDefault = ToolDispatchContext(

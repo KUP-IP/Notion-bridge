@@ -45,6 +45,15 @@ func runRoutingIntegrityLayerTests() async {
                    "description budget breached: \(rendered.count)")
     }
 
+    await test("RIL discovery: governed tool schemas centrally advertise receipt inputs") {
+        guard case .object(let schema) = MCPToolFactory.inputSchema(for: fakeMessagesSendRegistration()),
+              case .object(let properties)? = schema["properties"] else {
+            throw TestError.assertion("governed schema is missing properties")
+        }
+        try expect(properties["_routingReceipt"] != nil, "single receipt input must be advertised")
+        try expect(properties["_routingReceipts"] != nil, "composed receipt input must be advertised")
+    }
+
     await test("RIL receipt: bridge_initialize carries registry snapshot") {
         try await withRILTempHome {
             try StandingOrdersStore.shared.resetForTesting()
@@ -116,7 +125,7 @@ func runRoutingIntegrityLayerTests() async {
         }
     }
 
-    await test("RIL gate: bridge_initialize marks only the current session; real messages_send no-send guard runs after marker") {
+    await test("RIL gate: only fetched governing skills authorize the current session") {
         try await withRILTempHome {
             try StandingOrdersStore.shared.resetForTesting()
             _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v7.0.2\n\nseed")
@@ -154,6 +163,7 @@ func runRoutingIntegrityLayerTests() async {
                     )
                 }
             ))
+            await registerRILFetchSkill(on: router)
             await MessagesModule.register(on: router)
 
             try await withNoDisabledTools {
@@ -167,7 +177,32 @@ func runRoutingIntegrityLayerTests() async {
                     context: ToolDispatchContext(transportSessionId: "ril-session-b", origin: .local)
                 )
                 let marked = await router.hasRoutingManifestMarker(sessionID: "ril-session-b")
-                try expect(marked, "bridge_initialize must mark the session")
+                try expect(!marked, "bridge_initialize establishes readiness but must not authorize tools")
+
+                let beforeFetch = await router.dispatchFormatted(
+                    toolName: "messages_send",
+                    arguments: .object([
+                        "recipient": .string("+15555550123"),
+                        "body": .string("dry-run probe"),
+                        "confirm": .string("DRY_RUN")
+                    ]),
+                    context: ToolDispatchContext(transportSessionId: "ril-session-b", origin: .local)
+                )
+                try expect(beforeFetch.isError && beforeFetch.text.contains("route_ack_required"),
+                           "initialization must not satisfy the governed route")
+
+                _ = try await router.dispatch(
+                    toolName: "fetch_skill",
+                    arguments: .object(["name": .string("people-keepr")]),
+                    context: ToolDispatchContext(transportSessionId: "ril-session-b", origin: .local)
+                )
+                _ = try await router.dispatch(
+                    toolName: "fetch_skill",
+                    arguments: .object(["name": .string("mac-message")]),
+                    context: ToolDispatchContext(transportSessionId: "ril-session-b", origin: .local)
+                )
+                try expect(await router.hasRoutingManifestMarker(sessionID: "ril-session-b"),
+                           "both fetched authorities must satisfy messages_send")
 
                 let allowed = try await router.dispatch(
                     toolName: "messages_send",
@@ -207,7 +242,13 @@ func runRoutingIntegrityLayerTests() async {
             }
 
             let bTools = await log.entries(forSessionID: "ril-session-b").map(\.toolName)
-            try expect(bTools == [BridgeInitializeModule.toolName, "messages_send"],
+            try expect(bTools == [
+                BridgeInitializeModule.toolName,
+                "messages_send",
+                "fetch_skill",
+                "fetch_skill",
+                "messages_send"
+            ],
                        "session b audit sequence drift: \(bTools)")
             let cEntries = await log.entries(forSessionID: "ril-session-c")
             try expect(cEntries.count == 1 && cEntries[0].approvalStatus == .rejected)
@@ -236,6 +277,7 @@ func runRoutingIntegrityLayerTests() async {
                 licenseStatusProvider: { .trial(daysRemaining: 5) }
             )
             await registerRILRoutingList(on: routerBefore)
+            await registerRILFetchSkill(on: routerBefore)
             await routerBefore.register(fakeMessagesSendRegistration())
             let context = ToolDispatchContext(
                 transportSessionId: "restart-session",
@@ -244,6 +286,17 @@ func runRoutingIntegrityLayerTests() async {
                 governancePrincipal: "oauth-sub:restart-user"
             )
             _ = try await routerBefore.dispatch(toolName: "skills_routing_list", arguments: .object([:]), context: context)
+            let beforeFetch = await routerBefore.dispatchFormatted(
+                toolName: "messages_send", arguments: .object([:]), context: context
+            )
+            try expect(beforeFetch.isError && beforeFetch.text.contains("route_ack_required"),
+                       "routing discovery must not authorize the tool")
+            _ = try await routerBefore.dispatch(
+                toolName: "fetch_skill", arguments: .object(["name": .string("people-keepr")]), context: context
+            )
+            _ = try await routerBefore.dispatch(
+                toolName: "fetch_skill", arguments: .object(["name": .string("mac-message")]), context: context
+            )
             _ = try await routerBefore.dispatch(toolName: "messages_send", arguments: .object([:]), context: context)
 
             // Simulates replacing/relaunching the app: same Application Support
@@ -256,6 +309,7 @@ func runRoutingIntegrityLayerTests() async {
                 licenseStatusProvider: { .trial(daysRemaining: 5) }
             )
             await registerRILRoutingList(on: routerAfter)
+            await registerRILFetchSkill(on: routerAfter)
             await routerAfter.register(fakeMessagesSendRegistration())
 
             let rejected = await routerAfter.dispatchFormatted(
@@ -267,6 +321,17 @@ func runRoutingIntegrityLayerTests() async {
                 toolName: "skills_routing_list", arguments: .object([:]), context: context
             )
             try expect(!roster.isError)
+            let afterRoster = await routerAfter.dispatchFormatted(
+                toolName: "messages_send", arguments: .object([:]), context: context
+            )
+            try expect(afterRoster.isError && afterRoster.text.contains("route_ack_required"),
+                       "routing discovery after replacement must not authorize the tool")
+            _ = try await routerAfter.dispatch(
+                toolName: "fetch_skill", arguments: .object(["name": .string("people-keepr")]), context: context
+            )
+            _ = try await routerAfter.dispatch(
+                toolName: "fetch_skill", arguments: .object(["name": .string("mac-message")]), context: context
+            )
             let allowed = await routerAfter.dispatchFormatted(
                 toolName: "messages_send", arguments: .object([:]), context: context
             )
@@ -274,7 +339,7 @@ func runRoutingIntegrityLayerTests() async {
         }
     }
 
-    await test("RIL no-session receipt is exact-scope, principal-bound, expiring, and one-time") {
+    await test("RIL explicit receipt is exact-scope, principal-bound, composed, and one-time") {
         try await withRILTempHome {
             let store = RoutingCustodyStore(root: BridgePaths.applicationSupport(.routingCustody))
             let router = ToolRouter(
@@ -284,26 +349,55 @@ func runRoutingIntegrityLayerTests() async {
                 licenseStatusProvider: { .trial(daysRemaining: 5) }
             )
             await registerRILRoutingList(on: router)
+            await registerRILFetchSkill(on: router)
             await router.register(fakeMessagesSendRegistration())
             let context = ToolDispatchContext(
-                transportSessionId: nil,
+                transportSessionId: ToolDispatchContext.remoteConnectorJSONSessionID,
                 origin: .local,
-                client: "no-stable-session"
+                client: "compact-connector",
+                governancePrincipal: "oauth-sub:receipt-user",
+                routeAcknowledgementMode: .explicitReceipt
             )
             let roster = try await router.dispatch(
                 toolName: "skills_routing_list", arguments: .object([:]), context: context
             )
-            guard case .object(let rosterObject) = roster,
-                  case .array(let receipts)? = rosterObject["routingReceipts"],
-                  let receipt = receipts.first(where: {
+            guard case .object(let rosterObject) = roster else {
+                throw TestError.assertion("routing list fixture returned malformed output")
+            }
+            try expect(rosterObject["routingReceipts"] == nil,
+                       "routing discovery must not issue authority receipts")
+
+            let people = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("people-keepr")]),
+                context: context
+            )
+            let mac = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("mac-message")]),
+                context: context
+            )
+            func messagesReceipt(_ output: Value) -> Value? {
+                guard case .object(let object) = output,
+                      case .array(let receipts)? = object["routingReceipts"] else { return nil }
+                return receipts.first(where: {
                       guard case .object(let object) = $0,
                             case .string("tool:messages_send")? = object["scopeID"] else { return false }
                       return true
-                  }) else {
-                throw TestError.assertion("routing list did not issue an exact messages_send receipt")
+                })
+            }
+            guard let peopleReceipt = messagesReceipt(people),
+                  let macReceipt = messagesReceipt(mac) else {
+                throw TestError.assertion("fetch_skill did not issue both messages_send authority receipts")
             }
 
-            let args: Value = .object(["_routingReceipt": receipt])
+            let withoutReceipt = await router.dispatchFormatted(
+                toolName: "messages_send", arguments: .object([:]), context: context
+            )
+            try expect(withoutReceipt.isError && withoutReceipt.text.contains("route_ack_required"),
+                       "stable compact alias must never become an implicit authority bucket")
+
+            let args: Value = .object(["_routingReceipts": .array([peopleReceipt, macReceipt])])
             let first = await router.dispatchFormatted(toolName: "messages_send", arguments: args, context: context)
             try expect(!first.isError, "fresh receipt must authorize once: \(first.text)")
             let replay = await router.dispatchFormatted(toolName: "messages_send", arguments: args, context: context)
@@ -313,7 +407,13 @@ func runRoutingIntegrityLayerTests() async {
             let wrongClient = await router.dispatchFormatted(
                 toolName: "messages_send",
                 arguments: args,
-                context: ToolDispatchContext(transportSessionId: nil, origin: .local, client: "other-client")
+                context: ToolDispatchContext(
+                    transportSessionId: ToolDispatchContext.remoteConnectorJSONSessionID,
+                    origin: .local,
+                    client: "compact-connector",
+                    governancePrincipal: "oauth-sub:other-user",
+                    routeAcknowledgementMode: .explicitReceipt
+                )
             )
             try expect(wrongClient.isError && wrongClient.text.contains("route_ack_required"))
         }
@@ -477,6 +577,23 @@ private func registerRILRoutingList(on router: ToolRouter) async {
                 ),
                 skills: (0..<8).map { .object(["name": .string("Routing \($0)")]) }
             ).value
+        }
+    ))
+}
+
+private func registerRILFetchSkill(on router: ToolRouter) async {
+    await router.register(ToolRegistration(
+        name: "fetch_skill",
+        module: "skills",
+        tier: .open,
+        description: "route authority fixture",
+        inputSchema: .object(["type": .string("object")]),
+        handler: { arguments in
+            guard case .object(let object) = arguments,
+                  case .string(let name)? = object["name"] else {
+                return .object(["error": .string("missing name")])
+            }
+            return .object(["slug": .string(name), "content": .string("fixture")])
         }
     ))
 }

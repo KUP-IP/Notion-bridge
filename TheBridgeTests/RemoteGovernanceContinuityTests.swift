@@ -135,7 +135,7 @@ func runRemoteGovernanceContinuityTests() async {
         }
     }
 
-    await test("principal continuation survives rotation but route acknowledgement stays session-scoped") {
+    await test("principal continuation survives rotation but fetched route authority stays session-scoped") {
         try await withRemoteGovernanceHarness { harness in
             let principal = SessionRegistry.principalKey(subject: "manifest-user")!
             let sessionA = "manifest-a-\(UUID().uuidString)"
@@ -151,7 +151,8 @@ func runRemoteGovernanceContinuityTests() async {
                 )
             )
             try expect(!initResult.isError)
-            try expect(await harness.router.hasRoutingManifestMarker(sessionID: sessionA))
+            try expect(!(await harness.router.hasRoutingManifestMarker(sessionID: sessionA)),
+                       "bridge_initialize establishes readiness but must not authorize governed tools")
             try expect(!(await harness.router.hasRoutingManifestMarker(sessionID: principal)),
                        "verified principal must never become a client acknowledgement bucket")
             try expect(try await harness.registry.isGoverned(
@@ -180,7 +181,30 @@ func runRemoteGovernanceContinuityTests() async {
                     governancePrincipal: principal
                 )
             )
-            try expect(!roster.isError, "routing roster acknowledgement must succeed: \(roster.text)")
+            try expect(!roster.isError, "routing roster discovery must succeed: \(roster.text)")
+
+            let afterRoster = await harness.router.dispatchFormatted(
+                toolName: "notion_page_create",
+                arguments: .object([:]),
+                context: .init(
+                    transportSessionId: sessionB,
+                    origin: .remote,
+                    governancePrincipal: principal
+                )
+            )
+            try expect(afterRoster.isError && afterRoster.text.contains("route_ack_required"),
+                       "routing roster discovery must not authorize a governed tool")
+
+            let fetched = await harness.router.dispatchFormatted(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("notion-keepr")]),
+                context: .init(
+                    transportSessionId: sessionB,
+                    origin: .remote,
+                    governancePrincipal: principal
+                )
+            )
+            try expect(!fetched.isError, "fetching the governing skill must succeed: \(fetched.text)")
 
             let bound = await harness.router.dispatchFormatted(
                 toolName: "notion_page_create",
@@ -318,6 +342,20 @@ private func withRemoteGovernanceHarness(
         description: "authoritative routing snapshot",
         inputSchema: .object(["type": .string("object")]),
         handler: { _ in remoteGovernanceHealthyRoutingSnapshot().value }
+    ))
+    await router.register(ToolRegistration(
+        name: "fetch_skill",
+        module: "skills",
+        tier: .open,
+        description: "route authority fixture",
+        inputSchema: .object(["type": .string("object")]),
+        handler: { arguments in
+            guard case .object(let object) = arguments,
+                  case .string(let name)? = object["name"] else {
+                return .object(["error": .string("missing name")])
+            }
+            return .object(["slug": .string(name), "content": .string("fixture")])
+        }
     ))
     await router.register(ToolRegistration(
         name: "governance_write_probe",
