@@ -227,6 +227,11 @@ public actor ToolRouter {
     private let routingCustodyStore: RoutingCustodyStore
     private let worktreeOwnershipStore: WorktreeOwnershipStore
     private let worktreeOwnershipEnabled: Bool
+    /// Wall clock used only for issuing and validating route receipts. Keeping
+    /// this injectable makes the five-minute boundary testable without sleeps;
+    /// audit timestamps continue to use the real clock.
+    public typealias RouteReceiptNowProvider = @Sendable () -> Date
+    private let routeReceiptNowProvider: RouteReceiptNowProvider
 
     /// PKT-909 (Sell/Distribute v3 · 1) — license-gate seam. Production
     /// callers default to `LicenseManager.shared.currentStatus`; tests
@@ -244,6 +249,7 @@ public actor ToolRouter {
         routingCustodyStore: RoutingCustodyStore = .shared,
         worktreeOwnershipStore: WorktreeOwnershipStore = .shared,
         worktreeOwnershipEnabled: Bool = false,
+        routeReceiptNowProvider: @escaping RouteReceiptNowProvider = { Date() },
         licenseStatusProvider: @escaping LicenseStatusProvider = { await LicenseManager.shared.currentStatus() }
     ) {
         self.securityGate = securityGate
@@ -252,6 +258,7 @@ public actor ToolRouter {
         self.routingCustodyStore = routingCustodyStore
         self.worktreeOwnershipStore = worktreeOwnershipStore
         self.worktreeOwnershipEnabled = worktreeOwnershipEnabled
+        self.routeReceiptNowProvider = routeReceiptNowProvider
         self.licenseStatusProvider = licenseStatusProvider
     }
 
@@ -812,7 +819,7 @@ public actor ToolRouter {
                     arguments: arguments,
                     context: context,
                     binding: binding,
-                    now: Date()
+                    now: routeReceiptNowProvider()
                 ) {
                 case .accepted:
                     acknowledged = true
@@ -952,7 +959,7 @@ public actor ToolRouter {
                 arguments: executionArguments,
                 result: result,
                 context: context,
-                now: Date()
+                now: routeReceiptNowProvider()
             )
             let governed = await isGoverned(context)
             let governanceNote: String?

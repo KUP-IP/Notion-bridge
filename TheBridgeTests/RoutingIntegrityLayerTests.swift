@@ -339,13 +339,16 @@ func runRoutingIntegrityLayerTests() async {
         }
     }
 
-    await test("RIL explicit receipt is exact-scope, principal-bound, composed, and one-time") {
+    await test("RIL explicit receipt rejects every invalid class and consumes exactly once") {
         try await withRILTempHome {
             let store = RoutingCustodyStore(root: BridgePaths.applicationSupport(.routingCustody))
+            let audit = AuditLog()
+            let clock = RILRouteReceiptClock(Date(timeIntervalSince1970: 1_800_000_000))
             let router = ToolRouter(
                 securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
-                auditLog: AuditLog(),
+                auditLog: audit,
                 routingCustodyStore: store,
+                routeReceiptNowProvider: { clock.now() },
                 licenseStatusProvider: { .trial(daysRemaining: 5) }
             )
             await registerRILRoutingList(on: router)
@@ -377,18 +380,24 @@ func runRoutingIntegrityLayerTests() async {
                 arguments: .object(["name": .string("mac-message")]),
                 context: context
             )
-            func messagesReceipt(_ output: Value) -> Value? {
+            func receipt(_ output: Value, scopeID: String) -> Value? {
                 guard case .object(let object) = output,
                       case .array(let receipts)? = object["routingReceipts"] else { return nil }
                 return receipts.first(where: {
                       guard case .object(let object) = $0,
-                            case .string("tool:messages_send")? = object["scopeID"] else { return false }
+                            case .string(scopeID)? = object["scopeID"] else { return false }
                       return true
                 })
             }
-            guard let peopleReceipt = messagesReceipt(people),
-                  let macReceipt = messagesReceipt(mac) else {
-                throw TestError.assertion("fetch_skill did not issue both messages_send authority receipts")
+            func replacing(_ value: Value, key: String, with replacement: Value) -> Value {
+                guard case .object(var object) = value else { return value }
+                object[key] = replacement
+                return .object(object)
+            }
+            guard let peopleReceipt = receipt(people, scopeID: "tool:messages_send"),
+                  let macReceipt = receipt(mac, scopeID: "tool:messages_send"),
+                  let otherToolReceipt = receipt(people, scopeID: "tool:messages_recent") else {
+                throw TestError.assertion("fetch_skill did not issue the required exact-scope receipts")
             }
 
             let withoutReceipt = await router.dispatchFormatted(
@@ -397,14 +406,54 @@ func runRoutingIntegrityLayerTests() async {
             try expect(withoutReceipt.isError && withoutReceipt.text.contains("route_ack_required"),
                        "stable compact alias must never become an implicit authority bucket")
 
-            let args: Value = .object(["_routingReceipts": .array([peopleReceipt, macReceipt])])
-            let first = await router.dispatchFormatted(toolName: "messages_send", arguments: args, context: context)
-            try expect(!first.isError, "fresh receipt must authorize once: \(first.text)")
-            let replay = await router.dispatchFormatted(toolName: "messages_send", arguments: args, context: context)
-            try expect(replay.isError && replay.text.contains("route_ack_required"),
-                       "receipt replay must fail closed: \(replay.text)")
+            let malformed = await router.dispatchFormatted(
+                toolName: "messages_send",
+                arguments: .object(["_routingReceipt": .string("not-a-receipt")]),
+                context: context
+            )
+            try expect(malformed.isError && malformed.text.contains("route_ack_required"))
 
-            let wrongClient = await router.dispatchFormatted(
+            let wrongScope = await router.dispatchFormatted(
+                toolName: "messages_send",
+                arguments: .object(["_routingReceipt": otherToolReceipt]),
+                context: context
+            )
+            try expect(wrongScope.isError && wrongScope.text.contains("route_ack_required"))
+
+            let prematureReceipt = replacing(
+                peopleReceipt,
+                key: "issuedAt",
+                with: .string("2099-01-01T00:00:00.000Z")
+            )
+            let premature = await router.dispatchFormatted(
+                toolName: "messages_send",
+                arguments: .object(["_routingReceipt": prematureReceipt]),
+                context: context
+            )
+            try expect(premature.isError && premature.text.contains("route_ack_required"))
+
+            let tamperedReceipt = replacing(
+                peopleReceipt,
+                key: "authorityIDs",
+                with: .array([.string("people-keepr"), .string("mac-message")])
+            )
+            let tampered = await router.dispatchFormatted(
+                toolName: "messages_send",
+                arguments: .object(["_routingReceipt": tamperedReceipt]),
+                context: context
+            )
+            try expect(tampered.isError && tampered.text.contains("route_ack_required"))
+
+            let incomplete = await router.dispatchFormatted(
+                toolName: "messages_send",
+                arguments: .object(["_routingReceipt": peopleReceipt]),
+                context: context
+            )
+            try expect(incomplete.isError && incomplete.text.contains("route_ack_required"),
+                       "one governing skill must not satisfy a composed route")
+
+            let args: Value = .object(["_routingReceipts": .array([peopleReceipt, macReceipt])])
+            let wrongPrincipal = await router.dispatchFormatted(
                 toolName: "messages_send",
                 arguments: args,
                 context: ToolDispatchContext(
@@ -415,7 +464,54 @@ func runRoutingIntegrityLayerTests() async {
                     routeAcknowledgementMode: .explicitReceipt
                 )
             )
-            try expect(wrongClient.isError && wrongClient.text.contains("route_ack_required"))
+            try expect(wrongPrincipal.isError && wrongPrincipal.text.contains("route_ack_required"))
+
+            let first = await router.dispatchFormatted(toolName: "messages_send", arguments: args, context: context)
+            try expect(!first.isError, "fresh receipt must authorize once: \(first.text)")
+            let replay = await router.dispatchFormatted(toolName: "messages_send", arguments: args, context: context)
+            try expect(replay.isError && replay.text.contains("route_ack_required"),
+                       "receipt replay must fail closed: \(replay.text)")
+
+            let expiringPeople = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("people-keepr")]),
+                context: context
+            )
+            let expiringMac = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("mac-message")]),
+                context: context
+            )
+            guard let expiringPeopleReceipt = receipt(expiringPeople, scopeID: "tool:messages_send"),
+                  let expiringMacReceipt = receipt(expiringMac, scopeID: "tool:messages_send") else {
+                throw TestError.assertion("fetch_skill did not issue expiring receipt fixtures")
+            }
+            clock.advance(by: 301)
+            let expired = await router.dispatchFormatted(
+                toolName: "messages_send",
+                arguments: .object([
+                    "_routingReceipts": .array([expiringPeopleReceipt, expiringMacReceipt])
+                ]),
+                context: context
+            )
+            try expect(expired.isError && expired.text.contains("route_ack_required"))
+
+            let notes = await audit.entries(forSessionID: ToolDispatchContext.remoteConnectorJSONSessionID)
+                .compactMap(\.governanceNote)
+            for expected in [
+                "route_receipt_rejected_missing",
+                "route_receipt_rejected_malformed",
+                "route_receipt_rejected_wrong_scope",
+                "route_receipt_rejected_not_yet_valid",
+                "route_receipt_rejected_tampered",
+                "route_receipt_rejected_incomplete_authorities",
+                "route_receipt_rejected_wrong_principal",
+                "route_receipt_consumed",
+                "route_receipt_rejected_replayed_or_unknown",
+                "route_receipt_rejected_expired",
+            ] {
+                try expect(notes.contains(expected), "missing audit evidence for \(expected): \(notes)")
+            }
         }
     }
 
@@ -596,4 +692,25 @@ private func registerRILFetchSkill(on router: ToolRouter) async {
             return .object(["slug": .string(name), "content": .string("fixture")])
         }
     ))
+}
+
+private final class RILRouteReceiptClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+
+    init(_ value: Date) {
+        self.value = value
+    }
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return value
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        value = value.addingTimeInterval(interval)
+        lock.unlock()
+    }
 }
