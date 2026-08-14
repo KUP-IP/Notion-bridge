@@ -435,13 +435,27 @@ public actor ToolRouter {
 
     private func fetchedAuthorityIDs(arguments: Value, result: Value) -> Set<String> {
         var candidates: [String] = []
-        if case .object(let object) = result {
-            for key in ["slug", "title", "name"] {
-                if case .string(let value)? = object[key] { candidates.append(value) }
+        if case .object(let object) = arguments {
+            // `id` is authoritative when present, so an accompanying `name`
+            // must never be allowed to mint authority. In that case use only
+            // the canonical identity returned by the successful fetch.
+            let hasAuthoritativeID: Bool = {
+                guard case .string(let id)? = object["id"] else { return false }
+                return !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }()
+            if !hasAuthoritativeID, case .string(let name)? = object["name"] {
+                // Specialist paths acknowledge their routing parent only.
+                // Treating every slash-delimited segment as an independent
+                // authority lets one success-shaped fetch overgrant a
+                // composed route (for example people-keepr/mac-message).
+                if let parent = name.split(separator: "/", maxSplits: 1).first {
+                    candidates.append(String(parent))
+                }
+            } else if case .object(let resultObject) = result {
+                for key in ["slug", "name"] {
+                    if case .string(let value)? = resultObject[key] { candidates.append(value) }
+                }
             }
-        }
-        if case .object(let object) = arguments, case .string(let name)? = object["name"] {
-            candidates.append(contentsOf: name.split(separator: "/").map(String.init))
         }
         let known = Set(ToolSkillBindingRegistry.bindings.flatMap { $0.governingSkills.map(\.slug) })
         return Set(candidates.map(ToolSkillBindingRegistry.normalizeAuthoritySlug)).intersection(known)

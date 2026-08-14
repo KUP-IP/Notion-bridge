@@ -394,6 +394,42 @@ func runRoutingIntegrityLayerTests() async {
                 object[key] = replacement
                 return .object(object)
             }
+            let compound = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["name": .string("people-keepr/mac-message")]),
+                context: context
+            )
+            guard let compoundReceipt = receipt(compound, scopeID: "tool:messages_send") else {
+                throw TestError.assertion("compound fetch did not issue its parent authority receipt")
+            }
+            let compoundAttempt = await router.dispatchFormatted(
+                toolName: "messages_send",
+                arguments: .object(["_routingReceipt": compoundReceipt]),
+                context: context
+            )
+            try expect(compoundAttempt.isError && compoundAttempt.text.contains("route_ack_required"),
+                       "one compound fetch must not overgrant both authorities")
+
+            let authoritativeID = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object([
+                    "id": .string("0123456789abcdef0123456789abcdef"),
+                    "name": .string("mac-message")
+                ]),
+                context: context
+            )
+            guard let authoritativeIDReceipt = receipt(authoritativeID, scopeID: "tool:messages_send"),
+                  case .object(let authoritativeIDObject) = authoritativeIDReceipt,
+                  case .array(let authoritativeIDValues)? = authoritativeIDObject["authorityIDs"] else {
+                throw TestError.assertion("authoritative id fetch did not issue a receipt")
+            }
+            let authoritativeIDAuthorities: Set<String> = Set(authoritativeIDValues.compactMap {
+                guard case .string(let value) = $0 else { return nil }
+                return value
+            })
+            try expect(authoritativeIDAuthorities == Set(["people-keepr"]),
+                       "an ignored name must not override id-derived authority: \(authoritativeIDAuthorities)")
+
             guard let peopleReceipt = receipt(people, scopeID: "tool:messages_send"),
                   let macReceipt = receipt(mac, scopeID: "tool:messages_send"),
                   let otherToolReceipt = receipt(people, scopeID: "tool:messages_recent") else {
@@ -685,11 +721,24 @@ private func registerRILFetchSkill(on router: ToolRouter) async {
         description: "route authority fixture",
         inputSchema: .object(["type": .string("object")]),
         handler: { arguments in
-            guard case .object(let object) = arguments,
-                  case .string(let name)? = object["name"] else {
+            guard case .object(let object) = arguments else {
                 return .object(["error": .string("missing name")])
             }
-            return .object(["slug": .string(name), "content": .string("fixture")])
+            if case .string(_)? = object["id"] {
+                return .object([
+                    "slug": .string("people-keepr"),
+                    "title": .string("mac-message"),
+                    "content": .string("fixture")
+                ])
+            }
+            guard case .string(let name)? = object["name"] else {
+                return .object(["error": .string("missing name")])
+            }
+            return .object([
+                "slug": .string(name),
+                "title": .string(name.contains("/") ? "mac-message" : name),
+                "content": .string("fixture")
+            ])
         }
     ))
 }
