@@ -383,6 +383,126 @@ func runSkillsModuleTests() async {
         try expect(dict["maturity"] == .string("Stable"), "maturity missing")
     }
 
+    await test("fetch_skill preserves resolved authority through UUID projection and fuzzy name lookup") {
+        let defaultsKey = BridgeDefaults.skills
+        let previousSkills = UserDefaults.standard.data(forKey: defaultsKey)
+        defer {
+            if let previousSkills {
+                UserDefaults.standard.set(previousSkills, forKey: defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
+        }
+
+        let knownAuthorities = Set(
+            ToolSkillBindingRegistry.bindings.flatMap { $0.governingSkills.map(\.slug) }
+        )
+        let activeGeneration = await SkillRuntimeGenerationStore.shared.activeGeneration()
+        let publishedAuthority = activeGeneration?.entries.first(where: {
+            knownAuthorities.contains(ToolSkillBindingRegistry.normalizeAuthoritySlug($0.slug))
+        })
+        if activeGeneration != nil, publishedAuthority == nil {
+            throw TestError.assertion("active skill generation has no receipt-governing authority fixture")
+        }
+        let pageID = publishedAuthority?.notionPageUUID ?? "14614614614614614614614614614614"
+        let authority = publishedAuthority.map {
+            ToolSkillBindingRegistry.normalizeAuthoritySlug($0.slug)
+        } ?? "people-keepr"
+        let config: [[String: Any]] = [[
+            "name": authority,
+            "notionPageId": pageID,
+            "enabled": true,
+            "visibility": "routing"
+        ]]
+        UserDefaults.standard.set(
+            try JSONSerialization.data(withJSONObject: config),
+            forKey: defaultsKey
+        )
+        let cached = CachedSkillBody(
+            pageId: pageID,
+            slug: authority,
+            version: "1.0.0",
+            status: "Testing",
+            maturity: "Stable",
+            markdown: "# PEOPLE Keepr\nDoctrine fixture.",
+            title: authority,
+            url: "https://notion.example/\(authority)",
+            properties: .object([
+                "Slug": .string(authority),
+                "Version": .string("1.0.0"),
+                "Status": .string("Testing"),
+                "Maturity": .string("Stable")
+            ]),
+            lastEditedTime: "2026-08-14T00:00:00.000Z",
+            writtenAt: Date(),
+            ttlHours: 24,
+            callCount: 1
+        )
+        let previousBody = await SkillBodyCacheStore.shared.read(pageId: pageID)
+        try await SkillBodyCacheStore.shared.write(cached)
+
+        func restoreBodyCache() async {
+            if let previousBody {
+                try? await SkillBodyCacheStore.shared.write(previousBody)
+            } else {
+                await SkillBodyCacheStore.shared.evict(pageId: pageID)
+            }
+        }
+
+        do {
+            let context = ToolDispatchContext(
+                transportSessionId: ToolDispatchContext.remoteConnectorJSONSessionID,
+                origin: .remote,
+                client: "skills-integration",
+                governancePrincipal: "oauth-sub:skills-integration",
+                routeAcknowledgementMode: .explicitReceipt
+            )
+            func authorityIDs(_ value: Value) -> Set<String> {
+                guard case .object(let object) = value,
+                      case .array(let receipts)? = object["routingReceipts"] else { return [] }
+                return Set(receipts.flatMap { receipt -> [String] in
+                    guard case .object(let object) = receipt,
+                          case .array(let values)? = object["authorityIDs"] else { return [] }
+                    return values.compactMap { value in
+                        guard case .string(let string) = value else { return nil }
+                        return string
+                    }
+                })
+            }
+
+            let projected = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object([
+                    "id": .string(pageID),
+                    "fields": .array([.string("content"), .string("uuid"), .string("version")])
+                ]),
+                context: context
+            )
+            guard case .object(let projectedObject) = projected else {
+                throw TestError.assertion("UUID projection returned malformed output")
+            }
+            try expect(authorityIDs(projected).contains(authority),
+                       "UUID projection must retain the resolved authority for receipt issuance")
+            try expect(projectedObject[ToolRouter.routingAuthorityEvidenceKey] == nil,
+                       "internal authority evidence must be stripped from projected output")
+
+            let fuzzy = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object([
+                    "name": .string("sk \(authority)"),
+                    "fields": .array([.string("content")])
+                ]),
+                context: context
+            )
+            try expect(authorityIDs(fuzzy).contains(authority),
+                       "a successful fuzzy lookup must issue authority for its resolved canonical skill")
+        } catch {
+            await restoreBodyCache()
+            throw error
+        }
+        await restoreBodyCache()
+    }
+
     // ============================================================
     // MARK: - Skill-system ownership and routing governance
     // ============================================================

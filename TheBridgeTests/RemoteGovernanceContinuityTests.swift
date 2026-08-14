@@ -354,7 +354,11 @@ private func withRemoteGovernanceHarness(
                   case .string(let name)? = object["name"] else {
                 return .object(["error": .string("missing name")])
             }
-            return .object(["slug": .string(name), "content": .string("fixture")])
+            return .object([
+                "slug": .string(name),
+                "content": .string("fixture"),
+                ToolRouter.routingAuthorityEvidenceKey: .object(["name": .string(name)])
+            ])
         }
     ))
     await router.register(ToolRegistration(

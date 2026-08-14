@@ -430,6 +430,19 @@ func runRoutingIntegrityLayerTests() async {
             try expect(authoritativeIDAuthorities == Set(["people-keepr"]),
                        "an ignored name must not override id-derived authority: \(authoritativeIDAuthorities)")
 
+            let conflictingIdentity = try await router.dispatch(
+                toolName: "fetch_skill",
+                arguments: .object(["id": .string(String(repeating: "f", count: 32))]),
+                context: context
+            )
+            guard case .object(let conflictingObject) = conflictingIdentity else {
+                throw TestError.assertion("conflicting identity fixture returned malformed output")
+            }
+            try expect(conflictingObject["routingReceipts"] == nil,
+                       "distinct registered slug/name identities must fail closed without a receipt")
+            try expect(conflictingObject[ToolRouter.routingAuthorityEvidenceKey] == nil,
+                       "internal authority evidence must never reach the caller")
+
             guard let peopleReceipt = receipt(people, scopeID: "tool:messages_send"),
                   let macReceipt = receipt(mac, scopeID: "tool:messages_send"),
                   let otherToolReceipt = receipt(people, scopeID: "tool:messages_recent") else {
@@ -573,7 +586,11 @@ func runRoutingIntegrityLayerTests() async {
                 handler: { arguments in
                     guard case .object(let object) = arguments,
                           case .string(let name)? = object["name"] else { return .object(["error": .string("missing")]) }
-                    return .object(["title": .string(name), "content": .string("fixture")])
+                    return .object([
+                        "title": .string(name),
+                        "content": .string("fixture"),
+                        ToolRouter.routingAuthorityEvidenceKey: .object(["name": .string(name)])
+                    ])
                 }
             ))
             await router.register(fakeMessagesSendRegistration())
@@ -724,20 +741,26 @@ private func registerRILFetchSkill(on router: ToolRouter) async {
             guard case .object(let object) = arguments else {
                 return .object(["error": .string("missing name")])
             }
-            if case .string(_)? = object["id"] {
+            if case .string(let id)? = object["id"] {
                 return .object([
                     "slug": .string("people-keepr"),
                     "title": .string("mac-message"),
-                    "content": .string("fixture")
+                    "content": .string("fixture"),
+                    ToolRouter.routingAuthorityEvidenceKey: .object([
+                        "slug": .string("people-keepr"),
+                        "name": .string(id == String(repeating: "f", count: 32) ? "mac-message" : "people-keepr")
+                    ])
                 ])
             }
             guard case .string(let name)? = object["name"] else {
                 return .object(["error": .string("missing name")])
             }
+            let parent = String(name.split(separator: "/", maxSplits: 1).first ?? "")
             return .object([
                 "slug": .string(name),
                 "title": .string(name.contains("/") ? "mac-message" : name),
-                "content": .string("fixture")
+                "content": .string("fixture"),
+                ToolRouter.routingAuthorityEvidenceKey: .object(["name": .string(parent)])
             ])
         }
     ))

@@ -22,7 +22,7 @@ public enum TunnelAuthFailureReason: String, Sendable, Equatable, CaseIterable {
         case .misconfigured:
             self = .oauthInactive
         case .missingBearer, .malformedAuthorizationHeader, .signatureInvalid,
-             .notYetValid, .malformedToken:
+             .notYetValid, .subjectMissing, .malformedToken:
             self = .oauthRevoked
         }
     }

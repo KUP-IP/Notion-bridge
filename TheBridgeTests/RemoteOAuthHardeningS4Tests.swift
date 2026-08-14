@@ -50,12 +50,12 @@ private struct S4Keys {
     }
 
     func sign(
-        iss: String, aud: String, sub: String = "user-1", scope: String?
+        iss: String, aud: String, sub: String? = "user-1", scope: String?
     ) async throws -> String {
         try await signing.sign(BridgeAccessToken(
             iss: IssuerClaim(value: iss),
             aud: AudienceClaim(value: [aud]),
-            sub: SubjectClaim(value: sub),
+            sub: sub.map { SubjectClaim(value: $0) },
             exp: ExpirationClaim(value: Date().addingTimeInterval(300)),
             nbf: nil,
             scope: scope
@@ -104,6 +104,43 @@ func runRemoteOAuthHardeningS4Tests() async {
             resourceMetadataURL: s4PRM,
             strictScopes: false
         )
+    }
+
+    await test("GH #146 E2E: signed connector tokens without a usable subject are rejected before dispatch") {
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog()
+        )
+        await router.register(ToolRegistration(
+            name: "skills_routing_list", module: "skills", tier: .open,
+            description: "must not run for a subject-less token",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { _ in
+                throw TestError.assertion("subject-less bearer reached tool dispatch")
+            }
+        ))
+        let server = SSEServer(router: router, onToolCall: {}, connectorAuth: unscopedAuthCtx())
+        let body = Data(#"{"jsonrpc":"2.0","id":146,"method":"tools/call","params":{"name":"skills_routing_list","arguments":{}}}"#.utf8)
+
+        for subject in [nil, "", "   "] as [String?] {
+            let token = try await keys.sign(
+                iss: s4Issuer, aud: s4Resource, sub: subject, scope: "openid"
+            )
+            let response = await server.handleHTTPRequest(HTTPRequest(
+                method: "POST",
+                headers: [
+                    "Cf-Connecting-Ip": "203.0.113.146",
+                    "Authorization": "Bearer \(token)",
+                    "Mcp-Session-Id": "subless-\(UUID().uuidString)"
+                ],
+                body: body
+            ))
+            try expect(response.statusCode == 401,
+                       "subject-less connector token must be rejected with 401, got \(response.statusCode)")
+            let challenge = response.headers.first { $0.key.lowercased() == "www-authenticate" }?.value ?? ""
+            try expect(challenge.contains("auth_failed") && !challenge.contains("subject"),
+                       "public challenge must remain coarse: \(challenge)")
+        }
     }
 
     // MARK: - A1: contacts.read scope split (pure gate logic)
@@ -325,7 +362,11 @@ func runRemoteOAuthHardeningS4Tests() async {
                       case .string(let name)? = object["name"] else {
                     return .object(["error": .string("missing name")])
                 }
-                return .object(["slug": .string(name), "content": .string("fixture")])
+                return .object([
+                    "slug": .string(name),
+                    "content": .string("fixture"),
+                    ToolRouter.routingAuthorityEvidenceKey: .object(["name": .string(name)])
+                ])
             }
         ))
         await router.register(ToolRegistration(

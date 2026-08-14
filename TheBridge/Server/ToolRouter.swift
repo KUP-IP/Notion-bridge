@@ -209,6 +209,9 @@ private extension UInt8 {
 
 /// Central dispatch hub. Every tool call flows through here.
 public actor ToolRouter {
+    /// Private-on-the-wire metadata shared with the fetch_skill handler.
+    /// Dispatch consumes and strips it before returning any public result.
+    public static let routingAuthorityEvidenceKey = "_bridgeRoutingAuthorityEvidence"
     private var registry: [String: ToolRegistration] = [:]
     private var manifestRevision: UInt64 = 0
     /// FB-4: withhold `tools/list` until `BridgeModuleRegistry` finishes so
@@ -433,46 +436,56 @@ public actor ToolRouter {
         return (snapshot, source, count)
     }
 
-    private func fetchedAuthorityIDs(arguments: Value, result: Value) -> Set<String> {
-        var candidates: [String] = []
-        if case .object(let object) = arguments {
-            // `id` is authoritative when present, so an accompanying `name`
-            // must never be allowed to mint authority. In that case use only
-            // the canonical identity returned by the successful fetch.
-            let hasAuthoritativeID: Bool = {
-                guard case .string(let id)? = object["id"] else { return false }
-                return !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }()
-            if !hasAuthoritativeID, case .string(let name)? = object["name"] {
-                // Specialist paths acknowledge their routing parent only.
-                // Treating every slash-delimited segment as an independent
-                // authority lets one success-shaped fetch overgrant a
-                // composed route (for example people-keepr/mac-message).
-                if let parent = name.split(separator: "/", maxSplits: 1).first {
-                    candidates.append(String(parent))
-                }
-            } else if case .object(let resultObject) = result {
-                for key in ["slug", "name"] {
-                    if case .string(let value)? = resultObject[key] { candidates.append(value) }
-                }
-            }
+    private func publicResultAndAuthorityEvidence(
+        _ result: Value
+    ) -> (result: Value, slug: String?, name: String?) {
+        guard case .object(var object) = result else { return (result, nil, nil) }
+        guard case .object(let evidence)? = object.removeValue(forKey: Self.routingAuthorityEvidenceKey) else {
+            return (.object(object), nil, nil)
         }
+        let slug: String? = {
+            guard case .string(let value)? = evidence["slug"] else { return nil }
+            return value
+        }()
+        let name: String? = {
+            guard case .string(let value)? = evidence["name"] else { return nil }
+            return value
+        }()
+        return (.object(object), slug, name)
+    }
+
+    private func fetchedAuthorityIDs(slug: String?, name: String?) -> Set<String> {
         let known = Set(ToolSkillBindingRegistry.bindings.flatMap { $0.governingSkills.map(\.slug) })
-        return Set(candidates.map(ToolSkillBindingRegistry.normalizeAuthoritySlug)).intersection(known)
+        let normalizedName = name.map(ToolSkillBindingRegistry.normalizeAuthoritySlug)
+        if let slug, !slug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let normalizedSlug = ToolSkillBindingRegistry.normalizeAuthoritySlug(slug)
+            // The Notion/file slug is authoritative. A distinct mutable name
+            // that also names a registered authority is an identity conflict,
+            // so issue no receipt rather than unioning or guessing.
+            if let normalizedName,
+               known.contains(normalizedName),
+               normalizedName != normalizedSlug {
+                return []
+            }
+            return known.contains(normalizedSlug) ? [normalizedSlug] : []
+        }
+        guard let normalizedName, known.contains(normalizedName) else { return [] }
+        return [normalizedName]
     }
 
     private func applyRoutingEvidence(
         toolName: String,
-        arguments: Value,
         result: Value,
         context: ToolDispatchContext,
         now: Date
     ) throws -> (result: Value, auditNote: String?) {
-        guard ToolSkillBindingRegistry.callSatisfiesManifestMarker(toolName: toolName, result: result) else {
-            return (result, nil)
+        let routed = publicResultAndAuthorityEvidence(result)
+        let publicResult = routed.result
+        guard ToolSkillBindingRegistry.callSatisfiesManifestMarker(toolName: toolName, result: publicResult) else {
+            return (publicResult, nil)
         }
 
-        if let evidence = routingSnapshotEvidence(toolName: toolName, result: result) {
+        if let evidence = routingSnapshotEvidence(toolName: toolName, result: publicResult) {
             _ = try routingCustodyStore.recordBootstrap(
                 snapshotID: evidence.id,
                 source: evidence.source,
@@ -491,14 +504,14 @@ public actor ToolRouter {
 
         var byScope: [String: Set<String>] = [:]
         if toolName == "fetch_skill" {
-            let fetched = fetchedAuthorityIDs(arguments: arguments, result: result)
+            let fetched = fetchedAuthorityIDs(slug: routed.slug, name: routed.name)
             for binding in ToolSkillBindingRegistry.bindings {
                 let relevant = Set(binding.governingSkills.map(\.slug)).intersection(fetched)
                 if !relevant.isEmpty { byScope[binding.scopeID] = relevant }
             }
         }
 
-        guard !byScope.isEmpty else { return (result, nil) }
+        guard !byScope.isEmpty else { return (publicResult, nil) }
 
         if context.routeAcknowledgementMode == .transportSession,
            let clientKey = context.transportSessionId,
@@ -506,13 +519,13 @@ public actor ToolRouter {
             for (scope, authorities) in byScope {
                 acknowledge(scopes: Set([scope]), authorityIDs: authorities, clientKey: clientKey)
             }
-            return (result, nil)
+            return (publicResult, nil)
         }
 
         let receipts = byScope.sorted { $0.key < $1.key }.map {
             issueReceipt(authorityIDs: $0.value, scopeID: $0.key, context: context, now: now).value
         }
-        guard !receipts.isEmpty, case .object(var object) = result else { return (result, nil) }
+        guard !receipts.isEmpty, case .object(var object) = publicResult else { return (publicResult, nil) }
         object["routingReceipts"] = .array(receipts)
         object["routingReceiptTTLSeconds"] = .int(300)
         object["routingReceiptUsage"] = .string(
@@ -970,7 +983,6 @@ public actor ToolRouter {
             }
             let routingEvidence = try applyRoutingEvidence(
                 toolName: toolName,
-                arguments: executionArguments,
                 result: result,
                 context: context,
                 now: routeReceiptNowProvider()

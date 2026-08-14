@@ -148,6 +148,23 @@ func runRemoteOAuthBearerTests() async {
 
     // MARK: - Validator: reject
 
+    await test("Validator: signed token without a usable subject is rejected") {
+        for subject in [nil, "", "   "] as [String?] {
+            let tok = try await keys.sign(
+                iss: kIssuer, aud: kResource, sub: subject, scope: "snippets.read"
+            )
+            do {
+                _ = try await validator(keys: keys.verifyKeys)
+                    .validate(authorizationHeader: "Bearer \(tok)")
+                throw TestError.assertion("sub-less token must be rejected")
+            } catch let error as BearerValidationError {
+                guard case .subjectMissing = error else {
+                    throw TestError.assertion("expected subjectMissing, got \(error)")
+                }
+            }
+        }
+    }
+
     await test("Validator: expired token rejected") {
         let tok = try await keys.sign(
             iss: kIssuer, aud: kResource, scope: "snippets.read",
