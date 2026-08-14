@@ -455,30 +455,44 @@ public enum VoiceMemoProcessor {
         router: ToolRouter,
         entity: RegistryEntity?
     ) async throws -> String {
-        var fields = resolvedMemoryKeepFields(intent: intent, plan: plan)
+        let proposedFields = resolvedMemoryKeepFields(intent: intent, plan: plan)
 
-        // GH #81 — minimum-information quality gate BEFORE any Notion write
-        // (registry_create below, then the summary-body append later in this
-        // function both read from `fields["summary"]`). A weak transcript-
-        // opening fragment or disfluency-dominated filler string (e.g. "I'm
-        // having fun with this idea") must never reach Notion as the sole
-        // content of a memory_keep row — graceful BLOCKED → REVIEW with the
-        // exact rejection reason, never a silent markedProcessed:true on an
-        // effectively-empty record. See VoiceMemoContentQualityGate for the
-        // written rule.
-        let candidateSummary = fields["summary"] ?? plan.summary
-        if case .rejected(let reason) = VoiceMemoContentQualityGate.evaluate(candidateSummary) {
+        // The durable Memory summary is authored page content first. A live
+        // registry may bind the canonical `summary` key to a non-text property
+        // (the operator's Memory DB currently maps it to the `Relevant` select),
+        // so the semantic summary cannot be assumed to be a writable property.
+        let semanticSummary: String = {
+            let body = intent.body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !body.isEmpty { return body }
+            if let field = proposedFields["summary"]?.trimmingCharacters(in: .whitespacesAndNewlines), !field.isEmpty {
+                return field
+            }
+            return plan.summary
+        }()
+
+        // GH #81 — minimum-information quality gate BEFORE any Notion write.
+        if case .rejected(let reason) = VoiceMemoContentQualityGate.evaluate(semanticSummary) {
             throw VoiceMemoError.contentQualityRejected(entityKey, reason)
         }
 
-        // PKT-MEM-132 D49 — reject a proposed field value that is a
-        // contiguous verbatim run from the raw transcript BEFORE any Notion
-        // write (registry_create below, then the summary-body append later
-        // in this function both read from `fields`). Runs on every field
-        // value, not just "summary" — an agent-supplied `fields` override
-        // can put transcript text under any key. Graceful BLOCKED → REVIEW,
-        // never a silent write of the raw transcript into Notion.
-        if let rejected = VoiceMemoTranscriptOverlapGuard.firstRejectedField(in: fields, transcript: transcript) {
+        // Adapt legacy plan fields to the LIVE Memory registry before any write:
+        // unknown retired keys are dropped; prose goes into a rich_text summary
+        // property only when the registry actually exposes one. A select/status
+        // property must never receive the prose summary.
+        var createFields = memoryKeepCreateFields(
+            proposed: proposedFields,
+            semanticSummary: semanticSummary,
+            entity: entity
+        )
+
+        // PKT-MEM-132 D49 — protect BOTH the body summary and every property
+        // value that will actually be sent to Notion.
+        if let rejected = VoiceMemoTranscriptOverlapGuard.firstRejectedField(
+            in: ["memoryBody": semanticSummary], transcript: transcript
+        ) {
+            throw VoiceMemoError.transcriptOverlapRejected(entityKey, rejected.key, rejected.runLength)
+        }
+        if let rejected = VoiceMemoTranscriptOverlapGuard.firstRejectedField(in: createFields, transcript: transcript) {
             throw VoiceMemoError.transcriptOverlapRejected(entityKey, rejected.key, rejected.runLength)
         }
 
@@ -486,7 +500,7 @@ public enum VoiceMemoProcessor {
         // unbound BEFORE any Notion create. Surfaces candidate Notion names for
         // rebind via registry_introspect.
         if let entity {
-            try Self.preflightMemoryKeepBindings(entity: entity, fields: fields)
+            try Self.preflightMemoryKeepBindings(entity: entity, fields: createFields)
         }
 
         // PKT-1064 — attach the ORIGINATING Player relation to the new Memory
@@ -500,11 +514,11 @@ public enum VoiceMemoProcessor {
             throw VoiceMemoError.playerRelationUnbound(entityKey)
         }
         let originatingPlayerId = Self.originatingPlayerId(for: intent)
-        fields[playersKey] = originatingPlayerId
+        createFields[playersKey] = originatingPlayerId
 
         let createResult = try await router.dispatch(toolName: "registry_create", arguments: .object([
             "entity": .string(entityKey),
-            "fields": .object(fields.mapValues { .string($0) }),
+            "fields": .object(createFields.mapValues { .string($0) }),
         ]))
         guard let pageId = parseRegistryPageId(from: createResult) else {
             return "registry_create entity=\(entityKey) (memory_keep) — created but page id not parsed"
@@ -523,7 +537,12 @@ public enum VoiceMemoProcessor {
         )
 
         // W3: summary + action items in Notion body — transcript remains UI-only (FR-005).
-        try await appendSummaryBodyToNotionPage(pageId: pageId, plan: plan, fields: fields, router: router)
+        try await appendSummaryBodyToNotionPage(
+            pageId: pageId,
+            plan: plan,
+            summaryText: semanticSummary,
+            router: router
+        )
         return "registry_create entity=\(entityKey) id=\(pageId) + player \(originatingPlayerId) + summary body"
     }
 
@@ -827,18 +846,39 @@ public enum VoiceMemoProcessor {
         throw VoiceMemoError.registryMatchFailed(entityKey, hint)
     }
 
+    /// Convert the parser's legacy Memory envelope into the properties the
+    /// CURRENT registry entity can safely accept. Voice-memo summaries are page
+    /// content; they are mirrored into a property only when `summary` is
+    /// `rich_text`. This prevents prose from being coerced into a live select
+    /// such as `Relevant`, while preserving older text-backed Memory schemas.
+    public static func memoryKeepCreateFields(
+        proposed: [String: String],
+        semanticSummary: String,
+        entity: RegistryEntity?
+    ) -> [String: String] {
+        guard let entity else { return proposed }
+
+        // Parser plans can outlive registry schema changes. Only send canonical
+        // keys the live entity declares; retired metadata fields are not writes.
+        var adapted = proposed.filter { entity.property($0.key) != nil }
+
+        if let summaryProperty = entity.property("summary"),
+           summaryProperty.type.lowercased() == "rich_text" {
+            adapted["summary"] = semanticSummary
+        } else {
+            adapted.removeValue(forKey: "summary")
+        }
+        return adapted
+    }
+
     /// SC2 — required Notion-bound fields must be bound before any write.
     public static func preflightMemoryKeepBindings(entity: RegistryEntity, fields: [String: String]) throws {
         let input = fields.mapValues { Value.string($0) }
         let resolved = RegistryWriter.resolve(input, entity: entity)
         var unbound = resolved.unbound
-        // Ensure the entity's summary + title slots exist and are bound even when
-        // the caller omitted a key (drift: Relevant: unbound while summary key set).
-        for key in ["summary", "title"] {
-            if let prop = entity.property(key), !prop.isBound, !unbound.contains(key) {
-                unbound.append(key)
-            }
-        }
+        // Title is always required. Summary is required only when it is part of
+        // the adapted property payload; non-text summary columns are deliberately
+        // excluded because the semantic summary lives in the page body.
         if let titleProp = entity.titleProperty, !titleProp.isBound,
            !unbound.contains(titleProp.key) {
             unbound.append(titleProp.key)
@@ -944,10 +984,9 @@ public enum VoiceMemoProcessor {
     static func appendSummaryBodyToNotionPage(
         pageId: String,
         plan: VoiceMemoPlan,
-        fields: [String: String],
+        summaryText: String,
         router: ToolRouter
     ) async throws {
-        let summaryText = fields["summary"] ?? plan.summary
         let trimmed = summaryText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         var children: [[String: Any]] = [
@@ -1581,13 +1620,11 @@ public enum VoiceMemoProcessor {
         if case .object(let fieldObj)? = obj["fields"] {
             intent.fields = fieldObj.compactMapValues { if case .string(let s) = $0 { return s }; return nil }
         }
-        // First-class summary override (promoted from the previously-undiscoverable
-        // fields.summary passthrough — GitHub issue reported the schema didn't document
-        // it even though appendSummaryBodyToNotionPage already read fields["summary"] ??
-        // plan.summary). Applied AFTER the `fields` object above so a top-level `summary`
-        // always wins over (or fills in) a fields.summary the caller also passed —
-        // the single, unambiguous override path callers can now discover from the schema.
-        if let summary = stringArg(obj, "summary") { intent.fields["summary"] = summary }
+        // First-class summary override. The summary is semantic PAGE BODY
+        // content; executeMemoryKeep mirrors it to a `summary` property only
+        // when that property is rich_text. Select/status-backed columns such as
+        // the live Memory `Relevant` field never receive arbitrary prose.
+        if let summary = stringArg(obj, "summary") { intent.body = summary }
         if kind == .comment, let purposeRaw = stringArg(obj, "purpose") {
             intent.purpose = VoiceMemoCommentPurpose(rawValue: purposeRaw)
         }
