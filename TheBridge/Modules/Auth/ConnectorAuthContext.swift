@@ -90,6 +90,7 @@ extension BearerValidationError {
         case .audienceMismatch: raw = "audience not accepted"
         case .expired: raw = "token expired"
         case .notYetValid: raw = "token not yet valid"
+        case .subjectMissing: raw = "token subject missing"
         case .misconfigured: raw = "connector key set not configured"
         case .malformedToken: raw = "malformed token"
         }

@@ -92,6 +92,11 @@ public struct BridgeAccessToken: JWTPayload, Sendable, Equatable {
             }
         }
 
+        guard let subject = sub?.value.trimmingCharacters(in: .whitespacesAndNewlines),
+              !subject.isEmpty else {
+            throw BearerValidationError.subjectMissing
+        }
+
         guard let expected = BridgeAccessToken.expectation else {
             // No expectation configured ⇒ refuse rather than accept an
             // unbound token (fail-closed).
@@ -137,6 +142,8 @@ public enum BearerValidationError: Error, Equatable, Sendable {
     case audienceMismatch(expected: String, got: [String])
     case expired
     case notYetValid
+    /// A verified connector principal is mandatory for session and receipt custody.
+    case subjectMissing
     /// Validator has no keys / no issuer expectation (fail-closed).
     case misconfigured
     /// JWTKit rejected the token for any other structural reason.

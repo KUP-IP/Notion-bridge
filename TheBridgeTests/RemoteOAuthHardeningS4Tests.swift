@@ -50,12 +50,12 @@ private struct S4Keys {
     }
 
     func sign(
-        iss: String, aud: String, sub: String = "user-1", scope: String?
+        iss: String, aud: String, sub: String? = "user-1", scope: String?
     ) async throws -> String {
         try await signing.sign(BridgeAccessToken(
             iss: IssuerClaim(value: iss),
             aud: AudienceClaim(value: [aud]),
-            sub: SubjectClaim(value: sub),
+            sub: sub.map { SubjectClaim(value: $0) },
             exp: ExpirationClaim(value: Date().addingTimeInterval(300)),
             nbf: nil,
             scope: scope
@@ -95,6 +95,52 @@ func runRemoteOAuthHardeningS4Tests() async {
             resourceMetadataURL: s4PRM,
             strictScopes: true
         )
+    }
+    let unscopedAuthCtx: @Sendable () -> ConnectorAuthContext = {
+        ConnectorAuthContext(
+            validator: validator(),
+            sessionBinding: ConnectorSessionBinding(),
+            diagnostics: ConnectorAuthDiagnostics(),
+            resourceMetadataURL: s4PRM,
+            strictScopes: false
+        )
+    }
+
+    await test("GH #146 E2E: signed connector tokens without a usable subject are rejected before dispatch") {
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog()
+        )
+        await router.register(ToolRegistration(
+            name: "skills_routing_list", module: "skills", tier: .open,
+            description: "must not run for a subject-less token",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { _ in
+                throw TestError.assertion("subject-less bearer reached tool dispatch")
+            }
+        ))
+        let server = SSEServer(router: router, onToolCall: {}, connectorAuth: unscopedAuthCtx())
+        let body = Data(#"{"jsonrpc":"2.0","id":146,"method":"tools/call","params":{"name":"skills_routing_list","arguments":{}}}"#.utf8)
+
+        for subject in [nil, "", "   "] as [String?] {
+            let token = try await keys.sign(
+                iss: s4Issuer, aud: s4Resource, sub: subject, scope: "openid"
+            )
+            let response = await server.handleHTTPRequest(HTTPRequest(
+                method: "POST",
+                headers: [
+                    "Cf-Connecting-Ip": "203.0.113.146",
+                    "Authorization": "Bearer \(token)",
+                    "Mcp-Session-Id": "subless-\(UUID().uuidString)"
+                ],
+                body: body
+            ))
+            try expect(response.statusCode == 401,
+                       "subject-less connector token must be rejected with 401, got \(response.statusCode)")
+            let challenge = response.headers.first { $0.key.lowercased() == "www-authenticate" }?.value ?? ""
+            try expect(challenge.contains("auth_failed") && !challenge.contains("subject"),
+                       "public challenge must remain coarse: \(challenge)")
+        }
     }
 
     // MARK: - A1: contacts.read scope split (pure gate logic)
@@ -258,6 +304,158 @@ func runRemoteOAuthHardeningS4Tests() async {
         // returns 200, crucially NOT a 401/403 auth refusal.
         try expect(resp.statusCode == 200,
                    "authorized contacts.read call must be dispatched (200), got \(resp.statusCode)")
+    }
+
+    await test("GH #146: compact connector requires principal-bound, exact-scope, single-use route receipts") {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("route-receipt-s4-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let advisoryKey = BridgeDefaults.brokerAdvisoryAnnotation
+        let previousAdvisory = UserDefaults.standard.object(forKey: advisoryKey)
+        UserDefaults.standard.set(true, forKey: advisoryKey)
+        defer {
+            if let previousAdvisory {
+                UserDefaults.standard.set(previousAdvisory, forKey: advisoryKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: advisoryKey)
+            }
+        }
+
+        let audit = AuditLog()
+        let custody = RoutingCustodyStore(root: root.appendingPathComponent("routing-custody", isDirectory: true))
+        let sessionRegistry = SessionRegistry(
+            path: root.appendingPathComponent("sessions/sessions.sqlite", isDirectory: false)
+        )
+        try await sessionRegistry.resetForTesting()
+        _ = try custody.recordBootstrap(
+            snapshotID: "compact-receipt-snapshot",
+            source: "test",
+            count: 2,
+            verifiedAt: Date()
+        )
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: audit,
+            sessionRegistry: sessionRegistry,
+            routingCustodyStore: custody
+        )
+        await router.register(ToolRegistration(
+            name: "skills_routing_list", module: "skills", tier: .open,
+            description: "routing discovery fixture",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { _ in
+                .object([
+                    "status": .string("healthy"), "source": .string("test"),
+                    "snapshot": .string("compact-receipt-snapshot"), "count": .int(2),
+                    "skills": .array([])
+                ])
+            }
+        ))
+        await router.register(ToolRegistration(
+            name: "fetch_skill", module: "skills", tier: .open,
+            description: "route authority fixture",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { arguments in
+                guard case .object(let object) = arguments,
+                      case .string(let name)? = object["name"] else {
+                    return .object(["error": .string("missing name")])
+                }
+                return .object([
+                    "slug": .string(name),
+                    "content": .string("fixture"),
+                    ToolRouter.routingAuthorityEvidenceKey: .object(["name": .string(name)])
+                ])
+            }
+        ))
+        await router.register(ToolRegistration(
+            name: "messages_recent", module: "messages", tier: .open,
+            description: "bounded messages fixture",
+            inputSchema: .object(["type": .string("object")]),
+            handler: { arguments in
+                if case .object(let object) = arguments,
+                   object["_routingReceipt"] != nil || object["_routingReceipts"] != nil {
+                    throw TestError.assertion("routing control metadata reached messages_recent")
+                }
+                return .object(["ok": .bool(true), "messages": .array([])])
+            }
+        ))
+        let server = SSEServer(router: router, onToolCall: {}, connectorAuth: unscopedAuthCtx())
+        let token = try await keys.sign(
+            iss: s4Issuer, aud: s4Resource, sub: "route-user", scope: "openid"
+        )
+        let otherToken = try await keys.sign(
+            iss: s4Issuer, aud: s4Resource, sub: "other-route-user", scope: "openid"
+        )
+
+        let roster = try await s4CompactToolCall(
+            server: server, token: token, sessionID: "conversation-a",
+            tool: "skills_routing_list", arguments: [:], id: 1
+        )
+        let rosterPayload = try s4CompactPayload(roster)
+        try expect(rosterPayload["routingReceipts"] == nil,
+                   "routing discovery must not issue route authority")
+
+        let beforeFetch = try await s4CompactToolCall(
+            server: server, token: token, sessionID: "conversation-a",
+            tool: "messages_recent", arguments: [:], id: 2
+        )
+        try expect(try s4CompactIsError(beforeFetch))
+        try expect(try s4CompactText(beforeFetch).contains("route_ack_required"))
+
+        let peopleFetch = try await s4CompactToolCall(
+            server: server, token: token, sessionID: "conversation-a",
+            tool: "fetch_skill", arguments: ["name": "people-keepr"], id: 3
+        )
+        let macFetch = try await s4CompactToolCall(
+            server: server, token: token, sessionID: "churned-header",
+            tool: "fetch_skill", arguments: ["name": "mac-message"], id: 4
+        )
+        let peopleReceipt = try s4CompactReceipt(peopleFetch, scopeID: "tool:messages_recent")
+        let macReceipt = try s4CompactReceipt(macFetch, scopeID: "tool:messages_recent")
+        let receiptArguments = ["_routingReceipts": [peopleReceipt, macReceipt]]
+
+        let secondConversation = try await s4CompactToolCall(
+            server: server, token: token, sessionID: "conversation-b",
+            tool: "messages_recent", arguments: [:], id: 5
+        )
+        try expect(try s4CompactIsError(secondConversation),
+                   "same principal in a fresh conversation must not inherit authority")
+
+        let wrongPrincipal = try await s4CompactToolCall(
+            server: server, token: otherToken, sessionID: "conversation-other",
+            tool: "messages_recent", arguments: receiptArguments, id: 6
+        )
+        try expect(try s4CompactIsError(wrongPrincipal),
+                   "a receipt must reject a different authenticated principal")
+
+        let accepted = try await s4CompactToolCall(
+            server: server, token: token, sessionID: nil,
+            tool: "messages_recent", arguments: receiptArguments, id: 7
+        )
+        try expect(!(try s4CompactIsError(accepted)),
+                   "valid receipts must survive header omission and authorize exactly once")
+        try expect((try s4CompactPayload(accepted))["ok"] as? Bool == true)
+
+        let replay = try await s4CompactToolCall(
+            server: server, token: token, sessionID: "another-header",
+            tool: "messages_recent", arguments: receiptArguments, id: 8
+        )
+        try expect(try s4CompactIsError(replay), "receipt replay must fail closed")
+
+        let entries = await audit.entries(forSessionID: ToolDispatchContext.remoteConnectorJSONSessionID)
+        let receiptNotes = Set(entries
+            .compactMap(\.governanceNote)
+            .flatMap { $0.split(separator: ";").map(String.init) }
+            .filter { $0.hasPrefix("route_receipt_") })
+        try expect(receiptNotes.contains("route_receipt_issued"))
+        try expect(receiptNotes.contains("route_receipt_consumed"))
+        try expect(receiptNotes.contains("route_receipt_rejected_wrong_principal"))
+        try expect(receiptNotes.contains("route_receipt_rejected_replayed_or_unknown"))
+        let auditText = entries.map { "\($0.inputSummary) \($0.outputSummary)" }.joined(separator: "\n")
+        try expect(!auditText.contains("principalDigest") && !auditText.contains("nonce"),
+                   "audit summaries must not persist receipt secrets: \(auditText)")
     }
 
     // MARK: - A2: TransportRouter injection seam
@@ -501,4 +699,75 @@ func runRemoteOAuthHardeningS4Tests() async {
         try expect(!TransportRouter(environment: [:]).isActive(.streamableHTTP),
                    "streamableHTTP must stay off with env unset")
     }
+}
+
+private func s4CompactToolCall(
+    server: SSEServer,
+    token: String,
+    sessionID: String?,
+    tool: String,
+    arguments: [String: Any],
+    id: Int
+) async throws -> [String: Any] {
+    let body = try JSONSerialization.data(withJSONObject: [
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": ["name": tool, "arguments": arguments] as [String: Any],
+    ] as [String: Any])
+    var headers = [
+        "Cf-Connecting-Ip": "203.0.113.146",
+        "Authorization": "Bearer \(token)",
+    ]
+    if let sessionID { headers["Mcp-Session-Id"] = sessionID }
+    let response = await server.handleHTTPRequest(HTTPRequest(
+        method: "POST", headers: headers, body: body
+    ))
+    guard response.statusCode == 200, let responseBody = response.bodyData,
+          let object = try JSONSerialization.jsonObject(with: responseBody) as? [String: Any] else {
+        throw TestError.assertion("compact connector call \(tool) returned malformed HTTP \(response.statusCode)")
+    }
+    return object
+}
+
+private func s4CompactResult(_ response: [String: Any]) throws -> [String: Any] {
+    guard let result = response["result"] as? [String: Any] else {
+        throw TestError.assertion("compact response is missing result: \(response)")
+    }
+    return result
+}
+
+private func s4CompactText(_ response: [String: Any]) throws -> String {
+    let result = try s4CompactResult(response)
+    guard let content = result["content"] as? [[String: Any]],
+          let text = content.first?["text"] as? String else {
+        throw TestError.assertion("compact response is missing text content: \(result)")
+    }
+    return text
+}
+
+private func s4CompactIsError(_ response: [String: Any]) throws -> Bool {
+    let result = try s4CompactResult(response)
+    guard let isError = result["isError"] as? Bool else {
+        throw TestError.assertion("compact response is missing isError: \(result)")
+    }
+    return isError
+}
+
+private func s4CompactPayload(_ response: [String: Any]) throws -> [String: Any] {
+    let text = try s4CompactText(response)
+    guard let data = text.data(using: .utf8),
+          let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        throw TestError.assertion("tool text is not a JSON object: \(text)")
+    }
+    return payload
+}
+
+private func s4CompactReceipt(_ response: [String: Any], scopeID: String) throws -> [String: Any] {
+    let payload = try s4CompactPayload(response)
+    guard let receipts = payload["routingReceipts"] as? [[String: Any]],
+          let receipt = receipts.first(where: { $0["scopeID"] as? String == scopeID }) else {
+        throw TestError.assertion("fetch_skill did not issue receipt for \(scopeID): \(payload)")
+    }
+    return receipt
 }

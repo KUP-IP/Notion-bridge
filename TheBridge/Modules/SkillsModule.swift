@@ -61,6 +61,34 @@ public enum SkillsModule {
 
     public static let moduleName = "skills"
 
+    /// Carries the handler-resolved parent doctrine identity through public
+    /// field projection. ToolRouter consumes and strips this key before the
+    /// result leaves dispatch; callers never receive it as envelope data.
+    static func attachingRoutingAuthorityEvidence(
+        to value: Value,
+        slug: String?,
+        name: String
+    ) -> Value {
+        guard case .object(var object) = value else { return value }
+        var evidence: [String: Value] = ["name": .string(name)]
+        if let slug { evidence["slug"] = .string(slug) }
+        object[ToolRouter.routingAuthorityEvidenceKey] = .object(evidence)
+        return .object(object)
+    }
+
+    static func projectSkillResult(_ value: Value, fields: [String]?) -> Value {
+        let evidence: Value? = {
+            guard case .object(let object) = value else { return nil }
+            return object[ToolRouter.routingAuthorityEvidenceKey]
+        }()
+        var projected = FieldsFilter.project(value, fields: fields)
+        if let evidence, case .object(var object) = projected {
+            object[ToolRouter.routingAuthorityEvidenceKey] = evidence
+            projected = .object(object)
+        }
+        return projected
+    }
+
     // MARK: - Auto-Routing Instructions (injected into MCP initialize response)
 
     /// Build a compact instructions string containing the routing skill index.
@@ -340,7 +368,18 @@ public enum SkillsModule {
                             parent: name,
                             intent: intentArg
                         )
-                        return FieldsFilter.project(fileResult, fields: fieldsArg)
+                        let fileSlug: String? = {
+                            if case .string(let slug)? = fileSkill.frontmatter["slug"] { return slug }
+                            return nil
+                        }()
+                        return Self.projectSkillResult(
+                            Self.attachingRoutingAuthorityEvidence(
+                                to: fileResult,
+                                slug: fileSlug,
+                                name: fileSkill.name
+                            ),
+                            fields: fieldsArg
+                        )
                     }
                     let closeMatches = closestSkillMatches(for: name)
                     let allSkills = listAvailableSkillNames()
@@ -372,7 +411,7 @@ public enum SkillsModule {
                         parent: name,
                         intent: intentArg
                     )
-                    return FieldsFilter.project(cachedResult, fields: fieldsArg)
+                    return Self.projectSkillResult(cachedResult, fields: fieldsArg)
                 }
 
                 guard skillConfig.enabled else {
@@ -430,9 +469,14 @@ public enum SkillsModule {
                    let cachedBody = await SkillBodyCacheStore.shared.read(pageId: pageIdRaw) {
                     // Build the envelope with ZERO network — no client is
                     // constructed or awaited on this branch.
-                    let result = await Self.buildPlainCacheHitEnvelope(
+                    var result = await Self.buildPlainCacheHitEnvelope(
                         skill: skillConfig,
                         cachedBody: cachedBody
+                    )
+                    result = Self.attachingRoutingAuthorityEvidence(
+                        to: result,
+                        slug: cachedBody.slug,
+                        name: skillConfig.name
                     )
                     await cache.set(cacheKey, content: result)
 
@@ -460,7 +504,7 @@ public enum SkillsModule {
                         parent: name,
                         intent: intentArg
                     )
-                    return FieldsFilter.project(plainHitResult, fields: fieldsArg)
+                    return Self.projectSkillResult(plainHitResult, fields: fieldsArg)
                 }
 
                 // Fetch from Notion API
@@ -576,6 +620,15 @@ public enum SkillsModule {
                         parentName: skillConfig.name,
                         dispatch: specialistDispatch
                     )
+                    let parentSlug = CachedSkillBody.propertyString(
+                        "Slug",
+                        in: .object(Self.flattenProperties(pageProperties))
+                    )
+                    result = Self.attachingRoutingAuthorityEvidence(
+                        to: result,
+                        slug: parentSlug,
+                        name: skillConfig.name
+                    )
                     await cache.set(cacheKey, content: result)
 
                     // body-cache: persist (miss) or bump + maybe revalidate
@@ -627,7 +680,7 @@ public enum SkillsModule {
                         parent: name,
                         intent: intentArg
                     )
-                    return FieldsFilter.project(liveResult, fields: fieldsArg)
+                    return Self.projectSkillResult(liveResult, fields: fieldsArg)
                 } catch let error as NotionClientError {
                     // F10: 403 handling — structured error + "Access Lost" badge
                     if case .httpError(let code, let msg) = error, code == 403 {

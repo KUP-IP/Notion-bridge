@@ -67,6 +67,39 @@ public enum BridgeToolDescriptionRenderer {
 
 public enum MCPToolFactory {
 
+    private static let routingReceiptSchema: Value = .object([
+        "type": .string("object"),
+        "description": .string(
+            "Opaque, single-use route receipt returned by fetch_skill. Copy it verbatim; the server binds it to the authenticated principal and exact tool scope."
+        )
+    ])
+
+    /// Add routing-control inputs in one transport-independent location. Tool
+    /// handlers never see these keys; ToolRouter strips them before dispatch.
+    public static func inputSchema(for reg: ToolRegistration) -> Value {
+        guard ToolSkillBindingRegistry.binding(for: reg.name) != nil,
+              case .object(var schema) = reg.inputSchema else {
+            return reg.inputSchema
+        }
+        var properties: [String: Value]
+        if case .object(let existing)? = schema["properties"] {
+            properties = existing
+        } else {
+            properties = [:]
+        }
+        properties["_routingReceipt"] = routingReceiptSchema
+        properties["_routingReceipts"] = .object([
+            "type": .string("array"),
+            "description": .string(
+                "Route receipts returned by separate fetch_skill calls when this tool has multiple governing skills. Copy each receipt verbatim."
+            ),
+            "items": routingReceiptSchema,
+            "minItems": .int(1)
+        ])
+        schema["properties"] = .object(properties)
+        return .object(schema)
+    }
+
     /// The ONLY place a `ToolRegistration` becomes an MCP `Tool`.
     /// Both transports (ServerManager stdio + SSETransport HTTP) call this.
     public static func tool(for reg: ToolRegistration) -> Tool {
@@ -77,7 +110,7 @@ public enum MCPToolFactory {
             name: reg.name,
             title: displayTitle,
             description: BridgeToolDescriptionRenderer.render(reg),
-            inputSchema: reg.inputSchema,
+            inputSchema: inputSchema(for: reg),
             annotations: annotations
         )
     }
