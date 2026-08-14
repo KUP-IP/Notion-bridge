@@ -141,13 +141,6 @@ private final class ManualClock: CloudClock, @unchecked Sendable {
     }
 }
 
-/// Clock that resolves every sleep immediately — used where we want the
-/// timeout guard to lose the race (it fires instantly but the work already
-/// completed) OR to drive an instant-timeout case.
-private final class ImmediateClock: CloudClock, @unchecked Sendable {
-    func sleep(seconds: Double) async throws { /* return at once */ }
-}
-
 private final class FakeTokenExchange: CloudTokenExchanging, @unchecked Sendable {
     let token: String
     let throwsError: Bool
@@ -363,7 +356,7 @@ func runEnableCloudAccessFlowTests() async {
                 defaults: defaults,
                 config: wsfConfig,
                 provisionBaseURL: "https://mock.local",
-                clock: ImmediateClock()
+                clock: ManualClock()   // never auto-times-out; an instant clock races the 30s guard
             )
         }
         await MainActor.run { flow.start() }
