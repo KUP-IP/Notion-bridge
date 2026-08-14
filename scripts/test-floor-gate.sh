@@ -20,7 +20,11 @@
 # 2026-08-06: 3605 → 3613 (+8) — Red Team rework: drop noreply archiveHints,
 #   batch archive/move force Request+neverAutoApprove, Archive↔All Mail
 #   verify, succeeded=verified-only. Measured 3613 passed, 0 failed.
-FLOOR="${BRIDGE_TEST_FLOOR:-3613}"
+# 2026-08-14: 3613 → 3620 (+7) — PKT-FETCH-SKILL-SLUG-ALIAS: unique cached-slug
+#   alias for fetch_skill (+2 hermetic). Remaining +5 already present on
+#   9c73762 vs the 2026-08-06 floor stamp. Measured 3620 passed, 0 failed
+#   after .build/debug/TheBridgeTests on feat/pkt-fetch-skill-slug-alias.
+FLOOR="${BRIDGE_TEST_FLOOR:-3620}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

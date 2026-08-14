@@ -601,8 +601,14 @@ extension SkillsModule {
     }
 
     /// Look up a skill from UserDefaults by name with fuzzy matching (v1.7.0, F5).
-    /// Tries: exact (case-insensitive) > normalized (strip "sk ", space/hyphen swap) > substring.
-    static func lookupSkill(named name: String) -> SkillConfig? {
+    /// Tries: exact (case-insensitive) > normalized (strip "sk ", space/hyphen swap)
+    /// > unique cached slug alias > substring.
+    ///
+    /// Slug alias (PKT-FETCH-SKILL-SLUG-ALIAS): a case-insensitive exact match
+    /// against a locally cached `CachedSkillBody.slug` that maps uniquely to one
+    /// configured Notion skill (same page id). Duplicate slugs and cache-only
+    /// hits fail closed. Display-name lookup is unchanged.
+    static func lookupSkill(named name: String) async -> SkillConfig? {
         guard let data = UserDefaults.standard.data(forKey: BridgeDefaults.skills),
               let skills = try? JSONDecoder().decode([SkillConfig].self, from: data) else {
             return nil
@@ -620,12 +626,41 @@ extension SkillsModule {
                 return match
             }
         }
-        // 3. Substring: input contained in skill name or vice versa (unique match only)
+        // 3. Unique slug → configured skill (same Notion UUID). Before
+        // substring so a slug cannot be stolen by a unique name-contains hit.
+        if let aliased = await lookupSkillByUniqueCachedSlug(stripped, skills: skills) {
+            return aliased
+        }
+        // 4. Substring: input contained in skill name or vice versa (unique match only)
         let subs = skills.filter {
             $0.name.lowercased().contains(stripped) || stripped.contains($0.name.lowercased())
         }
         if subs.count == 1 { return subs[0] }
         return nil
+    }
+
+    /// Test hook: returns the configured display name + page id, or nil.
+    public static func lookupSkillNamedForTesting(_ name: String) async -> (name: String, pageId: String)? {
+        guard let skill = await lookupSkill(named: name) else { return nil }
+        return (skill.name, skill.notionPageId)
+    }
+
+    /// Unique case-insensitive slug from the on-disk body cache, bound to
+    /// exactly one configured SkillConfig by normalized Notion page id.
+    private static func lookupSkillByUniqueCachedSlug(
+        _ stripped: String,
+        skills: [SkillConfig]
+    ) async -> SkillConfig? {
+        let wanted = stripped.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !wanted.isEmpty else { return nil }
+        let hits = await SkillBodyCacheStore.shared.readAll().filter { body in
+            body.slug.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == wanted
+        }
+        guard hits.count == 1 else { return nil }
+        let pageId = CachedSkillBody.normalize(hits[0].pageId)
+        let configs = skills.filter { CachedSkillBody.normalize($0.notionPageId) == pageId }
+        guard configs.count == 1 else { return nil }
+        return configs[0]
     }
 
     /// Exact UUID resolver for PKT-1131. Unlike the human-facing name path,

@@ -660,4 +660,133 @@ func runSkillsModuleTests() async {
         try expect(warnings.isEmpty, "Corrected routing metadata should be clean: \(warnings)")
     }
 
+    await test("fetch_skill slug alias resolves to the same configured skill as display name") {
+        let defaultsKey = BridgeDefaults.skills
+        let previousSkills = UserDefaults.standard.data(forKey: defaultsKey)
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bridge-slug-alias-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        BridgePaths.overrideHomeForTesting(tmp)
+        defer {
+            BridgePaths.overrideHomeForTesting(nil)
+            try? FileManager.default.removeItem(at: tmp)
+            if let previousSkills {
+                UserDefaults.standard.set(previousSkills, forKey: defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
+        }
+
+        let pageID = "ef3dabbe3b4c41379cc58d89102d6046"
+        let decoyID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let displayName = "SKILLS Keepr"
+        let slug = "skill-keepr"
+        let config: [[String: Any]] = [
+            [
+                "name": displayName,
+                "notionPageId": pageID,
+                "enabled": true,
+                "visibility": "routing"
+            ],
+            [
+                "name": "Skill",
+                "notionPageId": decoyID,
+                "enabled": true,
+                "visibility": "standard"
+            ]
+        ]
+        UserDefaults.standard.set(
+            try JSONSerialization.data(withJSONObject: config),
+            forKey: defaultsKey
+        )
+
+        let cached = CachedSkillBody(
+            pageId: pageID,
+            slug: slug,
+            version: "6.2.0",
+            status: "Testing",
+            maturity: "Building",
+            markdown: "# SKILLS Keepr",
+            title: displayName,
+            url: "https://notion.example/skills-keepr",
+            properties: .object(["Slug": .string(slug)]),
+            lastEditedTime: "2026-08-14T00:00:00.000Z",
+            writtenAt: Date(),
+            ttlHours: 24,
+            callCount: 1
+        )
+        try await SkillBodyCacheStore.shared.write(cached)
+
+        let byName = await SkillsModule.lookupSkillNamedForTesting(displayName)
+        let bySlug = await SkillsModule.lookupSkillNamedForTesting(slug)
+        let bySkPrefix = await SkillsModule.lookupSkillNamedForTesting("sk \(slug)")
+        guard let byName, let bySlug, let bySkPrefix else {
+            throw TestError.assertion("expected display name, slug, and sk-prefix slug to resolve")
+        }
+        try expect(byName.name == displayName, "display name lookup must keep the configured name")
+        try expect(bySlug.name == displayName, "slug alias must return the display-name config, not a second identity")
+        try expect(bySlug.pageId == byName.pageId, "slug must alias the same page id as display name")
+        try expect(bySkPrefix.pageId == byName.pageId, "sk-prefix slug must resolve to the same page")
+        try expect(
+            CachedSkillBody.normalize(byName.pageId) == CachedSkillBody.normalize(pageID),
+            "page id mismatch"
+        )
+    }
+
+    await test("fetch_skill slug alias fails closed for unknown and duplicate slugs") {
+        let defaultsKey = BridgeDefaults.skills
+        let previousSkills = UserDefaults.standard.data(forKey: defaultsKey)
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bridge-slug-alias-failclosed-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        BridgePaths.overrideHomeForTesting(tmp)
+        defer {
+            BridgePaths.overrideHomeForTesting(nil)
+            try? FileManager.default.removeItem(at: tmp)
+            if let previousSkills {
+                UserDefaults.standard.set(previousSkills, forKey: defaultsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: defaultsKey)
+            }
+        }
+
+        let pageA = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        let pageB = "cccccccccccccccccccccccccccccccc"
+        let config: [[String: Any]] = [
+            ["name": "Alpha Keepr", "notionPageId": pageA, "enabled": true, "visibility": "routing"],
+            ["name": "Beta Keepr", "notionPageId": pageB, "enabled": true, "visibility": "routing"]
+        ]
+        UserDefaults.standard.set(
+            try JSONSerialization.data(withJSONObject: config),
+            forKey: defaultsKey
+        )
+
+        func body(pageId: String, title: String) -> CachedSkillBody {
+            CachedSkillBody(
+                pageId: pageId,
+                slug: "shared-slug",
+                version: "1.0.0",
+                status: "Testing",
+                maturity: "Stable",
+                markdown: "# \(title)",
+                title: title,
+                url: "https://notion.example/\(pageId)",
+                properties: .object(["Slug": .string("shared-slug")]),
+                lastEditedTime: "2026-08-14T00:00:00.000Z",
+                writtenAt: Date(),
+                ttlHours: 24,
+                callCount: 1
+            )
+        }
+        try await SkillBodyCacheStore.shared.write(body(pageId: pageA, title: "Alpha Keepr"))
+        try await SkillBodyCacheStore.shared.write(body(pageId: pageB, title: "Beta Keepr"))
+
+        let unknown = await SkillsModule.lookupSkillNamedForTesting("not-a-real-slug-xyz")
+        try expect(unknown == nil, "unknown slug must fail closed")
+        let duplicate = await SkillsModule.lookupSkillNamedForTesting("shared-slug")
+        try expect(duplicate == nil, "duplicate cached slugs must fail closed")
+        let byDisplay = await SkillsModule.lookupSkillNamedForTesting("Alpha Keepr")
+        try expect(byDisplay?.name == "Alpha Keepr", "display name must still resolve when slug alias is closed")
+    }
+
 }
