@@ -24,7 +24,10 @@
 #   alias for fetch_skill (+2 hermetic). Remaining +5 already present on
 #   9c73762 vs the 2026-08-06 floor stamp. Measured 3620 passed, 0 failed
 #   after .build/debug/TheBridgeTests on feat/pkt-fetch-skill-slug-alias.
-FLOOR="${BRIDGE_TEST_FLOOR:-3620}"
+# 2026-08-14: 3620 → 3624 (+4) — issues #125/#130: messages_send `sent` is
+#   dispatch success, not chat.db correlation; poll default 20×0.5s.
+#   Measured 3624 passed, 0 failed on fix/issue-125-130-messages-correlation.
+FLOOR="${BRIDGE_TEST_FLOOR:-3624}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

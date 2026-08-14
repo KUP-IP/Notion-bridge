@@ -677,6 +677,12 @@ public enum MessagesModule {
         )
     }
 
+    /// Bounded chat.db poll after dispatch. Not a provider-delivery claim.
+    public static let localCorrelationPollAttempts = 20
+    public static let localCorrelationPollInterval: TimeInterval = 0.5
+    public static let sendCompatibilityFieldSemantics =
+        "sent is dispatch success; verified and correlatedLocalRecord are local chat.db correlation only"
+
     /// Poll chat.db for one correlated local outbound record candidate. Evidence is bounded
     /// by the pre-send ROWID and Intent preparation timestamp; it does not
     /// claim provider delivery or remote receipt.
@@ -685,8 +691,8 @@ public enum MessagesModule {
         body: String,
         afterId: Int,
         preparedAt: Date,
-        attempts: Int = 8,
-        interval: TimeInterval = 0.5,
+        attempts: Int = localCorrelationPollAttempts,
+        interval: TimeInterval = localCorrelationPollInterval,
         pageSize: Int = 250,
         maxPages: Int = 20
     ) -> MessagesDeliveryVerification {
@@ -838,6 +844,63 @@ public enum MessagesModule {
             verification: verify(recipient, body, afterId, preparedAt),
             service: service.rawValue
         )
+    }
+
+    /// MCP envelope for ordinary one-to-one `messages_send`. `sent` is dispatch
+    /// success; `verified` / `correlatedLocalRecord` remain chat.db correlation.
+    public static func oneToOneSendMCPFields(
+        recipient: String,
+        body: String,
+        attempt: MessagesDeliveryAttempt
+    ) -> [String: Value] {
+        var result: [String: Value] = [
+            "sent": .bool(attempt.dispatchSucceeded),
+            "deliveryInvoked": .bool(attempt.invoked),
+            "consequencePossible": .bool(attempt.invoked),
+            "correlatedLocalRecord": .bool(attempt.verification.verified),
+            "providerDeliveryConfirmed": .bool(false),
+            "compatibilityFieldSemantics": .string(sendCompatibilityFieldSemantics),
+            "recipient": .string(recipient),
+            "bodyLength": .int(body.utf8.count),
+            "service": attempt.service.map(Value.string) ?? .null,
+            "detectedService": attempt.detectedService.map(Value.string) ?? .null,
+            "verified": .bool(attempt.verification.verified),
+            "verificationStatus": .string(attempt.verification.status.rawValue),
+            "messageRowId": attempt.verification.messageRowId.map(Value.int) ?? .null,
+            "messageGuid": attempt.verification.messageGuid.map(Value.string) ?? .null,
+            "chatGuid": attempt.verification.chatGuid.map(Value.string) ?? .null,
+            "messageDate": attempt.verification.messageDate.map { .string(ThreadMessagesReceiptJournal.iso($0)) } ?? .null,
+            "deliveryReference": attempt.verification.deliveryReference.map(Value.string) ?? .null,
+            "verifiedAt": attempt.verification.verifiedAt.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null,
+            "candidateRowIds": .array(attempt.verification.candidateRowIds.map(Value.int))
+        ]
+        result["error"] = (attempt.error ?? attempt.verification.error).map(Value.string) ?? .null
+        if let errorNumber = attempt.errorNumber { result["errorNumber"] = .int(errorNumber) }
+        return result
+    }
+
+    /// MCP envelope after a successful chatIdentifier AppleScript invoke.
+    public static func chatIdentifierSendMCPFields(
+        chatIdentifier: String,
+        body: String,
+        verification: MessagesDeliveryVerification
+    ) -> [String: Value] {
+        [
+            "sent": .bool(true),
+            "deliveryInvoked": .bool(true),
+            "consequencePossible": .bool(true),
+            "correlatedLocalRecord": .bool(verification.verified),
+            "providerDeliveryConfirmed": .bool(false),
+            "compatibilityFieldSemantics": .string(sendCompatibilityFieldSemantics),
+            "chatIdentifier": .string(chatIdentifier),
+            "bodyLength": .int(body.utf8.count),
+            "target": .string("chatIdentifier"),
+            "verified": .bool(verification.verified),
+            "verificationStatus": .string(verification.status.rawValue),
+            "messageRowId": verification.messageRowId.map(Value.int) ?? .null,
+            "deliveryReference": verification.deliveryReference.map(Value.string) ?? .null,
+            "verifiedAt": verification.verifiedAt.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null
+        ]
     }
 
     private static func isPhoneRecipient(_ value: String) -> Bool {
@@ -1239,7 +1302,7 @@ public enum MessagesModule {
             module: moduleName,
             tier: .request,
             neverAutoApprove: true,
-            description: "Send one explicitly selected iMessage or SMS after fresh approval. One-to-one sends require service:'iMessage' or service:'SMS' and never fall back. THREAD transaction arguments return THREAD_MESSAGES_CONTAINED. chat.db matches are CORRELATED_LOCAL_OUTBOUND_RECORD evidence only.",
+            description: "Send one explicitly selected iMessage or SMS after fresh approval. One-to-one sends require service:'iMessage' or service:'SMS' and never fall back. THREAD transaction arguments return THREAD_MESSAGES_CONTAINED. sent is dispatch success; chat.db matches are CORRELATED_LOCAL_OUTBOUND_RECORD evidence only (verified / correlatedLocalRecord).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1505,21 +1568,11 @@ public enum MessagesModule {
                         afterId: preSendMaxId,
                         preparedAt: preparedAt
                     )
-                    return .object([
-                        "sent": .bool(verification.verified),
-                        "deliveryInvoked": .bool(true),
-                        "consequencePossible": .bool(true),
-                        "correlatedLocalRecord": .bool(verification.verified),
-                        "providerDeliveryConfirmed": .bool(false),
-                        "chatIdentifier": .string(chatIdentifier),
-                        "bodyLength": .int(body.utf8.count),
-                        "target": .string("chatIdentifier"),
-                        "verified": .bool(verification.verified),
-                        "verificationStatus": .string(verification.status.rawValue),
-                        "messageRowId": verification.messageRowId.map(Value.int) ?? .null,
-                        "deliveryReference": verification.deliveryReference.map(Value.string) ?? .null,
-                        "verifiedAt": verification.verifiedAt.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null
-                    ])
+                    return .object(chatIdentifierSendMCPFields(
+                        chatIdentifier: chatIdentifier,
+                        body: body,
+                        verification: verification
+                    ))
                 }
 
                 guard let recipient else {
@@ -1588,30 +1641,11 @@ public enum MessagesModule {
                     afterId: preSendMaxId,
                     preparedAt: preparedAt
                 )
-                var result: [String: Value] = [
-                    "sent": .bool(attempt.verification.verified),
-                    "deliveryInvoked": .bool(attempt.invoked),
-                    "consequencePossible": .bool(attempt.invoked),
-                    "correlatedLocalRecord": .bool(attempt.verification.verified),
-                    "providerDeliveryConfirmed": .bool(false),
-                    "compatibilityFieldSemantics": .string("sent and verified are local-correlation aliases only"),
-                    "recipient": .string(recipient),
-                    "bodyLength": .int(body.utf8.count),
-                    "service": attempt.service.map(Value.string) ?? .null,
-                    "detectedService": attempt.detectedService.map(Value.string) ?? .null,
-                    "verified": .bool(attempt.verification.verified),
-                    "verificationStatus": .string(attempt.verification.status.rawValue),
-                    "messageRowId": attempt.verification.messageRowId.map(Value.int) ?? .null,
-                    "messageGuid": attempt.verification.messageGuid.map(Value.string) ?? .null,
-                    "chatGuid": attempt.verification.chatGuid.map(Value.string) ?? .null,
-                    "messageDate": attempt.verification.messageDate.map { .string(ThreadMessagesReceiptJournal.iso($0)) } ?? .null,
-                    "deliveryReference": attempt.verification.deliveryReference.map(Value.string) ?? .null,
-                    "verifiedAt": attempt.verification.verifiedAt.map { .string(ISO8601DateFormatter().string(from: $0)) } ?? .null,
-                    "candidateRowIds": .array(attempt.verification.candidateRowIds.map(Value.int))
-                ]
-                result["error"] = (attempt.error ?? attempt.verification.error).map(Value.string) ?? .null
-                if let errorNumber = attempt.errorNumber { result["errorNumber"] = .int(errorNumber) }
-                return .object(result)
+                return .object(oneToOneSendMCPFields(
+                    recipient: recipient,
+                    body: body,
+                    attempt: attempt
+                ))
             }
         ))
     }
