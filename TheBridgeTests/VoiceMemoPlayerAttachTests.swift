@@ -27,6 +27,7 @@ private actor MemoryKeepStubState {
     var omitPlayersOnReadback = false
     var createCallCount = 0
     var getCallCount = 0
+    var appendedChildrenJSON = ""
 
     func recordCreate(entity: String, fields: [String: Value]) {
         createdEntity = entity
@@ -35,6 +36,7 @@ private actor MemoryKeepStubState {
     }
 
     func recordGet() { getCallCount += 1 }
+    func recordAppend(_ json: String) { appendedChildrenJSON = json }
     func setReadback(_ ids: [String]) { readbackPlayerIds = ids }
     func setOmitPlayers(_ omit: Bool) { omitPlayersOnReadback = omit }
 }
@@ -57,7 +59,24 @@ private func memoryEntityWithPlayers() -> RegistryEntity {
     )
 }
 
-/// Memory entity fixture WITHOUT any PLAYERS relation (the current live binding).
+/// Live Memory shape as of 2026-08-14: canonical `summary` is the
+/// select-backed `Relevant` property, not prose storage.
+private func memoryEntityWithSelectRelevant() -> RegistryEntity {
+    RegistryEntity(
+        key: "memory",
+        displayName: "Memory",
+        dataSourceId: "8a39359f-2246-40a2-8614-a487ba9abd23",
+        properties: [
+            RegistryProperty(key: "title", notionName: "Memory", notionPropertyId: "title", type: "title", role: .title),
+            RegistryProperty(key: "summary", notionName: "Relevant", notionPropertyId: "sum1", type: "select"),
+            RegistryProperty(key: "players", notionName: "PLAYERS", notionPropertyId: "rel1", type: "relation", role: .relation),
+        ],
+        cacheTTLSeconds: 3600,
+        hasBody: true
+    )
+}
+
+/// Memory entity fixture WITHOUT any PLAYERS relation.
 private func memoryEntityNoPlayers() -> RegistryEntity {
     RegistryEntity(
         key: "memory",
@@ -139,12 +158,17 @@ private func installStubs(on router: ToolRouter, state: MemoryKeepStubState, pag
             ])
         })
 
-    // Body append is irrelevant to attribution — accept and no-op.
     let append = ToolRegistration(
         name: "notion_blocks_append", module: "stub", tier: .open,
         description: "stub",
         inputSchema: .object(["type": .string("object")]),
-        handler: { _ in .object(["ok": .bool(true)]) })
+        handler: { args in
+            if case .object(let a) = args,
+               case .string(let children)? = a["children"] {
+                await state.recordAppend(children)
+            }
+            return .object(["ok": .bool(true)])
+        })
 
     await router.register(create)
     await router.register(get)
@@ -186,7 +210,7 @@ func runVoiceMemoPlayerAttachTests() async {
             plan: memoryKeepPlan(),
             transcript: "Keep this note.",
             router: router,
-            entity: memoryEntityWithPlayers()
+            entity: memoryEntityWithSelectRelevant()
         )
 
         let fields = await state.createdFields
