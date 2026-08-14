@@ -462,11 +462,11 @@ public enum VoiceMemoProcessor {
         // (the operator's Memory DB currently maps it to the `Relevant` select),
         // so the semantic summary cannot be assumed to be a writable property.
         let semanticSummary: String = {
-            let body = intent.body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !body.isEmpty { return body }
             if let field = proposedFields["summary"]?.trimmingCharacters(in: .whitespacesAndNewlines), !field.isEmpty {
                 return field
             }
+            let body = intent.body?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !body.isEmpty { return body }
             return plan.summary
         }()
 
@@ -1620,11 +1620,11 @@ public enum VoiceMemoProcessor {
         if case .object(let fieldObj)? = obj["fields"] {
             intent.fields = fieldObj.compactMapValues { if case .string(let s) = $0 { return s }; return nil }
         }
-        // First-class summary override. The summary is semantic PAGE BODY
-        // content; executeMemoryKeep mirrors it to a `summary` property only
-        // when that property is rich_text. Select/status-backed columns such as
-        // the live Memory `Relevant` field never receive arbitrary prose.
-        if let summary = stringArg(obj, "summary") { intent.body = summary }
+        // First-class summary override stays in the semantic summary envelope.
+        // executeMemoryKeep mirrors it to a property only when that live property
+        // is rich_text; select/status-backed columns such as `Relevant` are
+        // filtered at the property-write boundary.
+        if let summary = stringArg(obj, "summary") { intent.fields["summary"] = summary }
         if kind == .comment, let purposeRaw = stringArg(obj, "purpose") {
             intent.purpose = VoiceMemoCommentPurpose(rawValue: purposeRaw)
         }
