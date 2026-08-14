@@ -340,7 +340,13 @@ public enum SkillsModule {
                 let fieldsArg = try FieldsFilter.parseFieldsArgument(args, toolName: "fetch_skill")
 
                 // Look up skill in UserDefaults config (cache key includes metadata fingerprint)
-                guard let skillConfig = uuidSkill ?? lookupSkill(named: name) else {
+                let skillConfig: SkillConfig?
+                if let uuidSkill {
+                    skillConfig = uuidSkill
+                } else {
+                    skillConfig = await lookupSkill(named: name)
+                }
+                guard let skillConfig else {
                     // W2 D4: fall back to the filesystem index. A file-
                     // source skill with this name (bundled or user dir)
                     // takes effect when Notion-skills don't shadow it.
