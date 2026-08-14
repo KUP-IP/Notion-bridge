@@ -370,6 +370,75 @@ func runMessagesModuleTests() async {
         try expect(attempt.verification.status == .notFound)
     }
 
+    await test("invoked send with NOT_FOUND still reports sent true") {
+        let probe = InvocationProbe()
+        let attempt = MessagesModule.performOneToOneSend(
+            recipient: "+15551234567", body: "test", confirm: "SEND",
+            serviceOverride: "iMessage", afterId: 1, preparedAt: Date(),
+            invoke: probe.invoke, verify: probe.verify
+        )
+        let fields = MessagesModule.oneToOneSendMCPFields(
+            recipient: "+15551234567", body: "test", attempt: attempt
+        )
+        guard case .bool(let sent) = fields["sent"],
+              case .bool(let correlated) = fields["correlatedLocalRecord"],
+              case .bool(let verified) = fields["verified"],
+              case .bool(let invoked) = fields["deliveryInvoked"],
+              case .string(let status) = fields["verificationStatus"],
+              case .string(let semantics) = fields["compatibilityFieldSemantics"] else {
+            throw TestError.assertion("expected dispatch vs correlation envelope")
+        }
+        try expect(sent, "dispatch success must not be false solely because chat.db missed")
+        try expect(!correlated, "NOT_FOUND must not claim local correlation")
+        try expect(!verified)
+        try expect(invoked)
+        try expect(status == MessagesDeliveryVerificationStatus.notFound.rawValue)
+        try expect(semantics.contains("dispatch success"))
+    }
+
+    await test("AppleScript invoke error reports sent false with deliveryInvoked true") {
+        let probe = InvocationProbe()
+        probe.result = .init(error: "forced failure", errorNumber: -1708)
+        let attempt = MessagesModule.performOneToOneSend(
+            recipient: "+15551234567", body: "test", confirm: "SEND",
+            serviceOverride: "iMessage", afterId: 1, preparedAt: Date(),
+            invoke: probe.invoke, verify: probe.verify
+        )
+        let fields = MessagesModule.oneToOneSendMCPFields(
+            recipient: "+15551234567", body: "test", attempt: attempt
+        )
+        guard case .bool(let sent) = fields["sent"],
+              case .bool(let invoked) = fields["deliveryInvoked"] else {
+            throw TestError.assertion("expected sent/deliveryInvoked on invoke error")
+        }
+        try expect(!sent)
+        try expect(invoked)
+        try expect(probe.verifyCount == 0)
+    }
+
+    await test("chatIdentifier success with NOT_FOUND still reports sent true") {
+        let fields = MessagesModule.chatIdentifierSendMCPFields(
+            chatIdentifier: "iMessage;-;+15551234567",
+            body: "test",
+            verification: .init(status: .notFound)
+        )
+        guard case .bool(let sent) = fields["sent"],
+              case .bool(let correlated) = fields["correlatedLocalRecord"],
+              case .bool(let verified) = fields["verified"],
+              case .string(let status) = fields["verificationStatus"] else {
+            throw TestError.assertion("expected chatIdentifier dispatch vs correlation envelope")
+        }
+        try expect(sent)
+        try expect(!correlated)
+        try expect(!verified)
+        try expect(status == MessagesDeliveryVerificationStatus.notFound.rawValue)
+    }
+
+    await test("local correlation poll default is 20 attempts at 0.5s") {
+        try expect(MessagesModule.localCorrelationPollAttempts == 20)
+        try expect(MessagesModule.localCorrelationPollInterval == 0.5)
+    }
+
     await test("messages_send rejects body+confirm without recipient or chatIdentifier") {
         do {
             _ = try await router.dispatch(

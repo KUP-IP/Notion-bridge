@@ -71,6 +71,9 @@ public struct MessagesDeliveryAttempt: Sendable, Equatable {
         self.error = error
         self.errorNumber = errorNumber
     }
+
+    /// AppleScript/dispatch succeeded. Independent of local chat.db correlation.
+    public var dispatchSucceeded: Bool { invoked && error == nil }
 }
 
 public struct ThreadLinkedPersonSnapshot: Sendable, Equatable {
