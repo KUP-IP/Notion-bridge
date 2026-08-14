@@ -275,8 +275,23 @@ func runRemoteOAuthHardeningS4Tests() async {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
 
+        let advisoryKey = BridgeDefaults.brokerAdvisoryAnnotation
+        let previousAdvisory = UserDefaults.standard.object(forKey: advisoryKey)
+        UserDefaults.standard.set(true, forKey: advisoryKey)
+        defer {
+            if let previousAdvisory {
+                UserDefaults.standard.set(previousAdvisory, forKey: advisoryKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: advisoryKey)
+            }
+        }
+
         let audit = AuditLog()
         let custody = RoutingCustodyStore(root: root.appendingPathComponent("routing-custody", isDirectory: true))
+        let sessionRegistry = SessionRegistry(
+            path: root.appendingPathComponent("sessions/sessions.sqlite", isDirectory: false)
+        )
+        try await sessionRegistry.resetForTesting()
         _ = try custody.recordBootstrap(
             snapshotID: "compact-receipt-snapshot",
             source: "test",
@@ -286,6 +301,7 @@ func runRemoteOAuthHardeningS4Tests() async {
         let router = ToolRouter(
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: audit,
+            sessionRegistry: sessionRegistry,
             routingCustodyStore: custody
         )
         await router.register(ToolRegistration(
@@ -388,7 +404,10 @@ func runRemoteOAuthHardeningS4Tests() async {
         try expect(try s4CompactIsError(replay), "receipt replay must fail closed")
 
         let entries = await audit.entries(forSessionID: ToolDispatchContext.remoteConnectorJSONSessionID)
-        let receiptNotes = entries.compactMap(\.governanceNote).filter { $0.hasPrefix("route_receipt_") }
+        let receiptNotes = Set(entries
+            .compactMap(\.governanceNote)
+            .flatMap { $0.split(separator: ";").map(String.init) }
+            .filter { $0.hasPrefix("route_receipt_") })
         try expect(receiptNotes.contains("route_receipt_issued"))
         try expect(receiptNotes.contains("route_receipt_consumed"))
         try expect(receiptNotes.contains("route_receipt_rejected_wrong_principal"))
