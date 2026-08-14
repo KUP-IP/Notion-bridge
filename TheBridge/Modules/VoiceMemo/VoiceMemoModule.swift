@@ -642,7 +642,7 @@ public enum VoiceMemoModule {
                     ]),
                     "summary": .object([
                         "type": .string("string"),
-                        "description": .string("Substantive summary override for intentKind=memory_keep — replaces the heuristic plan.summary as the Notion Memory page's summary property and body text. Recommended whenever the auto-generated summary is a weak transcript fragment; must clear the minimum-information quality gate (non-filler, not too short) or the commit is routed to the review queue instead of being written."),
+                        "description": .string("Substantive summary override for intentKind=memory_keep — replaces the heuristic summary in the Notion Memory page body. It is mirrored to a registry summary property only when that property is rich_text; select/status-backed fields such as Relevant never receive prose. Recommended whenever the auto-generated summary is a weak transcript fragment; must clear the minimum-information quality gate (non-filler, not too short) or the commit is routed to the review queue instead of being written."),
                     ]),
                     "purpose": .object([
                         "type": .string("string"),
