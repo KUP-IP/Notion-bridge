@@ -485,10 +485,13 @@ public enum VoiceMemoProcessor {
             entity: entity
         )
 
-        // PKT-MEM-132 D49 — protect BOTH the body summary and every property
-        // value that will actually be sent to Notion.
+        // PKT-MEM-132 D49 — protect the semantic summary (page body, and a
+        // rich_text property when one exists) plus every other property that
+        // will actually be sent to Notion. Report the canonical `summary` key
+        // when the prose overlaps the transcript, even if the live registry
+        // maps that key to a non-text column such as `Relevant`.
         if let rejected = VoiceMemoTranscriptOverlapGuard.firstRejectedField(
-            in: ["memoryBody": semanticSummary], transcript: transcript
+            in: ["summary": semanticSummary], transcript: transcript
         ) {
             throw VoiceMemoError.transcriptOverlapRejected(entityKey, rejected.key, rejected.runLength)
         }

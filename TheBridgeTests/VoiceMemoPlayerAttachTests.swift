@@ -199,6 +199,9 @@ func runVoiceMemoPlayerAttachTests() async {
     print("\n\u{1F517} PKT-1064 — originating-Player relation attach + verify")
 
     // 1. Attaches the default originating player on memory_keep create.
+    //    Live Memory shape (summary → Relevant select): prose must not enter
+    //    the select, retired parser keys must be dropped, title + Player stay,
+    //    and the semantic summary lands in the Notion body append.
     await test("PKT-1064: memory_keep attaches the originating Player relation at create") {
         let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = MemoryKeepStubState()
@@ -217,6 +220,17 @@ func runVoiceMemoPlayerAttachTests() async {
         try expect(fields["players"] == .string(kIsaiahPlayerId),
                    "create must carry players=\(kIsaiahPlayerId), got \(String(describing: fields["players"]))")
         try expect(detail.contains(kIsaiahPlayerId), "detail should record the attached player")
+        try expect(fields["title"] == .string("Preferred stack"),
+                   "title must still be written, got \(String(describing: fields["title"]))")
+        try expect(fields["summary"] == nil,
+                   "select-backed summary/Relevant must not receive prose, got \(String(describing: fields["summary"]))")
+        try expect(fields["alias"] == nil && fields["status"] == nil && fields["type"] == nil,
+                   "retired parser Memory fields must be filtered, got \(fields)")
+        let appended = await state.appendedChildrenJSON
+        try expect(appended.contains("Keep this: my preferred stack is Bridge plus Cursor."),
+                   "semantic summary must appear in the Notion body append, got \(appended)")
+        try expect(!appended.contains("Keep this note."),
+                   "raw transcript must not leak into the Notion body, got \(appended)")
     }
 
     // 2. Verify read-back confirms the relation is present.
