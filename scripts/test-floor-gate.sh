@@ -31,7 +31,11 @@
 #   on-device approval (Always ask / session / trusted direct). Fail-closed
 #   for group, THREAD, remote, jobs, and raw chatNNN. Measured 3640 passed,
 #   0 failed on feat/issue-126-messages-approval-policy.
-FLOOR="${BRIDGE_TEST_FLOOR:-3640}"
+# 2026-08-15: 3640 → 3652 (+12) — issue #138: registry_create repair envelope
+#   (state complete|partial|none, entityUrl, applied/failed), relation
+#   preflight, updatePage applied vs canonicalized vs rejected. Measured
+#   3652 passed, 0 failed on feat/issue-138-registry-repair-envelope.
+FLOOR="${BRIDGE_TEST_FLOOR:-3652}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

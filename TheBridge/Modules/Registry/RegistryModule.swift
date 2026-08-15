@@ -129,7 +129,7 @@ public enum RegistryModule {
     /// Shared description snippet for the `fields` result-projection param,
     /// reused verbatim across all 6 tools (Round 2 Decision 4 — one
     /// mechanism, learned once, recognized everywhere).
-    static let fieldsParamDescriptionSuffix = " Optional `fields` (array of strings) narrows the returned row to only the requested top-level keys — e.g. [\"title\",\"properties.status\"] — instead of the full envelope. Bare \"properties\" keeps the whole properties map; a dotted \"properties.X\" sub-selects one property (case-insensitive). Identity keys (`id`, `entity`, `title`) are always retained when present so projected list/find rows remain usable for follow-on updates. Omitted or [] → unchanged full response. Unknown keys/paths are silently absent, never an error. On write tools this NEVER filters the operation-status wrapper (created/updated/matchedId/bodyWrite/idempotentReplay/partialFailure/reason) — only the row payload."
+    static let fieldsParamDescriptionSuffix = " Optional `fields` (array of strings) narrows the returned row to only the requested top-level keys — e.g. [\"title\",\"properties.status\"] — instead of the full envelope. Bare \"properties\" keeps the whole properties map; a dotted \"properties.X\" sub-selects one property (case-insensitive). Identity keys (`id`, `entity`, `title`) are always retained when present so projected list/find rows remain usable for follow-on updates. Omitted or [] → unchanged full response. Unknown keys/paths are silently absent, never an error. On write tools this NEVER filters the operation-status wrapper (created/updated/matchedId/bodyWrite/idempotentReplay/partialFailure/reason/state/entityUrl/applied/failed) — only the row payload."
 
     static func fieldsParamSchema() -> Value {
         .object([
@@ -161,6 +161,19 @@ public enum RegistryModule {
         if let markdownHash { out["markdownSha256"] = .string(markdownHash) }
         if let error { out["error"] = .string(error) }
         return .object(out)
+    }
+
+    static func createReceipt(
+        _ env: RegistryCreateEnvelope,
+        requestedFields: [String]?,
+        extras: [String: Value] = [:]
+    ) -> Value {
+        let projected = env.row.map { FieldsFilter.project(rowValue($0, stale: false), fields: requestedFields) }
+        guard case .object(var obj) = env.asValue(projectedRow: projected) else {
+            return env.asValue(projectedRow: projected)
+        }
+        for (k, v) in extras { obj[k] = v }
+        return .object(obj)
     }
 
     static func entityValue(_ e: RegistryEntity) -> Value {
@@ -473,7 +486,7 @@ public enum RegistryModule {
     public static func makeCreate() -> ToolRegistration {
         ToolRegistration(
             name: "registry_create", module: moduleName, tier: .notify,
-            description: "Create a new row in a registry entity from canonical field keys. Optional bodyMarkdown initializes the newly-created Notion page body for body-bearing entities (see registry_entities hasBody=true); the supplied Markdown is copied as source content, not summarized, regenerated, or improved. Supported Markdown is Notion's page-markdown subset: headings, paragraphs, bulleted/numbered lists, code fences, block quotes, links, and inline emphasis. bodyMarkdown is optional, Max 100000 characters, and used only for initial creation via replacePageMarkdown on the new blank page. Use idempotencyKey to make retries return the first created page instead of creating duplicates. If the body write fails after row creation, the result is created=false with partialFailure=true and the page id plus body error; it is never reported as a successful creation." + fieldsParamDescriptionSuffix + " NOTE: the write-payload `fields` (object) and the result-projection `fields` (array) share one parameter name — pass an OBJECT to write, or an ARRAY to project the response; the shapes never collide.",
+            description: "Create a new row in a registry entity from canonical field keys. Returns a repair envelope: state complete|partial|none, entityUrl whenever a page was created (including partial), applied field keys, and failed [{field,reason}]. Relation targets are preflighted for integration accessibility before the parent row is created — an inaccessible target yields state none and creates nothing. If a later property or body write fails, state is partial with a usable entityUrl; do not re-issue create — repair that URL. Optional bodyMarkdown initializes the newly-created Notion page body for body-bearing entities (see registry_entities hasBody=true); the supplied Markdown is copied as source content, not summarized, regenerated, or improved. Supported Markdown is Notion's page-markdown subset: headings, paragraphs, bulleted/numbered lists, code fences, block quotes, links, and inline emphasis. bodyMarkdown is optional, Max 100000 characters, and used only for initial creation via replacePageMarkdown on the new blank page. Use idempotencyKey to make retries return the first created page instead of creating duplicates." + fieldsParamDescriptionSuffix + " NOTE: the write-payload `fields` (object) and the result-projection `fields` (array) share one parameter name — pass an OBJECT to write, or an ARRAY to project the response; the shapes never collide.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -522,6 +535,10 @@ public enum RegistryModule {
                                 "created": .bool(false),
                                 "idempotentReplay": .bool(true),
                                 "partialFailure": .bool(false),
+                                "state": .string("complete"),
+                                "entityUrl": .string(healed.row.url),
+                                "applied": .array([]),
+                                "failed": .array([]),
                                 "row": FieldsFilter.project(rowValue(healed.row, stale: false), fields: requestedFields),
                                 "bodyWrite": bodyWriteValue(
                                     requested: true,
@@ -536,6 +553,10 @@ public enum RegistryModule {
                                 "created": .bool(false),
                                 "idempotentReplay": .bool(true),
                                 "partialFailure": .bool(true),
+                                "state": .string("partial"),
+                                "entityUrl": .string(failed.row.url),
+                                "applied": .array([]),
+                                "failed": .array([RegistryFieldFailure(field: "bodyMarkdown", reason: failed.bodyError ?? "body_write_failed").asValue]),
                                 "reason": .string("body_write_failed"),
                                 "row": FieldsFilter.project(rowValue(failed.row, stale: false), fields: requestedFields),
                                 "bodyWrite": bodyWriteValue(
@@ -551,6 +572,13 @@ public enum RegistryModule {
                         "created": .bool(false),
                         "idempotentReplay": .bool(true),
                         "partialFailure": .bool(!record.bodySucceeded && record.bodyRequested),
+                        "state": .string(!record.bodySucceeded && record.bodyRequested ? "partial" : "complete"),
+                        "entityUrl": .string(record.row.url),
+                        "applied": .array([]),
+                        "failed": .array(
+                            (!record.bodySucceeded && record.bodyRequested)
+                            ? [RegistryFieldFailure(field: "bodyMarkdown", reason: record.bodyError ?? "body_write_failed").asValue]
+                            : []),
                         "row": FieldsFilter.project(rowValue(record.row, stale: false), fields: requestedFields),
                         "bodyWrite": bodyWriteValue(
                             requested: record.bodyRequested,
@@ -561,7 +589,13 @@ public enum RegistryModule {
                     ])
                 }
                 let writer = RegistryWriter(gateway: gateway)
-                let row = try await writer.create(entity: entity, fields: fields(a))
+                var env = try await writer.createReporting(entity: entity, fields: fields(a))
+                if env.state == .none {
+                    return createReceipt(env, requestedFields: requestedFields)
+                }
+                guard let row = env.row else {
+                    return createReceipt(env, requestedFields: requestedFields)
+                }
                 if let idempotencyKey {
                     try await idemStore.save(RegistryCreateIdempotencyRecord(
                         entity: entity.key,
@@ -575,11 +609,7 @@ public enum RegistryModule {
                         createdAt: Date()))
                 }
                 guard let bodyMarkdown else {
-                    return .object([
-                        "created": .bool(true),
-                        "partialFailure": .bool(false),
-                        "row": FieldsFilter.project(rowValue(row, stale: false), fields: requestedFields),
-                    ])
+                    return createReceipt(env, requestedFields: requestedFields)
                 }
                 do {
                     try await gateway.writeMarkdown(pageId: row.pageId, workspace: entity.workspace, markdown: bodyMarkdown)
@@ -595,10 +625,7 @@ public enum RegistryModule {
                             bodyError: nil,
                             createdAt: Date()))
                     }
-                    return .object([
-                        "created": .bool(true),
-                        "partialFailure": .bool(false),
-                        "row": FieldsFilter.project(rowValue(row, stale: false), fields: requestedFields),
+                    return createReceipt(env, requestedFields: requestedFields, extras: [
                         "bodyWrite": bodyWriteValue(
                             requested: true,
                             succeeded: true,
@@ -619,11 +646,13 @@ public enum RegistryModule {
                             bodyError: err,
                             createdAt: Date()))
                     }
-                    return .object([
-                        "created": .bool(false),
-                        "partialFailure": .bool(true),
+                    env = RegistryCreateEnvelope(
+                        state: .partial,
+                        row: row,
+                        applied: env.applied,
+                        failed: env.failed + [RegistryFieldFailure(field: "bodyMarkdown", reason: err)])
+                    return createReceipt(env, requestedFields: requestedFields, extras: [
                         "reason": .string("body_write_failed"),
-                        "row": FieldsFilter.project(rowValue(row, stale: false), fields: requestedFields),
                         "bodyWrite": bodyWriteValue(
                             requested: true,
                             succeeded: false,

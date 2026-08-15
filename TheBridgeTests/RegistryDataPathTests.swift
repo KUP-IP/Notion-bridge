@@ -23,6 +23,7 @@ private actor FakeRegistryGateway: RegistryNotionGateway {
     var pages: [String: NotionRow] = [:]
     var queryRows: [NotionRow] = []
     var failNetwork = false
+    var failUpdateWhenType: String?
     private(set) var pageCalls = 0
     private(set) var queryCalls = 0
     private(set) var created: [[BoundField]] = []
@@ -32,6 +33,7 @@ private actor FakeRegistryGateway: RegistryNotionGateway {
     private var nextId = 1
 
     func setFail(_ v: Bool) { failNetwork = v }
+    func setFailUpdateWhenType(_ t: String?) { failUpdateWhenType = t }
     func putPage(_ row: NotionRow) { pages[row.id] = row }
     func setQueryRows(_ rows: [NotionRow]) { queryRows = rows }
     func setSchema(_ s: DataSourceSchema) { schemaToReturn = s }
@@ -61,6 +63,9 @@ private actor FakeRegistryGateway: RegistryNotionGateway {
     }
     func update(pageId: String, workspace: String?, fields: [BoundField]) async throws -> NotionRow {
         if failNetwork { throw FakeError.offline }
+        if let t = failUpdateWhenType, fields.contains(where: { $0.type == t }) {
+            throw FakeError.forbidden
+        }
         updated.append((pageId, fields))
         let norm = CachedRow.normalize(pageId)
         var cells = (pages[norm] ?? pages[pageId])?.cells ?? [:]
@@ -83,7 +88,7 @@ private actor FakeRegistryGateway: RegistryNotionGateway {
         markdownWrites.append((pageId, markdown))
     }
 
-    enum FakeError: Error { case offline, notFound }
+    enum FakeError: Error { case offline, notFound, forbidden }
 
     static func row(id: String, fields: [BoundField]) -> NotionRow {
         var cells: [String: NotionCell] = [:]
@@ -103,6 +108,16 @@ private func widgetEntity(ttl: Int = 3600) -> RegistryEntity {
             RegistryProperty(key: "count", notionName: "Count", notionPropertyId: "p_count", type: "number"),
         ],
         cacheTTLSeconds: ttl, hasBody: true)
+}
+
+private func packetLikeEntity(ttl: Int = 3600) -> RegistryEntity {
+    RegistryEntity(
+        key: "session", displayName: "Packets", dataSourceId: "ds_pkt", workspace: nil,
+        properties: [
+            RegistryProperty(key: "name", notionName: "Packet Name", notionPropertyId: "p_title", type: "title", role: .title),
+            RegistryProperty(key: "project", notionName: "PROJECT", notionPropertyId: "p_proj", type: "relation", role: .relation),
+        ],
+        cacheTTLSeconds: ttl, hasBody: false)
 }
 
 private func widgetRow(id: String, name: String, status: String, count: Double, edited: String = "2026-06-17T10:00:00.000Z") -> NotionRow {
@@ -330,6 +345,47 @@ func runRegistryDataPathTests() async {
             let cached = await cache.read(entity: "widget", pageId: cr.pageId)
             try expect(cached != nil, "post-create cache populated at key \(cr.pageId)")
             try expect(cached?.properties == fullProjection, "cache holds the full projection")
+        }
+    }
+
+    await test("Writer.createReporting: inaccessible relation preflight yields state none and creates nothing") {
+        try await withTempHomeReg { cache in
+            let gw = FakeRegistryGateway()
+            let writer = RegistryWriter(gateway: gw, cache: cache)
+            let env = try await writer.createReporting(
+                entity: packetLikeEntity(),
+                fields: [
+                    "name": .string("Ghost"),
+                    "project": .array([.string("deadbeefdeadbeefdeadbeefdeadbeef")]),
+                ])
+            try expect(env.state == .none, "preflight must not create")
+            try expect(env.entityUrl == nil, "no URL when nothing was created")
+            try expect(env.failed.contains(where: { $0.field == "project" && $0.reason.contains("inaccessible_relation_target") }),
+                       "failed names the relation: \(env.failed)")
+            try expect(await gw.created.isEmpty, "no Notion create")
+        }
+    }
+
+    await test("Writer.createReporting: relation PATCH failure yields partial with entityUrl and one row") {
+        try await withTempHomeReg { cache in
+            let gw = FakeRegistryGateway()
+            let target = "aabbccdd00112233445566778899aabb"
+            await gw.putPage(NotionRow(
+                id: CachedRow.normalize(target), url: "https://n/\(target)",
+                lastEditedTime: "t", cells: [:]))
+            await gw.setFailUpdateWhenType("relation")
+            let writer = RegistryWriter(gateway: gw, cache: cache)
+            let env = try await writer.createReporting(
+                entity: packetLikeEntity(),
+                fields: [
+                    "name": .string("Partial Packet"),
+                    "project": .array([.string(target)]),
+                ])
+            try expect(env.state == .partial, "PATCH failure is partial, not none")
+            try expect(env.entityUrl != nil && !(env.entityUrl ?? "").isEmpty, "usable entityUrl")
+            try expect(env.applied.contains("name"), "title applied: \(env.applied)")
+            try expect(env.failed.contains(where: { $0.field == "project" }), "project failed: \(env.failed)")
+            try expect(await gw.created.count == 1, "exactly one row created")
         }
     }
 

@@ -419,4 +419,47 @@ public enum RegistryPropertyCodec {
         }
         return String(d)
     }
+
+    // MARK: - Write classification (issue #138)
+
+    /// Relation / people page ids, dash-stripped and lowercased.
+    public static func pageIds(from value: Value) -> [String] {
+        (listOrNil(value) ?? [])
+            .map { CachedRow.normalize($0) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Compare a requested write to the value present on the returned page.
+    /// Exact MCP `Value` equality is `applied`. Semantically equal rewrites
+    /// (UUID dashes, select option objects, 7 vs 7.0) are `canonicalized`.
+    /// Missing or different values are `rejected` — never lumped in with
+    /// canonicalization.
+    public static func classifyWrite(type: String, requested: Value, actual: Value?) -> FieldWriteOutcome {
+        guard let actual else { return .rejected("not present on page") }
+        if requested == actual { return .applied }
+        if semanticallyEqual(type: type, requested: requested, actual: actual) {
+            return .canonicalized
+        }
+        return .rejected("value mismatch")
+    }
+
+    public static func semanticallyEqual(type: String, requested: Value, actual: Value) -> Bool {
+        switch type {
+        case "relation", "people":
+            return Set(pageIds(from: requested)) == Set(pageIds(from: actual))
+        case "number":
+            return numeric(requested) == numeric(actual)
+        case "checkbox":
+            return boolean(requested) == boolean(actual)
+        case "multi_select":
+            return Set((listOrNil(requested) ?? []).map { $0.lowercased() })
+                == Set((listOrNil(actual) ?? []).map { $0.lowercased() })
+        case "title", "rich_text", "select", "status", "url", "email", "phone_number":
+            let a = stringy(requested)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let b = stringy(actual)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return a != nil && a == b
+        default:
+            return requested == actual
+        }
+    }
 }

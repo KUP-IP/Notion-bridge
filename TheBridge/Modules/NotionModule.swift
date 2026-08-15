@@ -331,7 +331,7 @@ public enum NotionModule {
             name: "notion_page_update",
             module: moduleName,
             tier: .notify,
-            description: "Update a Notion page's properties only (title, status, relations). For body content use notion_blocks_append / notion_block_update.",
+            description: "Update a Notion page's properties only (title, status, relations). Distinguishes status applied (exact), canonicalized (Notion rewrote UUID/select/number form — still success), and rejected (field missing or value mismatch). Canonicalized-only is never reported as partially applied. For body content use notion_blocks_append / notion_block_update.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -383,11 +383,14 @@ public enum NotionModule {
                 await SkillBodyCacheEviction.evictIfConfiguredSkillPage(pageId)
                 await RegistryRowCache.shared.evictPageEverywhere(pageId: pageId)
 
-                return .object([
-                    "success": .bool(true),
+                let classification = PageUpdateApplication.classify(requested: propsObj, returnedPage: resultJSON)
+                var out: [String: Value] = [
+                    "success": .bool(classification.success),
                     "id": .string(id),
-                    "url": .string(url)
-                ])
+                    "url": .string(url),
+                ]
+                for (k, v) in classification.asValue { out[k] = v }
+                return .object(out)
             }
         ))
 

@@ -37,6 +37,8 @@ public struct RegistryWriter: Sendable {
         case notFullyBound(entity: String, unbound: [String])
         case unknownFields(entity: String, keys: [String])
         case noWritableFields(entity: String)
+        case preflightFailed(entity: String, failed: [RegistryFieldFailure])
+        case partialMaterialization(entity: String, envelope: RegistryCreateEnvelope)
         public var errorDescription: String? {
             switch self {
             case .notFullyBound(let e, let u):
@@ -45,6 +47,11 @@ public struct RegistryWriter: Sendable {
                 return "entity ‘\(e)’ has no properties \(k)"
             case .noWritableFields(let e):
                 return "no writable fields supplied for ‘\(e)’"
+            case .preflightFailed(let e, let failed):
+                let detail = failed.map { "\($0.field): \($0.reason)" }.joined(separator: "; ")
+                return "entity ‘\(e)’ create blocked before page creation — \(detail)"
+            case .partialMaterialization(let e, let env):
+                return "entity ‘\(e)’ partially materialized at \(env.entityUrl ?? env.row?.pageId ?? "?") — repair that row; do not re-create"
             }
         }
     }
@@ -77,29 +84,152 @@ public struct RegistryWriter: Sendable {
 
     // MARK: - Create (create-then-update)
 
-    @discardableResult
-    public func create(entity: RegistryEntity, fields input: [String: Value]) async throws -> CachedRow {
+    /// Create-then-update that never hides a materialized page behind a thrown
+    /// error. Preflights relation targets; returns `state: none` without creating
+    /// when a target is inaccessible; returns `state: partial` with `entityUrl`
+    /// when the title lands and a later field PATCH fails.
+    public func createReporting(
+        entity: RegistryEntity, fields input: [String: Value]
+    ) async throws -> RegistryCreateEnvelope {
         let r = Self.resolve(input, entity: entity)
         if !r.unknown.isEmpty { throw RegistryWriteError.unknownFields(entity: entity.key, keys: r.unknown) }
         if !r.unbound.isEmpty { throw RegistryWriteError.notFullyBound(entity: entity.key, unbound: r.unbound) }
         if r.fields.isEmpty || !Self.hasEncodable(r.fields) { throw RegistryWriteError.noWritableFields(entity: entity.key) }
 
+        let preflight = await preflightRelationTargets(r.fields, entity: entity)
+        if !preflight.isEmpty {
+            return RegistryCreateEnvelope(state: .none, row: nil, applied: [], failed: preflight)
+        }
+
         let titleFields = r.fields.filter { $0.isTitle }
         let rest = r.fields.filter { !$0.isTitle }
+        let seedFields = titleFields.isEmpty ? r.fields : titleFields
 
-        // Create-then-update: seed the page with the title, then PATCH the rest.
         let created = try await gateway.create(
             dataSourceId: entity.dataSourceId, workspace: entity.workspace,
-            fields: titleFields.isEmpty ? r.fields : titleFields)
-        // Cache the titled row immediately, so if the follow-up PATCH throws the
-        // created page isn't an invisible orphan — a retry/read still sees it.
-        // (Notion has no multi-call transaction; this is the best-effort guard.)
+            fields: seedFields)
         _ = await RegistryReader.store(created, entity: entity, into: cache)
         var row = created
+        var applied = seedFields.map { Self.canonicalKey(for: $0, entity: entity) }
+        var failed: [RegistryFieldFailure] = []
+
         if !titleFields.isEmpty, !rest.isEmpty {
-            row = try await gateway.update(pageId: created.id, workspace: entity.workspace, fields: rest)
+            do {
+                row = try await gateway.update(pageId: created.id, workspace: entity.workspace, fields: rest)
+                let classified = Self.classifyFields(rest, on: row, entity: entity)
+                applied.append(contentsOf: classified.applied)
+                failed.append(contentsOf: classified.failed)
+            } catch {
+                let isolated = await isolateRestFields(
+                    rest, pageId: created.id, workspace: entity.workspace, entity: entity)
+                row = isolated.row ?? row
+                applied.append(contentsOf: isolated.applied)
+                failed.append(contentsOf: isolated.failed)
+            }
+        } else {
+            let classified = Self.classifyFields(seedFields, on: row, entity: entity)
+            failed.append(contentsOf: classified.failed)
+            if !classified.failed.isEmpty {
+                applied = classified.applied
+            }
         }
-        return await RegistryReader.store(row, entity: entity, into: cache)
+
+        let cached = await RegistryReader.store(row, entity: entity, into: cache)
+        let state: RegistryCreateEnvelope.State = failed.isEmpty ? .complete : .partial
+        var seen = Set<String>()
+        let uniqueApplied = applied.filter { seen.insert($0).inserted }
+        return RegistryCreateEnvelope(
+            state: state, row: cached, applied: uniqueApplied, failed: failed)
+    }
+
+    @discardableResult
+    public func create(entity: RegistryEntity, fields input: [String: Value]) async throws -> CachedRow {
+        let env = try await createReporting(entity: entity, fields: input)
+        switch env.state {
+        case .complete:
+            guard let row = env.row else {
+                throw RegistryWriteError.noWritableFields(entity: entity.key)
+            }
+            return row
+        case .none:
+            throw RegistryWriteError.preflightFailed(entity: entity.key, failed: env.failed)
+        case .partial:
+            throw RegistryWriteError.partialMaterialization(entity: entity.key, envelope: env)
+        }
+    }
+
+    static func canonicalKey(for field: BoundField, entity: RegistryEntity) -> String {
+        entity.properties.first(where: {
+            $0.notionPropertyId == field.propertyId || $0.notionName == field.notionName
+        })?.key ?? field.notionName
+    }
+
+    /// GET each relation target before creating the parent row. Notion returns
+    /// 404 for both missing and unshared pages; either is inaccessible to this
+    /// integration and must fail closed as `state: none`.
+    func preflightRelationTargets(
+        _ fields: [BoundField], entity: RegistryEntity
+    ) async -> [RegistryFieldFailure] {
+        var failed: [RegistryFieldFailure] = []
+        for field in fields where field.type == "relation" {
+            let key = Self.canonicalKey(for: field, entity: entity)
+            for id in RegistryPropertyCodec.pageIds(from: field.value) {
+                do {
+                    _ = try await gateway.page(pageId: id, workspace: entity.workspace)
+                } catch {
+                    failed.append(RegistryFieldFailure(
+                        field: key,
+                        reason: "inaccessible_relation_target (\(id)): \(String(describing: error))"))
+                }
+            }
+        }
+        return failed
+    }
+
+    static func classifyFields(
+        _ fields: [BoundField], on row: NotionRow, entity: RegistryEntity
+    ) -> (applied: [String], failed: [RegistryFieldFailure]) {
+        var applied: [String] = []
+        var failed: [RegistryFieldFailure] = []
+        for field in fields {
+            let key = canonicalKey(for: field, entity: entity)
+            let actual = row.cell(for: matchingProperty(field, entity: entity))?.value
+                ?? row.cells[field.notionName]?.value
+            switch RegistryPropertyCodec.classifyWrite(type: field.type, requested: field.value, actual: actual) {
+            case .applied, .canonicalized:
+                applied.append(key)
+            case .rejected(let reason):
+                failed.append(RegistryFieldFailure(field: key, reason: reason))
+            }
+        }
+        return (applied, failed)
+    }
+
+    static func matchingProperty(_ field: BoundField, entity: RegistryEntity) -> RegistryProperty {
+        entity.properties.first(where: {
+            $0.notionPropertyId == field.propertyId || $0.notionName == field.notionName
+        }) ?? RegistryProperty(
+            key: field.notionName, notionName: field.notionName,
+            notionPropertyId: field.propertyId, type: field.type)
+    }
+
+    func isolateRestFields(
+        _ rest: [BoundField], pageId: String, workspace: String?, entity: RegistryEntity
+    ) async -> (row: NotionRow?, applied: [String], failed: [RegistryFieldFailure]) {
+        var row: NotionRow?
+        var applied: [String] = []
+        var failed: [RegistryFieldFailure] = []
+        for field in rest {
+            let key = Self.canonicalKey(for: field, entity: entity)
+            do {
+                row = try await gateway.update(pageId: pageId, workspace: workspace, fields: [field])
+                applied.append(key)
+            } catch {
+                failed.append(RegistryFieldFailure(
+                    field: key, reason: String(describing: error)))
+            }
+        }
+        return (row, applied, failed)
     }
 
     // MARK: - Update

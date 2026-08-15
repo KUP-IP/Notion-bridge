@@ -14,6 +14,7 @@ private actor ModFakeGateway: RegistryNotionGateway {
     var queryRows: [NotionRow]
     var pages: [String: NotionRow]
     var failMarkdownWrite = false
+    var failUpdateWhenType: String?
     private(set) var created: [[BoundField]] = []
     private(set) var updated: [(String, [BoundField])] = []
     private(set) var archived: [String] = []
@@ -52,6 +53,9 @@ private actor ModFakeGateway: RegistryNotionGateway {
         return NotionRow(id: "createdid000000000000000000000aa", url: "u", lastEditedTime: "t", cells: cells)
     }
     func update(pageId: String, workspace: String?, fields: [BoundField]) async throws -> NotionRow {
+        if let t = failUpdateWhenType, fields.contains(where: { $0.type == t }) {
+            throw NSError(domain: "fake.update", code: 404, userInfo: [NSLocalizedDescriptionKey: "Can't edit this block"])
+        }
         updated.append((pageId, fields))
         var cells = (pages[CachedRow.normalize(pageId)])?.cells ?? [:]
         for f in fields { cells[f.notionName] = NotionCell(id: f.propertyId, type: f.type, value: f.value) }
@@ -64,6 +68,11 @@ private actor ModFakeGateway: RegistryNotionGateway {
         markdownWrites.append((pageId, markdown))
     }
     func setFailMarkdownWrite(_ value: Bool) { failMarkdownWrite = value }
+    func setFailUpdateWhenType(_ value: String?) { failUpdateWhenType = value }
+    func seedAccessiblePage(_ id: String) {
+        let n = CachedRow.normalize(id)
+        pages[n] = NotionRow(id: n, url: "https://n/\(n)", lastEditedTime: "t", cells: [:])
+    }
 }
 
 private func skillsSchema() -> DataSourceSchema {
@@ -546,6 +555,8 @@ func runRegistryModuleTests() async {
                 ]),
             ]))
             _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("session")]))
+            let projectId = "37fcbb58-889e-81f1-867e-d71b11dd9baf"
+            await fake.seedAccessiblePage(projectId)
             let markdown = """
             # Approved Proposal
 
@@ -634,8 +645,93 @@ func runRegistryModuleTests() async {
             ]))
             try expect(obj(out)["created"] == .bool(false), "partial failure must not be success")
             try expect(obj(out)["partialFailure"] == .bool(true), "partial failure flag")
+            try expect(obj(out)["state"] == .string("partial"), "envelope state")
+            try expect(obj(out)["entityUrl"] != nil, "entityUrl present after body fail")
             try expect(obj(out)["reason"] == .string("body_write_failed"), "structured reason")
             try expect(await fake.created.count == 1, "row was created before body failed")
+        }
+    }
+
+    await test("registry_create complete envelope includes state and entityUrl") {
+        let fake = ModFakeGateway(schema: skillsSchema())
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("skill")]))
+            let out = try await RegistryModule.makeCreate().handler(.object([
+                "entity": .string("skill"),
+                "fields": .object(["name": .string("Envelope")]),
+            ]))
+            try expect(obj(out)["state"] == .string("complete"), "complete")
+            try expect(obj(out)["created"] == .bool(true), "created compat")
+            try expect(obj(out)["entityUrl"] != nil, "entityUrl on complete")
+            try expect(obj(out)["applied"] != nil, "applied list present")
+            try expect(obj(out)["failed"] == .array([]), "no failures")
+        }
+    }
+
+    await test("registry_create inaccessible relation preflight yields state none and creates nothing") {
+        let fake = ModFakeGateway(schema: packetSchema())
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeAddEntity().handler(.object([
+                "key": .string("session"),
+                "displayName": .string("Packets"),
+                "dataSourceId": .string("packet_ds"),
+                "hasBody": .bool(true),
+                "properties": .array([
+                    .object(["key": .string("name"), "notionName": .string("Packet Name"), "type": .string("title"), "role": .string("title")]),
+                    .object(["key": .string("project"), "notionName": .string("PROJECT"), "type": .string("relation"), "role": .string("relation")]),
+                ]),
+            ]))
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("session")]))
+            let out = try await RegistryModule.makeCreate().handler(.object([
+                "entity": .string("session"),
+                "fields": .object([
+                    "name": .string("Should Not Exist"),
+                    "project": .array([.string("00000000000000000000000000000001")]),
+                ]),
+            ]))
+            try expect(obj(out)["state"] == .string("none"), "none")
+            try expect(obj(out)["created"] == .bool(false), "not created")
+            try expect(obj(out)["entityUrl"] == nil, "no URL")
+            try expect(await fake.created.isEmpty, "creates nothing")
+            guard case .array(let failed)? = obj(out)["failed"] else { throw TestError.assertion("failed missing") }
+            try expect(failed.contains(where: {
+                obj($0)["field"] == .string("project")
+            }), "project in failed: \(failed)")
+        }
+    }
+
+    await test("registry_create forced relation PATCH failure yields partial with entityUrl and one row") {
+        let fake = ModFakeGateway(schema: packetSchema())
+        let target = "aabbccdd00112233445566778899aabb"
+        await fake.seedAccessiblePage(target)
+        await fake.setFailUpdateWhenType("relation")
+        try await withRegistryModuleEnv(fake) {
+            _ = try await RegistryModule.makeAddEntity().handler(.object([
+                "key": .string("session"),
+                "displayName": .string("Packets"),
+                "dataSourceId": .string("packet_ds"),
+                "hasBody": .bool(false),
+                "properties": .array([
+                    .object(["key": .string("name"), "notionName": .string("Packet Name"), "type": .string("title"), "role": .string("title")]),
+                    .object(["key": .string("project"), "notionName": .string("PROJECT"), "type": .string("relation"), "role": .string("relation")]),
+                ]),
+            ]))
+            _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("session")]))
+            let out = try await RegistryModule.makeCreate().handler(.object([
+                "entity": .string("session"),
+                "fields": .object([
+                    "name": .string("Repair Me"),
+                    "project": .array([.string(target)]),
+                ]),
+            ]))
+            try expect(obj(out)["state"] == .string("partial"), "partial")
+            try expect(obj(out)["created"] == .bool(false), "not a successful create")
+            try expect(obj(out)["partialFailure"] == .bool(true), "partialFailure compat")
+            try expect(obj(out)["entityUrl"] != nil, "usable entityUrl")
+            try expect(await fake.created.count == 1, "zero duplicate rows")
+            guard case .array(let failed)? = obj(out)["failed"] else { throw TestError.assertion("failed missing") }
+            try expect(failed.contains(where: { obj($0)["field"] == .string("project") }),
+                       "project failed: \(failed)")
         }
     }
 
