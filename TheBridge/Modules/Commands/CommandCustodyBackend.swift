@@ -241,6 +241,28 @@ final class CommandCustodyBackend: @unchecked Sendable {
         try publishLocked(snapshot)
     }
 
+    func applyFavoriteLayout(slugsBySlot: [Int: String]) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        var snapshot = try mutableSnapshotLocked()
+        let commands = effectiveCommands(snapshot)
+        var next: [Int: String] = [:]
+        var seen = Set<String>()
+        for (slot, slug) in slugsBySlot {
+            try assertSlot(slot)
+            guard let existing = commands.first(where: { $0.slug == slug }) else {
+                throw CommandStore.StoreError.slugNotFound(slug)
+            }
+            guard seen.insert(existing.id).inserted else {
+                throw CommandStore.StoreError.corruptRevision("duplicate favorite slug \(slug)")
+            }
+            next[slot] = existing.id
+        }
+        snapshot.favorites = next
+        try publishLocked(snapshot)
+    }
+
     func recordUse(slug: String, at date: Date) throws {
         lock.lock()
         defer { lock.unlock() }

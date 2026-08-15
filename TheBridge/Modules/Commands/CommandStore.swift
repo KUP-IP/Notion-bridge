@@ -318,6 +318,22 @@ public final class CommandStore: @unchecked Sendable {
         try custody.setKeySlot(slug: slug, slot: slot)
     }
 
+    /// Current 0…9 favorite map keyed by command slug. Bodies are not included.
+    public func favoriteLayout() throws -> FavoriteLayout {
+        var slots: [Int: String] = [:]
+        for command in try list() {
+            if let slot = command.keySlot {
+                slots[slot] = command.slug
+            }
+        }
+        return FavoriteLayout(slots: slots)
+    }
+
+    /// Replace the entire favorite map in one publish. Does not rewrite bodies.
+    public func applyFavoriteLayout(_ layout: FavoriteLayout) throws {
+        try custody.applyFavoriteLayout(slugsBySlot: layout.slots)
+    }
+
     /// Stamp lastUsedAt to now. Called when the command fires from the popup.
     public func recordUse(slug: String, at when: Date = Date()) throws {
         try custody.recordUse(slug: slug, at: when)

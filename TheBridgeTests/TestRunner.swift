@@ -871,6 +871,10 @@ await runCommandDirectionalCatalogTests()
 // bounded Calibrate report. AI LOG stays telemetry.
 await runCommandGitHubFirstFeedbackTests()
 
+// GitHub #140 C0: Search favorite layout transactions, Replace/Swap/Undo,
+// A0 favorite-map persistence, no command-body mutation.
+await runCommandFavoriteLayoutTests()
+
 // PKT-876 (v3.6.1): Settings sections Liquid Glass reskin.
 await runSettingsSectionsLGTests()
 
