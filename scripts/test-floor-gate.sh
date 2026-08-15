@@ -35,7 +35,11 @@
 #   (state complete|partial|none, entityUrl, applied/failed), relation
 #   preflight, updatePage applied vs canonicalized vs rejected. Measured
 #   3652 passed, 0 failed on feat/issue-138-registry-repair-envelope.
-FLOOR="${BRIDGE_TEST_FLOOR:-3652}"
+# 2026-08-15: 3652 → 3666 (+14) — issue #129: command activation inserts at
+#   the focused cursor (AX / synthetic Unicode), never reads or writes the
+#   clipboard; fail-closed no-target / Accessibility-denied. Measured
+#   3666 passed, 0 failed on feat/issue-129-command-cursor-insert.
+FLOOR="${BRIDGE_TEST_FLOOR:-3666}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

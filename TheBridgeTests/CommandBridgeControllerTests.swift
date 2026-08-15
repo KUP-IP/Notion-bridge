@@ -14,8 +14,8 @@
 //   (D) CommandBridgeViewModel.buildSlotRows / buildRecentRows /
 //       queryDidChange — the pure builders driving the SwiftUI tray and
 //       secondary panel.
-//   (E) CommandBridgeController.applyCommit clipboard contract preserved
-//       byte-for-byte from the retired CommandBoxController.
+//   (E) CommandBridgeController.applyCommit cursor-insert contract
+//       (issue #129 — clipboard stays untouched).
 //   (F) Lifecycle reset shape (open → closed) without touching AppKit.
 //   (G) Hot-key plumbing-failure shape: modifier-less ⇒ .plumbingFailure.
 
@@ -184,18 +184,19 @@ func runCommandBridgeControllerTests() async {
         try expect(rows.isEmpty, "no MRU ⇒ no recents")
     }
 
-    // ── (E) Clipboard contract — applyCommit preserved byte-for-byte ─
+    // ── (E) Cursor-insert contract — applyCommit never writes clipboard ─
 
-    await test("applyCommit(.paste) writes the resolved body once (clipboard contract)") {
+    await test("applyCommit(.paste) inserts the resolved body once (clipboard untouched)") {
         let cb = InMemoryClipboard(initial: "prior")
         let mgr = CommandsManager(fetcher: { _ in "{}" })
         let coord = CommandPaletteCoordinator(
             provider: StaticCommandDescriptorProvider(), manager: mgr)
         let ctrl = await CommandBridgeController(clipboard: cb, coordinator: coord)
         await ctrl.applyCommit(.paste("hello-bridge"))
-        try expect(cb.readString() == "hello-bridge",
-                   "exact body must reach the clipboard, got \(cb.readString() ?? "nil")")
-        try expect(cb.writeCount == 1, "exactly one write, got \(cb.writeCount)")
+        try expect(await ctrl.lastInsertedText == "hello-bridge",
+                   "exact body must reach the inserter, got \(await ctrl.lastInsertedText ?? "nil")")
+        try expect(cb.writeCount == 0, "fire path must not write clipboard, got \(cb.writeCount)")
+        try expect(cb.readString() == "prior", "clipboard must stay byte-for-byte, got \(cb.readString() ?? "nil")")
     }
 
     await test("applyCommit(.notFound) writes nothing (no clobber)") {
@@ -207,6 +208,7 @@ func runCommandBridgeControllerTests() async {
         await ctrl.applyCommit(.notFound(query: "zzzz"))
         try expect(cb.writeCount == 0, "no write on .notFound")
         try expect(cb.readString() == "prior", "clipboard untouched on no-match")
+        try expect(await ctrl.lastInsertedText == nil)
     }
 
     await test("applyCommit(.paste) with empty body no-ops (no blank clobber)") {
@@ -218,6 +220,7 @@ func runCommandBridgeControllerTests() async {
         await ctrl.applyCommit(.paste(""))
         try expect(cb.writeCount == 0, "empty body must NOT blank-clobber")
         try expect(cb.readString() == "prior", "clipboard untouched on empty body")
+        try expect(await ctrl.lastInsertOutcome == .emptyBody)
     }
 
     // ── (F) Lifecycle defaults (closed at init, no panel constructed) ─
