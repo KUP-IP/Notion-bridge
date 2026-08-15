@@ -119,3 +119,7 @@ directory.
 A1 (`docs/commands-reconciliation-a1.md`) adds optional `adoptedBases` on
 `layers.json` and `adopted-bases/<id>.md` bodies. Schema version remains 2.
 Existing A0 revisions without those keys stay valid.
+
+B0 (`docs/commands-directional-b0.md`) rewrites catalog bodies to the
+directional contract and sets `behaviorVersion` to 2. Schema version stays 1
+on the catalog; custody schema stays 2.

@@ -863,6 +863,10 @@ await runCommandCustodyTests()
 // compatibility-required execution gating. No automatic body merge.
 await runCommandReconciliationTests()
 
+// GitHub #140 B0: directional repository defaults, length/content
+// validation, and A0/A1 override preservation.
+await runCommandDirectionalCatalogTests()
+
 // PKT-876 (v3.6.1): Settings sections Liquid Glass reskin.
 await runSettingsSectionsLGTests()
 

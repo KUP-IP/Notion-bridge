@@ -62,3 +62,6 @@ Existing schema-2 revisions without `adoptedBases` decode as an empty map and
 remain valid. Restore/copy-from-base are unavailable until an A1 override
 creation snapshots a base; adopt-incoming and copy-from-incoming still work.
 Operator override bodies are never rewritten by catalog replacement.
+
+B0 (`docs/commands-directional-b0.md`) changes catalog `behaviorVersion` to 2
+for the directional rewrite. That is behavioral, not compatibility-required.
