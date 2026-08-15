@@ -48,8 +48,8 @@ public enum VoiceMemoSummarizer {
 
         let prompt = """
         Summarize this voice memo for a personal knowledge base. Reply with ONLY valid JSON, no markdown:
-        {"summary":"2-4 sentence paragraph","actions":["action item 1","action item 2"]}
-        Use an empty actions array if none. Max 400 chars in summary.
+        {"summary":"2-4 sentence paragraph","actions":["Who will take the next physical step to achieve which outcome"]}
+        Each action must name who, the next physical step, and the outcome. Never write "Follow up." Use an empty actions array if none. Max 400 chars in summary.
         Transcript:
         \(trimmed.prefix(6000))
         """

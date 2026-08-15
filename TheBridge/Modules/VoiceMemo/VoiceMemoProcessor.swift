@@ -182,12 +182,17 @@ public enum VoiceMemoProcessor {
         recordUnderstandCloudSend(recording: recording, plan: plan, transcript: transcript)
         let needsLLMSummary = plan.intents.contains { $0.kind == .memoryKeep }
             && VoiceMemoCuratorRouter.shouldSummarizeForMemoryKeep()
+        let structuredActions: [String]
         if needsLLMSummary {
-            llmSummary = await summarizeStage(transcript: transcript, fallbackTitle: recording.title)
+            let structured = await structuredSummarizeStage(transcript: transcript, fallbackTitle: recording.title)
+            llmSummary = structured.paragraph
+            structuredActions = structured.actions
         } else {
             llmSummary = VoiceMemoParser.firstSentencePublic(in: transcript, maxLen: 280)
+            structuredActions = []
         }
         plan = applySummary(to: plan, summary: llmSummary, transcript: transcript, recordingPath: recording.path)
+        if !structuredActions.isEmpty { plan.actions = structuredActions }
 
         if await VoiceMemoCuratorRouter.deferExecuteToAgent() {
             if !options.dryRun {
@@ -437,7 +442,8 @@ public enum VoiceMemoProcessor {
             plan: plan,
             transcript: transcript,
             router: router,
-            entity: await Self.loadRegistryEntity(key: entityKey)
+            entity: await Self.loadRegistryEntity(key: entityKey),
+            catalog: await VoiceMemoRelationCatalog.loadFromSharedCache()
         )
     }
 
@@ -445,7 +451,8 @@ public enum VoiceMemoProcessor {
     /// (the property map that decides whether a PLAYERS relation can be
     /// attached). Production resolves it from the shared config store; tests
     /// inject a fixture entity so the attach/verify/graceful-BLOCKED branches
-    /// are exercised hermetically without live Notion.
+    /// are exercised hermetically without live Notion. `catalog` defaults empty
+    /// so hermetic tests never scan the live registry cache.
     @discardableResult
     public static func executeMemoryKeep(
         entityKey: String,
@@ -453,7 +460,8 @@ public enum VoiceMemoProcessor {
         plan: VoiceMemoPlan,
         transcript: String,
         router: ToolRouter,
-        entity: RegistryEntity?
+        entity: RegistryEntity?,
+        catalog: VoiceMemoRelationCatalog = VoiceMemoRelationCatalog()
     ) async throws -> String {
         let proposedFields = resolvedMemoryKeepFields(intent: intent, plan: plan)
 
@@ -519,6 +527,15 @@ public enum VoiceMemoProcessor {
         let originatingPlayerId = Self.originatingPlayerId(for: intent)
         createFields[playersKey] = originatingPlayerId
 
+        let haystack = [
+            intent.title ?? plan.generatedTitle,
+            semanticSummary,
+            plan.actions.joined(separator: " "),
+            transcript,
+        ].filter { !$0.isEmpty }.joined(separator: "\n")
+        let relationMatch = VoiceMemoMemoryRelationMatcher.match(haystack: haystack, catalog: catalog)
+        applyBoundRelationMatches(relationMatch, to: &createFields, entity: entity)
+
         let createResult = try await router.dispatch(toolName: "registry_create", arguments: .object([
             "entity": .string(entityKey),
             "fields": .object(createFields.mapValues { .string($0) }),
@@ -544,6 +561,7 @@ public enum VoiceMemoProcessor {
             pageId: pageId,
             plan: plan,
             summaryText: semanticSummary,
+            matchNotes: relationMatch.notes,
             router: router
         )
         return "registry_create entity=\(entityKey) id=\(pageId) + player \(originatingPlayerId) + summary body"
@@ -570,6 +588,35 @@ public enum VoiceMemoProcessor {
                 && prop.notionName.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == "PLAYERS"
         }
         return match?.key
+    }
+
+    /// Bound relation key whose Notion column matches `notionName`
+    /// case-insensitively, or nil when absent/unbound. Unbound keys are skipped
+    /// (not a BLOCK) so Memory create still lands with PLAYERS.
+    public static func boundRelationKey(named notionName: String, in entity: RegistryEntity?) -> String? {
+        guard let entity else { return nil }
+        let want = notionName.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        let match = entity.properties.first { prop in
+            prop.role == .relation
+                && prop.isBound
+                && prop.notionName.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == want
+        }
+        return match?.key
+    }
+
+    static func applyBoundRelationMatches(
+        _ match: VoiceMemoRelationMatch,
+        to fields: inout [String: String],
+        entity: RegistryEntity?
+    ) {
+        func put(_ notionName: String, ids: [String]) {
+            guard !ids.isEmpty, let key = boundRelationKey(named: notionName, in: entity) else { return }
+            fields[key] = ids.joined(separator: ",")
+        }
+        put("CONTACTS", ids: match.contactIds)
+        put("PROJECTS", ids: match.projectIds)
+        put("DOCS", ids: match.docIds)
+        put("BLOCKS", ids: match.blockIds)
     }
 
     /// Default originating player = the primary user player (Isaiah, PLYR-5).
@@ -988,6 +1035,7 @@ public enum VoiceMemoProcessor {
         pageId: String,
         plan: VoiceMemoPlan,
         summaryText: String,
+        matchNotes: [String] = [],
         router: ToolRouter
     ) async throws {
         let trimmed = summaryText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1024,6 +1072,24 @@ public enum VoiceMemoProcessor {
                     "type": "bulleted_list_item",
                     "bulleted_list_item": [
                         "rich_text": [["type": "text", "text": ["content": String(action.prefix(1900))]]],
+                    ],
+                ])
+            }
+        }
+        if !matchNotes.isEmpty {
+            children.append([
+                "object": "block",
+                "type": "heading_3",
+                "heading_3": [
+                    "rich_text": [["type": "text", "text": ["content": "Unresolved names"]]],
+                ],
+            ])
+            for note in matchNotes.prefix(12) {
+                children.append([
+                    "object": "block",
+                    "type": "bulleted_list_item",
+                    "bulleted_list_item": [
+                        "rich_text": [["type": "text", "text": ["content": String(note.prefix(1900))]]],
                     ],
                 ])
             }
