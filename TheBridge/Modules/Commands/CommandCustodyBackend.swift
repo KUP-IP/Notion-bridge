@@ -8,9 +8,11 @@
 //   state.json                         atomic active-revision pointer
 //   revisions/revision-<uuid>/
 //     layers.json                       overrides, custom metadata, tombstones,
-//                                       and favorite command IDs
+//                                       favorite command IDs, and optional
+//                                       adopted-base descriptors (A1; decodeIfPresent)
 //     telemetry/usage.json             non-body activity data
 //     bodies/<immutable-command-id>.md command-body payloads only
+//     adopted-bases/<immutable-id>.md  last-adopted product body (A1; optional)
 //     manifest.json                     SHA-256 for every payload file
 //   live-telemetry/usage.json          ordinary activity overlay only
 //
@@ -27,6 +29,7 @@ final class CommandCustodyBackend: @unchecked Sendable {
     private static let layersFile = "layers.json"
     private static let revisionTelemetryFile = "telemetry/usage.json"
     private static let manifestFile = "manifest.json"
+    private static let adoptedBasesDirectory = "adopted-bases"
 
     private let storageRoot: URL?
     private let productDefaultsOverride: [CommandStore.ProductDefault]?
@@ -180,7 +183,11 @@ final class CommandCustodyBackend: @unchecked Sendable {
         if let defaultCommand = productDefaults.first(where: { $0.id == id }) {
             if isEquivalent(updated, to: defaultCommand) {
                 snapshot.localOverrides.removeValue(forKey: id)
+                snapshot.adoptedBases.removeValue(forKey: id)
             } else {
+                if snapshot.localOverrides[id] == nil {
+                    snapshot.adoptedBases[id] = AdoptedBase(defaultCommand)
+                }
                 snapshot.localOverrides[id] = updated
             }
         } else {
@@ -213,6 +220,7 @@ final class CommandCustodyBackend: @unchecked Sendable {
 
         if productDefaults.contains(where: { $0.id == id }) {
             snapshot.localOverrides.removeValue(forKey: id)
+            snapshot.adoptedBases.removeValue(forKey: id)
             snapshot.tombstones.insert(id)
         } else {
             snapshot.customCommands.removeValue(forKey: id)
@@ -246,6 +254,108 @@ final class CommandCustodyBackend: @unchecked Sendable {
         // This is deliberately not a revision write. Ordinary telemetry cannot
         // rewrite command bodies, metadata, tombstones, or favorite layout.
         try writeLiveTelemetryLocked(snapshot.usage)
+    }
+
+    // MARK: - Product-default reconciliation (A1)
+
+    func reconciliations() throws -> [CommandStore.CommandReconciliation] {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let snapshot = try readableSnapshotLocked() else { return [] }
+        return productDefaults.compactMap { makeReconciliationLocked(incoming: $0, snapshot: snapshot) }
+    }
+
+    func reconciliation(slug: String) throws -> CommandStore.CommandReconciliation? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let incoming = productDefaults.first(where: { $0.slug == slug }) else { return nil }
+        guard let snapshot = try readableSnapshotLocked() else {
+            return makeReconciliationLocked(incoming: incoming, snapshot: .empty)
+        }
+        return makeReconciliationLocked(incoming: incoming, snapshot: snapshot)
+    }
+
+    func applyReconciliation(
+        slug: String,
+        action: CommandStore.ReconciliationAction
+    ) throws -> CommandStore.CommandReconciliation {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let incoming = productDefaults.first(where: { $0.slug == slug }) else {
+            throw CommandStore.StoreError.reconciliationNotApplicable(slug)
+        }
+        var snapshot = try mutableSnapshotLocked()
+        guard snapshot.productDefaultsActive, !snapshot.tombstones.contains(incoming.id) else {
+            throw CommandStore.StoreError.reconciliationNotApplicable(slug)
+        }
+
+        switch action {
+        case .restoreBase:
+            guard let adopted = snapshot.adoptedBases[incoming.id] else {
+                throw CommandStore.StoreError.adoptedBaseMissing(slug)
+            }
+            let restored = StoredCommand(adopted, id: incoming.id, slug: incoming.slug)
+            if isEquivalent(restored, to: incoming) {
+                snapshot.localOverrides.removeValue(forKey: incoming.id)
+                snapshot.adoptedBases.removeValue(forKey: incoming.id)
+            } else {
+                snapshot.localOverrides[incoming.id] = restored
+            }
+
+        case .adoptIncoming:
+            snapshot.localOverrides.removeValue(forKey: incoming.id)
+            snapshot.adoptedBases.removeValue(forKey: incoming.id)
+
+        case .copySelectedChange(let source, let field):
+            let sourceDefault: CommandStore.ProductDefault
+            switch source {
+            case .base:
+                guard let adopted = snapshot.adoptedBases[incoming.id] else {
+                    throw CommandStore.StoreError.adoptedBaseMissing(slug)
+                }
+                sourceDefault = adopted.asProductDefault(
+                    id: incoming.id,
+                    slug: incoming.slug,
+                    initialKeySlot: incoming.initialKeySlot
+                )
+            case .incoming:
+                sourceDefault = incoming
+            }
+
+            var local = snapshot.localOverrides[incoming.id] ?? StoredCommand(incoming)
+            if snapshot.localOverrides[incoming.id] == nil {
+                snapshot.adoptedBases[incoming.id] = AdoptedBase(incoming)
+            }
+            switch field {
+            case .name: local.name = sourceDefault.name
+            case .icon: local.icon = sourceDefault.icon
+            case .color: local.color = sourceDefault.color
+            case .body: local.body = sourceDefault.body
+            }
+            if isEquivalent(local, to: incoming) {
+                snapshot.localOverrides.removeValue(forKey: incoming.id)
+                snapshot.adoptedBases.removeValue(forKey: incoming.id)
+            } else {
+                snapshot.localOverrides[incoming.id] = local
+            }
+        }
+
+        try publishLocked(snapshot)
+        guard let result = makeReconciliationLocked(incoming: incoming, snapshot: snapshot) else {
+            throw CommandStore.StoreError.reconciliationNotApplicable(slug)
+        }
+        return result
+    }
+
+    func executionGate(slug: String) throws -> CommandStore.ExecutionGate {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let incoming = productDefaults.first(where: { $0.slug == slug }) else {
+            return .open
+        }
+        guard let snapshot = try readableSnapshotLocked() else { return .open }
+        return makeReconciliationLocked(incoming: incoming, snapshot: snapshot)?.executionGate ?? .open
     }
 
     // MARK: - Test seams
@@ -596,6 +706,7 @@ final class CommandCustodyBackend: @unchecked Sendable {
         }
         let requiredBodyPaths = (Array(layers.localOverrides.keys) + Array(layers.customCommands.keys))
             .map(bodyRelativePath(for:))
+            + layers.adoptedBases.keys.map(adoptedBaseRelativePath(for:))
         guard requiredBodyPaths.allSatisfy({ manifest.payloadSHA256[$0] != nil }) else {
             throw CommandStore.StoreError.corruptRevision("manifest is missing a command-body hash for \(id)")
         }
@@ -614,7 +725,12 @@ final class CommandCustodyBackend: @unchecked Sendable {
             ),
             tombstones: Set(layers.hiddenDefaultTombstones),
             favorites: try favoriteMap(from: layers.favoriteLayout),
-            usage: telemetry.lastUsedAt
+            usage: telemetry.lastUsedAt,
+            adoptedBases: try readAdoptedBases(
+                layers.adoptedBases,
+                revisionID: id,
+                revisionRoot: revisionRoot
+            )
         )
         if mergeLiveTelemetry, let live = readLiveTelemetryLocked() {
             for (id, date) in live {
@@ -648,7 +764,8 @@ final class CommandCustodyBackend: @unchecked Sendable {
                 localOverrides: snapshot.localOverrides.mapValues { $0.withoutBody },
                 customCommands: snapshot.customCommands.mapValues { $0.withoutBody },
                 hiddenDefaultTombstones: snapshot.tombstones.sorted(),
-                favoriteLayout: snapshot.favorites.mapKeys { String($0) }
+                favoriteLayout: snapshot.favorites.mapKeys { String($0) },
+                adoptedBases: snapshot.adoptedBases.mapValues { $0.withoutBody }
             )
             let telemetry = Telemetry(
                 schemaVersion: Self.schemaVersion,
@@ -663,6 +780,12 @@ final class CommandCustodyBackend: @unchecked Sendable {
                 try writeData(
                     Data(stored.body.utf8),
                     to: staging.appendingPathComponent(bodyRelativePath(for: stored.id))
+                )
+            }
+            for (id, adopted) in snapshot.adoptedBases {
+                try writeData(
+                    Data(adopted.body.utf8),
+                    to: staging.appendingPathComponent(adoptedBaseRelativePath(for: id))
                 )
             }
 
@@ -820,6 +943,11 @@ final class CommandCustodyBackend: @unchecked Sendable {
                 throw CommandStore.StoreError.corruptRevision("invalid local override \(id)")
             }
         }
+        for (id, adopted) in snapshot.adoptedBases {
+            guard snapshot.localOverrides[id] != nil, isSafeID(id), isSafeAdoptedBase(adopted) else {
+                throw CommandStore.StoreError.corruptRevision("invalid adopted base \(id)")
+            }
+        }
         for (id, stored) in snapshot.customCommands {
             guard defaultsByID[id] == nil, stored.id == id, isSafeStoredCommand(stored),
                   allIDs.insert(id).inserted, allSlugs.insert(stored.slug).inserted
@@ -856,6 +984,88 @@ final class CommandCustodyBackend: @unchecked Sendable {
             && stored.body == productDefault.body
     }
 
+    private func makeReconciliationLocked(
+        incoming: CommandStore.ProductDefault,
+        snapshot: Snapshot
+    ) -> CommandStore.CommandReconciliation? {
+        if snapshot.productDefaultsActive == false { return nil }
+        if snapshot.tombstones.contains(incoming.id) { return nil }
+
+        let localStored = snapshot.localOverrides[incoming.id]
+        let adopted = snapshot.adoptedBases[incoming.id]
+        let localCommand = localStored.map { stored in
+            CommandStore.Command(
+                id: stored.id,
+                slug: stored.slug,
+                name: stored.name,
+                icon: stored.icon,
+                color: stored.color,
+                keySlot: snapshot.favorites.first(where: { $0.value == stored.id })?.key,
+                lastUsedAt: snapshot.usage[stored.id],
+                body: stored.body
+            )
+        }
+        let base = adopted.map {
+            $0.asProductDefault(
+                id: incoming.id,
+                slug: incoming.slug,
+                initialKeySlot: incoming.initialKeySlot
+            )
+        }
+        let (classification, gate, updateAvailable) = classifyLocked(
+            local: localStored,
+            incoming: incoming,
+            adopted: adopted
+        )
+        return CommandStore.CommandReconciliation(
+            commandID: incoming.id,
+            slug: incoming.slug,
+            base: base ?? (localStored == nil ? incoming : nil),
+            local: localCommand,
+            incoming: incoming,
+            classification: classification,
+            updateAvailable: updateAvailable,
+            executionGate: gate
+        )
+    }
+
+    private func classifyLocked(
+        local: StoredCommand?,
+        incoming: CommandStore.ProductDefault,
+        adopted: AdoptedBase?
+    ) -> (CommandStore.UpdateClassification, CommandStore.ExecutionGate, Bool) {
+        guard local != nil else {
+            return (.current, .open, false)
+        }
+
+        let adoptedSchema = adopted?.schemaVersion
+            ?? CommandStore.ProductDefault.currentCatalogSchemaVersion
+        let adoptedBehavior = adopted?.behaviorVersion
+            ?? CommandStore.ProductDefault.currentCatalogBehaviorVersion
+        let adoptedCaps = Set(adopted?.requiredCapabilities ?? [])
+        let incomingCaps = Set(incoming.requiredCapabilities)
+
+        if incoming.schemaVersion != adoptedSchema || incomingCaps != adoptedCaps {
+            let evidence = [
+                "schemaVersion \(adoptedSchema)→\(incoming.schemaVersion)",
+                "requiredCapabilities \(sortedCaps(adoptedCaps))→\(sortedCaps(incomingCaps))"
+            ].joined(separator: "; ")
+            return (
+                .compatibilityRequired,
+                .compatibilityRequired(evidence: evidence),
+                true
+            )
+        }
+        if incoming.behaviorVersion != adoptedBehavior {
+            return (.behavioral, .open, true)
+        }
+        return (.editorial, .open, true)
+    }
+
+    private func sortedCaps(_ caps: Set<String>) -> String {
+        "[" + caps.sorted().joined(separator: ",") + "]"
+    }
+
     // MARK: - Revision payload parsing
 
     private func readStoredCommands(
@@ -879,6 +1089,37 @@ final class CommandCustodyBackend: @unchecked Sendable {
             result[id] = StoredCommand(
                 id: descriptor.id,
                 slug: descriptor.slug,
+                name: descriptor.name,
+                icon: descriptor.icon,
+                color: descriptor.color,
+                body: body
+            )
+        }
+        return result
+    }
+
+    private func readAdoptedBases(
+        _ descriptors: [String: AdoptedBaseDescriptor],
+        revisionID: String,
+        revisionRoot: URL
+    ) throws -> [String: AdoptedBase] {
+        var result: [String: AdoptedBase] = [:]
+        for (id, descriptor) in descriptors {
+            guard isSafeID(id) else {
+                throw CommandStore.StoreError.corruptRevision("invalid adopted-base identity \(id)")
+            }
+            let url = revisionRoot.appendingPathComponent(adoptedBaseRelativePath(for: id))
+            guard let data = try? Data(contentsOf: url),
+                  let body = String(data: data, encoding: .utf8)
+            else {
+                throw CommandStore.StoreError.corruptRevision(
+                    "missing or invalid adopted base for \(revisionID)/\(id)"
+                )
+            }
+            result[id] = AdoptedBase(
+                schemaVersion: descriptor.schemaVersion,
+                behaviorVersion: descriptor.behaviorVersion,
+                requiredCapabilities: descriptor.requiredCapabilities,
                 name: descriptor.name,
                 icon: descriptor.icon,
                 color: descriptor.color,
@@ -960,6 +1201,10 @@ final class CommandCustodyBackend: @unchecked Sendable {
         "bodies/\(commandID).md"
     }
 
+    private func adoptedBaseRelativePath(for commandID: String) -> String {
+        "\(Self.adoptedBasesDirectory)/\(commandID).md"
+    }
+
     /// `FileManager` can enumerate the same temporary directory through its
     /// canonical `/private/var` spelling while the caller supplied `/var`.
     /// Never derive a manifest path with a blind string replacement: canonical
@@ -1036,6 +1281,10 @@ final class CommandCustodyBackend: @unchecked Sendable {
         isSafeID(command.id) && isSafeSlug(command.slug)
     }
 
+    private func isSafeAdoptedBase(_ base: AdoptedBase) -> Bool {
+        base.schemaVersion >= 1 && base.behaviorVersion >= 1
+    }
+
     private func isSafeRelativePath(_ value: String) -> Bool {
         !value.hasPrefix("/")
             && !value.contains("..")
@@ -1074,6 +1323,44 @@ final class CommandCustodyBackend: @unchecked Sendable {
         var customCommands: [String: StoredDescriptor]
         var hiddenDefaultTombstones: [String]
         var favoriteLayout: [String: String]
+        var adoptedBases: [String: AdoptedBaseDescriptor]
+
+        enum CodingKeys: String, CodingKey {
+            case schemaVersion, productDefaultsActive, localOverrides, customCommands
+            case hiddenDefaultTombstones, favoriteLayout, adoptedBases
+        }
+
+        init(
+            schemaVersion: Int,
+            productDefaultsActive: Bool,
+            localOverrides: [String: StoredDescriptor],
+            customCommands: [String: StoredDescriptor],
+            hiddenDefaultTombstones: [String],
+            favoriteLayout: [String: String],
+            adoptedBases: [String: AdoptedBaseDescriptor]
+        ) {
+            self.schemaVersion = schemaVersion
+            self.productDefaultsActive = productDefaultsActive
+            self.localOverrides = localOverrides
+            self.customCommands = customCommands
+            self.hiddenDefaultTombstones = hiddenDefaultTombstones
+            self.favoriteLayout = favoriteLayout
+            self.adoptedBases = adoptedBases
+        }
+
+        init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+            productDefaultsActive = try values.decode(Bool.self, forKey: .productDefaultsActive)
+            localOverrides = try values.decode([String: StoredDescriptor].self, forKey: .localOverrides)
+            customCommands = try values.decode([String: StoredDescriptor].self, forKey: .customCommands)
+            hiddenDefaultTombstones = try values.decode([String].self, forKey: .hiddenDefaultTombstones)
+            favoriteLayout = try values.decode([String: String].self, forKey: .favoriteLayout)
+            adoptedBases = try values.decodeIfPresent(
+                [String: AdoptedBaseDescriptor].self,
+                forKey: .adoptedBases
+            ) ?? [:]
+        }
     }
 
     private struct Telemetry: Codable {
@@ -1124,8 +1411,98 @@ final class CommandCustodyBackend: @unchecked Sendable {
             )
         }
 
+        init(_ adopted: AdoptedBase, id: String, slug: String) {
+            self.init(
+                id: id,
+                slug: slug,
+                name: adopted.name,
+                icon: adopted.icon,
+                color: adopted.color,
+                body: adopted.body
+            )
+        }
+
         var withoutBody: StoredDescriptor {
             StoredDescriptor(id: id, slug: slug, name: name, icon: icon, color: color)
+        }
+    }
+
+    private struct AdoptedBaseDescriptor: Codable {
+        var schemaVersion: Int
+        var behaviorVersion: Int
+        var requiredCapabilities: [String]
+        var name: String
+        var icon: CommandStore.Icon
+        var color: CommandStore.NotionColor?
+    }
+
+    private struct AdoptedBase: Equatable {
+        var schemaVersion: Int
+        var behaviorVersion: Int
+        var requiredCapabilities: [String]
+        var name: String
+        var icon: CommandStore.Icon
+        var color: CommandStore.NotionColor?
+        var body: String
+
+        init(
+            schemaVersion: Int,
+            behaviorVersion: Int,
+            requiredCapabilities: [String],
+            name: String,
+            icon: CommandStore.Icon,
+            color: CommandStore.NotionColor?,
+            body: String
+        ) {
+            self.schemaVersion = schemaVersion
+            self.behaviorVersion = behaviorVersion
+            self.requiredCapabilities = requiredCapabilities
+            self.name = name
+            self.icon = icon
+            self.color = color
+            self.body = body
+        }
+
+        init(_ productDefault: CommandStore.ProductDefault) {
+            self.init(
+                schemaVersion: productDefault.schemaVersion,
+                behaviorVersion: productDefault.behaviorVersion,
+                requiredCapabilities: productDefault.requiredCapabilities,
+                name: productDefault.name,
+                icon: productDefault.icon,
+                color: productDefault.color,
+                body: productDefault.body
+            )
+        }
+
+        var withoutBody: AdoptedBaseDescriptor {
+            AdoptedBaseDescriptor(
+                schemaVersion: schemaVersion,
+                behaviorVersion: behaviorVersion,
+                requiredCapabilities: requiredCapabilities,
+                name: name,
+                icon: icon,
+                color: color
+            )
+        }
+
+        func asProductDefault(
+            id: String,
+            slug: String,
+            initialKeySlot: Int?
+        ) -> CommandStore.ProductDefault {
+            CommandStore.ProductDefault(
+                id: id,
+                slug: slug,
+                name: name,
+                icon: icon,
+                color: color,
+                initialKeySlot: initialKeySlot,
+                body: body,
+                schemaVersion: schemaVersion,
+                behaviorVersion: behaviorVersion,
+                requiredCapabilities: requiredCapabilities
+            )
         }
     }
 
@@ -1154,6 +1531,7 @@ final class CommandCustodyBackend: @unchecked Sendable {
         var tombstones: Set<String>
         var favorites: [Int: String]
         var usage: [String: Date]
+        var adoptedBases: [String: AdoptedBase]
 
         static let empty = Snapshot(
             productDefaultsActive: false,
@@ -1161,7 +1539,8 @@ final class CommandCustodyBackend: @unchecked Sendable {
             customCommands: [:],
             tombstones: [],
             favorites: [:],
-            usage: [:]
+            usage: [:],
+            adoptedBases: [:]
         )
     }
 }

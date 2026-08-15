@@ -31,7 +31,14 @@ public final class CommandStore: @unchecked Sendable {
     /// Product defaults are supplied by the application bundle. They are read
     /// as an authority layer and are never written into an operator's local
     /// custody store merely because the application is replaced.
+    ///
+    /// A1 metadata (`schemaVersion`, `behaviorVersion`, `requiredCapabilities`)
+    /// is structured catalog evidence. Wording lives in `body` and never
+    /// participates in compatibility gating.
     public struct ProductDefault: Equatable, Sendable {
+        public static let currentCatalogSchemaVersion = 1
+        public static let currentCatalogBehaviorVersion = 1
+
         public var id: String
         public var slug: String
         public var name: String
@@ -39,6 +46,9 @@ public final class CommandStore: @unchecked Sendable {
         public var color: NotionColor?
         public var initialKeySlot: Int?
         public var body: String
+        public var schemaVersion: Int
+        public var behaviorVersion: Int
+        public var requiredCapabilities: [String]
 
         public init(
             id: String,
@@ -47,7 +57,10 @@ public final class CommandStore: @unchecked Sendable {
             icon: Icon,
             color: NotionColor? = nil,
             initialKeySlot: Int? = nil,
-            body: String
+            body: String,
+            schemaVersion: Int = ProductDefault.currentCatalogSchemaVersion,
+            behaviorVersion: Int = ProductDefault.currentCatalogBehaviorVersion,
+            requiredCapabilities: [String] = []
         ) {
             self.id = id
             self.slug = slug
@@ -56,7 +69,58 @@ public final class CommandStore: @unchecked Sendable {
             self.color = color
             self.initialKeySlot = initialKeySlot
             self.body = body
+            self.schemaVersion = schemaVersion
+            self.behaviorVersion = behaviorVersion
+            self.requiredCapabilities = requiredCapabilities
         }
+    }
+
+    /// Settings-facing update class. Compatibility-required is the only class
+    /// that closes the execution gate, and only from schema/capability evidence.
+    public enum UpdateClassification: String, Sendable, Equatable {
+        case current
+        case editorial
+        case behavioral
+        case compatibilityRequired
+    }
+
+    public enum ExecutionGate: Sendable, Equatable {
+        case open
+        case compatibilityRequired(evidence: String)
+    }
+
+    public enum ReconciliationField: String, Sendable, Equatable {
+        case name
+        case icon
+        case color
+        case body
+    }
+
+    public enum ReconciliationSource: String, Sendable, Equatable {
+        case base
+        case incoming
+    }
+
+    /// Explicit operator actions. There is no automatic natural-language body
+    /// merge path; `copySelectedChange` copies one whole field.
+    public enum ReconciliationAction: Sendable, Equatable {
+        case restoreBase
+        case adoptIncoming
+        case copySelectedChange(source: ReconciliationSource, field: ReconciliationField)
+    }
+
+    /// Base = last-adopted product default. Local = operator override.
+    /// Incoming = current application catalog entry. Unmodified commands have
+    /// no local override; incoming is the effective body.
+    public struct CommandReconciliation: Equatable, Sendable {
+        public var commandID: String
+        public var slug: String
+        public var base: ProductDefault?
+        public var local: Command?
+        public var incoming: ProductDefault
+        public var classification: UpdateClassification
+        public var updateAvailable: Bool
+        public var executionGate: ExecutionGate
     }
 
     /// Deterministic fault points used only by the custody regression suite.
@@ -160,6 +224,8 @@ public final class CommandStore: @unchecked Sendable {
         case corruptRevision(String)
         case injectedFailure(TestFaultPoint)
         case ioFailure(underlying: Error)
+        case adoptedBaseMissing(String)
+        case reconciliationNotApplicable(String)
 
         public var errorDescription: String? {
             switch self {
@@ -174,6 +240,10 @@ public final class CommandStore: @unchecked Sendable {
             case .injectedFailure(let point):
                 return "Injected command custody failure at \(point)."
             case .ioFailure(let e): return "Command store I/O failed: \(e.localizedDescription)"
+            case .adoptedBaseMissing(let s):
+                return "No adopted product-default base is on file for '\(s)'."
+            case .reconciliationNotApplicable(let s):
+                return "Product-default reconciliation does not apply to '\(s)'."
             }
         }
     }
@@ -251,6 +321,28 @@ public final class CommandStore: @unchecked Sendable {
     /// Stamp lastUsedAt to now. Called when the command fires from the popup.
     public func recordUse(slug: String, at when: Date = Date()) throws {
         try custody.recordUse(slug: slug, at: when)
+    }
+
+    // MARK: - Product-default reconciliation (A1)
+
+    public func reconciliations() throws -> [CommandReconciliation] {
+        try custody.reconciliations()
+    }
+
+    public func reconciliation(slug: String) throws -> CommandReconciliation? {
+        try custody.reconciliation(slug: slug)
+    }
+
+    @discardableResult
+    public func applyReconciliation(
+        slug: String,
+        action: ReconciliationAction
+    ) throws -> CommandReconciliation {
+        try custody.applyReconciliation(slug: slug, action: action)
+    }
+
+    public func executionGate(slug: String) throws -> ExecutionGate {
+        try custody.executionGate(slug: slug)
     }
 
     // MARK: - Slugification

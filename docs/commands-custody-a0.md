@@ -115,3 +115,7 @@ run the same suite with `BRIDGE_A0_LEGACY_FIXTURE_ROOT` set to the legacy
 temporary root, migrates only the copy, and compares its effective state and
 locally-custodied body bytes against the source. It never writes the supplied
 directory.
+
+A1 (`docs/commands-reconciliation-a1.md`) adds optional `adoptedBases` on
+`layers.json` and `adopted-bases/<id>.md` bodies. Schema version remains 2.
+Existing A0 revisions without those keys stay valid.
