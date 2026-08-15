@@ -17,6 +17,8 @@ public struct CommandsEditorView: View {
     @Binding private var commands: [CommandStore.Command]
     @Binding private var selectedSlug: String?
 
+    @ObservedObject private var nav = SettingsNavigation.shared
+
     // Adaptive key-cap / tray sheen: the raised "keycap" + tray surfaces used
     // raw Color.white/black literals that wash out on titanium. We compute the
     // sheen + drop-shadow per color-scheme so both themes read correctly (DARK
@@ -77,6 +79,7 @@ public struct CommandsEditorView: View {
         .task { await load() }
         .onAppear { syncAppearanceState() }
         .onChange(of: selectedSlug) { _, _ in syncAppearanceState() }
+        .onChange(of: nav.anchor) { _, _ in applyCommandDeepLink(in: commands) }
         // PKT-879: icon picker sheet
         .sheet(isPresented: $iconPickerPresented) {
             if let cmd = currentCommand {
@@ -790,14 +793,26 @@ public struct CommandsEditorView: View {
             let list = try CommandStore.shared.list()
             await MainActor.run {
                 self.commands = list
-                if self.selectedSlug == nil || !list.contains(where: { $0.slug == self.selectedSlug }) {
-                    self.selectedSlug = self.firstAlphabetical(list)?.slug
+                if !self.applyCommandDeepLink(in: list) {
+                    if self.selectedSlug == nil || !list.contains(where: { $0.slug == self.selectedSlug }) {
+                        self.selectedSlug = self.firstAlphabetical(list)?.slug
+                    }
                 }
                 self.loadError = nil
             }
         } catch {
             await MainActor.run { self.loadError = error.localizedDescription }
         }
+    }
+
+    @discardableResult
+    private func applyCommandDeepLink(in list: [CommandStore.Command]) -> Bool {
+        guard let id = CommandSettingsDeepLink.commandID(fromAnchor: nav.anchor),
+              let slug = CommandSettingsDeepLink.slug(forID: id, in: list)
+        else { return false }
+        selectedSlug = slug
+        nav.anchor = nil
+        return true
     }
 
     private func firstAlphabetical(_ list: [CommandStore.Command]) -> CommandStore.Command? {
