@@ -150,7 +150,8 @@ asks to "fetch ScaleFocusKeeper," route to `close-agent` instead.
 
 ## See also
 
-- `AGENT_FEEDBACK.md` — evidence-only friction log; the source for the VERIFIED-FIXED
-  list and the open enhancement asks behind this map.
+- GitHub Issues — the only actionable development-feedback ledger. Search before
+  creating. AI LOG is telemetry. See `docs/operator/calibrate.md` and
+  `docs/commands-github-first-b1.md`.
 - `AGENTS.md` — build/test/install ladder, architecture, security tiers, MCP dispatch
   shape (`runTool({toolName, toolArguments})`).

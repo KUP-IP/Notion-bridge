@@ -83,7 +83,7 @@ Work through the audit report. For each DEAD flag:
 
 ### 2.4 Stale TODOs and FIXMEs
 - Read every TODO and FIXME in the codebase
-- For each: either fix it now, convert it to a filed issue in AGENT_FEEDBACK.md with a date, or delete it
+- For each: either fix it now, convert it to a filed GitHub issue with a date, or delete it
 - Do not leave TODOs that are older than the current sprint or that reference removed features
 
 ### 2.5 Import Hygiene
@@ -247,7 +247,7 @@ LOOP:
 
 **Diagnostic discipline:**
 - A test that was previously passing and now fails after your changes means your change introduced a regression. Revert or fix — do not proceed.
-- A test that was always failing is either a test bug (fix the test) or a pre-existing source bug (fix the source, log in AGENT_FEEDBACK.md if it's outside this sprint's scope).
+- A test that was always failing is either a test bug (fix the test) or a pre-existing source bug (fix the source, file a GitHub issue if it's outside this sprint's scope).
 - `swift build -c release` must also pass. A test-passing debug build that fails release build is not done.
 
 ---
@@ -373,8 +373,8 @@ Work through all registered tools. Mark each ✅ pass / ❌ fail / ⚠️ degrad
 - [ ] (all dynamically discovered Stripe tools)
 
 ### 7.3 Failure Handling During Validation
-- Any ❌ failure: diagnose, fix source, re-run. Do not mark as "known issue" without a corresponding AGENT_FEEDBACK.md entry with full context.
-- Any ⚠️ degraded (tool works but response is incomplete, slow, or poorly formatted): log in AGENT_FEEDBACK.md and open a follow-up fix if it can be addressed within this sprint.
+- Any ❌ failure: diagnose, fix source, re-run. Do not mark as "known issue" without a corresponding GitHub issue with full context.
+- Any ⚠️ degraded (tool works but response is incomplete, slow, or poorly formatted): file or update a GitHub issue and open a follow-up fix if it can be addressed within this sprint.
 
 ---
 
@@ -396,9 +396,9 @@ After code and tests are clean:
 - Any mention of `notion_page_markdown_write` must be removed
 - Installation and setup steps must be accurate
 
-### 8.4 AGENT_FEEDBACK.md
-- Mark any entries resolved in v1.8.0 with `**RESOLVED (v1.8.0)**` inline annotation
-- Do not edit existing entry text — annotate only
+### 8.4 GitHub Issues
+- Actionable leftovers from this sprint belong in GitHub Issues after search-before-create
+- Do not append a local `AGENT_FEEDBACK.md` file
 
 ---
 
@@ -435,12 +435,12 @@ This sprint is complete when **all** of the following are true:
 ### Tool Validation
 - [ ] All tools in the validation checklist marked ✅
 - [ ] Zero ❌ failures remaining
-- [ ] All ⚠️ degraded items have a filed AGENT_FEEDBACK.md entry
+- [ ] All ⚠️ degraded items have a filed GitHub issue
 
 ### Documentation
 - [ ] Tool count in AGENTS.md matches actual registered count
 - [ ] `notion_page_markdown_write` removed from all documentation
-- [ ] All resolved v1.8.0 feedback entries annotated in AGENT_FEEDBACK.md
+- [ ] All resolved v1.8.0 feedback entries are historical provenance, not an active ledger
 
 ---
 

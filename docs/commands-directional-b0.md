@@ -50,4 +50,6 @@ terms that would make a default coding-only or knowledge-work-only.
 
 - [`commands-custody-a0.md`](commands-custody-a0.md)
 - [`commands-reconciliation-a1.md`](commands-reconciliation-a1.md)
+- [`commands-github-first-b1.md`](commands-github-first-b1.md)
 - [`operator/commands-engineering-palette.md`](operator/commands-engineering-palette.md)
+- [`operator/calibrate.md`](operator/calibrate.md)
