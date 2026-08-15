@@ -33,6 +33,18 @@ public struct CommandsEditorView: View {
     // for the full curated catalog; the inline Appearance card covers the common
     // emoji/symbol + tint choices per the design).
     @State private var iconPickerPresented: Bool = false
+    @AppStorage(BridgeDefaults.commandsDeveloperPublication)
+    private var developerPublication = false
+    @State private var publicationPresented = false
+    @State private var publicationProposal = CommandProductProposal(
+        diff: CommandProductDiff(
+            commandID: "",
+            slug: "",
+            name: "",
+            localBody: "",
+            intendedProductOutcome: ""
+        )
+    )
 
     // Inline Appearance card state (mirrors the design's page-level pickTab/tint).
     private enum AppearanceTab: Hashable { case emoji, symbol }
@@ -92,6 +104,13 @@ public struct CommandsEditorView: View {
                     }
                 )
             }
+        }
+        .sheet(isPresented: $publicationPresented) {
+            CommandProductPublicationSheet(
+                isPresented: $publicationPresented,
+                proposal: $publicationProposal,
+                developerMode: developerPublication
+            )
         }
     }
 
@@ -249,6 +268,11 @@ public struct CommandsEditorView: View {
             Spacer(minLength: 8)
 
             HStack(spacing: 3) {
+                if CommandProductPublication.developerControlsVisible(developerMode: developerPublication) {
+                    headerAction("arrow.up.doc", help: "Propose as Product Change") {
+                        openPublication(c)
+                    }
+                }
                 headerAction("doc.on.doc", help: "Duplicate") { duplicate(c) }
                 headerAction("trash", help: "Delete", danger: true) { delete(c) }
             }
@@ -883,6 +907,18 @@ public struct CommandsEditorView: View {
         } catch {
             saveMessage = error.localizedDescription
         }
+    }
+
+    private func openPublication(_ c: CommandStore.Command) {
+        let rec = try? CommandStore.shared.reconciliation(slug: c.slug)
+        let baseBody = rec?.base?.body ?? rec?.incoming.body
+        publicationProposal = CommandProductPublication.draft(
+            command: c,
+            baseBody: baseBody,
+            intendedProductOutcome: "",
+            sensitivePaths: ConfigManager.shared.sensitivePaths
+        )
+        publicationPresented = true
     }
 
     private func duplicate(_ c: CommandStore.Command) {

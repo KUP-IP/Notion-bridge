@@ -879,6 +879,9 @@ await runCommandFavoriteLayoutTests()
 // Settings deep-link by immutable command ID. Return never writes.
 await runCommandSearchCreateTests()
 
+// GitHub #140 D0: developer-mode product publication. No silent Git.
+await runCommandProductPublicationTests()
+
 // PKT-876 (v3.6.1): Settings sections Liquid Glass reskin.
 await runSettingsSectionsLGTests()
 
