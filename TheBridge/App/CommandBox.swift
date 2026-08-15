@@ -1,4 +1,4 @@
-// CommandBox.swift — Commands palette (clipboard-only) — reusable types
+// CommandBox.swift — Commands palette (shared types) — reusable types
 // TheBridge · App
 //
 // PKT-878 v3.6.3: the legacy NSTableView-backed `CommandBoxController` +
@@ -10,14 +10,16 @@
 //
 //   • HotkeyConfig            — Carbon RegisterEventHotKey config + persisted
 //                                 load/save + Cocoa→Carbon recorder mapping
-//   • ClipboardWriting        — protocol seam over NSPasteboard (write-only)
+//   • ClipboardWriting        — protocol seam over NSPasteboard (probe
+//                                 only on the fire path — issue #129)
 //   • InMemoryClipboard       — test double (write + read-back + write count)
 //   • SystemClipboard         — NSPasteboard.general adapter (replace contents)
 //
-// PERMISSION MODEL (unchanged): Carbon `RegisterEventHotKey` is a HOT-KEY
-// REGISTRATION, not an event tap — no Input Monitoring or Accessibility
-// TCC grant. The pasteboard write needs no TCC grant either. With
-// paste-back deleted years ago, there is no CGEvent synthesis anywhere.
+// PERMISSION MODEL: Carbon `RegisterEventHotKey` is a HOT-KEY
+// REGISTRATION, not an event tap — no Input Monitoring grant. Cursor
+// insert (issue #129) lives in CommandCursorInsert.swift and requires
+// Accessibility. The pasteboard seam is retained so tests can prove the
+// fire path never writes it.
 
 import Foundation
 import AppKit

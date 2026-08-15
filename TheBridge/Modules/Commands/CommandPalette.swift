@@ -2,10 +2,11 @@
 // TheBridge · Modules · Commands
 //
 // This consumes the GUI shell (CommandBox.swift — Carbon hot-key +
-// non-activating NSPanel + a single clipboard write) and the W2 data
-// layer (CommandsManager — /markdown fetch + mention resolve + TTL
-// cache + offline-fallback). This file owns the GUI-FREE glue that
-// joins them, all of it headlessly testable:
+// non-activating NSPanel) and the W2 data layer (CommandsManager —
+// /markdown fetch + mention resolve + TTL cache + offline-fallback).
+// The GUI shell inserts the resolved body at the focused cursor
+// (issue #129) and never writes the clipboard. This file owns the
+// GUI-FREE glue that joins them, all of it headlessly testable:
 //
 //   1. CommandDescriptor          — palette-row metadata (id/name/abbr/
 //                                    group/tags). The BODY is NOT held
@@ -35,15 +36,15 @@
 //                                    the resolved body via the injected
 //                                    CommandsManager (NO duplicate fetch/
 //                                    cache — it calls W2). Returns the
-//                                    plain-text body the GUI shell writes
-//                                    to the system clipboard.
+//                                    plain-text body the GUI shell inserts
+//                                    at the focused cursor.
 //
 // HONEST GUI CEILING (NOT papered over): the hot-key actually firing and
 // the NSPanel receiving keystrokes require a live WindowServer/login
 // session and cannot be asserted headlessly — an explicit operator
-// manual-smoke. The clipboard WRITE itself is headlessly verified (write
-// → read back via the ClipboardWriting seam). Everything in THIS file is
-// pure and 100%-green-tested.
+// manual-smoke. Cursor insert is headlessly verified via the
+// `CommandTextInserting` seam (clipboard writeCount stays 0). Everything
+// in THIS file is pure and 100%-green-tested.
 
 import Foundation
 
@@ -287,14 +288,13 @@ public struct CommandsPaletteGate: Sendable, Equatable {
 
 /// What happens when the user commits (Enter) on a query/selection.
 public enum CommandPaletteCommitResult: Sendable, Equatable {
-    /// Resolved body (plain text). The GUI shell writes this to the
-    /// system clipboard (replace contents — no save/restore); the user
-    /// pastes it themselves. The case name is retained for source/test
-    /// stability — it now means "this is the body to put on the
-    /// clipboard", NOT a synthetic paste into another app.
+    /// Resolved body (plain text). The GUI shell inserts this at the
+    /// focused cursor in the previously-frontmost app. The case name is
+    /// retained for source/test stability — it now means "this is the
+    /// body to insert", NOT a clipboard write and NOT a synthetic ⌘V.
     case paste(String)
-    /// The query matched no command — nothing to paste. The GUI shell
-    /// keeps the panel open (no destructive paste of a wrong command).
+    /// The query matched no command — nothing to insert. The GUI shell
+    /// keeps the panel open (no destructive insert of a wrong command).
     case notFound(query: String)
     /// A command matched but its body could not be fetched AND there was
     /// no offline-fallback cache (CommandsManager surfaced .unavailable).
@@ -453,7 +453,7 @@ public struct CommandPalettePresentation: Sendable, Equatable {
     /// True ⇒ keep the panel open (let the user retry / re-type).
     /// False ⇒ the body was copied; dismiss after the confirmation.
     public let staysOpen: Bool
-    /// True ⇒ the body was written to the clipboard; the panel should
+    /// True ⇒ the body was inserted at the cursor; the panel should
     /// flash this confirmation briefly then auto-dismiss.
     public let isConfirmation: Bool
 
@@ -469,7 +469,7 @@ public struct CommandPalettePresentation: Sendable, Equatable {
 /// state is unit-asserted exhaustively.
 public enum CommandPalettePresenter {
 
-    /// The auto-dismiss delay (ms) for the "Copied ‹name›" confirmation.
+    /// The auto-dismiss delay (ms) for the "Inserted ‹name›" confirmation.
     public static let confirmationDismissMillis = 900
 
     /// cmd-ux W3 (Q1=b): empty-state guidance shown when the palette has
@@ -490,7 +490,7 @@ public enum CommandPalettePresenter {
         switch result {
         case .paste:
             return CommandPalettePresentation(
-                message: "Copied \(name)",
+                message: "Inserted \(name)",
                 staysOpen: false,
                 isConfirmation: true
             )
@@ -509,8 +509,48 @@ public enum CommandPalettePresenter {
         }
     }
 
+    /// Map an insert outcome to panel copy. Failures stay open with an
+    /// explicit status; success dismisses. Never implies a clipboard write.
+    public static func presentInsert(
+        _ outcome: CommandInsertOutcome,
+        name: String
+    ) -> CommandPalettePresentation {
+        switch outcome {
+        case .inserted:
+            return CommandPalettePresentation(
+                message: "Inserted \(name)",
+                staysOpen: false,
+                isConfirmation: true
+            )
+        case .emptyBody:
+            return CommandPalettePresentation(
+                message: "Command body is empty",
+                staysOpen: true,
+                isConfirmation: false
+            )
+        case .noEditableTarget:
+            return CommandPalettePresentation(
+                message: "No editable field in the frontmost app",
+                staysOpen: true,
+                isConfirmation: false
+            )
+        case .accessibilityDenied:
+            return CommandPalettePresentation(
+                message: "Accessibility permission required to insert commands",
+                staysOpen: true,
+                isConfirmation: false
+            )
+        case .insertFailed(let reason):
+            return CommandPalettePresentation(
+                message: "Could not insert command — \(reason)",
+                staysOpen: true,
+                isConfirmation: false
+            )
+        }
+    }
+
     /// Presentation for an Enter on an empty query: a pure no-op —
-    /// nothing copied, panel stays, no message.
+    /// nothing inserted, panel stays, no message.
     public static var emptyQueryNoOp: CommandPalettePresentation {
         CommandPalettePresentation(message: "", staysOpen: true, isConfirmation: false)
     }

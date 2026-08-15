@@ -696,15 +696,15 @@ func runCommandPaletteTests() async {
     }
 
     // ============================================================
-    // MARK: (H) Clipboard-only commit — CommandBridgeController.applyCommit
-    //   The on-Enter behaviour: .paste → WRITE the body to the clipboard
-    //   (replace contents, NO save/restore); .notFound / .unavailable →
-    //   write NOTHING. Driven through an InMemoryClipboard so the write
-    //   is read back in-test (now headlessly verifiable). NO panel / NO
-    //   hot-key constructed — only the pure commit decision.
+    // MARK: (H) Cursor-insert commit — CommandBridgeController.applyCommit
+    //   The on-Enter behaviour: .paste → INSERT the body via the
+    //   CommandTextInserting seam; clipboard writeCount stays 0.
+    //   .notFound / .unavailable → insert NOTHING. Driven through an
+    //   InMemoryClipboard probe so "never wrote" is headlessly
+    //   verifiable. NO panel / NO hot-key constructed.
     // ============================================================
 
-    await test("applyCommit(.paste) WRITES the resolved body to the clipboard") {
+    await test("applyCommit(.paste) INSERTS the resolved body and does not write the clipboard") {
         let cb = InMemoryClipboard(initial: "user-prior-clip")
         let mgr = CommandsManager(fetcher: { _ in mdJSON("x") })
         let ctrl = await CommandBridgeController(
@@ -712,14 +712,14 @@ func runCommandPaletteTests() async {
             coordinator: CommandPaletteCoordinator(
                 provider: StaticCommandDescriptorProvider(), manager: mgr))
         await ctrl.applyCommit(.paste("=== resolved body ==="))
-        try expect(cb.readString() == "=== resolved body ===",
-                   "the clipboard must hold exactly the resolved body, got \(cb.readString() ?? "nil")")
-        try expect(cb.writeCount == 1, "exactly one clipboard write, got \(cb.writeCount)")
+        try expect(await ctrl.lastInsertedText == "=== resolved body ===",
+                   "the inserter must receive exactly the resolved body, got \(await ctrl.lastInsertedText ?? "nil")")
+        try expect(cb.writeCount == 0, "fire path must not write clipboard, got \(cb.writeCount)")
+        try expect(cb.readString() == "user-prior-clip",
+                   "prior clipboard must be unchanged, got \(cb.readString() ?? "nil")")
     }
 
-    await test("applyCommit(.paste) does NOT preserve the prior clipboard (replace-only)") {
-        // The corrected invariant superseding the deleted save/restore:
-        // the user WANTS the body on the clipboard; the original is gone.
+    await test("applyCommit(.paste) MUST preserve the prior clipboard (issue #129)") {
         let cb = InMemoryClipboard(initial: "user-prior-clip")
         let mgr = CommandsManager(fetcher: { _ in mdJSON("x") })
         let ctrl = await CommandBridgeController(
@@ -727,8 +727,9 @@ func runCommandPaletteTests() async {
             coordinator: CommandPaletteCoordinator(
                 provider: StaticCommandDescriptorProvider(), manager: mgr))
         await ctrl.applyCommit(.paste("new-body"))
-        try expect(cb.readString() == "new-body",
-                   "there is NO restore — prior clip must be overwritten, got \(cb.readString() ?? "nil")")
+        try expect(cb.readString() == "user-prior-clip",
+                   "clipboard must be byte-for-byte unchanged, got \(cb.readString() ?? "nil")")
+        try expect(await ctrl.lastInsertedText == "new-body")
     }
 
     await test("applyCommit(.notFound) writes NOTHING (no guessed command on the clipboard)") {
@@ -742,6 +743,7 @@ func runCommandPaletteTests() async {
         try expect(cb.writeCount == 0, "a not-found commit must NOT write, got writeCount=\(cb.writeCount)")
         try expect(cb.readString() == "user-prior-clip",
                    "the clipboard must be left untouched on no-match, got \(cb.readString() ?? "nil")")
+        try expect(await ctrl.lastInsertedText == nil)
     }
 
     await test("applyCommit(.unavailable) writes NOTHING (no destructive clobber)") {
@@ -767,10 +769,11 @@ func runCommandPaletteTests() async {
         try expect(cb.writeCount == 0,
                    "an empty resolved body must NOT blank-clobber the clipboard, got \(cb.writeCount)")
         try expect(cb.readString() == "user-prior-clip", "clipboard untouched on empty body")
+        try expect(await ctrl.lastInsertOutcome == .emptyBody)
     }
 
-    await test("applyCommit(.paste) preserves exact markdown bytes onto the clipboard") {
-        let cb = InMemoryClipboard()
+    await test("applyCommit(.paste) preserves exact markdown bytes onto the inserter") {
+        let cb = InMemoryClipboard(initial: "PRIOR")
         let mgr = CommandsManager(fetcher: { _ in mdJSON("x") })
         let ctrl = await CommandBridgeController(
             clipboard: cb,
@@ -778,13 +781,15 @@ func runCommandPaletteTests() async {
                 provider: StaticCommandDescriptorProvider(), manager: mgr))
         let body = "# H1\n\n- a — b\n[link](https://www.notion.so/p)\n✅ ünïçødé"
         await ctrl.applyCommit(.paste(body))
-        try expect(cb.readString() == body,
-                   "the resolved markdown must reach the clipboard byte-for-byte, got \(cb.readString() ?? "nil")")
+        try expect(await ctrl.lastInsertedText == body,
+                   "the resolved markdown must reach the inserter byte-for-byte, got \(await ctrl.lastInsertedText ?? "nil")")
+        try expect(cb.readString() == "PRIOR")
+        try expect(cb.writeCount == 0)
     }
 
-    await test("Coordinator(query) → applyCommit writes the W2-resolved body end-to-end") {
+    await test("Coordinator(query) → applyCommit inserts the W2-resolved body end-to-end") {
         // The full headless path: typed query → registry fuzzy match →
-        // W2 body fetch+resolve → clipboard write (read back in-test).
+        // W2 body fetch+resolve → cursor insert (clipboard untouched).
         let (d, suite) = makeIsolatedDefaults()
         seedRegistry(d, key: BridgeDefaults.skills, [
             (name: "Email Signature", pageId: pidSig, enabled: true),
@@ -797,12 +802,14 @@ func runCommandPaletteTests() async {
         let coord = CommandPaletteCoordinator(
             provider: isolatedRegistryProvider(suiteName: suite, storageKey: BridgeDefaults.skills),
             manager: mgr)
-        let cb = InMemoryClipboard()
+        let cb = InMemoryClipboard(initial: "user-prior-clip")
         let ctrl = await CommandBridgeController(clipboard: cb, coordinator: coord)
         let result = await coord.commit(query: "Email Signature")
         await ctrl.applyCommit(result)
-        try expect(cb.readString() == "RESOLVED SIGNATURE BODY",
-                   "the end-to-end path must land the W2-resolved body on the clipboard, got \(cb.readString() ?? "nil")")
+        try expect(await ctrl.lastInsertedText == "RESOLVED SIGNATURE BODY",
+                   "the end-to-end path must land the W2-resolved body on the inserter, got \(await ctrl.lastInsertedText ?? "nil")")
+        try expect(cb.writeCount == 0)
+        try expect(cb.readString() == "user-prior-clip")
         try expect(fetched.replacingOccurrences(of: "-", with: "") == pidSig,
                    "must fetch the matched registry entry's page id, got \(fetched)")
     }
@@ -899,11 +906,11 @@ func runCommandPaletteTests() async {
     //   ceiling; THIS decision is asserted exhaustively.
     // ============================================================
 
-    await test("Presenter: .paste ⇒ \"Copied ‹name›\", panel DISMISSES (confirmation)") {
+    await test("Presenter: .paste ⇒ \"Inserted ‹name›\", panel DISMISSES (confirmation)") {
         let p = CommandPalettePresenter.present(.paste("body"), name: "Email Signature")
-        try expect(p.message == "Copied Email Signature", "got '\(p.message)'")
-        try expect(p.staysOpen == false, "a successful copy must dismiss the panel")
-        try expect(p.isConfirmation, "a copy is a flash-then-dismiss confirmation")
+        try expect(p.message == "Inserted Email Signature", "got '\(p.message)'")
+        try expect(p.staysOpen == false, "a successful insert must dismiss the panel")
+        try expect(p.isConfirmation, "an insert is a flash-then-dismiss confirmation")
     }
 
     await test("Presenter: .notFound ⇒ \"No match for ‹query›\", panel STAYS, no copy") {

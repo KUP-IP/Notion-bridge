@@ -559,7 +559,7 @@ public struct CommandsEditorView: View {
                     .fixedSize()
                     .accessibilityLabel("Command body view")
                     Spacer()
-                    Text("Copied to clipboard as plain-text markdown")
+                    Text("Inserted at the cursor as plain-text markdown")
                         .font(BridgeTokens.Typeface.micro)
                         .foregroundStyle(BridgeTokens.fg5)
                         .lineLimit(1)

@@ -4,12 +4,14 @@ This checklist covers the manual smoke surface for the Command Bridge
 popup rebuild. The DECISION layer underneath is fully unit-tested
 headlessly — see `TheBridgeTests/CommandBridgeControllerTests.swift`
 for placement math, recents MRU, animation config, view-model
-builders, the clipboard contract, lifecycle defaults, and the
+builders, the cursor-insert contract (issue #129), lifecycle defaults, and the
 modifier-less hot-key plumbing-failure shape. What this document
 catches is the **AppKit ceiling**: the global hot-key actually firing
 on a live WindowServer, a borderless NSPanel becoming key without
 activating the app, the SwiftUI Liquid Glass rendering, multi-display
-placement, the macOS reduce-motion path, and focus-loss dismissal.
+placement, the macOS reduce-motion path, focus-loss dismissal, and
+direct cursor insert into a native field plus a browser input
+(Accessibility grant required; clipboard must stay unchanged).
 
 ## Build & launch
 
@@ -51,8 +53,10 @@ placement, the macOS reduce-motion path, and focus-loss dismissal.
       Initiate or `5` for Execute on the default engineering palette)
       fires that command:
   - [ ] The popup closes
-  - [ ] The system clipboard now holds the exact markdown body of the
-        fired command (`pbpaste` to verify byte-for-byte)
+  - [ ] The command body is inserted at the cursor in the previously
+        focused editable field (not copied to the clipboard)
+  - [ ] `pbpaste` still shows whatever was on the clipboard *before*
+        the fire — byte-for-byte unchanged
   - [ ] The command's lastUsedAt is updated (visible next time you
         open the popup and press ↓ — the row will show "just now")
 - [ ] Pressing a number key for an **unassigned** slot is a no-op:
@@ -70,9 +74,9 @@ placement, the macOS reduce-motion path, and focus-loss dismissal.
 - [ ] Each row shows: icon · name · relative timestamp ("just now",
       "2m ago", "yesterday", "3d ago") · keycap label if the command
       has an assigned slot
-- [ ] Press Enter → the top-selected row fires (clipboard write +
-      close)
-- [ ] Click a row → that command fires (clipboard write + close)
+- [ ] Press Enter → the top-selected row fires (cursor insert +
+      close; clipboard unchanged)
+- [ ] Click a row → that command fires (cursor insert + close)
 
 ## Search-as-you-type
 
@@ -120,6 +124,24 @@ placement, the macOS reduce-motion path, and focus-loss dismissal.
       ⚠ collision and **keeps the prior working combo** alive
 - [ ] Try a modifier-less key → the recorder refuses to record it
 
+## Cursor insert (issue #129) — Accessibility smoke
+
+Requires The Bridge Accessibility grant. Put a unique token on the
+clipboard first (`echo UNIQUE-CLIP-TOKEN | pbcopy`) so you can prove
+it was not overwritten.
+
+- [ ] Native field: focus TextEdit (or Notes) with the caret in the
+      body. Fire a command. The body inserts at the caret. `pbpaste`
+      is still `UNIQUE-CLIP-TOKEN`.
+- [ ] Selection replace: select a word in that field, fire again. The
+      selection is replaced by the command body. Clipboard unchanged.
+- [ ] Browser input: focus a text input in Safari or Chrome, fire a
+      command. The body inserts in that field. Clipboard unchanged.
+- [ ] No target: click the desktop (no focused field) and fire. The
+      clipboard is still `UNIQUE-CLIP-TOKEN`. Console shows
+      `[CommandBridge] No editable field in the frontmost app` (or the
+      Accessibility-permission message if the grant is missing).
+
 ## Negative paths
 
 - [ ] Disable the palette via Settings → Commands master toggle →
@@ -139,8 +161,9 @@ operator smoke. Re-running the harness covers them:
 - Animation config + reduce-motion collapse
   (`CommandBridgeAnimation.locked` / `.reduced`)
 - View-model builders (`buildSlotRows` / `buildRecentRows`)
-- The clipboard contract (`applyCommit(.paste / .notFound /
-  .unavailable)`)
+- The cursor-insert contract (`applyCommit(.paste / .notFound /
+  .unavailable)` never writes the clipboard; no-target / AX-denied
+  fail closed — `TheBridgeTests/CommandCursorInsertTests.swift`)
 - The modifier-less hot-key refusal → `.plumbingFailure` (NEVER
   `.collision`)
 

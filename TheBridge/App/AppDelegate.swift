@@ -966,7 +966,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     /// when off. The descriptor source is the EXISTING skills registry
     /// (`RegistrySkillsCommandProvider` over `BridgeDefaults.skills`):
     /// every enabled registry entry is a selectable command. On Enter the
-    /// resolved page body is written to the system clipboard.
+    /// resolved page body is inserted at the focused cursor (issue #129).
     private func maybeStartCommandsPalette() {
         guard Self.shouldStartCommandsPalette() else {
             print("[The Bridge] Commands palette disabled (master toggle off; set \(CommandsPaletteGate.enableEnvKey)=1 to force on)")
@@ -1042,7 +1042,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         if !box.isRegistered, case .collision = box.lastRegisterStatus {
             scheduleLaunchHotkeyRetry()
         }
-        print("[The Bridge] Commands palette enabled — registry-backed, clipboard-only — hot-key \(registered ? "registered" : "registration FAILED") (\(hotkey.displayString))")
+        print("[The Bridge] Commands palette enabled — registry-backed, cursor-insert — hot-key \(registered ? "registered" : "registration FAILED") (\(hotkey.displayString))")
     }
 
     /// Number of launch-retry attempts remaining for a transient ⌃⌘B

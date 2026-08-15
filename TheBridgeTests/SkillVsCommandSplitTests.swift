@@ -13,9 +13,9 @@
 //     fetches, one payload. The agent gets the whole page.
 //
 //   • Hot-key command (CommandsManager.body → CommandPaletteCoordinator
-//     .commit → CommandBridgeController clipboard): BODY-ONLY markdown via
+//     .commit → CommandBridgeController insert): BODY-ONLY markdown via
 //     /markdown. It must NEVER fetch or leak page `properties` — the
-//     user pastes a clean body, not a metadata dump.
+//     user receives a clean body at the cursor, not a metadata dump.
 //
 // ZERO network: the command path is driven through an INJECTED body
 // fetcher; the fetch_skill path through the production envelope builder
@@ -40,11 +40,11 @@ func runSkillVsCommandSplitTests() async {
     // ── LOCK 1: command commit path yields ONLY the markdown body ─────
     //
     //   Drive the EXACT production path the hot-key uses — coordinator
-    //   commit → applyCommit → clipboard — with an injected body fetcher.
-    //   The clipboard payload must be byte-for-byte the resolved
+    //   commit → applyCommit → inserter — with an injected body fetcher.
+    //   The inserted payload must be byte-for-byte the resolved
     //   markdown. If a future change ever folded page `properties` into
     //   the command path, the injected body (which carries NO property
-    //   text) could not still equal the clipboard verbatim.
+    //   text) could not still equal the inserted text verbatim.
     await test("LOCK: CommandsManager/coordinator commit yields ONLY the markdown body (no properties)") {
         // The body deliberately contains NO property-shaped text. A
         // synthetic getPage-style properties dict is built but is NEVER
@@ -66,6 +66,7 @@ func runSkillVsCommandSplitTests() async {
             return mdJSON(body)   // /markdown body ONLY — never properties
         })
         let cb = InMemoryClipboard(initial: "user-prior-clip")
+        let ins = RecordingTextInserter()
         let coord = CommandPaletteCoordinator(
             provider: StaticCommandDescriptorProvider([
                 CommandDescriptor(id: pageId, name: "Email Signature",
@@ -73,7 +74,7 @@ func runSkillVsCommandSplitTests() async {
             ]),
             manager: mgr)
         let ctrl = await CommandBridgeController(
-            clipboard: cb, coordinator: coord)
+            clipboard: cb, inserter: ins, coordinator: coord)
 
         let result = await coord.commit(
             CommandDescriptor(id: pageId, name: "Email Signature", abbreviation: "sig"))
@@ -85,21 +86,23 @@ func runSkillVsCommandSplitTests() async {
         // (1) The committed payload is EXACTLY the resolved markdown body.
         try expect(pasted == body,
                    "commit payload must be the verbatim body, got \(pasted)")
-        // (2) The clipboard holds ONLY that body — nothing else merged in.
-        try expect(cb.readString() == body,
-                   "clipboard must hold ONLY the markdown body, got \(cb.readString() ?? "nil")")
-        try expect(cb.writeCount == 1, "exactly one clipboard write, got \(cb.writeCount)")
+        // (2) The inserter holds ONLY that body — nothing else merged in.
+        try expect(ins.inserts.first?.text == body,
+                   "inserter must hold ONLY the markdown body, got \(ins.inserts.first?.text ?? "nil")")
+        try expect(cb.writeCount == 0, "command path must not write clipboard, got \(cb.writeCount)")
+        try expect(cb.readString() == "user-prior-clip",
+                   "clipboard must stay untouched, got \(cb.readString() ?? "nil")")
         // (3) Exactly ONE fetch — the /markdown body fetch. There is no
         //     second getPage/properties fetch in the command path.
         try expect(fetchCalls.count == 1,
                    "the command path must do exactly ONE (body) fetch, got \(fetchCalls.count)")
         // (4) Hard anti-leak: no property name/value can appear on the
-        //     clipboard (the body never contained them, and the path has
+        //     inserted body (the body never contained them, and the path has
         //     no properties input — this pins the consequence).
-        let clip = cb.readString() ?? ""
+        let inserted = ins.inserts.first?.text ?? ""
         for needle in ["Status", "Published", "Owner", "DO-NOT-LEAK", "select", "rich_text"] {
-            try expect(!clip.contains(needle),
-                       "page-property text \"\(needle)\" must NEVER reach the command clipboard")
+            try expect(!inserted.contains(needle),
+                       "page-property text \"\(needle)\" must NEVER reach the command insert")
         }
     }
 
