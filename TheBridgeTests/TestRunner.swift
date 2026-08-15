@@ -859,6 +859,10 @@ await runCommandStoreTests()
 // recovery proof for the legacy command store.
 await runCommandCustodyTests()
 
+// GitHub #140 A1: product-default reconciliation, classifications, and
+// compatibility-required execution gating. No automatic body merge.
+await runCommandReconciliationTests()
+
 // PKT-876 (v3.6.1): Settings sections Liquid Glass reskin.
 await runSettingsSectionsLGTests()
 

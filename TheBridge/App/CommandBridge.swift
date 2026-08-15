@@ -829,7 +829,23 @@ public final class CommandBridgeController: NSObject {
     /// the prior app's focused editable control (issue #129). Never
     /// copies to the clipboard. On failure, records a status and still
     /// closes the palette so the operator is not stuck in the overlay.
+    /// Compatibility-required commands fail closed: no insert, no fire.
     private func commitBody(_ body: String, slug: String) {
+        let gate: CommandStore.ExecutionGate
+        do {
+            gate = try store.executionGate(slug: slug)
+        } catch {
+            _ = applyCommit(.unavailable(name: slug, reason: error.localizedDescription))
+            hide()
+            print("[CommandBridge] command execution gated: \(error.localizedDescription)")
+            return
+        }
+        if case .compatibilityRequired(let evidence) = gate {
+            _ = applyCommit(.unavailable(name: slug, reason: evidence))
+            hide()
+            print("[CommandBridge] command execution gated: \(evidence)")
+            return
+        }
         let target = priorApp
         let pid = insertTargetPID(target)
         let outcome = applyCommit(.paste(body), intoProcess: pid)
