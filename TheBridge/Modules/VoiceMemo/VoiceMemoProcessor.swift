@@ -1058,7 +1058,8 @@ public enum VoiceMemoProcessor {
                 ],
             ])
         }
-        if !plan.actions.isEmpty {
+        let actions = memoryKeepActionItems(plan: plan, summaryText: trimmed)
+        if !actions.isEmpty {
             children.append([
                 "object": "block",
                 "type": "heading_3",
@@ -1066,11 +1067,12 @@ public enum VoiceMemoProcessor {
                     "rich_text": [["type": "text", "text": ["content": "Action items"]]],
                 ],
             ])
-            for action in plan.actions.prefix(12) {
+            for action in actions.prefix(12) {
                 children.append([
                     "object": "block",
-                    "type": "bulleted_list_item",
-                    "bulleted_list_item": [
+                    "type": "to_do",
+                    "to_do": [
+                        "checked": false,
                         "rich_text": [["type": "text", "text": ["content": String(action.prefix(1900))]]],
                     ],
                 ])
@@ -1100,6 +1102,45 @@ public enum VoiceMemoProcessor {
             "blockId": .string(pageId),
             "children": .string(json),
         ]))
+    }
+
+    /// Plan actions first; otherwise lift "Next:" / "I need to" prose from the summary.
+    /// Never invent "Follow up."
+    static func memoryKeepActionItems(plan: VoiceMemoPlan, summaryText: String) -> [String] {
+        let fromPlan = plan.actions
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !isFollowUpFiller($0) }
+        if !fromPlan.isEmpty { return Array(fromPlan.prefix(12)) }
+
+        var fromProse = proseActionSentences(from: summaryText)
+        if fromProse.isEmpty {
+            fromProse = VoiceMemoDegradedPreviewBuilder.build(from: summaryText).actions
+                .filter { !isFollowUpFiller($0) }
+        }
+        return Array(fromProse.prefix(12))
+    }
+
+    private static func isFollowUpFiller(_ text: String) -> Bool {
+        let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower == "follow up" || lower == "follow up." || lower == "follow-up" || lower == "follow-up."
+    }
+
+    private static func proseActionSentences(from text: String) -> [String] {
+        let parts = text
+            .replacingOccurrences(of: "\n", with: ". ")
+            .components(separatedBy: CharacterSet(charactersIn: ".!?"))
+        var out: [String] = []
+        for raw in parts {
+            let sentence = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard sentence.count >= 12, !isFollowUpFiller(sentence) else { continue }
+            let lower = sentence.lowercased()
+            let isAction = lower.hasPrefix("next")
+                || lower.hasPrefix("i need to")
+                || lower.hasPrefix("i'll ")
+                || lower.hasPrefix("i will ")
+            if isAction { out.append(sentence) }
+        }
+        return out
     }
 
     /// Legacy transcript append — retained for explicit opt-in callers only.

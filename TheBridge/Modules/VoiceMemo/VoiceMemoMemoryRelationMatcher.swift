@@ -2,7 +2,8 @@
 // TheBridge · Modules · VoiceMemo
 //
 // Conservative matcher for memory_keep: unique contacts, distinctive
-// project/doc phrases, exact-title blocks. Never creates PEOPLE rows.
+// project/doc phrases (including unique 2-token prefixes), exact-title
+// blocks. Never creates PEOPLE rows.
 // Dual-sided Notion reverse-fill is accepted; we only write the Memory side.
 
 import Foundation
@@ -175,14 +176,17 @@ public enum VoiceMemoMemoryRelationMatcher {
         return "Skipped “\(label)” — \(names.count) contacts (\(shown)\(extra))"
     }
 
-    // MARK: - Projects / docs (exact title/alias, or distinctive ≥2-token phrase)
+    // MARK: - Projects / docs (exact title/alias, unique 2-token prefix, or unique token)
 
     private static func matchDistinctive(hay: String, entries: [VoiceMemoCacheEntry]) -> [String] {
         let tokenOwners = distinctiveTokenIndex(entries)
+        let pairOwners = distinctivePairIndex(entries)
         var ids: [String] = []
         var seen = Set<String>()
         for entry in entries {
-            guard matchProjectOrDoc(hay: hay, entry: entry, tokenOwners: tokenOwners) else { continue }
+            guard matchProjectOrDoc(
+                hay: hay, entry: entry, tokenOwners: tokenOwners, pairOwners: pairOwners
+            ) else { continue }
             if seen.insert(entry.id).inserted { ids.append(entry.id) }
         }
         return ids
@@ -191,7 +195,8 @@ public enum VoiceMemoMemoryRelationMatcher {
     private static func matchProjectOrDoc(
         hay: String,
         entry: VoiceMemoCacheEntry,
-        tokenOwners: [String: Set<String>]
+        tokenOwners: [String: Set<String>],
+        pairOwners: [String: Set<String>]
     ) -> Bool {
         let phrases = ([entry.title] + entry.aliases)
             .map(normalize)
@@ -203,6 +208,14 @@ public enum VoiceMemoMemoryRelationMatcher {
             if containsPhrase(hay, phrase) { return true }
             if distinctive.count >= 2, containsPhrase(hay, distinctive.joined(separator: " ")) {
                 return true
+            }
+            let pairTokens = distinctive.filter { $0.count >= 3 }
+            if pairTokens.count >= 2 {
+                for i in 0..<(pairTokens.count - 1) {
+                    let pair = pairTokens[i] + " " + pairTokens[i + 1]
+                    let owners = pairOwners[pair] ?? []
+                    if owners.count == 1, containsPhrase(hay, pair) { return true }
+                }
             }
             if distinctive.count == 1, let token = distinctive.first, token.count >= 3 {
                 let owners = tokenOwners[token] ?? []
@@ -224,6 +237,24 @@ public enum VoiceMemoMemoryRelationMatcher {
             }
             for token in tokens {
                 index[token, default: []].insert(entry.id)
+            }
+        }
+        return index
+    }
+
+    /// Consecutive distinctive ≥3-char token pairs, e.g. "emmiwood obk" from
+    /// "Emmiwood / OBK Website + Booking System". Shared pairs never attach.
+    private static func distinctivePairIndex(_ entries: [VoiceMemoCacheEntry]) -> [String: Set<String>] {
+        var index: [String: Set<String>] = [:]
+        for entry in entries {
+            for phrase in ([entry.title] + entry.aliases).map(normalize) {
+                let distinctive = phrase.split(separator: " ").map(String.init)
+                    .filter { !stoplist.contains($0) && $0.count >= 3 }
+                guard distinctive.count >= 2 else { continue }
+                for i in 0..<(distinctive.count - 1) {
+                    let pair = distinctive[i] + " " + distinctive[i + 1]
+                    index[pair, default: []].insert(entry.id)
+                }
             }
         }
         return index

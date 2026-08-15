@@ -220,6 +220,63 @@ func runVoiceMemoMemoryRelationMatcherTests() async {
         try expect(appended.contains("Hannah"), "Hannah collision must be listed in the body, got \(appended)")
         try expect(appended.contains("Isaiah will text Andrew Moeller"),
                    "action items must copy onto the body, got \(appended)")
+        try expect(appended.contains("\"to_do\""), "action items must be Notion checkboxes, got \(appended)")
+    }
+
+    await test("matcher: unique 2-token prefix attaches when emmiwood alone collides") {
+        let catalog = VoiceMemoRelationCatalog(
+            projects: [
+                VoiceMemoCacheEntry(id: kEmmiwood, title: "Emmiwood / OBK Website + Booking System"),
+                VoiceMemoCacheEntry(id: kFBD, title: "Emmiwood — Go Live Prep"),
+            ]
+        )
+        let miss = VoiceMemoMemoryRelationMatcher.match(
+            haystack: "Review Emmiwood before Friday.",
+            catalog: catalog
+        )
+        try expect(miss.projectIds.isEmpty, "shared Emmiwood token must not attach, got \(miss.projectIds)")
+
+        let hit = VoiceMemoMemoryRelationMatcher.match(
+            haystack: "Talked with Barro about Emmiwood / OBK.",
+            catalog: catalog
+        )
+        try expect(hit.projectIds == [kEmmiwood], "unique emmiwood obk prefix must attach, got \(hit.projectIds)")
+    }
+
+    await test("executeMemoryKeep: Next: prose becomes a to_do when plan.actions is empty") {
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
+        let state = RelationStubState()
+        await installRelationStubs(on: router, state: state, pageId: "page-next-todo")
+
+        _ = try await VoiceMemoProcessor.executeMemoryKeep(
+            entityKey: "memory",
+            intent: VoiceMemoIntent(
+                kind: .memoryKeep,
+                confidence: 0.95,
+                entityKey: "memory",
+                title: "Barro screenshots",
+                fields: [:]
+            ),
+            plan: VoiceMemoPlan(
+                generatedTitle: "Barro screenshots",
+                skipMemoryKeep: false,
+                summary: "Talked with Barro about Emmiwood / OBK. Next: send him the booking-flow screenshots so he can confirm the go-live checklist.",
+                actions: [],
+                intents: []
+            ),
+            transcript: "Memory keep. I talked with Barro about Emmiwood / OBK. Next, I need to send him the booking flow screenshots.",
+            router: router,
+            entity: memoryEntityWithRelations(),
+            catalog: sampleCatalog()
+        )
+
+        let appended = await state.appendedChildrenJSON
+        try expect(appended.contains("\"to_do\""), "Next: prose must become a checkbox, got \(appended)")
+        try expect(appended.contains("booking-flow screenshots") || appended.contains("booking flow screenshots"),
+                   "checkbox must carry the physical next step, got \(appended)")
+        try expect(!appended.contains("Follow up"), "must not invent Follow up")
+        let fields = await state.createdFields
+        try expect(fields["projects"] == .string(kEmmiwood), "Emmiwood / OBK prefix must attach, got \(String(describing: fields["projects"]))")
     }
 
     await test("executeMemoryKeep: unbound CONTACTS is skipped, PLAYERS still writes") {
