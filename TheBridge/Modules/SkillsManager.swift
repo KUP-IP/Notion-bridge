@@ -55,7 +55,7 @@ public enum SkillVisibility: String, Sendable, CaseIterable, Equatable {
     /// Fetchable via `fetch_skill` only; omitted from routing list.
     case standard
     /// cmd-ux W3: appears in the global Commands palette (the hot-key
-    /// command box copies the page body to the clipboard). Still
+    /// command box inserts the page body at the focused cursor). Still
     /// fetchable by name via `fetch_skill`; NOT in the routing list.
     case command
 }

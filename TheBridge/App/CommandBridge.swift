@@ -17,12 +17,13 @@
 //     typing (search results). Recents is in-memory session-only (locked
 //     decision Q1).
 //
-// Behaviour locked by PKT-878:
-//   • Number key 1–0 → fires the assigned favorite → copies its
-//     markdown body to the system pasteboard → closes.
+// Behaviour locked by PKT-878 + issue #129:
+//   • Number key 1–0 → fires the assigned favorite → inserts its
+//     markdown body at the focused cursor in the prior app → closes.
+//     The clipboard is never read or written on this path.
 //   • ↓ → opens the recents slide-in (140ms ease).
 //   • Typing → substring search across all commands, ranked by recency.
-//   • Enter or click on a row → fires the selected command (copy +
+//   • Enter or click on a row → fires the selected command (insert +
 //     close). Esc / focus-loss → closes without writing.
 //   • Open animation: 180ms ease-out, opacity 0→1, scale 0.94→1.0,
 //     with a 10ms cascade stagger across the 10 bubbles.
@@ -32,7 +33,9 @@
 //   • `HotkeyConfig`            — Carbon `RegisterEventHotKey` config
 //                                  + persisted-load + Cocoa→Carbon recorder
 //   • `ClipboardWriting`/`InMemoryClipboard`/`SystemClipboard`
-//                                  — write-only pasteboard seam
+//                                  — retained as a probe seam so tests
+//                                  can prove the fire path never writes
+//   • `CommandTextInserting`       — cursor-insert seam (#129)
 //   • Carbon hot-key REGISTRATION shape (InstallEventHandler +
 //     RegisterEventHotKey) — pulled into `registerHotkey()` below
 //     unchanged in semantics so the operator-smoke contract is
@@ -47,7 +50,7 @@
 // without activating the app, the SwiftUI rendering, and the focus-loss
 // dismiss all require a real login session. The DECISION layers below
 // (the state machine, the placement math, the search ranking, the
-// recents tracker, the commit→clipboard write, the animation config)
+// recents tracker, the commit→cursor insert, the animation config)
 // are PURE and unit-tested headlessly.
 
 import Foundation
@@ -245,21 +248,16 @@ public enum CommandBridgePanelMode: Sendable, Equatable {
 //     • Owns the borderless NSPanel and the SwiftUI host inside it.
 //     • Owns the lifecycle state machine (closed → opening → open →
 //       closing) and the secondary panel mode (none / recents / search).
-//     • On commit: writes the resolved command body to the system
-//       pasteboard via the `ClipboardWriting` seam and closes.
+//     • On commit: inserts the resolved command body at the focused
+//       editable control of the previously-frontmost app via
+//       `CommandTextInserting`. The clipboard is not used.
 //
-//   PERMISSION MODEL (v3.7.6 — paste-back ADDED): Carbon
+//   PERMISSION MODEL (issue #129 — cursor insert): Carbon
 //   `RegisterEventHotKey` is still a HOT-KEY REGISTRATION, not an event
-//   tap — no Input Monitoring grant. NSPasteboard write still needs no
-//   TCC grant and stays UNCONDITIONAL on every commit. What is NEW: after
-//   the clipboard write, the fire path optionally synthesizes ⌘V into the
-//   previously-frontmost app via CGEvent (mirroring `CGEventModule.postKey`).
-//   That single synthesis is GATED on `AXIsProcessTrusted()`; when the
-//   Accessibility grant is absent we skip the keystroke entirely (the
-//   clipboard already holds the body — a graceful manual-paste fallback)
-//   and surface the system grant prompt once. The pure `applyCommit`
-//   primitive is unchanged (clipboard-only) so its headless contract
-//   stays byte-for-byte; paste-back lives on `fireSlot` / `fireSlug`.
+//   tap — no Input Monitoring grant. Insertion requires Accessibility
+//   (`AXIsProcessTrusted()`). When the grant is absent, or there is no
+//   focused editable target, the fire path fails closed with an explicit
+//   status and does NOT copy to the clipboard as a fallback.
 // ============================================================
 
 @MainActor
@@ -278,6 +276,7 @@ public final class CommandBridgeController: NSObject {
 
     private var hotkey: HotkeyConfig
     private let clipboard: ClipboardWriting
+    private let inserter: CommandTextInserting
     private let coordinator: CommandPaletteCoordinator
     private let store: CommandStore
     private let recents: CommandBridgeRecents
@@ -302,8 +301,8 @@ public final class CommandBridgeController: NSObject {
     /// the next app boot — the "standard boot-up location" the operator asked for.
     private var rememberedOrigin: CGPoint?
 
-    /// (v3.7.6) The app that was frontmost the instant before we showed, so
-    /// paste-into-app can re-activate it and synthesize ⌘V. Captured in
+    /// The app that was frontmost the instant before we showed, so
+    /// cursor-insert can target its focused AX element. Captured in
     /// `show()` BEFORE `orderFrontRegardless()`.
     private var priorApp: NSRunningApplication?
 
@@ -320,10 +319,11 @@ public final class CommandBridgeController: NSObject {
     /// in tests / shells that don't wire it. Returns whether it presented.
     public var presentDashboard: (() -> Void)?
 
-    /// (v3.7.6) Whether paste-into-app is enabled. Default ON per the brief.
-    /// The clipboard write is ALWAYS performed regardless of this flag; this
-    /// only governs the post-write ⌘V synthesis.
-    public var pasteIntoAppEnabled: Bool = true
+    /// Last insert attempt from `applyCommit` / `fireSlot` / `fireSlug`.
+    /// Tests assert this instead of reading the pasteboard.
+    public private(set) var lastInsertOutcome: CommandInsertOutcome?
+    /// Body delivered on the last successful insert (nil when skipped/failed).
+    public private(set) var lastInsertedText: String?
 
     /// Cancels a pending close `orderOut` when re-opened mid-dismiss.
     private var dismissGeneration: UInt = 0
@@ -339,11 +339,13 @@ public final class CommandBridgeController: NSObject {
 
     public init(hotkey: HotkeyConfig = .productionDefault,
                 clipboard: ClipboardWriting = SystemClipboard(),
+                inserter: CommandTextInserting = AccessibilityCommandInserter(),
                 coordinator: CommandPaletteCoordinator,
                 store: CommandStore = .shared,
                 recents: CommandBridgeRecents = .shared) {
         self.hotkey = hotkey
         self.clipboard = clipboard
+        self.inserter = inserter
         self.coordinator = coordinator
         self.store = store
         self.recents = recents
@@ -351,10 +353,24 @@ public final class CommandBridgeController: NSObject {
     }
 
     /// Convenience for tests / shells that don't pass a hotkey.
+    /// Defaults the inserter to `RecordingTextInserter` so headless tests
+    /// never type into the host process.
     public convenience init(clipboard: ClipboardWriting,
                             coordinator: CommandPaletteCoordinator) {
         self.init(hotkey: .productionDefault,
                   clipboard: clipboard,
+                  inserter: RecordingTextInserter(),
+                  coordinator: coordinator)
+    }
+
+    /// Test seam: inject both the clipboard probe (must stay untouched)
+    /// and a recording / forced-outcome inserter.
+    public convenience init(clipboard: ClipboardWriting,
+                            inserter: CommandTextInserting,
+                            coordinator: CommandPaletteCoordinator) {
+        self.init(hotkey: .productionDefault,
+                  clipboard: clipboard,
+                  inserter: inserter,
                   coordinator: coordinator)
     }
 
@@ -791,12 +807,12 @@ public final class CommandBridgeController: NSObject {
 
     // MARK: - Commit (number key / Enter / row click)
     //
-    //   Three commit shapes, all routing through the single
-    //   `applyCommit(.paste(body))` write so the clipboard contract is
-    //   one-line-tested.
+    //   Three commit shapes, all routing through `applyCommit(.paste(body))`
+    //   so the cursor-insert contract is one-line-tested. The injected
+    //   clipboard is a probe only — this path never writes it.
 
     /// Fire the favorite assigned to slot `slot` (0…9). If the slot is
-    /// empty this is a no-op (no clipboard clobber, panel stays open).
+    /// empty this is a no-op (no insert, clipboard untouched, panel stays).
     public func fireSlot(_ slot: Int) {
         guard let cmd = (try? store.command(forKeySlot: slot)) ?? nil else { return }
         commitBody(cmd.body, slug: cmd.slug)
@@ -809,92 +825,65 @@ public final class CommandBridgeController: NSObject {
         commitBody(cmd.body, slug: cmd.slug)
     }
 
-    /// (v3.7.6) Shared fire path for `fireSlot` / `fireSlug`. Writes the body
-    /// to the clipboard (UNCONDITIONAL — same `applyCommit` primitive the
-    /// headless test pins), records the use, closes the panel, then optionally
-    /// pastes into the previously-frontmost app. The clipboard half is
-    /// unchanged from the prior two call sites; only the paste-back tail is new.
+    /// Shared fire path for `fireSlot` / `fireSlug`. Inserts the body at
+    /// the prior app's focused editable control (issue #129). Never
+    /// copies to the clipboard. On failure, records a status and still
+    /// closes the palette so the operator is not stuck in the overlay.
     private func commitBody(_ body: String, slug: String) {
-        applyCommit(.paste(body))              // unconditional clipboard write
-        try? store.recordUse(slug: slug)
-        recents.record(slug)
-        let target = priorApp                  // snapshot the target before we close
+        let target = priorApp
+        let pid = insertTargetPID(target)
+        let outcome = applyCommit(.paste(body), intoProcess: pid)
+        if outcome?.succeeded == true {
+            try? store.recordUse(slug: slug)
+            recents.record(slug)
+        }
         hide()
-        if pasteIntoAppEnabled, !body.isEmpty {
-            pasteIntoPriorApp(target)
+        if outcome?.succeeded == true,
+           let target,
+           target.processIdentifier != NSRunningApplication.current.processIdentifier {
+            target.activate(options: [])
+        }
+        if let outcome, !outcome.succeeded {
+            print("[CommandBridge] \(outcome.userMessage)")
         }
     }
 
-    // MARK: - Paste-into-app (v3.7.6 — CGEvent ⌘V, AX-gated)
-
-    /// Re-activate the previously-frontmost app and synthesize ⌘V so the just-
-    /// copied body lands in its focused field. GATED on `AXIsProcessTrusted()`:
-    ///   • No prior app, or the prior app IS us → skip (nothing to paste into).
-    ///   • Not AX-trusted → skip the keystroke (clipboard already holds the
-    ///     body, so manual ⌘V is the graceful fallback) and surface the system
-    ///     grant prompt ONCE via `AXIsProcessTrustedWithOptions(prompt:true)`.
-    ///   • Trusted → activate the target, then after ~100ms post a ⌘V key
-    ///     press through `.cghidEventTap` (mirrors `CGEventModule.postKey`).
-    /// Secure text fields silently swallow synthetic paste — that degrades to
-    /// the clipboard fallback, which is acceptable.
-    private func pasteIntoPriorApp(_ target: NSRunningApplication?) {
-        guard let target else { return }
-        let me = NSRunningApplication.current
-        guard target.processIdentifier != me.processIdentifier else { return }
-
-        guard AXIsProcessTrusted() else {
-            // Not trusted — clipboard fallback stands; nudge the one-time grant
-            // prompt so the user can enable real paste-back next time. The
-            // option key is the string literal "AXTrustedCheckOptionPrompt" (not
-            // the `kAXTrustedCheckOptionPrompt` global, which Swift 6 strict
-            // concurrency flags as shared-mutable — same workaround as
-            // PermissionManager.requestAccessibilityAccess()).
-            _ = AXIsProcessTrustedWithOptions(
-                ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-            )
-            return
-        }
-
-        // Re-activate the target so the keystroke is routed to its key window.
-        target.activate(options: [])
-
-        // Let the activation settle, then post ⌘V. ~100ms mirrors the brief.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) {
-            Self.postCommandV()
-        }
+    /// Destination pid for insert: the captured prior app, unless it is us.
+    private func insertTargetPID(_ target: NSRunningApplication?) -> pid_t? {
+        guard let target else { return nil }
+        let me = NSRunningApplication.current.processIdentifier
+        guard target.processIdentifier != me else { return nil }
+        return target.processIdentifier
     }
 
-    /// Synthesize a ⌘V key press via CGEvent. Mirrors `CGEventModule.postKey`:
-    /// `.hidSystemState` source, `kVK_ANSI_V` virtual key, `.maskCommand`
-    /// flag, posted to `.cghidEventTap`. Static + side-effect-only.
-    private nonisolated static func postCommandV() {
-        guard let src = CGEventSource(stateID: .hidSystemState) else { return }
-        let v = CGKeyCode(kVK_ANSI_V)
-        guard
-            let down = CGEvent(keyboardEventSource: src, virtualKey: v, keyDown: true),
-            let up   = CGEvent(keyboardEventSource: src, virtualKey: v, keyDown: false)
-        else { return }
-        down.flags = .maskCommand
-        up.flags = .maskCommand
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
-    }
-
-    /// Clipboard-only commit: on `.paste(body)` write the resolved body
-    /// to the clipboard (replace contents — no save/restore). On
-    /// `.notFound` / `.unavailable` write nothing. Same shape as the
-    /// legacy `CommandBoxController.applyCommit` so the headless
-    /// `applyCommit(.paste / .notFound / .unavailable)` test contract is
-    /// preserved byte-for-byte.
-    public func applyCommit(_ result: CommandPaletteCommitResult) {
+    /// Cursor-insert commit (issue #129). `.paste(body)` delivers through
+    /// `CommandTextInserting` and never writes the clipboard. `.notFound`
+    /// / `.unavailable` / empty body skip insert. The injected clipboard
+    /// is retained only so tests can assert `writeCount == 0`.
+    @discardableResult
+    public func applyCommit(
+        _ result: CommandPaletteCommitResult,
+        intoProcess pid: pid_t? = nil
+    ) -> CommandInsertOutcome? {
+        _ = clipboard  // probe only — never writeString / readString here
+        lastInsertedText = nil
         switch result {
         case .paste(let body):
-            guard !body.isEmpty else { return }
-            clipboard.writeString(body)
+            guard !body.isEmpty else {
+                lastInsertOutcome = .emptyBody
+                return .emptyBody
+            }
+            let outcome = inserter.insert(body, intoProcess: pid)
+            lastInsertOutcome = outcome
+            if outcome.succeeded { lastInsertedText = body }
+            return outcome
         case .notFound:
-            break
+            lastInsertOutcome = nil
+            return nil
         case .unavailable(_, let reason):
+            lastInsertOutcome = nil
             print("[CommandBridge] command body unavailable: \(reason)")
+            return nil
         }
     }
 
@@ -1062,14 +1051,14 @@ public final class CommandBridgeController: NSObject {
     }
 
     /// Fire a typed search result's destination (R2). The single routing seam
-    /// (one switch, not 4 ad-hoc branches). Commands paste-and-close exactly as
+    /// (one switch, not 4 ad-hoc branches). Commands insert-and-close exactly as
     /// before; skills open their source; jobs/tools deep-link into Settings via
     /// the identity-correct `AppDelegate.shared` + SettingsNavigation (PKT-1005
     /// plumbing). The bar is hidden after navigating so the destination has focus.
     public func fireDestination(_ destination: BridgeSearchDestination) {
         switch destination {
         case .command(let slug):
-            fireSlug(slug)                 // paste body + close (existing path)
+            fireSlug(slug)                 // insert body + close (existing path)
 
         case .skillNotion(let pageId, let url):
             openURLString(url ?? SkillPlatform.notion.canonicalURL(uuid: pageId)
