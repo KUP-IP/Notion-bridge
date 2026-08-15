@@ -875,6 +875,10 @@ await runCommandGitHubFirstFeedbackTests()
 // A0 favorite-map persistence, no command-body mutation.
 await runCommandFavoriteLayoutTests()
 
+// GitHub #140 C1: explicit Search create, duplicate/sensitive warnings,
+// Settings deep-link by immutable command ID. Return never writes.
+await runCommandSearchCreateTests()
+
 // PKT-876 (v3.6.1): Settings sections Liquid Glass reskin.
 await runSettingsSectionsLGTests()
 

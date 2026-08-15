@@ -922,6 +922,9 @@ public final class CommandBridgeController: NSObject {
         model.onFireDestination = { [weak self] dest in self?.fireDestination(dest) }
         model.onEscape   = { [weak self] in self?.hide() }
         model.onSettings = { [weak self] in self?.openCommandsSettings() }
+        model.onEditCommandID = { [weak self] id in
+            self?.navigateSettings(.orders, anchor: CommandSettingsDeepLink.anchor(commandID: id))
+        }
         // (v3.7.6) Dashboard popover presenter. The pill no longer carries a
         // leading bridge-mark (the design `.cb-pill` has none — see `pill`), so
         // this is invoked from the status-bar item path rather than the palette
@@ -992,7 +995,11 @@ public final class CommandBridgeController: NSObject {
                 kind: .command,
                 id: c.slug,
                 title: c.name,
-                subtitle: c.keySlot.map { "slot \($0)" },
+                subtitle: CommandSearchCreate.searchSubtitle(
+                    slot: c.keySlot,
+                    body: c.body,
+                    sensitivePaths: ConfigManager.shared.sensitivePaths
+                ),
                 destination: .command(slug: c.slug),
                 recency: c.lastUsedAt
             ))
@@ -1152,6 +1159,10 @@ public final class CommandBridgeViewModel: ObservableObject {
     @Published public var selectedResultID: String? = nil
     /// C0 Search favorite picker / Replace-Swap-Cancel prompt.
     @Published public var favoriteSession = FavoriteLayoutSession()
+    /// C1 explicit create sheet. Nil means Search is not creating.
+    @Published public var createAssessment: CommandCreateAssessment? = nil
+    @Published public var createDraft = CommandCreateDraft()
+    @Published public var createError: String? = nil
     /// (v3.7.6) Monotonic focus token. The controller bumps this on EVERY
     /// show() (the panel is reused, so `.onAppear` only fires once); the view
     /// observes it and re-claims first responder on the query field.
@@ -1188,6 +1199,8 @@ public final class CommandBridgeViewModel: ObservableObject {
     /// (the design `.cb-pill` has no leading mark); retained for the status-bar
     /// entry point that presents the same Dashboard surface.
     public var onBridgeMark: () -> Void = {}
+    /// C1 Edit/Reveal: Settings deep-link by immutable command ID.
+    public var onEditCommandID: (String) -> Void = { _ in }
 
     private let store: CommandStore
     private let recents: CommandBridgeRecents
@@ -1297,6 +1310,69 @@ public final class CommandBridgeViewModel: ObservableObject {
               result.kind == .command
         else { return nil }
         return result.entityId
+    }
+
+    public func beginCreateFromQuery() {
+        createDraft = CommandSearchCreate.draft(fromSearchText: query)
+        createError = nil
+        refreshCreateAssessment()
+    }
+
+    public func cancelCreate() {
+        createAssessment = nil
+        createError = nil
+    }
+
+    public func refreshCreateAssessment() {
+        let existing = (try? store.list()) ?? []
+        createAssessment = CommandSearchCreate.assess(
+            draft: createDraft,
+            existing: existing,
+            sensitivePaths: ConfigManager.shared.sensitivePaths
+        )
+        createError = nil
+    }
+
+    @discardableResult
+    public func confirmCreate() -> CommandStore.Command? {
+        refreshCreateAssessment()
+        guard let assessment = createAssessment, assessment.canProposeSave else { return nil }
+        do {
+            let created = try store.create(
+                name: assessment.draft.trimmedName,
+                icon: .emoji("✨"),
+                body: assessment.draft.trimmedBody,
+                keySlot: assessment.draft.keySlot
+            )
+            createAssessment = nil
+            createError = nil
+            reload()
+            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                queryDidChange(query)
+            }
+            return created
+        } catch {
+            createError = error.localizedDescription
+            return nil
+        }
+    }
+
+    public func editCommand(slug: String) {
+        guard let command = try? store.get(slug: slug), !command.id.isEmpty else { return }
+        onEditCommandID(command.id)
+    }
+
+    public func duplicateCommand(slug: String) {
+        guard let command = try? store.get(slug: slug) else { return }
+        let names = ((try? store.list()) ?? []).map(\.name)
+        let copy = CommandSearchCreate.duplicateBody(of: command, existingNames: names)
+        createDraft = CommandCreateDraft(name: copy.name, body: copy.body)
+        createError = nil
+        refreshCreateAssessment()
+    }
+
+    public func revealCommand(slug: String) {
+        editCommand(slug: slug)
     }
 
     public func commandDisplayName(_ slug: String) -> String {
@@ -1439,6 +1515,7 @@ public final class CommandBridgeViewModel: ObservableObject {
         searchResults = []
         selectedResultID = nil
         panelMode = .none
+        cancelCreate()
     }
 
     // MARK: Pure builders (unit-tested)
@@ -1550,10 +1627,12 @@ public struct CommandBridgeRootView: View {
         .simultaneousGesture(windowDrag)
         .background(KeyHandler(
             onNumber: { n in
+                if model.createAssessment != nil { return }
                 if model.handleFavoriteDigit(n) { return }
                 model.onFireSlot(n)
             },
             onOptionNumber: { n in
+                if model.createAssessment != nil { return }
                 if let slug = model.selectedCommandSlug() {
                     _ = model.assignFavorite(slug: slug, slot: n)
                 }
@@ -1561,13 +1640,8 @@ public struct CommandBridgeRootView: View {
             onArrowDown: { model.moveSelection(1) },
             onArrowUp: { model.moveSelection(-1) },
             onReturn: { commitTopSelection() },
-            onEscape: {
-                if model.favoriteSession.pickerSlug != nil || model.favoriteSession.pending != nil {
-                    model.cancelFavoritePrompt()
-                } else {
-                    model.onEscape()
-                }
-            }
+            onEscape: { handleSearchEscape() },
+            onCreateShortcut: { model.beginCreateFromQuery() }
         ))
         .onAppear { queryFocused = true }
         // Re-assert field focus whenever the controller bumps the token (the
@@ -1643,6 +1717,17 @@ public struct CommandBridgeRootView: View {
             .buttonStyle(.plain)
             .frame(width: CommandBridgeChrome.tileSize, height: CommandBridgeChrome.tileSize)
             .contentShape(RoundedRectangle(cornerRadius: CommandBridgeChrome.tileCornerRadius, style: .continuous))
+            .contextMenu {
+                Button("Edit") { model.editCommand(slug: cmd.slug) }
+                Button("Duplicate") { model.duplicateCommand(slug: cmd.slug) }
+                Button("Reveal in Settings") { model.revealCommand(slug: cmd.slug) }
+                Divider()
+                Button("Move to slot…") { model.beginFavoritePicker(slug: cmd.slug) }
+                Button("Remove favorite") { model.removeFavorite(slug: cmd.slug) }
+                if model.favoriteSession.canUndo {
+                    Button("Undo favorite change") { model.undoFavoriteLayout() }
+                }
+            }
             // Co-born with bar: opacity only (no under-keycap, no group scale).
             .opacity(model.didOpen ? 1.0 : 0.0)
             .animation(
@@ -1703,13 +1788,8 @@ public struct CommandBridgeRootView: View {
                     onReturn: { commitTopSelection() },
                     onArrowDown: { model.moveSelection(1) },
                     onArrowUp: { model.moveSelection(-1) },
-                    onEscape: {
-                        if model.favoriteSession.pickerSlug != nil || model.favoriteSession.pending != nil {
-                            model.cancelFavoritePrompt()
-                        } else {
-                            model.onEscape()
-                        }
-                    }
+                    onEscape: { handleSearchEscape() },
+                    onCreateShortcut: { model.beginCreateFromQuery() }
                 )
                 .frame(maxWidth: .infinity)
             }
@@ -1808,6 +1888,34 @@ public struct CommandBridgeRootView: View {
                 }
                 if model.searchResults.isEmpty {
                     panelEmptyHint("No match for \"\(q)\".")
+                }
+                if !q.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   model.createAssessment == nil {
+                    Button {
+                        model.beginCreateFromQuery()
+                    } label: {
+                        HStack(spacing: BridgeTokens.Space.s3) {
+                            Image(systemName: "plus.circle")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(BridgeTokens.fg3)
+                            Text("Create command from this text")
+                                .font(BridgeTokens.Typeface.meta)
+                                .foregroundStyle(BridgeTokens.fg2)
+                            Spacer(minLength: 0)
+                            Text("⌥↩")
+                                .font(BridgeTokens.Typeface.micro)
+                                .foregroundStyle(BridgeTokens.fg5)
+                        }
+                        .padding(.horizontal, BridgeTokens.Space.s3)
+                        .frame(height: 36)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open the create sheet. Ordinary Return never saves.")
+                    .accessibilityLabel("Create command from this text")
+                }
+                if model.createAssessment != nil {
+                    createCommandSheet
                 }
                 if let pickerSlug = model.favoriteSession.pickerSlug,
                    model.favoriteSession.pending == nil {
@@ -1966,6 +2074,10 @@ public struct CommandBridgeRootView: View {
         }
         .contextMenu {
             if isCommand {
+                Button("Edit") { model.editCommand(slug: result.entityId) }
+                Button("Duplicate") { model.duplicateCommand(slug: result.entityId) }
+                Button("Reveal in Settings") { model.revealCommand(slug: result.entityId) }
+                Divider()
                 Button("Move to slot…") { model.beginFavoritePicker(slug: result.entityId) }
                 if slot != nil {
                     Button("Remove favorite") { model.removeFavorite(slug: result.entityId) }
@@ -2062,6 +2174,110 @@ public struct CommandBridgeRootView: View {
         .accessibilityLabel("Replace, swap, or cancel favorite assignment")
     }
 
+    @ViewBuilder
+    private var createCommandSheet: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Create command")
+                .font(BridgeTokens.Typeface.meta)
+                .foregroundStyle(BridgeTokens.fg3)
+            TextField("Name", text: Binding(
+                get: { model.createDraft.name },
+                set: { model.createDraft.name = $0; model.refreshCreateAssessment() }
+            ))
+            .textFieldStyle(.plain)
+            .font(BridgeTokens.Typeface.name)
+            .foregroundStyle(BridgeTokens.fg1)
+            .padding(.horizontal, BridgeTokens.Space.s2)
+            .frame(height: 28)
+            .background(BridgeTokens.wellFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            TextEditor(text: Binding(
+                get: { model.createDraft.body },
+                set: { model.createDraft.body = $0; model.refreshCreateAssessment() }
+            ))
+            .font(BridgeTokens.Typeface.meta)
+            .foregroundStyle(BridgeTokens.fg2)
+            .scrollContentBackground(.hidden)
+            .frame(minHeight: 64, maxHeight: 96)
+            .padding(4)
+            .background(BridgeTokens.wellFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            Toggle("Treat as sensitive", isOn: Binding(
+                get: { model.createDraft.sensitive },
+                set: { model.createDraft.sensitive = $0; model.refreshCreateAssessment() }
+            ))
+            .font(BridgeTokens.Typeface.meta)
+            .foregroundStyle(BridgeTokens.fg3)
+            .toggleStyle(.checkbox)
+            HStack(spacing: 4) {
+                Text("Slot")
+                    .font(BridgeTokens.Typeface.meta)
+                    .foregroundStyle(BridgeTokens.fg5)
+                ForEach(FavoriteLayout.displayOrder, id: \.self) { slot in
+                    let selected = model.createDraft.keySlot == slot
+                    Button {
+                        model.createDraft.keySlot = selected ? nil : slot
+                        model.refreshCreateAssessment()
+                    } label: {
+                        Text(String(slot))
+                            .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
+                            .frame(width: 22, height: 22)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(selected ? BridgeTokens.glassControl : BridgeTokens.wellFill)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Optional favorite slot \(slot)")
+                }
+            }
+            if let assessment = model.createAssessment {
+                ForEach(Array(assessment.duplicates.enumerated()), id: \.offset) { _, dup in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(duplicateWarning(dup))
+                            .font(BridgeTokens.Typeface.meta)
+                            .foregroundStyle(BridgeTokens.fg2)
+                        if case .exactSlug(let slug) = dup {
+                            Button("Edit existing") { model.editCommand(slug: slug) }
+                        } else if case .exactName(let slug) = dup {
+                            Button("Edit existing") { model.editCommand(slug: slug) }
+                        } else if case .nearName(let slug) = dup {
+                            Button("Open similar") { model.editCommand(slug: slug) }
+                        }
+                    }
+                }
+                if !assessment.sensitiveHits.isEmpty {
+                    Text("Sensitive path warning: \(assessment.sensitiveHits.joined(separator: ", ")). Body previews stay suppressed.")
+                        .font(BridgeTokens.Typeface.meta)
+                        .foregroundStyle(BridgeTokens.fg2)
+                }
+            }
+            if let error = model.createError {
+                Text(error)
+                    .font(BridgeTokens.Typeface.meta)
+                    .foregroundStyle(BridgeTokens.fg2)
+            }
+            HStack(spacing: 8) {
+                Button("Save") { _ = model.confirmCreate() }
+                    .disabled(!(model.createAssessment?.canProposeSave ?? false))
+                Button("Cancel") { model.cancelCreate() }
+            }
+        }
+        .padding(BridgeTokens.Space.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Create command sheet")
+    }
+
+    private func duplicateWarning(_ dup: CommandCreateDuplicate) -> String {
+        switch dup {
+        case .exactSlug(let slug):
+            return "A command already uses this identity (\(model.commandDisplayName(slug)))."
+        case .exactName(let slug):
+            return "A command already has this name (\(model.commandDisplayName(slug)))."
+        case .nearName(let slug):
+            return "Similar to \(model.commandDisplayName(slug))."
+        }
+    }
+
     /// Selected-row treatment (`.cb-row.on`): faint accent tint + accent hairline
     /// ring + a 2.5pt accent-strong rail down the leading edge. Unselected is clear.
     @ViewBuilder
@@ -2129,9 +2345,21 @@ public struct CommandBridgeRootView: View {
         return "\(Int(interval / 86_400))d ago"
     }
 
+    /// Fires the keyboard-selected row (↑/↓), falling back to the first.
+    /// Ordinary Return never opens or saves a create sheet.
     private func commitTopSelection() {
-        // Fires the keyboard-selected row (↑/↓), falling back to the first.
+        if model.createAssessment != nil { return }
         model.commitSelected()
+    }
+
+    private func handleSearchEscape() {
+        if model.createAssessment != nil {
+            model.cancelCreate()
+        } else if model.favoriteSession.pickerSlug != nil || model.favoriteSession.pending != nil {
+            model.cancelFavoritePrompt()
+        } else {
+            model.onEscape()
+        }
     }
 }
 
@@ -2258,6 +2486,7 @@ private struct QueryField: NSViewRepresentable {
     var onArrowDown: () -> Void
     var onArrowUp: () -> Void
     var onEscape: () -> Void
+    var onCreateShortcut: () -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -2391,6 +2620,10 @@ private struct QueryField: NSViewRepresentable {
             case #selector(NSResponder.moveUp(_:)):
                 parent.onArrowUp(); return true
             case #selector(NSResponder.insertNewline(_:)):
+                let mods = NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
+                if mods.contains(.option) || mods.contains(.command) {
+                    parent.onCreateShortcut(); return true
+                }
                 parent.onReturn(); return true
             case #selector(NSResponder.cancelOperation(_:)):
                 parent.onEscape(); return true
@@ -2445,6 +2678,7 @@ private struct KeyHandler: NSViewRepresentable {
     let onArrowUp: () -> Void
     let onReturn: () -> Void
     let onEscape: () -> Void
+    let onCreateShortcut: () -> Void
 
     func makeNSView(context: Context) -> NSView {
         let v = MonitorView()
@@ -2454,6 +2688,7 @@ private struct KeyHandler: NSViewRepresentable {
         v.onArrowUp = onArrowUp
         v.onReturn = onReturn
         v.onEscape = onEscape
+        v.onCreateShortcut = onCreateShortcut
         return v
     }
 
@@ -2465,6 +2700,7 @@ private struct KeyHandler: NSViewRepresentable {
         v.onArrowUp = onArrowUp
         v.onReturn = onReturn
         v.onEscape = onEscape
+        v.onCreateShortcut = onCreateShortcut
     }
 
     final class MonitorView: NSView {
@@ -2474,6 +2710,7 @@ private struct KeyHandler: NSViewRepresentable {
         var onArrowUp: (() -> Void)?
         var onReturn: (() -> Void)?
         var onEscape: (() -> Void)?
+        var onCreateShortcut: (() -> Void)?
         private var monitor: Any?
 
         override func viewDidMoveToWindow() {
@@ -2490,6 +2727,7 @@ private struct KeyHandler: NSViewRepresentable {
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self else { return event }
                 guard self.window?.isKeyWindow == true else { return event }
+                if Self.consumeCreateShortcut(event, fire: self) { return nil }
                 if Self.consumeOptionNumber(event, fire: self) { return nil }
                 let isFieldEditor = (self.window?.firstResponder is NSText)
                 if !isFieldEditor || (event.charactersIgnoringModifiers?.isEmpty ?? true) {
@@ -2518,6 +2756,26 @@ private struct KeyHandler: NSViewRepresentable {
             // and the cleanup path above is sufficient (the monitor is
             // bound to a window-scoped block that no longer reaches a
             // dead view).
+        }
+
+        static func consumeCreateShortcut(_ event: NSEvent, fire v: MonitorView) -> Bool {
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            let isReturn = event.keyCode == UInt16(kVK_Return) || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
+            if isReturn,
+               mods.contains(.option),
+               !mods.contains(.command),
+               !mods.contains(.control) {
+                v.onCreateShortcut?()
+                return true
+            }
+            if mods.contains(.command),
+               !mods.contains(.option),
+               !mods.contains(.control),
+               event.charactersIgnoringModifiers?.lowercased() == "n" {
+                v.onCreateShortcut?()
+                return true
+            }
+            return false
         }
 
         static func consumeOptionNumber(_ event: NSEvent, fire v: MonitorView) -> Bool {
