@@ -892,7 +892,8 @@ public actor ToolRouter {
             tier: effectiveTier,
             neverAutoApprove: neverAutoApprove,
             arguments: executionArguments,
-            module: tool.module
+            module: tool.module,
+            context: context
         )
 
         switch decision {
@@ -1010,6 +1011,10 @@ public actor ToolRouter {
             }
             governanceNote = governanceNotes.isEmpty ? nil : governanceNotes.joined(separator: ";")
 
+            let diagnosedResult = toolName == "messages_send"
+                ? Self.withMessagesApprovalMode(returnedResult)
+                : returnedResult
+
             // F2 + PKT-552: Fire-and-forget Notify-tier notification with structured context.
             // Runs after successful execution — informational only.
             if effectiveTier == .notify {
@@ -1029,7 +1034,7 @@ public actor ToolRouter {
                 toolName: toolName,
                 tier: effectiveTier,
                 inputSummary: stringifySummary(executionArguments),
-                outputSummary: stringifySummary(returnedResult),
+                outputSummary: stringifySummary(diagnosedResult),
                 durationMs: ms,
                 approvalStatus: .approved,
                 governed: governed,
@@ -1037,7 +1042,7 @@ public actor ToolRouter {
                 transportSessionId: context.transportSessionId,
                 governanceNote: governanceNote
             ))
-            return returnedResult
+            return diagnosedResult
         } catch {
             let duration = ContinuousClock.now - start
             let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
@@ -1298,6 +1303,18 @@ public actor ToolRouter {
         return .object([
             "result": result,
             "governance": governance
+        ])
+    }
+
+    private static func withMessagesApprovalMode(_ result: Value) -> Value {
+        let mode = MessagesSendApprovalPolicy.load().rawValue
+        if case .object(var dict) = result {
+            dict["approvalMode"] = .string(mode)
+            return .object(dict)
+        }
+        return .object([
+            "result": result,
+            "approvalMode": .string(mode)
         ])
     }
 

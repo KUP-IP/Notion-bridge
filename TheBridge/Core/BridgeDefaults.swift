@@ -26,6 +26,14 @@ public enum BridgeDefaults {
     /// regardless of any override. ABSENT ⇒ no module overrides.
     public static let moduleTierOverrides = "com.notionbridge.moduleTierOverrides"
 
+    /// Operator-selected `messages_send` on-device approval mode.
+    /// Raw `MessagesSendApprovalMode` string. Missing/invalid ⇒ `alwaysAsk`.
+    public static let messagesSendApprovalMode = "com.notionbridge.messagesSendApprovalMode"
+
+    /// Monotonic generation bumped on every `messages_send` approval-mode save
+    /// so SecurityGate can drop in-memory session skips after a revert.
+    public static let messagesSendApprovalGeneration = "com.notionbridge.messagesSendApprovalGeneration"
+
     /// User-disabled tool names. Array<String>.
     /// Written by ToolRegistryView, read by CredentialsFeature and ListTools handlers.
     public static let disabledTools = "com.notionbridge.disabledTools"

@@ -93,6 +93,7 @@ public enum SettingsUIValidationHarness {
                     BridgeAXID.Security.addCredential,
                     BridgeAXID.Security.credentialsList,
                     BridgeAXID.Security.togglePolicy,
+                    BridgeAXID.Security.messagesSendApproval,
                 ])
             case .connection:
                 ids.append(contentsOf: [

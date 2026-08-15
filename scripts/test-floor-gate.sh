@@ -27,7 +27,11 @@
 # 2026-08-14: 3620 → 3624 (+4) — issues #125/#130: messages_send `sent` is
 #   dispatch success, not chat.db correlation; poll default 20×0.5s.
 #   Measured 3624 passed, 0 failed on fix/issue-125-130-messages-correlation.
-FLOOR="${BRIDGE_TEST_FLOOR:-3624}"
+# 2026-08-15: 3624 → 3640 (+16) — issue #126: configurable messages_send
+#   on-device approval (Always ask / session / trusted direct). Fail-closed
+#   for group, THREAD, remote, jobs, and raw chatNNN. Measured 3640 passed,
+#   0 failed on feat/issue-126-messages-approval-policy.
+FLOOR="${BRIDGE_TEST_FLOOR:-3640}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

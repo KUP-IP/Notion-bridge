@@ -4,6 +4,9 @@
 // `SecuritySection` composite owns the single posture header (replacing this
 // file's old gold orb-hero) and the tab bar; this view is hero-less and renders
 // the access gates that govern what tools can do:
+//   0. **Messages send approval** — operator-selected on-device prompt mode
+//      for ordinary local one-to-one `messages_send` (Always ask / session /
+//      trusted direct). Group, THREAD, remote, and jobs always prompt.
 //   1. **Always-Allow grants** — module-scoped `moduleTierOverrides` (the literal
 //      "Always Allow"), each with its tier chip + a Revoke affordance that clears
 //      the grant so the module's tools fall back to their registered defaults.
@@ -56,9 +59,13 @@ public struct PermissionsSection: View {
         self.onResetTCC = onResetTCC
     }
 
+    @AppStorage(BridgeDefaults.messagesSendApprovalMode) private var messagesApprovalRaw: String =
+        MessagesSendApprovalMode.alwaysAsk.rawValue
+
     public var body: some View {
         ScrollView {
             VStack(spacing: BridgeSpacing.sm) {
+                messagesApprovalCard
                 alwaysAllowCard
                 systemAccessLabel
                 grantsCard
@@ -93,6 +100,51 @@ public struct PermissionsSection: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This will reset all system permissions for The Bridge. You\u{2019}ll need to re-grant each permission after resetting.")
+        }
+    }
+
+    // MARK: - Messages send approval
+
+    private var messagesApprovalMode: MessagesSendApprovalMode {
+        MessagesSendApprovalMode(rawValue: messagesApprovalRaw) ?? .alwaysAsk
+    }
+
+    private var messagesApprovalCard: some View {
+        BridgeGlassCard {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    BridgeCardLabel("Messages send approval")
+                    Spacer()
+                    if messagesApprovalMode != .alwaysAsk {
+                        BridgeChip("Always ask", state: .anti) {
+                            messagesApprovalRaw = MessagesSendApprovalMode.alwaysAsk.rawValue
+                            MessagesSendApprovalPolicy.save(.alwaysAsk)
+                        }
+                        .accessibilityLabel("Revert Messages send approval to Always ask")
+                    }
+                }
+                Text("Ordinary one-to-one iMessage/SMS from a live local agent. Group chats, THREAD, remote/tunnel, jobs, and raw chat ids always prompt. confirm:SEND is required in every mode.")
+                    .font(BridgeTokens.Typeface.sub)
+                    .foregroundStyle(BridgeTokens.fg4)
+                    .fixedSize(horizontal: false, vertical: true)
+                Picker("Mode", selection: $messagesApprovalRaw) {
+                    ForEach(MessagesSendApprovalMode.allCases, id: \.rawValue) { mode in
+                        Text(mode.title).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
+                .accessibilityLabel("Messages send approval mode")
+                .onChange(of: messagesApprovalRaw) { _, newValue in
+                    let mode = MessagesSendApprovalMode(rawValue: newValue) ?? .alwaysAsk
+                    MessagesSendApprovalPolicy.save(mode)
+                }
+                Text(messagesApprovalMode.riskCopy)
+                    .font(BridgeTokens.Typeface.sub)
+                    .foregroundStyle(messagesApprovalMode == .trustedDirect ? BridgeTokens.warnText : BridgeTokens.fg4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityIdentifier(BridgeAXID.Security.messagesSendApproval)
         }
     }
 
