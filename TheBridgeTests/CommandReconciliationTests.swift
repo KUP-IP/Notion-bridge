@@ -119,7 +119,7 @@ func runCommandReconciliationTests() async {
             local.body = "custom-initiate"
             _ = try store.update(local)
             var incomingCatalog = CommandStore.defaultProductCatalog
-            incomingCatalog[0].behaviorVersion = 2
+            incomingCatalog[0].behaviorVersion = CommandStore.ProductDefault.currentCatalogBehaviorVersion + 1
             incomingCatalog[0].body = "behavioral incoming"
             let incomingStore = CommandStore(storageRoot: root, productDefaults: incomingCatalog)
             let state = try requireReconciliation(incomingStore, slug: "initiate")

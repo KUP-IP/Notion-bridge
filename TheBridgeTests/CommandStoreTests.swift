@@ -173,7 +173,7 @@ func runCommandStoreTests() async {
         }
     }
 
-    await test("seeded Initiate command delegates to bridge_initialize") {
+    await test("seeded Initiate command is a directional arrival mode") {
         try await withTempHome { _ in
             try CommandStore.shared.resetForTesting()
             try CommandStore.shared.seedIfEmpty()
@@ -181,16 +181,16 @@ func runCommandStoreTests() async {
                 try expect(false, "expected Initiate seed to exist")
                 return
             }
-            try expect(initiate.body.contains("bridge_initialize"),
-                       "Initiate seed must call the canonical initializer")
-            try expect(initiate.body.contains("structured receipt"),
-                       "Initiate seed must treat the receipt as source of truth")
-            try expect(initiate.body.contains("Do not maintain a parallel startup checklist"),
-                       "Initiate seed must avoid duplicating the initializer protocol")
+            try expect(initiate.body.contains("Mode: arrival"),
+                       "Initiate must be an arrival mode")
+            try expect(initiate.body.contains("Use when:"),
+                       "Initiate must use the five-part directional contract")
+            try expect(!initiate.body.contains("bridge_initialize"),
+                       "Initiate must not embed the initializer tool ID")
         }
     }
 
-    await test("seeded Execute command routes through parent Keepr before executor") {
+    await test("seeded Execute command is a directional delivery mode without tool routing") {
         try await withTempHome { _ in
             try CommandStore.shared.resetForTesting()
             try CommandStore.shared.seedIfEmpty()
@@ -198,14 +198,14 @@ func runCommandStoreTests() async {
                 try expect(false, "expected Execute seed to exist")
                 return
             }
-            try expect(execute.body.contains("skills_routing_list"),
-                       "Execute seed must load the live routing roster")
-            try expect(execute.body.contains("parent Keepr"),
-                       "Execute seed must route through a parent Keepr")
-            try expect(execute.body.contains("Do not route directly to `executor`"),
-                       "Execute seed must explicitly prevent direct executor routing")
-            try expect(!execute.body.contains("fetch_skill('executor')"),
-                       "Execute seed must not tell agents to fetch executor directly")
+            try expect(execute.body.contains("Mode: delivery"),
+                       "Execute must be a delivery mode")
+            try expect(!execute.body.contains("skills_routing_list"),
+                       "Execute must not embed the routing roster tool ID")
+            try expect(!execute.body.contains("executor"),
+                       "Execute must not name executor; routing stays in skills")
+            try expect(!execute.body.contains("fetch_skill"),
+                       "Execute must not tell agents to fetch a skill")
         }
     }
 
