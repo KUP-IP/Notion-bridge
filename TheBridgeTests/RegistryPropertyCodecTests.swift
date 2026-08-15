@@ -414,4 +414,21 @@ func runRegistryPropertyCodecTests() async {
         try expect(date["end"] as? String == "2026-07-17T10:30:00-05:00")
     }
 
+    await test("classifyWrite: dashed vs undashed relation ids are canonicalized, not rejected") {
+        let dashed = Value.array([.string("37fcbb58-889e-81f1-867e-d71b11dd9baf")])
+        let compact = Value.array([.string("37fcbb58889e81f1867ed71b11dd9baf")])
+        let outcome = RegistryPropertyCodec.classifyWrite(type: "relation", requested: dashed, actual: compact)
+        try expect(outcome == .canonicalized, "got \(outcome)")
+    }
+
+    await test("classifyWrite: 7 vs 7.0 number is canonicalized success") {
+        let outcome = RegistryPropertyCodec.classifyWrite(type: "number", requested: .int(7), actual: .double(7.0))
+        try expect(outcome == .canonicalized, "got \(outcome)")
+    }
+
+    await test("classifyWrite: missing actual is rejected, not canonicalized") {
+        let outcome = RegistryPropertyCodec.classifyWrite(type: "relation", requested: .array([.string("aa")]), actual: nil)
+        guard case .rejected = outcome else { throw TestError.assertion("expected rejected, got \(outcome)") }
+    }
+
 }

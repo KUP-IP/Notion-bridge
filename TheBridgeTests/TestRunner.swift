@@ -677,6 +677,7 @@ await runSessionPersistenceTests()   // ITEM [session]: MCP session durability a
 await runRegistryConfigTests()       // Data-Source Registry W1: config model + store (Skills = entity #1, bind-by-property-id)
 await runRegistryRowCacheTests()     // Data-Source Registry W1: generalized per-entity read-through row cache (stale-while-revalidate + offline)
 await runRegistryPropertyCodecTests() // Data-Source Registry W2: Notion property codec (typed Value ↔ Notion JSON, decode/encode/isWritable)
+await runPageUpdateApplicationTests()  // issue #138: updatePage applied vs canonicalized vs rejected
 await runRegistryDataPathTests()     // Data-Source Registry W2: live data path (schema binder · read-through reader · writer create-then-update · rate limiter)
 await runRegistryModuleTests()       // Data-Source Registry W3: MCP tool surface (13 tools: generic CRUD + resolve_and_update + add/remove_entity + introspect + possess + hydrate, registration + handler behavior)
 await runRegistryAppendMergeTests()  // PKT-MEM-135: RegistryAppendMerge shared append-merge primitive (ported from VoiceMemoProcessor.mergeAppendRegistryFields)
