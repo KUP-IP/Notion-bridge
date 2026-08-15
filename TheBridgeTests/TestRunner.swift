@@ -867,6 +867,10 @@ await runCommandReconciliationTests()
 // validation, and A0/A1 override preservation.
 await runCommandDirectionalCatalogTests()
 
+// GitHub #140 B1: GitHub-first feedback, zero AGENT_FEEDBACK writers,
+// bounded Calibrate report. AI LOG stays telemetry.
+await runCommandGitHubFirstFeedbackTests()
+
 // PKT-876 (v3.6.1): Settings sections Liquid Glass reskin.
 await runSettingsSectionsLGTests()
 

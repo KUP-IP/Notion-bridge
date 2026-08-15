@@ -130,11 +130,11 @@ Identify session context from conversation + current page. EVENT hub detected �
 ### Phase 1 — Context Scan (UP-AC1)
 Auto-detect from conversation: **unresolved_items** · **decisions_made** · **artifacts_produced** · **pending_items** · **skills_used** (always include `keepr` — system prompt for every session). Organize → log → proceed.
 ### Phase 1.5 — MCP Tool Feedback Scan (Conditional, UP-AC11)
-**🔧 Conditional.** Runs only when `file_append` tool available. Evidence-only — cite specific tool invocation; no speculation.
-1. **Detect** `file_append` availability → absent → skip
-2. **Collect** bugs · friction · enhancements · feature requests
-3. **Filter** — discard anything without concrete tool-invocation evidence
-4. **Write** — append to `~/Developer/the-bridge/AGENT_FEEDBACK.md` (canonical Bridge repo path; was `~/developer/notion-bridge/` pre-2026-06-29), one `### [date]` block per session
+**🔧 Conditional.** Evidence-only — cite specific tool invocation; no speculation. GitHub Issues is the sole actionable ledger. AI LOG stays telemetry. Do not write `AGENT_FEEDBACK.md`.
+1. **Collect** bugs · friction · enhancements · feature requests from this session
+2. **Filter** — discard anything without concrete tool-invocation evidence; discard client-, OS-, or other-repo issues unless a Bridge contract is implicated
+3. **Search-before-create** — search the Bridge GitHub repo for an existing open issue before filing
+4. **Write** — update the matching issue, file a new issue, or dismiss with a one-line reason. Never append a local feedback file
 5. **Skip** — no entries → log "no entries this session"
 ### Phase 2 — Retrospective (Internal, UP-AC2)
 #### §2.1 Universal Reflection Core (4 questions per §W.1)
