@@ -1302,7 +1302,7 @@ public enum MessagesModule {
             module: moduleName,
             tier: .request,
             neverAutoApprove: true,
-            description: "Send one explicitly selected iMessage or SMS after fresh approval. One-to-one sends require service:'iMessage' or service:'SMS' and never fall back. THREAD transaction arguments return THREAD_MESSAGES_CONTAINED. sent is dispatch success; chat.db matches are CORRELATED_LOCAL_OUTBOUND_RECORD evidence only (verified / correlatedLocalRecord).",
+            description: "Send one explicitly selected iMessage or SMS after confirm:'SEND'. One-to-one requires service iMessage or SMS with no fallback. THREAD args return THREAD_MESSAGES_CONTAINED. sent is dispatch success; chat.db matches are correlation-only. On-device approval is configurable (Settings → Security → Gates; default Always ask). Group, THREAD, remote, and job sends always prompt.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

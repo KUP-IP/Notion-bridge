@@ -190,6 +190,12 @@ public actor SecurityGate {
 
     private let approvalProvider: any SecurityApprovalProviding
     private var sessionAllowedPaths: Set<String> = []
+    /// Transport session IDs that already passed an on-device ordinary
+    /// `messages_send` prompt while mode is `.session`.
+    private var messagesSendSessionApprovals: Set<String> = []
+    /// Last observed `BridgeDefaults.messagesSendApprovalGeneration`. A bump
+    /// (including Always-ask revert without an intervening send) drops skips.
+    private var messagesSendApprovalGeneration = 0
 
     private static let permanentAllowPrefix = "com.notionbridge.security.pathAllow."
 
@@ -225,7 +231,8 @@ public actor SecurityGate {
         tier: SecurityTier,
         neverAutoApprove: Bool = false,
         arguments: Value,
-        module: String = ""
+        module: String = "",
+        context: ToolDispatchContext = .localDefault
     ) async -> GateDecision {
         let allStrings = extractStrings(from: arguments)
         let combined = allStrings.joined(separator: " ")
@@ -266,12 +273,43 @@ public actor SecurityGate {
             // Learned command prefixes no longer bypass Request prompts — use Tool Registry
             // (tier override) or per-call approval. `neverAutoApprove` tools use notification
             // category NO_ALWAYS (no Always Allow action); alert fallback is Allow/Deny only.
-            return await requestToolTierApproval(
+            if toolName == "messages_send" {
+                let mode = MessagesSendApprovalPolicy.load()
+                let generation = UserDefaults.standard.integer(
+                    forKey: BridgeDefaults.messagesSendApprovalGeneration
+                )
+                if mode != .session || generation != messagesSendApprovalGeneration {
+                    messagesSendSessionApprovals.removeAll()
+                    messagesSendApprovalGeneration = generation
+                }
+                let sessionKey = context.transportSessionId?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let alreadyApproved = !sessionKey.isEmpty && messagesSendSessionApprovals.contains(sessionKey)
+                if !MessagesSendApprovalPolicy.requiresOnDevicePrompt(
+                    arguments: arguments,
+                    context: context,
+                    mode: mode,
+                    sessionAlreadyApproved: alreadyApproved
+                ) {
+                    return .allow
+                }
+            }
+            let decision = await requestToolTierApproval(
                 toolName: toolName,
                 module: module,
                 detail: detail,
                 neverAutoApprove: neverAutoApprove
             )
+            if case .allow = decision,
+               toolName == "messages_send",
+               MessagesSendApprovalPolicy.load() == .session,
+               MessagesSendApprovalPolicy.isOrdinaryOneToOne(arguments),
+               let sessionKey = context.transportSessionId?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+               !sessionKey.isEmpty {
+                messagesSendSessionApprovals.insert(sessionKey)
+            }
+            return decision
         }
     }
 

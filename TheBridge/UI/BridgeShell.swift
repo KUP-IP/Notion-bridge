@@ -128,6 +128,8 @@ public enum BridgeAXID {
         public static let credentialRow  = id("credential.row")
         /// The credential auto-validate policy toggle.
         public static let togglePolicy   = id("toggle.policy")
+        /// Messages send on-device approval mode picker (Gates tab).
+        public static let messagesSendApproval = id("messages.approval")
     }
 
     // ── Connection section control slugs (enum case `.connection`) ───────

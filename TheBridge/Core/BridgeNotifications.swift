@@ -16,6 +16,9 @@ public extension Notification.Name {
     /// Posted when `com.notionbridge.tierOverrides` changes (e.g. Request-tier **Always Allow** → notify).
     static let notionBridgeTierOverridesDidChange = Notification.Name("com.notionbridge.tierOverridesDidChange")
 
+    /// Posted when the operator changes `messages_send` on-device approval mode.
+    static let messagesSendApprovalModeDidChange = Notification.Name("com.notionbridge.messagesSendApprovalModeDidChange")
+
     /// Remote access config changed (tunnel URL saved or bearer token generated/cleared).
     /// Observers should invalidate active MCP sessions and rebuild validation pipelines.
     static let remoteAccessConfigDidChange = Notification.Name("com.notionbridge.remoteAccessConfigDidChange")

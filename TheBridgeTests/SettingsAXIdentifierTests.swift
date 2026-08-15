@@ -157,6 +157,7 @@ func runSettingsAXIdentifierTests() async {
                 (BridgeAXID.Security.recheckAll,            "bridge.settings.security.recheck.all"),
                 (BridgeAXID.Security.addCredential,         "bridge.settings.security.credential.add"),
                 (BridgeAXID.Security.togglePolicy,          "bridge.settings.security.toggle.policy"),
+                (BridgeAXID.Security.messagesSendApproval,  "bridge.settings.security.messages.approval"),
                 (BridgeAXID.Connection.toggleRemote,        "bridge.settings.connection.toggle.remote"),
                 (BridgeAXID.Connection.clientRow,           "bridge.settings.connection.client.row"),
                 (BridgeAXID.Advanced.toggleLaunchAtLogin,   "bridge.settings.advanced.toggle.launchAtLogin"),
