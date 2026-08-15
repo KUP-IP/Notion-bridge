@@ -1150,6 +1150,8 @@ public final class CommandBridgeViewModel: ObservableObject {
     /// (PKT-1006 R2) Keyboard-selected typed search result id ("<kind>:<id>").
     /// ↑/↓ move it across groups; Enter fires its destination. nil → none.
     @Published public var selectedResultID: String? = nil
+    /// C0 Search favorite picker / Replace-Swap-Cancel prompt.
+    @Published public var favoriteSession = FavoriteLayoutSession()
     /// (v3.7.6) Monotonic focus token. The controller bumps this on EVERY
     /// show() (the panel is reused, so `.onAppear` only fires once); the view
     /// observes it and re-claims first responder on the query field.
@@ -1218,6 +1220,114 @@ public final class CommandBridgeViewModel: ObservableObject {
         let all = (try? store.list()) ?? []
         self.slotRows = Self.buildSlotRows(from: all)
         self.recentRows = Self.buildRecentRows(from: all, order: recents.ordered)
+        let layout = (try? store.favoriteLayout()) ?? FavoriteLayout()
+        if favoriteSession.current != layout && favoriteSession.pending == nil {
+            favoriteSession.current = layout
+        }
+    }
+
+    public func beginFavoritePicker(slug: String) {
+        var session = favoriteSession
+        session.openPicker(slug: slug)
+        favoriteSession = session
+    }
+
+    public func cancelFavoritePrompt() {
+        var session = favoriteSession
+        if session.pending != nil {
+            session.cancelPrompt()
+        } else {
+            session.closePicker()
+        }
+        favoriteSession = session
+    }
+
+    @discardableResult
+    public func handleFavoriteDigit(_ displayOrStoreSlot: Int) -> Bool {
+        if favoriteSession.pending != nil { return true }
+        guard let slug = favoriteSession.pickerSlug else { return false }
+        return assignFavorite(slug: slug, slot: displayOrStoreSlot)
+    }
+
+    public func assignFavorite(slug: String, slot: Int) -> Bool {
+        var session = favoriteSession
+        if let next = session.chooseSlot(slot, for: slug) {
+            favoriteSession = session
+            persistFavoriteLayout(next)
+            return true
+        }
+        favoriteSession = session
+        return favoriteSession.pending != nil
+    }
+
+    public func resolveFavoriteReplace() {
+        var session = favoriteSession
+        if let next = session.resolveReplace() {
+            favoriteSession = session
+            persistFavoriteLayout(next)
+        }
+    }
+
+    public func resolveFavoriteSwap() {
+        var session = favoriteSession
+        if let next = session.resolveSwap() {
+            favoriteSession = session
+            persistFavoriteLayout(next)
+        }
+    }
+
+    public func removeFavorite(slug: String) {
+        var session = favoriteSession
+        let next = session.remove(slug: slug)
+        favoriteSession = session
+        persistFavoriteLayout(next)
+    }
+
+    public func undoFavoriteLayout() {
+        var session = favoriteSession
+        if let previous = session.undo() {
+            favoriteSession = session
+            persistFavoriteLayout(previous, recordUndo: false)
+        }
+    }
+
+    public func selectedCommandSlug() -> String? {
+        guard let id = selectedResultID,
+              let result = searchResults.first(where: { $0.id == id }),
+              result.kind == .command
+        else { return nil }
+        return result.entityId
+    }
+
+    public func commandDisplayName(_ slug: String) -> String {
+        if let name = slotRows.compactMap(\.command).first(where: { $0.slug == slug })?.name {
+            return name
+        }
+        if let name = recentRows.first(where: { $0.slug == slug })?.name {
+            return name
+        }
+        if let title = searchResults.first(where: { $0.kind == .command && $0.entityId == slug })?.title {
+            return title
+        }
+        return (try? store.get(slug: slug))?.name ?? slug
+    }
+
+    private func persistFavoriteLayout(_ layout: FavoriteLayout, recordUndo: Bool = true) {
+        do {
+            try store.applyFavoriteLayout(layout)
+            if !recordUndo {
+                favoriteSession.current = layout
+            }
+            favoriteSession = favoriteSession
+            reload()
+            if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                queryDidChange(query)
+            }
+        } catch {
+            favoriteSession = FavoriteLayoutSession(
+                current: (try? store.favoriteLayout()) ?? FavoriteLayout()
+            )
+        }
     }
 
     /// Search-as-you-type. Empty query → panelMode = .none and rows hidden.
@@ -1393,6 +1503,7 @@ public struct CommandBridgeRootView: View {
     // dragging by rasterizing the haloed text into a stable layer (no per-frame
     // shadow recompute), then release it on drag end.
     @State private var isDraggingWindow = false
+    @State private var hoveredSearchID: String?
 
     private var anim: CommandBridgeAnimation {
         reduceMotion ? .reduced : .locked
@@ -1438,11 +1549,25 @@ public struct CommandBridgeRootView: View {
         .background(WindowAccessor { paletteWindow = $0 })
         .simultaneousGesture(windowDrag)
         .background(KeyHandler(
-            onNumber: { n in model.onFireSlot(n) },
+            onNumber: { n in
+                if model.handleFavoriteDigit(n) { return }
+                model.onFireSlot(n)
+            },
+            onOptionNumber: { n in
+                if let slug = model.selectedCommandSlug() {
+                    _ = model.assignFavorite(slug: slug, slot: n)
+                }
+            },
             onArrowDown: { model.moveSelection(1) },
             onArrowUp: { model.moveSelection(-1) },
             onReturn: { commitTopSelection() },
-            onEscape: { model.onEscape() }
+            onEscape: {
+                if model.favoriteSession.pickerSlug != nil || model.favoriteSession.pending != nil {
+                    model.cancelFavoritePrompt()
+                } else {
+                    model.onEscape()
+                }
+            }
         ))
         .onAppear { queryFocused = true }
         // Re-assert field focus whenever the controller bumps the token (the
@@ -1578,7 +1703,13 @@ public struct CommandBridgeRootView: View {
                     onReturn: { commitTopSelection() },
                     onArrowDown: { model.moveSelection(1) },
                     onArrowUp: { model.moveSelection(-1) },
-                    onEscape: { model.onEscape() }
+                    onEscape: {
+                        if model.favoriteSession.pickerSlug != nil || model.favoriteSession.pending != nil {
+                            model.cancelFavoritePrompt()
+                        } else {
+                            model.onEscape()
+                        }
+                    }
                 )
                 .frame(maxWidth: .infinity)
             }
@@ -1678,6 +1809,13 @@ public struct CommandBridgeRootView: View {
                 if model.searchResults.isEmpty {
                     panelEmptyHint("No match for \"\(q)\".")
                 }
+                if let pickerSlug = model.favoriteSession.pickerSlug,
+                   model.favoriteSession.pending == nil {
+                    favoriteSlotPicker(slug: pickerSlug)
+                }
+                if let prompt = model.favoriteSession.pending {
+                    favoriteConflictPrompt(prompt)
+                }
             }
         }
         .padding(BridgeTokens.Space.s2)
@@ -1763,53 +1901,165 @@ public struct CommandBridgeRootView: View {
                            selected: Bool,
                            highlight: String) -> some View {
         let kindColor = NotionPalette.color(named: result.kind.colorTag) ?? BridgeTokens.fg2
-        Button {
-            model.onFireDestination(result.destination)
-        } label: {
-            HStack(spacing: BridgeTokens.Space.s4 - 2) {
-                // Color indicator dot — the kind's hue.
-                Circle()
-                    .fill(kindColor)
-                    .frame(width: 9, height: 9)
-                    .shadow(color: kindColor.opacity(0.6), radius: 2.5)
-                    .frame(width: 28, height: 28)
+        let isCommand = result.kind == .command
+        let slot = isCommand ? model.favoriteSession.current.slot(of: result.entityId) : nil
+        let showStar = isCommand && (
+            selected
+            || hoveredSearchID == result.id
+            || slot != nil
+            || model.favoriteSession.pickerSlug == result.entityId
+        )
+        HStack(spacing: 0) {
+            Button {
+                model.onFireDestination(result.destination)
+            } label: {
+                HStack(spacing: BridgeTokens.Space.s4 - 2) {
+                    Circle()
+                        .fill(kindColor)
+                        .frame(width: 9, height: 9)
+                        .shadow(color: kindColor.opacity(0.6), radius: 2.5)
+                        .frame(width: 28, height: 28)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    highlightedName(result.title, query: highlight)
-                        .font(BridgeTokens.Typeface.name)
-                        .foregroundStyle(BridgeTokens.fg1)
-                        .lineLimit(1)
-                        .legibilityHalo()
-                    if let subtitle = result.subtitle, !subtitle.isEmpty {
-                        Text(subtitle)
-                            .font(BridgeTokens.Typeface.meta)
-                            .foregroundStyle(BridgeTokens.fg5)
+                    VStack(alignment: .leading, spacing: 1) {
+                        highlightedName(result.title, query: highlight)
+                            .font(BridgeTokens.Typeface.name)
+                            .foregroundStyle(BridgeTokens.fg1)
                             .lineLimit(1)
                             .legibilityHalo()
+                        if let subtitle = result.subtitle, !subtitle.isEmpty {
+                            Text(subtitle)
+                                .font(BridgeTokens.Typeface.meta)
+                                .foregroundStyle(BridgeTokens.fg5)
+                                .lineLimit(1)
+                                .legibilityHalo()
+                        }
                     }
+
+                    Spacer(minLength: BridgeTokens.Space.s1)
+
+                    Text(result.kind.tag)
+                        .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(kindColor)
+                        .padding(.horizontal, BridgeTokens.Space.s2)
+                        .frame(minHeight: 18)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(kindColor.opacity(0.16))
+                                .overlay(Capsule(style: .continuous)
+                                    .strokeBorder(kindColor.opacity(0.34), lineWidth: 0.5))
+                        )
                 }
-
-                Spacer(minLength: BridgeTokens.Space.s1)
-
-                // Type tag chip — kind label, kind-tinted fill + ink.
-                Text(result.kind.tag)
-                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
-                    .foregroundStyle(kindColor)
-                    .padding(.horizontal, BridgeTokens.Space.s2)
-                    .frame(minHeight: 18)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(kindColor.opacity(0.16))
-                            .overlay(Capsule(style: .continuous)
-                                .strokeBorder(kindColor.opacity(0.34), lineWidth: 0.5))
-                    )
+                .padding(.leading, BridgeTokens.Space.s3)
+                .padding(.trailing, showStar ? BridgeTokens.Space.s1 : BridgeTokens.Space.s3)
+                .frame(height: 46)
+                .background(rowBackground(selected: selected))
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, BridgeTokens.Space.s3)
-            .frame(height: 46)
-            .background(rowBackground(selected: selected))
+            .buttonStyle(.plain)
+
+            if isCommand {
+                favoriteStar(slug: result.entityId, slot: slot, visible: showStar)
+            }
+        }
+        .onHover { hovering in
+            hoveredSearchID = hovering ? result.id : (hoveredSearchID == result.id ? nil : hoveredSearchID)
+        }
+        .contextMenu {
+            if isCommand {
+                Button("Move to slot…") { model.beginFavoritePicker(slug: result.entityId) }
+                if slot != nil {
+                    Button("Remove favorite") { model.removeFavorite(slug: result.entityId) }
+                }
+                if model.favoriteSession.canUndo {
+                    Button("Undo favorite change") { model.undoFavoriteLayout() }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(result.title)
+        .accessibilityValue(slot.map { "Favorite slot \($0)" } ?? (isCommand ? "Not favorited" : result.kind.tag))
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    @ViewBuilder
+    private func favoriteStar(slug: String, slot: Int?, visible: Bool) -> some View {
+        Button {
+            model.beginFavoritePicker(slug: slug)
+        } label: {
+            HStack(spacing: 2) {
+                Image(systemName: slot == nil ? "star" : "star.fill")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(slot == nil ? BridgeTokens.fg4 : BridgeTokens.gold)
+                if let slot {
+                    Text(String(slot))
+                        .font(.system(size: 10, weight: .semibold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(BridgeTokens.fg2)
+                }
+            }
+            .frame(width: 36, height: 46)
             .contentShape(Rectangle())
+            .opacity(visible ? 1 : 0)
+            .accessibilityLabel(slot == nil ? "Add favorite" : "Favorite slot \(slot!)")
         }
         .buttonStyle(.plain)
+        .disabled(!visible)
+        .help(slot == nil ? "Assign a favorite slot" : "Change or remove favorite slot")
+    }
+
+    @ViewBuilder
+    private func favoriteSlotPicker(slug: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Favorite slot for \(model.commandDisplayName(slug))")
+                .font(BridgeTokens.Typeface.meta)
+                .foregroundStyle(BridgeTokens.fg3)
+            HStack(spacing: 4) {
+                ForEach(FavoriteLayout.displayOrder, id: \.self) { slot in
+                    let taken = model.favoriteSession.current.slug(in: slot)
+                    Button {
+                        _ = model.assignFavorite(slug: slug, slot: slot)
+                    } label: {
+                        Text(String(slot))
+                            .font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit())
+                            .frame(width: 22, height: 22)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(taken == slug ? BridgeTokens.glassControl : BridgeTokens.wellFill)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help(taken == nil || taken == slug
+                          ? "Slot \(slot)"
+                          : "Slot \(slot) occupied by \(model.commandDisplayName(taken!))")
+                    .accessibilityLabel(taken == nil || taken == slug
+                                        ? "Favorite slot \(slot)"
+                                        : "Favorite slot \(slot), occupied by \(model.commandDisplayName(taken!))")
+                }
+            }
+        }
+        .padding(BridgeTokens.Space.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Choose favorite slot 1 through 0")
+    }
+
+    @ViewBuilder
+    private func favoriteConflictPrompt(_ prompt: FavoriteConflictPrompt) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Assigning \(model.commandDisplayName(prompt.slug)) to slot \(prompt.slot) would displace \(model.commandDisplayName(prompt.occupiedBy)).")
+                .font(BridgeTokens.Typeface.meta)
+                .foregroundStyle(BridgeTokens.fg2)
+            HStack(spacing: 8) {
+                Button("Replace") { model.resolveFavoriteReplace() }
+                if prompt.swap != nil {
+                    Button("Swap") { model.resolveFavoriteSwap() }
+                }
+                Button("Cancel") { model.cancelFavoritePrompt() }
+            }
+        }
+        .padding(BridgeTokens.Space.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Replace, swap, or cancel favorite assignment")
     }
 
     /// Selected-row treatment (`.cb-row.on`): faint accent tint + accent hairline
@@ -2190,6 +2440,7 @@ private struct WindowAccessor: NSViewRepresentable {
 /// delegate — see `QueryField.Coordinator`).
 private struct KeyHandler: NSViewRepresentable {
     let onNumber: (Int) -> Void
+    let onOptionNumber: (Int) -> Void
     let onArrowDown: () -> Void
     let onArrowUp: () -> Void
     let onReturn: () -> Void
@@ -2198,6 +2449,7 @@ private struct KeyHandler: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let v = MonitorView()
         v.onNumber = onNumber
+        v.onOptionNumber = onOptionNumber
         v.onArrowDown = onArrowDown
         v.onArrowUp = onArrowUp
         v.onReturn = onReturn
@@ -2205,10 +2457,19 @@ private struct KeyHandler: NSViewRepresentable {
         return v
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let v = nsView as? MonitorView else { return }
+        v.onNumber = onNumber
+        v.onOptionNumber = onOptionNumber
+        v.onArrowDown = onArrowDown
+        v.onArrowUp = onArrowUp
+        v.onReturn = onReturn
+        v.onEscape = onEscape
+    }
 
     final class MonitorView: NSView {
         var onNumber: ((Int) -> Void)?
+        var onOptionNumber: ((Int) -> Void)?
         var onArrowDown: (() -> Void)?
         var onArrowUp: (() -> Void)?
         var onReturn: (() -> Void)?
@@ -2228,18 +2489,13 @@ private struct KeyHandler: NSViewRepresentable {
             guard monitor == nil else { return }
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self else { return event }
-                // Only act when our window is key.
                 guard self.window?.isKeyWindow == true else { return event }
-                // If the focused first responder is the query text view
-                // (i.e. the user is typing), let it have the keystroke
-                // EXCEPT for the bare-number/bare-arrow shortcuts when
-                // the field is empty.
+                if Self.consumeOptionNumber(event, fire: self) { return nil }
                 let isFieldEditor = (self.window?.firstResponder is NSText)
                 if !isFieldEditor || (event.charactersIgnoringModifiers?.isEmpty ?? true) {
                     if Self.consume(event, fire: self) { return nil }
                 } else if let text = self.window?.firstResponder as? NSText,
                           text.string.isEmpty {
-                    // Empty field → bare number keys still fire the slot.
                     if Self.consume(event, fire: self) { return nil }
                 }
                 return event
@@ -2262,6 +2518,20 @@ private struct KeyHandler: NSViewRepresentable {
             // and the cleanup path above is sufficient (the monitor is
             // bound to a window-scoped block that no longer reaches a
             // dead view).
+        }
+
+        static func consumeOptionNumber(_ event: NSEvent, fire v: MonitorView) -> Bool {
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard mods.contains(.option),
+                  !mods.contains(.command),
+                  !mods.contains(.control),
+                  let chars = event.charactersIgnoringModifiers,
+                  chars.count == 1,
+                  let digit = chars.first?.wholeNumberValue,
+                  (0...9).contains(digit)
+            else { return false }
+            v.onOptionNumber?(digit)
+            return true
         }
 
         /// Returns true if the event was handled (swallowed).
