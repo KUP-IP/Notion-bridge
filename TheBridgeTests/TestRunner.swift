@@ -882,6 +882,9 @@ await runCommandSearchCreateTests()
 // GitHub #140 D0: developer-mode product publication. No silent Git.
 await runCommandProductPublicationTests()
 
+// GitHub #140 E0: A0–D0 coexist; no promoted install; no AGENT_FEEDBACK writer.
+await runCommandIntegrationE0Tests()
+
 // PKT-876 (v3.6.1): Settings sections Liquid Glass reskin.
 await runSettingsSectionsLGTests()
 

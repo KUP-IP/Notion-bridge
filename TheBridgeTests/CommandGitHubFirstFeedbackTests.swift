@@ -139,6 +139,7 @@ private enum CommandFeedbackScan {
     static func activeWriterFiles(under root: URL) throws -> [(path: String, match: String)] {
         let skipNames: Set<String> = [
             "CommandGitHubFirstFeedbackTests.swift",
+            "CommandIntegrationE0Tests.swift",
             "CommandCalibrateReport.swift",
             "CHANGELOG.md",
             "test-floor-gate-history.md",
