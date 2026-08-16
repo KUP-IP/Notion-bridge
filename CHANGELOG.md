@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased — Commands #140 integration
+
+- **Command system A0–D0 on one review candidate** — Durable custody,
+  directional defaults, GitHub-first feedback, Search favorites/create, and
+  gated developer publication land together. Ordinary updates stay Git-free.
+  No `AGENT_FEEDBACK.md` writer. Promoted install remains the G0 Ship Gate.
+  See `docs/commands-e0-integration.md`.
+
 ## Unreleased — Mail inbox management
 
 - **Mail organize surface** — Extends the Apple Mail family with identity-safe
