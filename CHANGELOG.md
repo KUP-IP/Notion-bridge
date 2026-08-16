@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Commands #140 hardening
+
+- **Command system F0 adversarial rehearsal** — Forward-update, interrupt,
+  corrupt-revision, tombstone, favorite undo, compatibility-required, and
+  publication-privacy cases stay on one SHA. Signed candidate may be built;
+  promoted install remains the G0 Ship Gate. See `docs/commands-f0-hardening.md`.
+
 ## Unreleased — Commands #140 integration
 
 - **Command system A0–D0 on one review candidate** — Durable custody,

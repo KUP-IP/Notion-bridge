@@ -140,6 +140,7 @@ private enum CommandFeedbackScan {
         let skipNames: Set<String> = [
             "CommandGitHubFirstFeedbackTests.swift",
             "CommandIntegrationE0Tests.swift",
+            "CommandHardeningF0Tests.swift",
             "CommandCalibrateReport.swift",
             "CHANGELOG.md",
             "test-floor-gate-history.md",
