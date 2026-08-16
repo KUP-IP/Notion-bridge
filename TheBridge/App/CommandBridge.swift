@@ -601,13 +601,11 @@ public final class CommandBridgeController: NSObject {
         // Cancel any in-flight close so re-hotkey mid-fade doesn't orderOut.
         dismissGeneration &+= 1
 
-        // (v3.7.6) Capture the frontmost app BEFORE we order the panel front,
-        // so paste-into-app can re-activate it on commit. The panel is a
-        // `.nonactivatingPanel`, so the prior app normally stays frontmost —
-        // but we record it explicitly to be robust across Spaces / ⌘-Tab.
-        let me = NSRunningApplication.current
-        let front = NSWorkspace.shared.frontmostApplication
-        priorApp = (front?.processIdentifier == me.processIdentifier) ? nil : front
+        // Snapshot the destination caret BEFORE the palette becomes key.
+        // `makeKeyAndOrderFront` below focuses the query field and clears
+        // the prior app's AX focused element — insert must use this snapshot
+        // (issue #129 live miss: clipboard gone, nothing landed at cursor).
+        snapshotInsertDestination(frontmost: NSWorkspace.shared.frontmostApplication)
 
         let panel = self.panel ?? makePanel()
         self.panel = panel
@@ -676,11 +674,22 @@ public final class CommandBridgeController: NSObject {
         }
     }
 
+    /// Snapshot the app + focused AX element that should receive the
+    /// command body. Called from `show()` before the palette becomes key.
+    /// Tests call this with `NSRunningApplication.current` (self → no target).
+    public func snapshotInsertDestination(frontmost: NSRunningApplication?) {
+        let me = NSRunningApplication.current.processIdentifier
+        priorApp = (frontmost?.processIdentifier == me) ? nil : frontmost
+        inserter.captureFocusedElement(of: insertTargetPID(priorApp))
+    }
+
     /// Public entrypoint mirroring the legacy `dismissOnEscape()` —
     /// closes the popup without writing anything.
     /// Visual-pass: animate close (didOpen→false) then `orderOut` only after
     /// `closeDuration` so dismiss is never a hard cut (Red Team DoD).
-    public func hide() {
+    /// Pass `immediate: true` on the fire path so CGEvent typing cannot
+    /// land in the palette query field.
+    public func hide(immediate: Bool = false) {
         guard lifecycle == .open || lifecycle == .opening else { return }
         lifecycle = .closing
         removeFocusLossObserver()
@@ -689,6 +698,12 @@ public final class CommandBridgeController: NSObject {
         removeDidMoveObserver()
         model?.didOpen = false
         dismissGeneration &+= 1
+        if immediate {
+            panel?.orderOut(nil)
+            model?.resetToTray()
+            lifecycle = .closed
+            return
+        }
         let gen = dismissGeneration
         let reduce = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         let delay = reduce ? 0 : CommandBridgeAnimation.locked.closeDuration
@@ -827,8 +842,9 @@ public final class CommandBridgeController: NSObject {
 
     /// Shared fire path for `fireSlot` / `fireSlug`. Inserts the body at
     /// the prior app's focused editable control (issue #129). Never
-    /// copies to the clipboard. On failure, records a status and still
-    /// closes the palette so the operator is not stuck in the overlay.
+    /// copies to the clipboard. Dismisses the palette *before* insert so
+    /// synthetic typing cannot land in the query field; the focused
+    /// element was snapshotted at `show()`.
     /// Compatibility-required commands fail closed: no insert, no fire.
     private func commitBody(_ body: String, slug: String) {
         let gate: CommandStore.ExecutionGate
@@ -848,16 +864,18 @@ public final class CommandBridgeController: NSObject {
         }
         let target = priorApp
         let pid = insertTargetPID(target)
+        // Resign key before AX / CGEvent insert. The destination caret was
+        // captured in `snapshotInsertDestination` while the palette was
+        // still not key.
+        hide(immediate: true)
+        if let target,
+           target.processIdentifier != NSRunningApplication.current.processIdentifier {
+            target.activate()
+        }
         let outcome = applyCommit(.paste(body), intoProcess: pid)
         if outcome?.succeeded == true {
             try? store.recordUse(slug: slug)
             recents.record(slug)
-        }
-        hide()
-        if outcome?.succeeded == true,
-           let target,
-           target.processIdentifier != NSRunningApplication.current.processIdentifier {
-            target.activate(options: [])
         }
         if let outcome, !outcome.succeeded {
             print("[CommandBridge] \(outcome.userMessage)")

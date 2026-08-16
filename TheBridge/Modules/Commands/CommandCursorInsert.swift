@@ -9,8 +9,10 @@
 //   • CommandTextSplicer — pure UTF-16 splice (caret insert / selection
 //     replace). Headlessly testable with no Accessibility grant.
 //   • CommandTextInserting — injectable delivery seam. Production is
-//     AccessibilityCommandInserter (AX focused element). Tests inject
-//     RecordingTextInserter so the suite never types into the host.
+//     AccessibilityCommandInserter. It snapshots the focused AX element
+//     *before* the palette becomes key (the query field otherwise clears
+//     the destination caret). Tests inject RecordingTextInserter so the
+//     suite never types into the host.
 
 import Foundation
 import AppKit
@@ -105,6 +107,12 @@ public enum CommandTextSplicer {
 // ============================================================
 
 public protocol CommandTextInserting: AnyObject, Sendable {
+    /// Snapshot the focused AX element of `pid` *before* the command
+    /// palette becomes key. The palette's query field steals AX focus;
+    /// insert uses this snapshot instead of re-querying the live tree.
+    @MainActor
+    func captureFocusedElement(of pid: pid_t?)
+
     /// Insert `text` into the focused editable control of `pid` (the
     /// previously-frontmost app). `pid == nil` means "no destination" —
     /// production fails closed; the recording double still records.
@@ -115,12 +123,18 @@ public protocol CommandTextInserting: AnyObject, Sendable {
 /// Test double. Never touches NSPasteboard or the live AX tree.
 public final class RecordingTextInserter: CommandTextInserting, @unchecked Sendable {
     public private(set) var inserts: [(text: String, pid: pid_t?)] = []
+    public private(set) var capturedFocusPIDs: [pid_t?] = []
     /// Forced outcome for the next (and subsequent) inserts. `.inserted`
     /// character counts are rewritten from the actual payload.
     public var forcedOutcome: CommandInsertOutcome
 
     public init(forcedOutcome: CommandInsertOutcome = .inserted(replacedSelection: false, characters: 0)) {
         self.forcedOutcome = forcedOutcome
+    }
+
+    @MainActor
+    public func captureFocusedElement(of pid: pid_t?) {
+        capturedFocusPIDs.append(pid)
     }
 
     @MainActor
@@ -142,7 +156,21 @@ public final class RecordingTextInserter: CommandTextInserting, @unchecked Senda
 /// Never reads or writes `NSPasteboard`. Fail-closed: missing grant or
 /// missing editable target returns a status outcome, not a clipboard copy.
 public final class AccessibilityCommandInserter: CommandTextInserting, @unchecked Sendable {
+    /// Focused element of the destination app, captured before the
+    /// palette becomes key. AXUIElement is not Sendable; this class is
+    /// already `@unchecked Sendable` and only touched on the main actor.
+    private var capturedElement: AXUIElement?
+    private var capturedPID: pid_t?
+
     public init() {}
+
+    @MainActor
+    public func captureFocusedElement(of pid: pid_t?) {
+        capturedElement = nil
+        capturedPID = pid
+        guard AXIsProcessTrusted(), let pid, pid > 0 else { return }
+        capturedElement = copyFocusedElement(of: pid)
+    }
 
     @MainActor
     public func insert(_ text: String, intoProcess pid: pid_t?) -> CommandInsertOutcome {
@@ -157,14 +185,9 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
 
         guard let pid, pid > 0 else { return .noEditableTarget }
 
-        let appEl = AXUIElementCreateApplication(pid)
-        var focusedRef: CFTypeRef?
-        let focusErr = AXUIElementCopyAttributeValue(
-            appEl, kAXFocusedUIElementAttribute as CFString, &focusedRef)
-        guard focusErr == .success, let focusedRef else {
-            return .noEditableTarget
-        }
-        let focused = focusedRef as! AXUIElement
+        let usedCapture = (capturedPID == pid && capturedElement != nil)
+        let focused = usedCapture ? capturedElement : copyFocusedElement(of: pid)
+        guard let focused else { return .noEditableTarget }
 
         let role = stringAttr(focused, kAXRoleAttribute as String) ?? ""
         if role == "AXSecureTextField" {
@@ -200,7 +223,11 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             }
         }
 
-        if looksEditable(role: role, element: focused) {
+        // A captured element had the caret when the operator invoked the
+        // palette — try synthetic typing even when Chromium reports a
+        // generic role (AXWebArea / AXGroup) instead of AXTextArea.
+        if usedCapture || looksEditable(role: role, element: focused) {
+            restoreFocus(focused, pid: pid)
             do {
                 try postUnicode(text)
                 return .inserted(replacedSelection: replaced, characters: text.count)
@@ -210,6 +237,28 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         }
 
         return .noEditableTarget
+    }
+
+    @MainActor
+    private func copyFocusedElement(of pid: pid_t) -> AXUIElement? {
+        let appEl = AXUIElementCreateApplication(pid)
+        var focusedRef: CFTypeRef?
+        let focusErr = AXUIElementCopyAttributeValue(
+            appEl, kAXFocusedUIElementAttribute as CFString, &focusedRef)
+        guard focusErr == .success, let focusedRef else { return nil }
+        return (focusedRef as! AXUIElement)
+    }
+
+    /// Put the caret back on `element` so CGEvent unicode typing lands
+    /// there instead of the (now dismissed) palette query field.
+    @MainActor
+    private func restoreFocus(_ element: AXUIElement, pid: pid_t) {
+        if let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate()
+        }
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+        AXUIElementSetAttributeValue(
+            element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
     }
 
     // MARK: AX helpers

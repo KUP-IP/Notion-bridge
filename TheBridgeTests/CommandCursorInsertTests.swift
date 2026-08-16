@@ -12,6 +12,7 @@
 // the operator smoke ceiling (docs/operator/command-bridge-smoke-checklist.md).
 
 import Foundation
+import AppKit
 import TheBridgeLib
 
 func runCommandCursorInsertTests() async {
@@ -204,6 +205,27 @@ func runCommandCursorInsertTests() async {
             throw TestError.assertion("expected inserted, got \(String(describing: outcome))")
         }
         try expect(replaced, "forced replace flag must round-trip")
+        try expect(cb.writeCount == 0)
+    }
+
+    await test("snapshotInsertDestination: frontmost=self captures nil pid (never insert into us)") {
+        let cb = InMemoryClipboard(initial: "prior")
+        let ins = RecordingTextInserter()
+        let ctrl = await CommandBridgeController(clipboard: cb, inserter: ins, coordinator: coord())
+        await ctrl.snapshotInsertDestination(frontmost: NSRunningApplication.current)
+        try expect(ins.capturedFocusPIDs.count == 1, "show-path must snapshot before key, got \(ins.capturedFocusPIDs.count)")
+        try expect(ins.capturedFocusPIDs[0] == nil, "self as frontmost must not be an insert target")
+        try expect(cb.writeCount == 0)
+    }
+
+    await test("snapshotInsertDestination then applyCommit still never writes the clipboard") {
+        let cb = InMemoryClipboard(initial: "user-prior-clip")
+        let ins = RecordingTextInserter()
+        let ctrl = await CommandBridgeController(clipboard: cb, inserter: ins, coordinator: coord())
+        await ctrl.snapshotInsertDestination(frontmost: NSRunningApplication.current)
+        await ctrl.applyCommit(.paste("after-snapshot"))
+        try expect(ins.inserts.map(\.text) == ["after-snapshot"])
+        try expect(cb.readString() == "user-prior-clip")
         try expect(cb.writeCount == 0)
     }
 }
