@@ -116,6 +116,8 @@ public struct AdvancedSection: View {
     // these the same way it reads `launchAtLogin` (no fake channel logic here).
     @AppStorage("automaticUpdates") private var automaticUpdates = true
     @AppStorage("betaChannel") private var betaChannel = false
+    @AppStorage(BridgeDefaults.commandsDeveloperPublication)
+    private var commandsDeveloperPublication = false
 
     // Transient "rebuilt"/"cache cleared" flash for the benign Routine actions,
     // keyed by action id so the confirmation lands on the row clicked.
@@ -403,6 +405,13 @@ public struct AdvancedSection: View {
                 title: "Beta channel",
                 subtitle: "Receive pre-release builds. May be unstable.",
                 isOn: $betaChannel
+            )
+
+            toggleDivider()
+            launchToggleRow(
+                title: "Command developer publication",
+                subtitle: "Show Propose as Product Change in Commands. Off by default. GitHub and branch controls stay hidden until this is on.",
+                isOn: $commandsDeveloperPublication
             )
         }
     }

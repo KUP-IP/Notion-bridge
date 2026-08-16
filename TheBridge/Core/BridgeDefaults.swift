@@ -171,6 +171,10 @@ public enum BridgeDefaults {
     /// fresh install / decode failure never loses the palette).
     public static let commandsHotkey = "com.notionbridge.commandsHotkey"
 
+    /// D0 / #140: developer publication workflow. Bool. ABSENT ⇒ OFF.
+    /// Standard mode must not show GitHub, branch, commit, or push controls.
+    public static let commandsDeveloperPublication = "com.notionbridge.commandsDeveloperPublication"
+
     // MARK: - Onboarding & Legal
 
     /// Whether the user has completed the onboarding wizard. Bool.
