@@ -1,9 +1,10 @@
 // VoiceMemoMemoryRelationMatcher.swift — cache-only Memory relation attach
 // TheBridge · Modules · VoiceMemo
 //
-// Conservative matcher for memory_keep: unique contacts, distinctive
-// project/doc phrases (including unique 2-token prefixes), exact-title
-// blocks. Never creates PEOPLE rows.
+// Conservative matcher for memory_keep: unique 2+ token contact titles
+// or aliases only (1-token names never attach), distinctive project/doc
+// phrases (including unique 2-token prefixes), exact-title blocks.
+// Never creates PEOPLE rows.
 // Dual-sided Notion reverse-fill is accepted; we only write the Memory side.
 
 import Foundation
@@ -73,17 +74,24 @@ public struct VoiceMemoRelationCatalog: Sendable, Equatable {
     private static func strings(from value: Value?) -> [String] {
         switch value {
         case .string(let s):
-            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-            return t.isEmpty ? [] : [t]
+            return splitNewlines(s)
         case .array(let arr):
-            return arr.compactMap { item -> String? in
-                guard case .string(let s) = item else { return nil }
-                let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-                return t.isEmpty ? nil : t
+            return arr.flatMap { item -> [String] in
+                guard case .string(let s) = item else { return [] }
+                return splitNewlines(s)
             }
         default:
             return []
         }
+    }
+
+    /// Notion Alias often stores one blob with newline-separated phrases.
+    /// Index each line on its own so a shared pair on one line cannot be
+    /// glued to the rest of the blob.
+    static func splitNewlines(_ raw: String) -> [String] {
+        raw.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 }
 
@@ -122,16 +130,25 @@ public enum VoiceMemoMemoryRelationMatcher {
         guard !hay.isEmpty, !catalog.isEmpty else { return VoiceMemoRelationMatch() }
 
         let contacts = matchContacts(hay: hay, entries: catalog.contacts)
+        // Projects and docs share distinctive-token/pair uniqueness so a
+        // geographic alias on a doc can block the same pair on a project.
+        let distinctiveEntries = catalog.projects + catalog.docs
+        let tokenOwners = distinctiveTokenIndex(distinctiveEntries)
+        let pairOwners = distinctivePairIndex(distinctiveEntries)
         return VoiceMemoRelationMatch(
             contactIds: contacts.ids,
-            projectIds: matchDistinctive(hay: hay, entries: catalog.projects),
-            docIds: matchDistinctive(hay: hay, entries: catalog.docs),
+            projectIds: matchDistinctive(
+                hay: hay, entries: catalog.projects, tokenOwners: tokenOwners, pairOwners: pairOwners
+            ),
+            docIds: matchDistinctive(
+                hay: hay, entries: catalog.docs, tokenOwners: tokenOwners, pairOwners: pairOwners
+            ),
             blockIds: matchExactTitles(hay: hay, entries: catalog.blocks, requireTwoTokens: true),
             notes: contacts.notes
         )
     }
 
-    // MARK: - Contacts (unique only; collisions listed, never attached)
+    // MARK: - Contacts (unique 2+ token title/alias only; first-name collisions noted)
 
     private static func matchContacts(
         hay: String,
@@ -141,32 +158,49 @@ public enum VoiceMemoMemoryRelationMatcher {
         var notes: [String] = []
         var attachedIds = Set<String>()
 
-        let byFull = Dictionary(grouping: entries) { normalize($0.title) }
-        for (full, group) in byFull where !full.isEmpty {
-            guard containsPhrase(hay, full) else { continue }
-            if group.count == 1, let only = group.first, attachedIds.insert(only.id).inserted {
+        var phraseOwners: [String: [VoiceMemoCacheEntry]] = [:]
+        for entry in entries {
+            for phrase in multiTokenPhrases(entry) {
+                phraseOwners[phrase, default: []].append(entry)
+            }
+        }
+        for (phrase, group) in phraseOwners {
+            guard containsPhrase(hay, phrase) else { continue }
+            let uniqueIds = Set(group.map(\.id))
+            if uniqueIds.count == 1, let only = group.first, attachedIds.insert(only.id).inserted {
                 attached.append(only.id)
-            } else if group.count >= 2 {
+            } else if uniqueIds.count >= 2 {
                 notes.append(collisionNote(label: group[0].title, entries: group))
             }
         }
 
+        // First-name hits are notes only when two or more contacts share the
+        // token and none of them already attached via a full name. Unique
+        // first names never attach (PEOPLE: full_name_only).
         let byFirst = Dictionary(grouping: entries) { firstToken(normalize($0.title)) }
         for (first, group) in byFirst where !first.isEmpty && first.count >= 2 {
             guard containsPhrase(hay, first) else { continue }
             let uniqueIds = Set(group.map(\.id))
-            if uniqueIds.count == 1, let only = group.first {
-                if attachedIds.insert(only.id).inserted {
-                    attached.append(only.id)
-                }
-            } else if uniqueIds.count >= 2 {
-                let already = group.contains { attachedIds.contains($0.id) }
-                if !already {
-                    notes.append(collisionNote(label: first.capitalized, entries: group))
-                }
+            guard uniqueIds.count >= 2 else { continue }
+            let already = group.contains { attachedIds.contains($0.id) }
+            if !already {
+                notes.append(collisionNote(label: first.capitalized, entries: group))
             }
         }
         return (attached, notes)
+    }
+
+    /// Titles and aliases with two or more tokens. 1-token names never attach.
+    private static func multiTokenPhrases(_ entry: VoiceMemoCacheEntry) -> [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for raw in sourcePhrases(entry) {
+            let phrase = normalize(raw)
+            let tokens = phrase.split(separator: " ")
+            guard tokens.count >= 2, seen.insert(phrase).inserted else { continue }
+            out.append(phrase)
+        }
+        return out
     }
 
     private static func collisionNote(label: String, entries: [VoiceMemoCacheEntry]) -> String {
@@ -178,9 +212,12 @@ public enum VoiceMemoMemoryRelationMatcher {
 
     // MARK: - Projects / docs (exact title/alias, unique 2-token prefix, or unique token)
 
-    private static func matchDistinctive(hay: String, entries: [VoiceMemoCacheEntry]) -> [String] {
-        let tokenOwners = distinctiveTokenIndex(entries)
-        let pairOwners = distinctivePairIndex(entries)
+    private static func matchDistinctive(
+        hay: String,
+        entries: [VoiceMemoCacheEntry],
+        tokenOwners: [String: Set<String>],
+        pairOwners: [String: Set<String>]
+    ) -> [String] {
         var ids: [String] = []
         var seen = Set<String>()
         for entry in entries {
@@ -198,7 +235,7 @@ public enum VoiceMemoMemoryRelationMatcher {
         tokenOwners: [String: Set<String>],
         pairOwners: [String: Set<String>]
     ) -> Bool {
-        let phrases = ([entry.title] + entry.aliases)
+        let phrases = sourcePhrases(entry)
             .map(normalize)
             .filter { !$0.isEmpty }
         for phrase in phrases {
@@ -228,7 +265,7 @@ public enum VoiceMemoMemoryRelationMatcher {
     private static func distinctiveTokenIndex(_ entries: [VoiceMemoCacheEntry]) -> [String: Set<String>] {
         var index: [String: Set<String>] = [:]
         for entry in entries {
-            let phrases = ([entry.title] + entry.aliases).map(normalize)
+            let phrases = sourcePhrases(entry).map(normalize)
             var tokens = Set<String>()
             for phrase in phrases {
                 for token in phrase.split(separator: " ").map(String.init) where !stoplist.contains(token) && token.count >= 3 {
@@ -247,7 +284,7 @@ public enum VoiceMemoMemoryRelationMatcher {
     private static func distinctivePairIndex(_ entries: [VoiceMemoCacheEntry]) -> [String: Set<String>] {
         var index: [String: Set<String>] = [:]
         for entry in entries {
-            for phrase in ([entry.title] + entry.aliases).map(normalize) {
+            for phrase in sourcePhrases(entry).map(normalize) {
                 let distinctive = phrase.split(separator: " ").map(String.init)
                     .filter { !stoplist.contains($0) && $0.count >= 3 }
                 guard distinctive.count >= 2 else { continue }
@@ -281,6 +318,10 @@ public enum VoiceMemoMemoryRelationMatcher {
     }
 
     // MARK: - Normalize / phrase
+
+    private static func sourcePhrases(_ entry: VoiceMemoCacheEntry) -> [String] {
+        ([entry.title] + entry.aliases).flatMap(VoiceMemoRelationCatalog.splitNewlines)
+    }
 
     public static func normalize(_ raw: String) -> String {
         var out = ""
