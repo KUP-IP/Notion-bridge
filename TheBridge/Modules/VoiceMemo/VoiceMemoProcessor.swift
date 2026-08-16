@@ -966,12 +966,42 @@ public enum VoiceMemoProcessor {
     }
 
     static func resolvedMemoryKeepFields(intent: VoiceMemoIntent, plan: VoiceMemoPlan) -> [String: String] {
-        if !intent.fields.isEmpty { return intent.fields }
-        return VoiceMemoParser.memoryKeepFields(
-            title: intent.title ?? plan.generatedTitle,
-            summary: plan.summary,
-            actions: plan.actions
+        let overrideTitle = intent.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if intent.fields.isEmpty {
+            return VoiceMemoParser.memoryKeepFields(
+                title: overrideTitle.isEmpty ? plan.generatedTitle : overrideTitle,
+                summary: plan.summary,
+                actions: plan.actions
+            )
+        }
+
+        var fields = intent.fields
+        if !overrideTitle.isEmpty {
+            fields["title"] = overrideTitle
+            return fields
+        }
+
+        let existingTitle = fields["title"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !existingTitle.isEmpty {
+            return fields
+        }
+
+        let semantic = [
+            fields["summary"],
+            intent.body,
+            plan.summary,
+        ]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty } ?? ""
+        let fromSummary = VoiceMemoParser.sanitizeTitle(
+            nil,
+            fallback: VoiceMemoParser.firstSentencePublic(in: semantic, maxLen: 72)
         )
+        if !fromSummary.isEmpty {
+            fields["title"] = fromSummary
+        }
+        return fields
     }
 
     static func skipNoTranscript(
@@ -1058,7 +1088,8 @@ public enum VoiceMemoProcessor {
                 ],
             ])
         }
-        if !plan.actions.isEmpty {
+        let actions = memoryKeepActionItems(plan: plan, summaryText: trimmed)
+        if !actions.isEmpty {
             children.append([
                 "object": "block",
                 "type": "heading_3",
@@ -1066,11 +1097,12 @@ public enum VoiceMemoProcessor {
                     "rich_text": [["type": "text", "text": ["content": "Action items"]]],
                 ],
             ])
-            for action in plan.actions.prefix(12) {
+            for action in actions.prefix(12) {
                 children.append([
                     "object": "block",
-                    "type": "bulleted_list_item",
-                    "bulleted_list_item": [
+                    "type": "to_do",
+                    "to_do": [
+                        "checked": false,
                         "rich_text": [["type": "text", "text": ["content": String(action.prefix(1900))]]],
                     ],
                 ])
@@ -1100,6 +1132,62 @@ public enum VoiceMemoProcessor {
             "blockId": .string(pageId),
             "children": .string(json),
         ]))
+    }
+
+    /// Plan actions first; otherwise lift "Next:" / "I need to" prose from the summary.
+    /// Never invent "Follow up."
+    static func memoryKeepActionItems(plan: VoiceMemoPlan, summaryText: String) -> [String] {
+        let fromPlan = plan.actions
+            .map { stripLeadingNextLabel($0) }
+            .filter { !$0.isEmpty && !isFollowUpFiller($0) }
+        if !fromPlan.isEmpty { return Array(fromPlan.prefix(12)) }
+
+        var fromProse = proseActionSentences(from: summaryText)
+        if fromProse.isEmpty {
+            fromProse = VoiceMemoDegradedPreviewBuilder.build(from: summaryText).actions
+                .map { stripLeadingNextLabel($0) }
+                .filter { !isFollowUpFiller($0) }
+        }
+        return Array(fromProse.prefix(12))
+    }
+
+    private static func isFollowUpFiller(_ text: String) -> Bool {
+        let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return lower == "follow up" || lower == "follow up." || lower == "follow-up" || lower == "follow-up."
+    }
+
+    /// Lifted checkboxes should not keep the "Next:" label in the to-do text.
+    private static func stripLeadingNextLabel(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        for prefix in ["next:", "next —", "next –", "next -"] {
+            if lower.hasPrefix(prefix) {
+                return String(trimmed.dropFirst(prefix.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return trimmed
+    }
+
+    private static func proseActionSentences(from text: String) -> [String] {
+        let parts = text
+            .replacingOccurrences(of: "\n", with: ". ")
+            .components(separatedBy: CharacterSet(charactersIn: ".!?"))
+        var out: [String] = []
+        for raw in parts {
+            let sentence = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard sentence.count >= 12, !isFollowUpFiller(sentence) else { continue }
+            let lower = sentence.lowercased()
+            let isAction = lower.hasPrefix("next")
+                || lower.hasPrefix("i need to")
+                || lower.hasPrefix("i'll ")
+                || lower.hasPrefix("i will ")
+            guard isAction else { continue }
+            let cleaned = stripLeadingNextLabel(sentence)
+            guard cleaned.count >= 12, !isFollowUpFiller(cleaned) else { continue }
+            out.append(cleaned)
+        }
+        return out
     }
 
     /// Legacy transcript append — retained for explicit opt-in callers only.

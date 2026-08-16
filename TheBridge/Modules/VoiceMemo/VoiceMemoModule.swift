@@ -634,7 +634,7 @@ public enum VoiceMemoModule {
                     ]),
                     "title": .object([
                         "type": .string("string"),
-                        "description": .string("Reminder title override; also the comment text fallback when body is unset."),
+                        "description": .string("Memory title for intentKind=memory_keep (wins over fields.title). Reminder title override; also the comment text fallback when body is unset."),
                     ]),
                     "body": .object([
                         "type": .string("string"),
