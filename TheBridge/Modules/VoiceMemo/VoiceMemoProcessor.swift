@@ -561,6 +561,7 @@ public enum VoiceMemoProcessor {
             pageId: pageId,
             plan: plan,
             summaryText: semanticSummary,
+            transcript: transcript,
             matchNotes: relationMatch.notes,
             router: router
         )
@@ -1065,6 +1066,7 @@ public enum VoiceMemoProcessor {
         pageId: String,
         plan: VoiceMemoPlan,
         summaryText: String,
+        transcript: String = "",
         matchNotes: [String] = [],
         router: ToolRouter
     ) async throws {
@@ -1088,7 +1090,7 @@ public enum VoiceMemoProcessor {
                 ],
             ])
         }
-        let actions = memoryKeepActionItems(plan: plan, summaryText: trimmed)
+        let actions = memoryKeepActionItems(plan: plan, summaryText: trimmed, transcript: transcript)
         if !actions.isEmpty {
             children.append([
                 "object": "block",
@@ -1134,21 +1136,24 @@ public enum VoiceMemoProcessor {
         ]))
     }
 
-    /// Plan actions first; otherwise lift "Next:" / "I need to" prose from the summary.
-    /// Never invent "Follow up."
-    static func memoryKeepActionItems(plan: VoiceMemoPlan, summaryText: String) -> [String] {
+    /// Plan actions first; otherwise lift "Next:" / "Next action:" / "I need to"
+    /// prose from the summary, then the transcript. Never invent "Follow up."
+    static func memoryKeepActionItems(plan: VoiceMemoPlan, summaryText: String, transcript: String = "") -> [String] {
         let fromPlan = plan.actions
             .map { stripLeadingNextLabel($0) }
             .filter { !$0.isEmpty && !isFollowUpFiller($0) }
         if !fromPlan.isEmpty { return Array(fromPlan.prefix(12)) }
 
-        var fromProse = proseActionSentences(from: summaryText)
-        if fromProse.isEmpty {
-            fromProse = VoiceMemoDegradedPreviewBuilder.build(from: summaryText).actions
-                .map { stripLeadingNextLabel($0) }
-                .filter { !isFollowUpFiller($0) }
+        for source in [summaryText, transcript] {
+            var fromProse = proseActionSentences(from: source)
+            if fromProse.isEmpty {
+                fromProse = VoiceMemoDegradedPreviewBuilder.build(from: source).actions
+                    .map { stripLeadingNextLabel($0) }
+                    .filter { !isFollowUpFiller($0) }
+            }
+            if !fromProse.isEmpty { return Array(fromProse.prefix(12)) }
         }
-        return Array(fromProse.prefix(12))
+        return []
     }
 
     private static func isFollowUpFiller(_ text: String) -> Bool {
@@ -1156,11 +1161,15 @@ public enum VoiceMemoProcessor {
         return lower == "follow up" || lower == "follow up." || lower == "follow-up" || lower == "follow-up."
     }
 
-    /// Lifted checkboxes should not keep the "Next:" label in the to-do text.
-    private static func stripLeadingNextLabel(_ text: String) -> String {
+    /// Lifted checkboxes should not keep a "Next:" / "Next action:" label.
+    static func stripLeadingNextLabel(_ text: String) -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
-        for prefix in ["next:", "next —", "next –", "next -"] {
+        let prefixes = [
+            "next action:", "next action —", "next action –", "next action -",
+            "next:", "next —", "next –", "next -",
+        ]
+        for prefix in prefixes {
             if lower.hasPrefix(prefix) {
                 return String(trimmed.dropFirst(prefix.count))
                     .trimmingCharacters(in: .whitespacesAndNewlines)

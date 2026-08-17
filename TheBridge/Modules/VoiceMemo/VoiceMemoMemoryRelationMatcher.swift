@@ -125,6 +125,15 @@ public enum VoiceMemoMemoryRelationMatcher {
         "bridge", "keep", "focus", "energy",
     ]
 
+    /// Geographic tokens that make a unique 2-token *slice* of a longer title
+    /// too weak to attach on its own (e.g. "sioux falls" ⊂ "Sioux Falls
+    /// Connector Network"). Invented prefixes like "emmiwood obk" are unaffected.
+    public static let geographicPairTokens: Set<String> = [
+        "falls", "lake", "river", "springs", "hills", "valley", "beach",
+        "island", "bay", "mount", "mountain", "creek", "canyon", "grove",
+        "woods", "forest", "harbor", "harbour", "bluff", "point",
+    ]
+
     public static func match(haystack: String, catalog: VoiceMemoRelationCatalog) -> VoiceMemoRelationMatch {
         let hay = normalize(haystack)
         guard !hay.isEmpty, !catalog.isEmpty else { return VoiceMemoRelationMatch() }
@@ -251,7 +260,10 @@ public enum VoiceMemoMemoryRelationMatcher {
                 for i in 0..<(pairTokens.count - 1) {
                     let pair = pairTokens[i] + " " + pairTokens[i + 1]
                     let owners = pairOwners[pair] ?? []
-                    if owners.count == 1, containsPhrase(hay, pair) { return true }
+                    guard owners.count == 1, containsPhrase(hay, pair) else { continue }
+                    if uniquePairMayAttach(pairTokens: pairTokens, pairIndex: i, hay: hay) {
+                        return true
+                    }
                 }
             }
             if distinctive.count == 1, let token = distinctive.first, token.count >= 3 {
@@ -260,6 +272,22 @@ public enum VoiceMemoMemoryRelationMatcher {
             }
         }
         return false
+    }
+
+    /// Unique 2-token titles attach. A pair that is only a slice of a longer
+    /// distinctive title attaches when another token from that title is also
+    /// in the haystack. A unique *prefix* pair (first two tokens) still
+    /// attaches without extras unless it is a geographic slice.
+    static func uniquePairMayAttach(pairTokens: [String], pairIndex: Int, hay: String) -> Bool {
+        if pairTokens.count == 2 { return true }
+        let others = pairTokens.indices
+            .filter { $0 != pairIndex && $0 != pairIndex + 1 }
+            .map { pairTokens[$0] }
+        if others.contains(where: { containsPhrase(hay, $0) }) { return true }
+        let pairA = pairTokens[pairIndex]
+        let pairB = pairTokens[pairIndex + 1]
+        let geographicSlice = geographicPairTokens.contains(pairA) || geographicPairTokens.contains(pairB)
+        return pairIndex == 0 && !geographicSlice
     }
 
     private static func distinctiveTokenIndex(_ entries: [VoiceMemoCacheEntry]) -> [String: Set<String>] {
