@@ -199,8 +199,10 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         let len = selectedRange?.length ?? 0
         let replaced = len > 0
         let before = stringAttr(focused, kAXValueAttribute as String)
+        let frame = axFrame(focused)
+        let trustAX = CommandInsertPointerFocus.trustsAXSet(role: role, frame: frame)
 
-        if isSettable(focused, kAXSelectedTextAttribute as String) {
+        if trustAX, isSettable(focused, kAXSelectedTextAttribute as String) {
             let setErr = AXUIElementSetAttributeValue(
                 focused, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
             if setErr == .success {
@@ -219,7 +221,7 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             }
         }
 
-        if isSettable(focused, kAXValueAttribute as String),
+        if trustAX, isSettable(focused, kAXValueAttribute as String),
            let current = before ?? stringAttr(focused, kAXValueAttribute as String),
            let range = selectedRange {
             let spliced = CommandTextSplicer.splice(
@@ -299,7 +301,8 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         ) else { return }
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
-        _ = CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.04, false)
+        let settle = CommandInsertPointerFocus.isWebLike(role) ? 0.08 : 0.04
+        _ = CFRunLoopRunInMode(CFRunLoopMode.defaultMode, settle, false)
     }
 
     private func axFrame(_ el: AXUIElement) -> CGRect? {
@@ -417,10 +420,33 @@ public enum CommandInsertAXVerify {
 /// Pure click-target math for the Chromium fallback. Native AX fields
 /// use the control center; web areas put the composer at the bottom.
 public enum CommandInsertPointerFocus {
+    public static let webLikeRoles: Set<String> = ["AXWebArea", "AXGroup", "AXUnknown"]
+    public static let tallWebAreaThreshold: CGFloat = 120
+
+    public static func isWebLike(_ role: String) -> Bool {
+        webLikeRoles.contains(role)
+    }
+
+    /// Chromium `AXWebArea` (and page-sized groups) report settable AXValue
+    /// without mutating the DOM. Native fields still use AX set + read-back.
+    public static func trustsAXSet(role: String, frame: CGRect?) -> Bool {
+        if role == "AXWebArea" { return false }
+        if isWebLike(role), let frame, frame.height >= tallWebAreaThreshold {
+            return false
+        }
+        return true
+    }
+
     public static func point(role: String, frame: CGRect) -> CGPoint {
-        let webLike: Set<String> = ["AXWebArea", "AXGroup", "AXUnknown"]
-        if webLike.contains(role) {
-            let inset = min(28, max(8, frame.height * 0.12))
+        if isWebLike(role) {
+            let inset: CGFloat
+            if frame.height >= tallWebAreaThreshold {
+                // Page-sized Cursor Agents web area is ~1387px; a 28px
+                // cap lands in the 24px "Send follow-up" strip.
+                inset = min(120, max(48, frame.height * 0.08))
+            } else {
+                inset = min(28, max(8, frame.height * 0.12))
+            }
             return CGPoint(x: frame.midX, y: frame.maxY - inset)
         }
         return CGPoint(x: frame.midX, y: frame.midY)

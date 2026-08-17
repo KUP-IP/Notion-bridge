@@ -100,9 +100,37 @@ func runCommandCursorInsertTests() async {
         let frame = CGRect(x: 0, y: 0, width: 400, height: 800)
         let p = CommandInsertPointerFocus.point(role: "AXWebArea", frame: frame)
         try expect(p.x == 200, "got \(p.x)")
-        try expect(p.y == 772, "got \(p.y)")
+        try expect(p.y == 736, "got \(p.y)")
         let group = CommandInsertPointerFocus.point(role: "AXGroup", frame: frame)
         try expect(group == p, "AXGroup must share the web-area heuristic")
+    }
+
+    await test("PointerFocus: short web-like control keeps a small inset") {
+        let frame = CGRect(x: 10, y: 20, width: 100, height: 40)
+        let p = CommandInsertPointerFocus.point(role: "AXWebArea", frame: frame)
+        try expect(p.x == 60, "got \(p.x)")
+        try expect(p.y == 52, "got \(p.y)")
+    }
+
+    await test("PointerFocus: page-sized Agents web area clears the follow-up strip") {
+        let frame = CGRect(x: 251, y: 30, width: 2030, height: 1387)
+        let p = CommandInsertPointerFocus.point(role: "AXWebArea", frame: frame)
+        let inset = min(120 as CGFloat, max(48, frame.height * 0.08))
+        try expect(p.x == frame.midX, "got \(p.x)")
+        try expect(p.y == frame.maxY - inset, "got \(p.y)")
+        try expect(inset > 28, "28px cap lands in the 24px follow-up strip, got \(inset)")
+        try expect(inset >= 48, "got \(inset)")
+    }
+
+    await test("AXSet: AXWebArea is untrusted even when AXValue looks settable") {
+        let frame = CGRect(x: 251, y: 30, width: 2030, height: 1387)
+        try expect(!CommandInsertPointerFocus.trustsAXSet(role: "AXWebArea", frame: frame))
+        try expect(!CommandInsertPointerFocus.trustsAXSet(role: "AXGroup", frame: frame))
+        try expect(CommandInsertPointerFocus.trustsAXSet(role: "AXTextArea", frame: frame))
+        try expect(CommandInsertPointerFocus.trustsAXSet(
+            role: "AXGroup",
+            frame: CGRect(x: 0, y: 0, width: 200, height: 40)
+        ))
     }
 
     await test("AXVerify: splice match counts as landed") {
