@@ -43,7 +43,11 @@
 #   hyphenated Notion UUID identity (+2 hermetic). Remaining +76 already
 #   green on main 55236fa (including #163/#168). Measured 3744 passed,
 #   0 failed on feat/issue-160-registry-uuid-normalize.
-FLOOR="${BRIDGE_TEST_FLOOR:-3744}"
+# 2026-08-17: 3744 → 3745 (+1) — unique geographic 2-token slices no longer
+#   attach Memory projects; Next action: / transcript Next: strip to the
+#   physical checkbox step. Measured 3745 passed, 0 failed on
+#   feat/voice-memo-place-and-next-action.
+FLOOR="${BRIDGE_TEST_FLOOR:-3745}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

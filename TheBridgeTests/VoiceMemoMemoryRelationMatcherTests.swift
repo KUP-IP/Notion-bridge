@@ -298,6 +298,76 @@ func runVoiceMemoMemoryRelationMatcherTests() async {
         try expect(fields["projects"] == .string(kEmmiwood), "Emmiwood / OBK prefix must attach, got \(String(describing: fields["projects"]))")
     }
 
+    await test("executeMemoryKeep: Next action: summary and transcript Next: strip to the physical step") {
+        let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
+        let state = RelationStubState()
+        await installRelationStubs(on: router, state: state, pageId: "page-next-action-todo")
+
+        _ = try await VoiceMemoProcessor.executeMemoryKeep(
+            entityKey: "memory",
+            intent: VoiceMemoIntent(
+                kind: .memoryKeep,
+                confidence: 0.95,
+                entityKey: "memory",
+                title: "Barro screenshots",
+                fields: [:]
+            ),
+            plan: VoiceMemoPlan(
+                generatedTitle: "Barro screenshots",
+                skipMemoryKeep: false,
+                summary: "Talked with Barro about Emmiwood / OBK. Next action: send him the booking-flow screenshots so he can confirm the go-live checklist.",
+                actions: [],
+                intents: []
+            ),
+            transcript: "Memory keep. I talked with Barro about Emmiwood / OBK. Next: send him the booking-flow screenshots.",
+            router: router,
+            entity: memoryEntityWithRelations(),
+            catalog: sampleCatalog()
+        )
+
+        let appended = await state.appendedChildrenJSON
+        try expect(appended.contains("\"to_do\""), "Next action: prose must become a checkbox, got \(appended)")
+        try expect(appended.contains("booking-flow screenshots"),
+                   "checkbox must carry the physical next step, got \(appended)")
+        if let range = appended.range(of: "\"to_do\"") {
+            let todoSlice = String(appended[range.lowerBound...])
+            let lower = todoSlice.lowercased()
+            try expect(!lower.contains("next action:"),
+                       "checkbox text must strip Next action:, got \(todoSlice)")
+            try expect(!lower.contains("next:"),
+                       "checkbox text must strip Next:, got \(todoSlice)")
+        }
+
+        let transcriptOnly = RelationStubState()
+        let transcriptRouter = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
+        await installRelationStubs(on: transcriptRouter, state: transcriptOnly, pageId: "page-transcript-next")
+        _ = try await VoiceMemoProcessor.executeMemoryKeep(
+            entityKey: "memory",
+            intent: VoiceMemoIntent(
+                kind: .memoryKeep,
+                confidence: 0.95,
+                entityKey: "memory",
+                title: "Transcript next",
+                fields: [:]
+            ),
+            plan: VoiceMemoPlan(
+                generatedTitle: "Transcript next",
+                skipMemoryKeep: false,
+                summary: "Talked with Barro about Emmiwood / OBK and the go-live checklist.",
+                actions: [],
+                intents: []
+            ),
+            transcript: "Memory keep. Next: send him the booking-flow screenshots so he can confirm.",
+            router: transcriptRouter,
+            entity: memoryEntityWithRelations(),
+            catalog: sampleCatalog()
+        )
+        let transcriptAppended = await transcriptOnly.appendedChildrenJSON
+        try expect(transcriptAppended.contains("\"to_do\""), "transcript Next: must lift when summary has no action, got \(transcriptAppended)")
+        try expect(transcriptAppended.contains("booking-flow screenshots"),
+                   "transcript-lifted checkbox must carry the physical step, got \(transcriptAppended)")
+    }
+
     await test("executeMemoryKeep: unbound CONTACTS is skipped, PLAYERS still writes") {
         let router = ToolRouter(securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()), auditLog: AuditLog())
         let state = RelationStubState()
@@ -364,7 +434,7 @@ func runVoiceMemoMemoryRelationMatcherTests() async {
         try expect(full.contactIds == [kBarro], "2-token title must attach, got \(full.contactIds)")
     }
 
-    await test("matcher: shared Sioux Falls pair attaches none; unique geography still attaches") {
+    await test("matcher: shared Sioux Falls pair attaches none; unique geography does not attach") {
         let shared = VoiceMemoRelationCatalog(
             projects: [
                 VoiceMemoCacheEntry(id: kConnector, title: "Sioux Falls Connector Network"),
@@ -393,8 +463,15 @@ func runVoiceMemoMemoryRelationMatcherTests() async {
             haystack: "Driving just north of Sioux Falls this afternoon.",
             catalog: unique
         )
-        try expect(residual.projectIds == [kConnector],
-                   "honesty: unique Sioux Falls project still attaches from geography, got \(residual.projectIds)")
+        try expect(residual.projectIds.isEmpty,
+                   "unique Sioux Falls geography must not attach from a place mention, got \(residual.projectIds)")
+
+        let named = VoiceMemoMemoryRelationMatcher.match(
+            haystack: "Working the Sioux Falls Connector Network this week.",
+            catalog: unique
+        )
+        try expect(named.projectIds == [kConnector],
+                   "full title plus extra distinctive token must still attach, got \(named.projectIds)")
     }
 
     await test("executeMemoryKeep: intent.title wins over missing fields.title") {
