@@ -54,7 +54,11 @@
 #   read AXValue back; Chromium false success falls through to
 #   click-then-type. Measured 3751 passed, 0 failed on
 #   feat/command-insert-ax-readback.
-FLOOR="${BRIDGE_TEST_FLOOR:-3751}"
+# 2026-08-17: 3751 → 3754 (+3) — tall Chromium web area click inset
+#   clears the 24px follow-up strip; skip AX set on AXWebArea.
+#   Measured 3754 passed, 0 failed on
+#   feat/command-insert-chromium-composer.
+FLOOR="${BRIDGE_TEST_FLOOR:-3754}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
