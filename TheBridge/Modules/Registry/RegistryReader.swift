@@ -151,10 +151,11 @@ public struct RegistryReader: Sendable {
     ///
     /// Semantics: ALL predicates must match (AND). A row matches a predicate
     /// when the projected value for that key equals the predicate value —
-    /// scalar values compared as case-insensitive strings; array values
-    /// (multi_select / relation / people) match when ANY element equals. An
-    /// absent key never matches. Zero matches is a valid, non-error result
-    /// (empty array). Ambiguous input naturally yields multiple rows.
+    /// scalar values compared as case-insensitive strings; compact and
+    /// hyphenated Notion UUIDs of the same 32-hex id are equal (issue #160);
+    /// array values (multi_select / relation / people) match when ANY element
+    /// equals. An absent key never matches. Zero matches is a valid, non-error
+    /// result (empty array). Ambiguous input naturally yields multiple rows.
     public func find(entity: RegistryEntity, predicates: [String: Value], limit: Int = 100) async throws -> [CachedRow] {
         let returnCap = max(1, limit)
         let rows = try await scanAll(entity: entity)
@@ -199,9 +200,11 @@ public struct RegistryReader: Sendable {
 
     /// True when `have` (a projected cell value) satisfies the `wanted`
     /// predicate value. Scalars compare as case-insensitive strings so
-    /// `"active"` matches a `.string("Active")` status; arrays match when ANY
-    /// element satisfies `wanted` (a relation/multi_select membership test).
-    static func valueMatches(_ have: Value, _ wanted: Value) -> Bool {
+    /// `"active"` matches a `.string("Active")` status; compact and hyphenated
+    /// Notion UUIDs of the same 32-hex id also match (issue #160). Arrays
+    /// match when ANY element satisfies `wanted` (a relation/multi_select
+    /// membership test).
+    public static func valueMatches(_ have: Value, _ wanted: Value) -> Bool {
         if case .array(let elems) = have {
             return elems.contains { valueMatches($0, wanted) }
         }
@@ -210,7 +213,26 @@ public struct RegistryReader: Sendable {
             return wants.contains { valueMatches(have, $0) }
         }
         guard let h = scalarString(have), let w = scalarString(wanted) else { return false }
-        return h.compare(w, options: .caseInsensitive) == .orderedSame
+        return identifierEquals(h, w)
+    }
+
+    /// Case-insensitive string equality, plus compact ↔ hyphenated Notion UUID
+    /// identity. Non-UUID strings stay on the case-insensitive path —
+    /// `"foo-bar"` does not match `"foobar"`.
+    static func identifierEquals(_ a: String, _ b: String) -> Bool {
+        if a.compare(b, options: .caseInsensitive) == .orderedSame { return true }
+        guard let na = notionUUIDHex(a), let nb = notionUUIDHex(b) else { return false }
+        return na == nb
+    }
+
+    /// 32 lowercase hex digits when `raw` is a compact or hyphenated Notion id.
+    static func notionUUIDHex(_ raw: String) -> String? {
+        let compact = raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+        guard compact.count == 32, compact.allSatisfy(\.isHexDigit) else { return nil }
+        return compact
     }
 
     /// Render a scalar `Value` to a comparable string; `nil` for containers.

@@ -39,7 +39,11 @@
 #   the focused cursor (AX / synthetic Unicode), never reads or writes the
 #   clipboard; fail-closed no-target / Accessibility-denied. Measured
 #   3666 passed, 0 failed on feat/issue-129-command-cursor-insert.
-FLOOR="${BRIDGE_TEST_FLOOR:-3666}"
+# 2026-08-17: 3666 → 3744 (+78) — issue #160: registry_find compact ↔
+#   hyphenated Notion UUID identity (+2 hermetic). Remaining +76 already
+#   green on main 55236fa (including #163/#168). Measured 3744 passed,
+#   0 failed on feat/issue-160-registry-uuid-normalize.
+FLOOR="${BRIDGE_TEST_FLOOR:-3744}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
