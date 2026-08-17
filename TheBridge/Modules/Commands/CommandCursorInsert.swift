@@ -223,11 +223,12 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             }
         }
 
-        // A captured element had the caret when the operator invoked the
-        // palette — try synthetic typing even when Chromium reports a
-        // generic role (AXWebArea / AXGroup) instead of AXTextArea.
+        // Native AX fields set AXSelectedText / AXValue. Chromium (Cursor
+        // chat, Chrome inputs) reports AXWebArea — click the captured
+        // frame so contenteditable actually receives unicode CGEvents.
         if usedCapture || looksEditable(role: role, element: focused) {
             restoreFocus(focused, pid: pid)
+            clickForPointerFocus(focused, role: role)
             do {
                 try postUnicode(text)
                 return .inserted(replacedSelection: replaced, characters: text.count)
@@ -259,6 +260,46 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         AXUIElementPerformAction(element, kAXRaiseAction as CFString)
         AXUIElementSetAttributeValue(
             element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+    }
+
+    /// Click the captured control so Electron/Chromium contenteditables
+    /// actually receive the following unicode key events.
+    @MainActor
+    private func clickForPointerFocus(_ element: AXUIElement, role: String) {
+        guard let rect = axFrame(element), rect.width > 1, rect.height > 1 else { return }
+        let point = CommandInsertPointerFocus.point(role: role, frame: rect)
+        guard let src = CGEventSource(stateID: .hidSystemState) else { return }
+        guard let down = CGEvent(
+            mouseEventSource: src,
+            mouseType: .leftMouseDown,
+            mouseCursorPosition: point,
+            mouseButton: .left
+        ),
+        let up = CGEvent(
+            mouseEventSource: src,
+            mouseType: .leftMouseUp,
+            mouseCursorPosition: point,
+            mouseButton: .left
+        ) else { return }
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+        _ = CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.04, false)
+    }
+
+    private func axFrame(_ el: AXUIElement) -> CGRect? {
+        var posRef: CFTypeRef?
+        var sizeRef: CFTypeRef?
+        let posErr = AXUIElementCopyAttributeValue(
+            el, kAXPositionAttribute as CFString, &posRef)
+        let sizeErr = AXUIElementCopyAttributeValue(
+            el, kAXSizeAttribute as CFString, &sizeRef)
+        guard posErr == .success, sizeErr == .success,
+              let posVal = posRef, let sizeVal = sizeRef else { return nil }
+        var origin = CGPoint.zero
+        var size = CGSize.zero
+        guard AXValueGetValue(posVal as! AXValue, .cgPoint, &origin),
+              AXValueGetValue(sizeVal as! AXValue, .cgSize, &size) else { return nil }
+        return CGRect(origin: origin, size: size)
     }
 
     // MARK: AX helpers
@@ -331,4 +372,17 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
 private enum CommandInsertSynthError: Error {
     case source
     case event
+}
+
+/// Pure click-target math for the Chromium fallback. Native AX fields
+/// use the control center; web areas put the composer at the bottom.
+public enum CommandInsertPointerFocus {
+    public static func point(role: String, frame: CGRect) -> CGPoint {
+        let webLike: Set<String> = ["AXWebArea", "AXGroup", "AXUnknown"]
+        if webLike.contains(role) {
+            let inset = min(28, max(8, frame.height * 0.12))
+            return CGPoint(x: frame.midX, y: frame.maxY - inset)
+        }
+        return CGPoint(x: frame.midX, y: frame.midY)
+    }
 }

@@ -47,7 +47,7 @@
 #   attach Memory projects; Next action: / transcript Next: strip to the
 #   physical checkbox step. Measured 3745 passed, 0 failed on
 #   feat/voice-memo-place-and-next-action.
-FLOOR="${BRIDGE_TEST_FLOOR:-3745}"
+FLOOR="${BRIDGE_TEST_FLOOR:-3747}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
