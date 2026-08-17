@@ -105,6 +105,50 @@ func runCommandCursorInsertTests() async {
         try expect(group == p, "AXGroup must share the web-area heuristic")
     }
 
+    await test("AXVerify: splice match counts as landed") {
+        let landed = CommandInsertAXVerify.landed(
+            before: "ab",
+            after: "aXYb",
+            insertion: "XY",
+            selectedLocationUTF16: 1,
+            selectedLengthUTF16: 0
+        )
+        try expect(landed)
+    }
+
+    await test("AXVerify: Chromium false success (after == before) is not landed") {
+        let landed = CommandInsertAXVerify.landed(
+            before: "Send follow-up\n",
+            after: "Send follow-up\n",
+            insertion: "Initiate",
+            selectedLocationUTF16: 0,
+            selectedLengthUTF16: 0
+        )
+        try expect(!landed, "unmutated AXValue must not count as insert")
+    }
+
+    await test("AXVerify: unread after a claimed set is not landed") {
+        let landed = CommandInsertAXVerify.landed(
+            before: "ab",
+            after: nil,
+            insertion: "XY",
+            selectedLocationUTF16: 1,
+            selectedLengthUTF16: 0
+        )
+        try expect(!landed)
+    }
+
+    await test("AXVerify: substring already in before does not count without a change") {
+        let landed = CommandInsertAXVerify.landed(
+            before: "Send follow-up\n",
+            after: "Send follow-up\n",
+            insertion: "Send",
+            selectedLocationUTF16: 15,
+            selectedLengthUTF16: 0
+        )
+        try expect(!landed)
+    }
+
     // ── (B) Status copy ─────────────────────────────────────────────
 
     await test("Outcome.userMessage: no-target and AX-denied are explicit") {

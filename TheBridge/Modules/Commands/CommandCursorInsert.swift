@@ -195,19 +195,32 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         }
 
         let selectedRange = cfRangeAttr(focused, kAXSelectedTextRangeAttribute as String)
-        let replaced = (selectedRange?.length ?? 0) > 0
+        let loc = selectedRange?.location ?? 0
+        let len = selectedRange?.length ?? 0
+        let replaced = len > 0
+        let before = stringAttr(focused, kAXValueAttribute as String)
 
         if isSettable(focused, kAXSelectedTextAttribute as String) {
             let setErr = AXUIElementSetAttributeValue(
                 focused, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
             if setErr == .success {
-                placeCaret(focused, afterUTF16: (selectedRange?.location ?? 0) + text.utf16.count)
-                return .inserted(replacedSelection: replaced, characters: text.count)
+                let after = stringAttr(focused, kAXValueAttribute as String)
+                if CommandInsertAXVerify.landed(
+                    before: before,
+                    after: after,
+                    insertion: text,
+                    selectedLocationUTF16: loc,
+                    selectedLengthUTF16: len
+                ) {
+                    placeCaret(focused, afterUTF16: loc + text.utf16.count)
+                    return .inserted(replacedSelection: replaced, characters: text.count)
+                }
+                // Chromium reports success without mutating the field.
             }
         }
 
         if isSettable(focused, kAXValueAttribute as String),
-           let current = stringAttr(focused, kAXValueAttribute as String),
+           let current = before ?? stringAttr(focused, kAXValueAttribute as String),
            let range = selectedRange {
             let spliced = CommandTextSplicer.splice(
                 value: current,
@@ -218,14 +231,17 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             let setErr = AXUIElementSetAttributeValue(
                 focused, kAXValueAttribute as CFString, spliced.newValue as CFTypeRef)
             if setErr == .success {
-                placeCaret(focused, afterUTF16: spliced.newCaretUTF16)
-                return .inserted(replacedSelection: spliced.replacedSelection, characters: text.count)
+                let after = stringAttr(focused, kAXValueAttribute as String)
+                if after == spliced.newValue {
+                    placeCaret(focused, afterUTF16: spliced.newCaretUTF16)
+                    return .inserted(replacedSelection: spliced.replacedSelection, characters: text.count)
+                }
             }
         }
 
-        // Native AX fields set AXSelectedText / AXValue. Chromium (Cursor
-        // chat, Chrome inputs) reports AXWebArea — click the captured
-        // frame so contenteditable actually receives unicode CGEvents.
+        // Native AX fields that actually changed are done above. Chromium
+        // (Cursor chat) exposes AXTextArea, returns AX set success, and
+        // leaves the DOM unchanged — click then unicode-type.
         if usedCapture || looksEditable(role: role, element: focused) {
             restoreFocus(focused, pid: pid)
             clickForPointerFocus(focused, role: role)
@@ -372,6 +388,30 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
 private enum CommandInsertSynthError: Error {
     case source
     case event
+}
+
+/// Read-back after a claimed AX text set. Chromium AXTextArea reports
+/// settable + success without changing AXValue (Cursor composer).
+public enum CommandInsertAXVerify {
+    public static func landed(
+        before: String?,
+        after: String?,
+        insertion: String,
+        selectedLocationUTF16: Int,
+        selectedLengthUTF16: Int
+    ) -> Bool {
+        guard !insertion.isEmpty else { return true }
+        guard let after else { return false }
+        let base = before ?? ""
+        let expected = CommandTextSplicer.splice(
+            value: base,
+            selectedLocationUTF16: selectedLocationUTF16,
+            selectedLengthUTF16: selectedLengthUTF16,
+            insertion: insertion
+        ).newValue
+        if after == expected { return true }
+        return after != base && after.contains(insertion)
+    }
 }
 
 /// Pure click-target math for the Chromium fallback. Native AX fields
