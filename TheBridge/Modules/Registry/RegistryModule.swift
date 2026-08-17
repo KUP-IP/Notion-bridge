@@ -417,7 +417,7 @@ public enum RegistryModule {
     public static func makeFind() -> ToolRegistration {
         ToolRegistration(
             name: "registry_find", module: moduleName, tier: .open,
-            description: "Find EXISTING registry rows by canonical field value(s) BEFORE creating — the resolve-before-write convergence primitive that avoids duplicate rows. Read-only, cache-backed, offline-tolerant. Pass `where` as a map of canonical field key → value (ALL must match, AND); values are matched rename-safe by the entity's bound property id, not the raw Notion name. Scalars compare case-insensitively; relation/multi-select fields match if any element equals. Returns matching rows (id + title + projected properties); no match → empty (not an error); multiple → ambiguous, all returned." + fieldsParamDescriptionSuffix,
+            description: "Find EXISTING registry rows by canonical field value(s) BEFORE creating — the resolve-before-write convergence primitive that avoids duplicate rows. Read-only, cache-backed, offline-tolerant. Pass `where` as a map of canonical field key → value (ALL must match, AND); values are matched rename-safe by the entity's bound property id, not the raw Notion name. Scalars compare case-insensitively; compact and hyphenated Notion UUIDs of the same 32-hex id are equal; relation/multi-select fields match if any element equals. Returns matching rows (id + title + projected properties); no match → empty (not an error); multiple → ambiguous, all returned." + fieldsParamDescriptionSuffix,
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

@@ -121,6 +121,14 @@ private func projectRow(id: String, name: String, status: String) -> NotionRow {
     ])
 }
 
+private func packetRow(id: String, name: String, projectId: String) -> NotionRow {
+    NotionRow(id: CachedRow.normalize(id), url: "https://n/\(id)", lastEditedTime: "2026-08-17T10:00:00.000Z", cells: [
+        "Packet Name": NotionCell(id: "id_packet_title", type: "title", value: .string(name)),
+        "Status": NotionCell(id: "id_packet_status", type: "status", value: .string("QUEUE")),
+        "PROJECT": NotionCell(id: "id_packet_project", type: "relation", value: .array([.string(projectId)])),
+    ])
+}
+
 private func registerProjectEntity() async throws {
     _ = try await RegistryModule.makeAddEntity().handler(.object([
         "key": .string("project"),
@@ -133,6 +141,21 @@ private func registerProjectEntity() async throws {
         ]),
     ]))
     _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("project")]))
+}
+
+private func registerPacketEntity() async throws {
+    _ = try await RegistryModule.makeAddEntity().handler(.object([
+        "key": .string("session"),
+        "displayName": .string("Packets"),
+        "dataSourceId": .string("packet_ds"),
+        "hasBody": .bool(true),
+        "properties": .array([
+            .object(["key": .string("name"), "notionName": .string("Packet Name"), "type": .string("title"), "role": .string("title")]),
+            .object(["key": .string("status"), "notionName": .string("Status"), "type": .string("status"), "role": .string("status")]),
+            .object(["key": .string("project"), "notionName": .string("PROJECT"), "type": .string("relation"), "role": .string("relation")]),
+        ]),
+    ]))
+    _ = try await RegistryModule.makeIntrospect().handler(.object(["entity": .string("session")]))
 }
 
 private func withRegistryModuleEnv(_ fake: ModFakeGateway, _ body: () async throws -> Void) async throws {
@@ -286,6 +309,60 @@ func runRegistryModuleTests() async {
             guard case .array(let rows)? = obj(out)["rows"], let r0 = rows.first else { throw TestError.assertion("no rows") }
             try expect(obj(r0)["id"] == .string("ffff0000000000000000000000000001"), "the correct row id")
             try expect(obj(r0)["title"] == .string("Alpha"), "and its title")
+        }
+    }
+
+    await test("RegistryReader.valueMatches treats compact and hyphenated Notion UUIDs as equal") {
+        let compact = "3accbb58889e81929e2cd36bd8dfcf23"
+        let hyphenated = "3accbb58-889e-8192-9e2c-d36bd8dfcf23"
+        let other = "3accbb58-889e-8192-9e2c-d36bd8dfcf24"
+        try expect(RegistryReader.valueMatches(.string(compact), .string(hyphenated)),
+                   "compact operand matches hyphenated stored id")
+        try expect(RegistryReader.valueMatches(.string(hyphenated), .string(compact)),
+                   "hyphenated operand matches compact stored id")
+        try expect(RegistryReader.valueMatches(.array([.string(hyphenated)]), .string(compact)),
+                   "relation array membership uses the same UUID identity")
+        try expect(RegistryReader.valueMatches(.string(compact.uppercased()), .string(hyphenated)),
+                   "UUID identity is case-insensitive")
+        try expect(!RegistryReader.valueMatches(.string(compact), .string(other)),
+                   "different UUIDs still miss")
+        try expect(!RegistryReader.valueMatches(.string("foo-bar"), .string("foobar")),
+                   "non-UUID hyphenated strings stay on exact case-insensitive equality")
+    }
+
+    await test("registry_find relation predicate matches compact 32-hex against hyphenated stored ids") {
+        let projectHyphenated = "3accbb58-889e-8192-9e2c-d36bd8dfcf23"
+        let projectCompact = "3accbb58889e81929e2cd36bd8dfcf23"
+        let otherCompact = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        let packetId = "bbbb0000000000000000000000000160"
+        let fake = ModFakeGateway(schema: packetSchema(), queryRows: [
+            packetRow(id: packetId, name: "UUID normalize packet", projectId: projectHyphenated),
+            packetRow(id: "bbbb0000000000000000000000000161", name: "Other project packet",
+                      projectId: "cccccccc-cccc-cccc-cccc-cccccccccccc"),
+        ])
+        try await withRegistryModuleEnv(fake) {
+            try await registerPacketEntity()
+            let compactOut = try await RegistryModule.makeFind().handler(.object([
+                "entity": .string("session"),
+                "where": .object(["project": .string(projectCompact)]),
+            ]))
+            try expect(obj(compactOut)["count"] == .int(1), "compact where must hit the hyphenated relation")
+            guard case .array(let compactRows)? = obj(compactOut)["rows"], let hit = compactRows.first else {
+                throw TestError.assertion("compact find returned no rows")
+            }
+            try expect(obj(hit)["id"] == .string(packetId), "compact where returns the related packet")
+
+            let hyphenOut = try await RegistryModule.makeFind().handler(.object([
+                "entity": .string("session"),
+                "where": .object(["project": .string(projectHyphenated)]),
+            ]))
+            try expect(obj(hyphenOut)["count"] == .int(1), "hyphenated where still matches")
+
+            let miss = try await RegistryModule.makeFind().handler(.object([
+                "entity": .string("session"),
+                "where": .object(["project": .string(otherCompact)]),
+            ]))
+            try expect(obj(miss)["count"] == .int(0), "unrelated compact UUID must miss")
         }
     }
 
