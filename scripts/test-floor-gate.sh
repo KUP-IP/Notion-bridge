@@ -47,7 +47,14 @@
 #   attach Memory projects; Next action: / transcript Next: strip to the
 #   physical checkbox step. Measured 3745 passed, 0 failed on
 #   feat/voice-memo-place-and-next-action.
-FLOOR="${BRIDGE_TEST_FLOOR:-3747}"
+# 2026-08-17: 3745 → 3747 (+2) — command insert Chromium pointer-focus
+#   math. Measured 3747 passed, 0 failed on
+#   feat/command-insert-cursor-webview.
+# 2026-08-17: 3747 → 3751 (+4) — AX set success is not insert success:
+#   read AXValue back; Chromium false success falls through to
+#   click-then-type. Measured 3751 passed, 0 failed on
+#   feat/command-insert-ax-readback.
+FLOOR="${BRIDGE_TEST_FLOOR:-3751}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
