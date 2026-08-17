@@ -872,6 +872,10 @@ public final class CommandBridgeController: NSObject {
            target.processIdentifier != NSRunningApplication.current.processIdentifier {
             target.activate()
         }
+        // Let the destination become key after the non-activating panel
+        // resigns, before AX / CGEvent insert. Electron otherwise keeps
+        // the composer unfocused and unicode typing lands nowhere.
+        _ = CFRunLoopRunInMode(CFRunLoopMode.defaultMode, 0.05, false)
         let outcome = applyCommit(.paste(body), intoProcess: pid)
         if outcome?.succeeded == true {
             try? store.recordUse(slug: slug)

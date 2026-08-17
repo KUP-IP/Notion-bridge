@@ -89,6 +89,22 @@ func runCommandCursorInsertTests() async {
         try expect(!s.replacedSelection)
     }
 
+    await test("PointerFocus: native field uses the control center") {
+        let frame = CGRect(x: 10, y: 20, width: 100, height: 40)
+        let p = CommandInsertPointerFocus.point(role: "AXTextArea", frame: frame)
+        try expect(p.x == 60, "got \(p.x)")
+        try expect(p.y == 40, "got \(p.y)")
+    }
+
+    await test("PointerFocus: Chromium web area aims near the bottom (composer)") {
+        let frame = CGRect(x: 0, y: 0, width: 400, height: 800)
+        let p = CommandInsertPointerFocus.point(role: "AXWebArea", frame: frame)
+        try expect(p.x == 200, "got \(p.x)")
+        try expect(p.y == 772, "got \(p.y)")
+        let group = CommandInsertPointerFocus.point(role: "AXGroup", frame: frame)
+        try expect(group == p, "AXGroup must share the web-area heuristic")
+    }
+
     // ── (B) Status copy ─────────────────────────────────────────────
 
     await test("Outcome.userMessage: no-target and AX-denied are explicit") {
