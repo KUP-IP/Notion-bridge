@@ -356,6 +356,20 @@ define VERIFY_INSTALL
 	echo "✅ install verify: version $$DST_VER + SPM resource bundle present"
 endef
 
+# Staged promotion attests STAGED_APP, not APP_BUNDLE. VERIFY_INSTALL still
+# belongs on `install` / `install-copy` (those ditto APP_BUNDLE). #177.
+define VERIFY_STAGED_INSTALL
+@SRC_VER=$$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$(STAGED_APP)/Contents/Info.plist" 2>/dev/null); \
+	DST_VER=$$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/The Bridge.app/Contents/Info.plist" 2>/dev/null); \
+	if [ -z "$$DST_VER" ] || [ "$$SRC_VER" != "$$DST_VER" ]; then \
+		echo "❌ staged install verify: version mismatch (staged '$$SRC_VER' != installed '$$DST_VER') — bundle may be raced/corrupt"; exit 1; \
+	fi; \
+	if [ ! -d "/Applications/The Bridge.app/Contents/Resources/TheBridge_TheBridge.bundle" ]; then \
+		echo "❌ staged install verify: SPM resource bundle missing — app would crash at launch (Bundle.module)"; exit 1; \
+	fi; \
+	echo "✅ staged install verify: version $$DST_VER + SPM resource bundle present"
+endef
+
 # ── Install ────────────────────────────────────────────────────────────
 # PKT-1 v3.5: destination renamed to "/Applications/The Bridge.app".
 # Cleanup removes the new path AND both legacy variants ("The Bridge.app"
@@ -397,7 +411,7 @@ install-copy-staged: check-staged-candidate
 	@ditto "$(STAGED_APP)" "/Applications/The Bridge.app"
 	@echo "🔄 Re-registering with Launch Services..."
 	@/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -f "/Applications/The Bridge.app"
-	$(VERIFY_INSTALL)
+	$(VERIFY_STAGED_INSTALL)
 	@ACTUAL=$$(shasum -a 256 "/Applications/The Bridge.app/Contents/MacOS/$(BINARY_NAME)" | awk '{print $$1}'); \
 		if [ "$$ACTUAL" != "$(EXPECTED_BINARY_SHA256)" ]; then \
 			echo "❌ Installed binary hash mismatch: $$ACTUAL != $(EXPECTED_BINARY_SHA256)"; exit 1; \
