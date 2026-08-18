@@ -1,34 +1,31 @@
 # Changelog
 
-## Unreleased — Commands #140 hardening
+## v4.0.3 (build 92) — Command system v2 + post-4.0.2 main — 2026-08-18
 
-- **Command system F0 adversarial rehearsal** — Forward-update, interrupt,
-  corrupt-revision, tombstone, favorite undo, compatibility-required, and
-  publication-privacy cases stay on one SHA. Signed candidate may be built;
-  promoted install remains the G0 Ship Gate. See `docs/commands-f0-hardening.md`.
-
-## Unreleased — Commands #140 integration
-
-- **Command system A0–D0 on one review candidate** — Durable custody,
-  directional defaults, GitHub-first feedback, Search favorites/create, and
-  gated developer publication land together. Ordinary updates stay Git-free.
-  No `AGENT_FEEDBACK.md` writer. Promoted install remains the G0 Ship Gate.
-  See `docs/commands-e0-integration.md`.
-
-## Unreleased — Mail inbox management
-
-- **Mail organize surface** — Extends the Apple Mail family with identity-safe
-  inbox management: `mail_mailboxes`, `mail_triage` (advisory preserve /
-  candidateArchive / needsReview signals), `mail_move`, `mail_archive`,
-  `mail_mark`, and guarded `mail_trash` (`confirm:'DELETE'`, neverAutoApprove).
-  Mutations require Mail AppleScript `messageIds` (batch max 25), `account`,
-  and return `mutated` vs `verified`/`succeeded` receipts (`succeeded` =
-  verify-confirmed only). Single-id archive/move stays Notify-tier; batch
-  (>1 id) forces Request + neverAutoApprove (human modal) plus
-  `confirm:'ARCHIVE'|'MOVE'`. Triage never archives from silence or from
-  noreply@ alone; Archive verify accepts Gmail `All Mail` alias.
-  `planOnly`/`dryRun` is plan-only. Prefer archive over trash; empty-trash
-  out of scope. staticFeatureModuleToolCount 217 → 223.
+- **Identity** — First published install after `v4.0.2` / build `91`. Marketing
+  **4.0.3**, build **92**. Sparkle tag `v4.0.3` is this release.
+- **Command system v2 (#140)** — Durable custody, product-default reconciliation,
+  directional built-ins, GitHub-first feedback (no `AGENT_FEEDBACK.md` writer),
+  Search favorites/create, gated developer publication, E0 integration, and F0
+  adversarial hardening. See `docs/commands-e0-integration.md` and
+  `docs/commands-f0-hardening.md`.
+- **Command insert** — Insert at the focused cursor instead of the clipboard
+  (#129/#156); snapshot the caret before the palette steals focus (#168);
+  Chromium composer click plus unicode on keyUp (#171–#175). Never NSPasteboard;
+  never Return.
+- **Mail organize surface** — Identity-safe inbox tools: `mail_mailboxes`,
+  `mail_triage`, `mail_move`, `mail_archive`, `mail_mark`, and guarded
+  `mail_trash` (`confirm:'DELETE'`, neverAutoApprove). Mutations require Mail
+  AppleScript `messageIds` (batch max 25). staticFeatureModuleToolCount 217 → 223.
+- **Registry** — Compact and hyphenated Notion UUIDs compare equal in
+  `registry_find` (#160). Partial `registry_create` returns a repair envelope
+  (#138).
+- **Voice memo** — Memory relations, action-item checkboxes, unique geography
+  pairs do not attach projects, summary overlap/precedence, contact/title matcher.
+- **Messages** — Configurable on-device approval (#126). `sent` is not chat.db
+  correlation (#125/#130).
+- **Skills** — `fetch_skill` slug aliases; route receipts bound to verified
+  authority (#146).
 
 ## v4.0.2 (build 91) — routing-custody land + freshness renewal — 2026-08-03
 
