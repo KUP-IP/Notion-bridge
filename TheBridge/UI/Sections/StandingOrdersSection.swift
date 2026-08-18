@@ -127,6 +127,12 @@ public struct OrdersSection: View {
                     metaStat(value: "\(commands.count)", label: "commands", color: BridgeTokens.accentLink)
                     metaStat(value: "\(favoriteCount)", label: "favorites", color: BridgeTokens.gold)
                 }
+
+                Text("Search, favorites, and create live on the Command Bridge palette — not in Settings. Ordinary Return never creates a command.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(BridgeTokens.fg4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(BridgeAXID.Commands.searchPaletteHint)
             }
         }
         .accessibilityElement(children: .contain)

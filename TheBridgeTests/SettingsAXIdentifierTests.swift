@@ -146,6 +146,7 @@ func runSettingsAXIdentifierTests() async {
             [
                 (BridgeAXID.Commands.toggleEnabled,         "bridge.settings.orders.toggle.enabled"),
                 (BridgeAXID.Commands.shortcutEditor,        "bridge.settings.orders.shortcut.editor"),
+                (BridgeAXID.Commands.searchPaletteHint,     "bridge.settings.orders.search.palette.hint"),
                 (BridgeAXID.Commands.header,                "bridge.settings.orders.header"),
                 (BridgeAXID.Commands.list,                  "bridge.settings.orders.list"),
                 (BridgeAXID.Jobs.newJob,                    "bridge.settings.jobs.new"),

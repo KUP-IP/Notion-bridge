@@ -414,6 +414,64 @@ func runWorktreeOwnershipTests() async {
         ) == nil, "HEAD drift must persist no claim")
     }
 
+    await test("C0 detached HEAD claims with branch (detached) and baseSHA equal to HEAD") {
+        let fixture = try C0GitFixture()
+        let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL("detached-claim"))
+        _ = try c0Run("/usr/bin/git", ["switch", "--detach", "HEAD"], cwd: fixture.linked)
+        let liveBranch = try c0Run(
+            "/usr/bin/git",
+            ["symbolic-ref", "--quiet", "--short", "HEAD"],
+            cwd: fixture.linked,
+            expectSuccess: false
+        )
+        try expect(liveBranch.status != 0, "symbolic-ref must fail on detached HEAD")
+        let head = try c0Run("/usr/bin/git", ["rev-parse", "HEAD"], cwd: fixture.linked).stdout
+        try expect(head == fixture.baseSHA)
+        let claim = try await store.claim(
+            repoRoot: fixture.repo.path,
+            worktreePath: fixture.linked.path,
+            branch: "(detached)",
+            baseSHA: head,
+            ownerSession: "sign-tree",
+            ttlSeconds: 300
+        )
+        try expect(claim.branch == "(detached)")
+        try expect(claim.baseSHA == head)
+        try expect(claim.ownerSession == "sign-tree")
+    }
+
+    await test("C0 named-branch claim on detached HEAD fails worktree_identity_changed") {
+        let fixture = try C0GitFixture()
+        let store = WorktreeOwnershipStore(databaseURL: fixture.databaseURL("detached-named"))
+        _ = try c0Run("/usr/bin/git", ["switch", "--detach", "HEAD"], cwd: fixture.linked)
+        let named = await c0ErrorCode {
+            _ = try await store.claim(
+                repoRoot: fixture.repo.path,
+                worktreePath: fixture.linked.path,
+                branch: "packet/c0-linked",
+                baseSHA: fixture.baseSHA,
+                ownerSession: "sign-tree",
+                ttlSeconds: 300
+            )
+        }
+        try expect(named == "worktree_identity_changed")
+        try expect(
+            try await store.record(worktreePath: fixture.linked.path) == nil,
+            "named-branch claim on detached HEAD must persist no claim"
+        )
+        let wrongBase = await c0ErrorCode {
+            _ = try await store.claim(
+                repoRoot: fixture.repo.path,
+                worktreePath: fixture.linked.path,
+                branch: "(detached)",
+                baseSHA: String(repeating: "0", count: 40),
+                ownerSession: "sign-tree",
+                ttlSeconds: 300
+            )
+        }
+        try expect(wrongBase == "worktree_identity_changed")
+    }
+
     await test("C0 same-path race across independent SQLite connections elects one owner") {
         let fixture = try C0GitFixture()
         let databaseURL = fixture.databaseURL("race")
@@ -2656,6 +2714,10 @@ func runWorktreeOwnershipTests() async {
         }
         try expect(byName["worktree_claim"] != nil)
         try expect(byName["worktree_release"] != nil)
+        try expect(
+            byName["worktree_claim"]?.description.contains("(detached)") == true,
+            "worktree_claim description must document detached HEAD claims"
+        )
         let claimAnnotation = ToolAnnotationCatalog.annotations(for: "worktree_claim")
         let releaseAnnotation = ToolAnnotationCatalog.annotations(for: "worktree_release")
         let commandAnnotation = ToolAnnotationCatalog.annotations(for: "worktree_command_run")

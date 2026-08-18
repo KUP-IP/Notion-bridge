@@ -78,6 +78,8 @@ public enum BridgeAXID {
         public static let toggleEnabled = id("toggle.enabled")
         /// The recordable global-shortcut editor field.
         public static let shortcutEditor = id("shortcut.editor")
+        /// Palette Search / favorites / create live on Command Bridge, not Settings.
+        public static let searchPaletteHint = id("search.palette.hint")
         /// The command master–detail list.
         public static let list          = id("list")
     }

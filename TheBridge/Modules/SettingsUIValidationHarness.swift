@@ -73,6 +73,7 @@ public enum SettingsUIValidationHarness {
                     BridgeAXID.Commands.header,
                     BridgeAXID.Commands.toggleEnabled,
                     BridgeAXID.Commands.shortcutEditor,
+                    BridgeAXID.Commands.searchPaletteHint,
                     BridgeAXID.Commands.list,
                 ])
             case .jobs:

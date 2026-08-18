@@ -3390,12 +3390,12 @@ public enum WorktreeOwnershipModule {
             name: "worktree_claim",
             module: moduleName,
             tier: .request,
-            description: "Claim one live canonical Git worktree for an ownerSession. The requested repo root, worktree path, branch, and base SHA are verified before the durable SQLite/WAL claim is written. Same-owner exact retries are idempotent; expired claims require explicit evidence-preserving recovery.",
+            description: "Claim one live canonical Git worktree for an ownerSession. The requested repo root, worktree path, branch, and base SHA are verified before the durable SQLite/WAL claim is written. Same-owner exact retries are idempotent; expired claims require explicit evidence-preserving recovery. On a detached HEAD, pass branch exactly \"(detached)\" and baseSHA equal to that HEAD. A named branch on a detached tree fails worktree_identity_changed; the identity tuple is never rewritten to match.",
             inputSchema: schema([
                 "repoRoot": stringProperty("Canonical primary repository root."),
                 "worktreePath": stringProperty("Canonical live worktree path."),
-                "branch": stringProperty("Expected current branch."),
-                "baseSHA": stringProperty("Expected commit ancestor that defines the worktree base."),
+                "branch": stringProperty("Expected current branch, or exactly \"(detached)\" when HEAD is detached."),
+                "baseSHA": stringProperty("Expected commit ancestor that defines the worktree base. First claim requires this equal to live HEAD."),
                 "ownerSession": stringProperty("Unique active owner session."),
                 "ttlSeconds": integerProperty("Bounded expiry, 60...86400 seconds.")
             ], ["repoRoot", "worktreePath", "branch", "baseSHA", "ownerSession", "ttlSeconds"]),
