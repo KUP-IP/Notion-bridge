@@ -58,7 +58,10 @@
 #   clears the 24px follow-up strip; skip AX set on AXWebArea.
 #   Measured 3754 passed, 0 failed on
 #   feat/command-insert-chromium-composer.
-FLOOR="${BRIDGE_TEST_FLOOR:-3754}"
+# 2026-08-17: 3754 → 3757 (+3) — unicode attach only on keyDown;
+#   Chromium markdown composers duplicate keyUp chunks. Measured
+#   3757 passed, 0 failed on feat/command-insert-unicode-keydown.
+FLOOR="${BRIDGE_TEST_FLOOR:-3757}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
