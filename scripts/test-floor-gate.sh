@@ -65,7 +65,10 @@
 #   0xFFFF so unset events are not kVK_ANSI_A; don't split markdown **.
 #   Measured 3759 passed, 0 failed on
 #   fix/command-insert-keyup-unicode.
-FLOOR="${BRIDGE_TEST_FLOOR:-3759}"
+# 2026-08-18: 3759 → 3761 (+2) — detached HEAD worktree_claim contract
+#   (`branch: "(detached)"` + named-branch refusal). Measured 3761 passed,
+#   0 failed on fix/v4.0.4-hardening.
+FLOOR="${BRIDGE_TEST_FLOOR:-3761}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
