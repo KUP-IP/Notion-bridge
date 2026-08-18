@@ -1,5 +1,19 @@
 # Changelog
 
+## v4.0.4 (build 93) — staged install + detached claims — 2026-08-18
+
+- **Identity** — Published install after `v4.0.3` / build `92`. Marketing
+  **4.0.4**, build **93**. Sparkle tag `v4.0.4` is this release.
+- **Staged install (#177)** — `install-copy-staged` verifies the staged
+  candidate's version and SPM bundle, not primary `.build/TheBridge.app`.
+- **Detached worktree claims (#178)** — `worktree_claim` documents and tests
+  `branch: "(detached)"` with `baseSHA = HEAD`. Named-branch claims on
+  detached HEAD still fail `worktree_identity_changed`.
+- **Commands Search G0** — Settings → Commands points Search, favorites, and
+  create at the Command Bridge palette. Ordinary Return still never creates.
+- **Audit** — Security review of the 4.0.3 delta plus this branch vs `main`:
+  no open P0/P1. Floor 3759 → 3761.
+
 ## v4.0.3 (build 92) — Command system v2 + post-4.0.2 main — 2026-08-18
 
 - **Identity** — First published install after `v4.0.2` / build `91`. Marketing
