@@ -155,10 +155,34 @@ func runCommandCursorInsertTests() async {
         try expect(joined == text, "got \(joined)")
     }
 
-    await test("UnicodeTyping: keyUp must not carry unicode; web-like delay is 8ms") {
-        try expect(!CommandInsertUnicodeTyping.attachUnicodeToKeyUp, "keyUp unicode duplicates in Chromium")
+    await test("UnicodeTyping: keyUp carries unicode; keyDown is empty; carrier is not A") {
+        let chunk: [UInt16] = Array("ab".utf16)
+        try expect(CommandInsertUnicodeTyping.attachUnicodeToKeyUp)
+        try expect(!CommandInsertUnicodeTyping.attachUnicodeToKeyDown)
+        try expect(CommandInsertUnicodeTyping.carrierKeyCode != CommandInsertUnicodeTyping.ansiAKeyCode)
+        try expect(CommandInsertUnicodeTyping.unicodeUnits(forKeyDown: chunk).isEmpty)
+        try expect(CommandInsertUnicodeTyping.unicodeUnits(forKeyUp: chunk) == chunk)
         try expect(CommandInsertUnicodeTyping.interChunkDelay(role: "AXWebArea") == 0.008, "got \(CommandInsertUnicodeTyping.interChunkDelay(role: "AXWebArea"))")
         try expect(CommandInsertUnicodeTyping.interChunkDelay(role: "AXTextArea") == 0, "native fields need no delay")
+    }
+
+    await test("UnicodeTyping: does not end a chunk with ** when a header follows") {
+        let text = "aping or acting.\n\n**Use when:** important"
+        let chunks = CommandInsertUnicodeTyping.utf16Chunks(text)
+        let decoded = chunks.map { String(utf16CodeUnits: $0, count: $0.count) }
+        try expect(!decoded.dropLast().contains(where: { $0.hasSuffix("**") }), "got \(decoded)")
+        try expect(decoded.contains(where: { $0.contains("**Use when:**") }), "got \(decoded)")
+        let joined = String(utf16CodeUnits: chunks.flatMap { $0 }, count: text.utf16.count)
+        try expect(joined == text, "got \(joined)")
+    }
+
+    await test("UnicodeTyping: does not split a ** pair across chunks") {
+        let text = String(repeating: "x", count: 19) + "**"
+        let chunks = CommandInsertUnicodeTyping.utf16Chunks(text)
+        let decoded = chunks.map { String(utf16CodeUnits: $0, count: $0.count) }
+        try expect(!decoded.contains(where: { $0.hasSuffix("*") && !$0.hasSuffix("**") && $0 != "*" }), "split pair: \(decoded)")
+        let joined = String(utf16CodeUnits: chunks.flatMap { $0 }, count: text.utf16.count)
+        try expect(joined == text, "got \(joined)")
     }
 
     await test("AXVerify: splice match counts as landed") {

@@ -61,7 +61,11 @@
 # 2026-08-17: 3754 → 3757 (+3) — unicode attach only on keyDown;
 #   Chromium markdown composers duplicate keyUp chunks. Measured
 #   3757 passed, 0 failed on feat/command-insert-unicode-keydown.
-FLOOR="${BRIDGE_TEST_FLOOR:-3757}"
+# 2026-08-18: 3757 → 3759 (+2) — unicode attach only on keyUp; carrier
+#   0xFFFF so unset events are not kVK_ANSI_A; don't split markdown **.
+#   Measured 3759 passed, 0 failed on
+#   fix/command-insert-keyup-unicode.
+FLOOR="${BRIDGE_TEST_FLOOR:-3759}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
