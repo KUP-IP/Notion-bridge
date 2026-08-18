@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "4.0.3"
+    public static let marketing = "4.0.4"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -317,7 +317,9 @@ public enum AppVersion {
     /// v4.0.3: 91 -> 92 -- first published install after v4.0.2. Ships command
     /// system v2 (#140 A0–G0), command-insert Chromium/keyUp path (#171–#175),
     /// mail inbox, registry UUID normalize (#160), and voice-memo residuals.
-    public static let build = "92"
+    /// v4.0.4: 92 -> 93 -- staged-install verify attests STAGED_APP (#177);
+    /// detached worktree_claim contract (#178); Commands Search palette hint.
+    public static let build = "93"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
