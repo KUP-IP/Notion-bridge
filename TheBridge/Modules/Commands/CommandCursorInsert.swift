@@ -368,27 +368,39 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
     /// Unicode CGEvent typing — no pasteboard. Last-resort when AX set
     /// fails but the focused element still looks like an editor.
     ///
-    /// Unicode is attached **only** to keyDown. Chromium markdown editors
-    /// (Cursor Agents composer) treat keyDown unicode as live typing
-    /// (input rules eat `**` and drop letters) and insert the same chunk
-    /// again on keyUp — garbled copy then a clean duplicate.
+    /// Unicode is attached **only** to keyUp. Cursor's markdown composer
+    /// treats keyDown unicode as live typing (`**` eaten, letters dropped).
+    /// `virtualKey` 0 is kVK_ANSI_A — leaving keyUp unset posts `"a"`.
+    /// Carrier 0xFFFF plus an explicit empty unicode payload on keyDown
+    /// avoids both the markdown chew and the A-key leak.
     private func postUnicode(_ text: String, interChunkDelay: TimeInterval = 0) throws {
         guard let src = CGEventSource(stateID: .hidSystemState) else {
             throw CommandInsertSynthError.source
         }
         let chunks = CommandInsertUnicodeTyping.utf16Chunks(text)
+        let vk = CommandInsertUnicodeTyping.carrierKeyCode
         for (i, chunk) in chunks.enumerated() {
-            guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)
+            guard let down = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false)
             else { throw CommandInsertSynthError.event }
-            chunk.withUnsafeBufferPointer { buf in
-                down.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: buf.baseAddress)
-            }
+            setUnicode(down, CommandInsertUnicodeTyping.unicodeUnits(forKeyDown: chunk))
+            setUnicode(up, CommandInsertUnicodeTyping.unicodeUnits(forKeyUp: chunk))
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
             if interChunkDelay > 0, i + 1 < chunks.count {
                 Thread.sleep(forTimeInterval: interChunkDelay)
             }
+        }
+    }
+
+    private func setUnicode(_ event: CGEvent, _ units: [UInt16]) {
+        if units.isEmpty {
+            var zero: UniChar = 0
+            event.keyboardSetUnicodeString(stringLength: 0, unicodeString: &zero)
+            return
+        }
+        units.withUnsafeBufferPointer { buf in
+            event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: buf.baseAddress)
         }
     }
 }
@@ -458,17 +470,29 @@ public enum CommandInsertPointerFocus {
     }
 }
 
-/// UTF-16 chunking + keyDown-only unicode policy for synthetic insert.
+/// UTF-16 chunking + keyUp-only unicode policy for synthetic insert.
 /// CGEvent `keyboardSetUnicodeString` caps at ~20 UTF-16 units; surrogate
-/// pairs must not be split across chunks.
+/// pairs and markdown `**` markers must not be split across chunks.
 public enum CommandInsertUnicodeTyping {
     public static let maxUTF16PerChunk = 20
-    /// Chromium contenteditable inserts keyUp unicode as a second copy.
-    public static let attachUnicodeToKeyUp = false
+    /// kVK_ANSI_A. An unset keyUp on this code posts `"a"`.
+    public static let ansiAKeyCode: CGKeyCode = 0
+    /// Non-character carrier so an empty unicode payload types nothing.
+    public static let carrierKeyCode: CGKeyCode = 0xFFFF
+    public static let attachUnicodeToKeyDown = false
+    public static let attachUnicodeToKeyUp = true
     public static let webLikeInterChunkDelay: TimeInterval = 0.008
 
     public static func interChunkDelay(role: String) -> TimeInterval {
         CommandInsertPointerFocus.isWebLike(role) ? webLikeInterChunkDelay : 0
+    }
+
+    public static func unicodeUnits(forKeyDown chunk: [UInt16]) -> [UInt16] {
+        attachUnicodeToKeyDown ? chunk : []
+    }
+
+    public static func unicodeUnits(forKeyUp chunk: [UInt16]) -> [UInt16] {
+        attachUnicodeToKeyUp ? chunk : []
     }
 
     public static func utf16Chunks(_ text: String, maxUTF16: Int = maxUTF16PerChunk) -> [[UInt16]] {
@@ -481,6 +505,16 @@ public enum CommandInsertUnicodeTyping {
             var end = min(idx + cap, units.count)
             if end < units.count, isHighSurrogate(units[end - 1]) {
                 end -= 1
+            }
+            // Don't split a `**` pair across chunks.
+            if end < units.count, end > idx, units[end - 1] == 0x2A, units[end] == 0x2A {
+                end -= 1
+            }
+            // Don't end a chunk with `**` when more text follows — keep the
+            // marker with the next header (`**Use when:**`, not `**` + `Use when:**`).
+            if end < units.count, end - idx >= 2,
+               units[end - 2] == 0x2A, units[end - 1] == 0x2A {
+                end -= 2
             }
             if end <= idx {
                 end = idx + 1
