@@ -248,7 +248,10 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             restoreFocus(focused, pid: pid)
             clickForPointerFocus(focused, role: role)
             do {
-                try postUnicode(text)
+                try postUnicode(
+                    text,
+                    interChunkDelay: CommandInsertUnicodeTyping.interChunkDelay(role: role)
+                )
                 return .inserted(replacedSelection: replaced, characters: text.count)
             } catch {
                 return .insertFailed(reason: "synthetic typing failed")
@@ -364,26 +367,28 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
 
     /// Unicode CGEvent typing — no pasteboard. Last-resort when AX set
     /// fails but the focused element still looks like an editor.
-    private func postUnicode(_ text: String) throws {
+    ///
+    /// Unicode is attached **only** to keyDown. Chromium markdown editors
+    /// (Cursor Agents composer) treat keyDown unicode as live typing
+    /// (input rules eat `**` and drop letters) and insert the same chunk
+    /// again on keyUp — garbled copy then a clean duplicate.
+    private func postUnicode(_ text: String, interChunkDelay: TimeInterval = 0) throws {
         guard let src = CGEventSource(stateID: .hidSystemState) else {
             throw CommandInsertSynthError.source
         }
-        let utf16 = Array(text.utf16)
-        let chunkSize = 20
-        var idx = 0
-        while idx < utf16.count {
-            let end = min(idx + chunkSize, utf16.count)
-            let chunk = Array(utf16[idx..<end])
+        let chunks = CommandInsertUnicodeTyping.utf16Chunks(text)
+        for (i, chunk) in chunks.enumerated() {
             guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false)
             else { throw CommandInsertSynthError.event }
             chunk.withUnsafeBufferPointer { buf in
                 down.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: buf.baseAddress)
-                up.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: buf.baseAddress)
             }
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
-            idx = end
+            if interChunkDelay > 0, i + 1 < chunks.count {
+                Thread.sleep(forTimeInterval: interChunkDelay)
+            }
         }
     }
 }
@@ -450,5 +455,43 @@ public enum CommandInsertPointerFocus {
             return CGPoint(x: frame.midX, y: frame.maxY - inset)
         }
         return CGPoint(x: frame.midX, y: frame.midY)
+    }
+}
+
+/// UTF-16 chunking + keyDown-only unicode policy for synthetic insert.
+/// CGEvent `keyboardSetUnicodeString` caps at ~20 UTF-16 units; surrogate
+/// pairs must not be split across chunks.
+public enum CommandInsertUnicodeTyping {
+    public static let maxUTF16PerChunk = 20
+    /// Chromium contenteditable inserts keyUp unicode as a second copy.
+    public static let attachUnicodeToKeyUp = false
+    public static let webLikeInterChunkDelay: TimeInterval = 0.008
+
+    public static func interChunkDelay(role: String) -> TimeInterval {
+        CommandInsertPointerFocus.isWebLike(role) ? webLikeInterChunkDelay : 0
+    }
+
+    public static func utf16Chunks(_ text: String, maxUTF16: Int = maxUTF16PerChunk) -> [[UInt16]] {
+        let units = Array(text.utf16)
+        guard !units.isEmpty else { return [] }
+        let cap = max(1, maxUTF16)
+        var chunks: [[UInt16]] = []
+        var idx = 0
+        while idx < units.count {
+            var end = min(idx + cap, units.count)
+            if end < units.count, isHighSurrogate(units[end - 1]) {
+                end -= 1
+            }
+            if end <= idx {
+                end = idx + 1
+            }
+            chunks.append(Array(units[idx..<end]))
+            idx = end
+        }
+        return chunks
+    }
+
+    private static func isHighSurrogate(_ u: UInt16) -> Bool {
+        u >= 0xD800 && u <= 0xDBFF
     }
 }

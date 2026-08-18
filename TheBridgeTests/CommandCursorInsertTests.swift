@@ -133,6 +133,34 @@ func runCommandCursorInsertTests() async {
         ))
     }
 
+    await test("UnicodeTyping: 20 UTF-16 stay one chunk; 21 split 20+1") {
+        let twenty = String(repeating: "a", count: 20)
+        let twentyOne = twenty + "b"
+        let one = CommandInsertUnicodeTyping.utf16Chunks(twenty)
+        let two = CommandInsertUnicodeTyping.utf16Chunks(twentyOne)
+        try expect(one.count == 1, "got \(one.count)")
+        try expect(one[0].count == 20, "got \(one[0].count)")
+        try expect(two.count == 2, "got \(two.count)")
+        try expect(two[0].count == 20 && two[1].count == 1, "got \(two.map(\.count))")
+        try expect(String(utf16CodeUnits: two.flatMap { $0 }, count: 21) == twentyOne, "join must reconstruct")
+    }
+
+    await test("UnicodeTyping: does not split a surrogate pair at the chunk boundary") {
+        let text = String(repeating: "a", count: 19) + "👍"
+        let chunks = CommandInsertUnicodeTyping.utf16Chunks(text)
+        try expect(chunks.count == 2, "got \(chunks.count)")
+        try expect(chunks[0].count == 19, "would have taken high surrogate, got \(chunks[0].count)")
+        try expect(chunks[1].count == 2, "emoji is one surrogate pair, got \(chunks[1].count)")
+        let joined = String(utf16CodeUnits: chunks.flatMap { $0 }, count: text.utf16.count)
+        try expect(joined == text, "got \(joined)")
+    }
+
+    await test("UnicodeTyping: keyUp must not carry unicode; web-like delay is 8ms") {
+        try expect(!CommandInsertUnicodeTyping.attachUnicodeToKeyUp, "keyUp unicode duplicates in Chromium")
+        try expect(CommandInsertUnicodeTyping.interChunkDelay(role: "AXWebArea") == 0.008, "got \(CommandInsertUnicodeTyping.interChunkDelay(role: "AXWebArea"))")
+        try expect(CommandInsertUnicodeTyping.interChunkDelay(role: "AXTextArea") == 0, "native fields need no delay")
+    }
+
     await test("AXVerify: splice match counts as landed") {
         let landed = CommandInsertAXVerify.landed(
             before: "ab",
