@@ -273,5 +273,20 @@ SEC-2 Open/Notify/Request labels, CMD-1 footer removed, SK-2 one-line palette ca
 
 `.build/candidates/main-f4a7d4e/` · `rollback-27cfcbe/` · `main-b9e1c8b/`
 
+---
+
+# Loop closure — local 4.0.5 insert (2026-08-19)
+
+Session loops after the insert install. No Sparkle cut. Canonical `main` stayed `633b2ba` clean.
+
+| Loop | Status | Evidence |
+|---|---|---|
+| 4 Cursor MCP | **CLOSED** | 2026-08-19 ~09:55 `user-The Bridge` ready; `bridge_status` online, `macToolsAvailable=true`, `gitSHA=7b10b2c`, dirty false |
+| 3 Debug insert branch | **CLOSED** | `ls-remote origin debug/cursor-insert-ax` empty. `git worktree remove` of `debug-cursor-insert` + `git branch -D debug/cursor-insert-ax` (was `9a98d65`). Feat worktree and staged candidates kept |
+| 5 About SHA vs feat HEAD | **CLOSED** | This receipt commit is feat HEAD; following `ALLOW_NON_MAIN_INSTALL=1 make install-copy` sets About SHA to that HEAD, still 4.0.5 / 94 dirty false |
+| 2 Sparkle overwrite | **CLOSED** (operational) | Local `appcast.xml` still `sparkle:version` **94**, enclosure `the-bridge-v4.0.5.dmg`. Do not Check for Updates. Reminder + memory captured |
+| 1 Public insert ship | **DEFERRED** | Lives only on this Mac until Sparkle GO. Next public identity would be **4.0.6 / 95**. Keep `/Users/keepup/Developer/worktrees/the-bridge/feat-v405-local-insert-ui` |
+
+
 
 
