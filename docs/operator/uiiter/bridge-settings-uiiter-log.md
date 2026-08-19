@@ -241,4 +241,37 @@ Open P0/P1: **none**. Last loop id: Track A loop 1.
 
 Installed app, tag SHA, and appcast agree on **4.0.5 / 94**. Build 93 was never reused. Appcast was not hand-edited.
 
+---
+
+# Local 4.0.5 / 94 insert install (2026-08-19)
+
+**Not Sparkle.** `ALLOW_NON_MAIN_INSTALL=1 make install-copy` from feat worktree `feat/v405-local-insert-ui`. Feed still 4.0.5 / 94; About SHA does **not** match tag `v4.0.5`. Do not Check for Updates (notarized 94 would wipe this binary).
+
+| | |
+|---|---|
+| Installed | 4.0.5 (94) · dirty false · `BridgeGitSHA` `7b10b2cdfd4354e94c2a511100e8b3cda103f86f` |
+| Worktree | `/Users/keepup/Developer/worktrees/the-bridge/feat-v405-local-insert-ui` — keep until a later Sparkle GO |
+| Canonical main | `/Users/keepup/Developer/the-bridge` @ `633b2ba`, clean |
+| Floor | 3761 → **3763** (+2 Electron keyDown policy + C1 name-only empty body) |
+| Product commit | `7b10b2c` `fix: land Cursor insert once and stop echoing search into command body` |
+
+## Blocking smoke
+
+| Check | Result | Evidence |
+|---|---|---|
+| Cursor `review` (Ship Gate, slot 9) | **PASS** — one body | Composer 24px/`Send follow-up` → 733×200 / len **1462**, prefix `Ship Gate`. Clipboard unchanged (`nb-pkt-765-persist-9B552D93-07D2-4538-8DF7-B04EB8F2DCC6`). Draft cleared after read. |
+| Notes insert | **PASS** — one body | AXTextArea 39 → **1487** chars; one `Ship Gate`. Clipboard unchanged. |
+| C1 ordinary Return | **PASS** | No-match `zzzmokecb2`; host stayed **584×260**; 13 command files unchanged. |
+| CB-2 ⌥↩ create | **PASS** | Host **584×480**; name `zzzmokecb2`; placeholder `Body (optional)`; body AXTextArea empty. Esc → 260; no file saved. |
+| #129 clipboard | **PASS** | `pbpaste` identical before/after Cursor and Notes fires. No NSPasteboard on the fire path. |
+
+## P3s (best-effort, Light; not recaptured)
+
+SEC-2 Open/Notify/Request labels, CMD-1 footer removed, SK-2 one-line palette caption, CON-2 handshake `fg5`→`fg4`. Still deferred: CON-1, MEM-1, DS-1, ADV-1, Dashboard, Onboarding.
+
+## Staged candidates retained
+
+`.build/candidates/main-f4a7d4e/` · `rollback-27cfcbe/` · `main-b9e1c8b/`
+
+
 
