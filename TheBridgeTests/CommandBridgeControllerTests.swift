@@ -127,6 +127,21 @@ func runCommandBridgeControllerTests() async {
                    "tile is squircle, not full circle")
         try expect(CommandBridgeChrome.hostHeight < 360,
                    "host height content-hug (< legacy 360 plate)")
+        try expect(CommandBridgeChrome.hostHeightCreateSheet > CommandBridgeChrome.hostHeight,
+                   "create sheet must expand the host")
+        try expect(CommandBridgeChrome.hostHeight(createSheetOpen: false) == CommandBridgeChrome.hostHeight,
+                   "idle host height")
+        try expect(CommandBridgeChrome.hostHeight(createSheetOpen: true) == CommandBridgeChrome.hostHeightCreateSheet,
+                   "create-sheet host height")
+        try expect(CommandBridgeChrome.hostHeightCreateSheet >= 440,
+                   "create sheet must fit Save/Cancel (Wave 1 CB-1)")
+        let idle = CGRect(x: 100, y: 200, width: CommandBridgeChrome.hostWidth, height: CommandBridgeChrome.hostHeight)
+        let expanded = CommandBridgeChrome.frameKeepingTop(current: idle, newHeight: CommandBridgeChrome.hostHeightCreateSheet)
+        try expect(expanded.height == CommandBridgeChrome.hostHeightCreateSheet, "expanded height")
+        try expect(abs((expanded.maxY) - idle.maxY) < 0.5, "top edge stays put when expanding")
+        let restored = CommandBridgeChrome.frameKeepingTop(current: expanded, newHeight: CommandBridgeChrome.hostHeight)
+        try expect(abs(restored.maxY - idle.maxY) < 0.5, "top edge stays put when shrinking")
+        try expect(abs(restored.height - CommandBridgeChrome.hostHeight) < 0.5, "idle height restored")
         try expect(CommandBridgeChrome.glassShadowRadius <= 14,
                    "shadow budget — no e2 fog")
     }
