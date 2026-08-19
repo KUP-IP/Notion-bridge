@@ -212,8 +212,25 @@ public enum CommandBridgeChrome: Sendable {
     public static let tilePitch: CGFloat = 48
     /// Host panel width: bar + horizontal breathing room.
     public static let hostWidth: CGFloat = pillWidth + 24
-    /// Host panel height: content-hug for closed + results room (not 360 empty air).
+    /// Host panel height: content-hug for idle + search results (not 360 empty air).
     public static let hostHeight: CGFloat = 260
+    /// Expanded host when the create sheet is open so Save/Cancel stay inside
+    /// the panel. Idle `hostHeight` stays the content-hug floor (< 360).
+    public static let hostHeightCreateSheet: CGFloat = 480
+
+    public static func hostHeight(createSheetOpen: Bool) -> CGFloat {
+        createSheetOpen ? hostHeightCreateSheet : hostHeight
+    }
+
+    /// Cocoa frame after a host-height change that keeps the **top** edge fixed
+    /// (grow/shrink downward). `current` uses bottom-left origin.
+    public static func frameKeepingTop(current: CGRect, newHeight: CGFloat) -> CGRect {
+        let delta = newHeight - current.height
+        return CGRect(x: current.origin.x,
+                      y: current.origin.y - delta,
+                      width: current.width,
+                      height: newHeight)
+    }
 }
 
 // ============================================================
@@ -959,6 +976,7 @@ public final class CommandBridgeController: NSObject {
         let root = CommandBridgeRootView(model: model)
         let host = NSHostingController(rootView: root)
         host.view.frame = NSRect(origin: .zero, size: Self.panelSize)
+        host.view.autoresizingMask = [.width, .height]
         // Transparent host — the BridgeGlass surfaces draw the backing.
         host.view.wantsLayer = true
         host.view.layer?.backgroundColor = NSColor.clear.cgColor
@@ -1608,8 +1626,25 @@ public struct CommandBridgeRootView: View {
         reduceMotion ? .reduced : .locked
     }
 
+    /// Idle 260; create sheet expands so Save/Cancel are not clipped (CB-1).
+    private var activeHostHeight: CGFloat {
+        CommandBridgeChrome.hostHeight(createSheetOpen: model.createAssessment != nil)
+    }
+
     public init(model: CommandBridgeViewModel) {
         self.model = model
+    }
+
+    /// Grow/shrink the hosting panel downward, keeping the top edge where the
+    /// operator last placed it.
+    private func syncPaletteHostSize() {
+        guard let win = paletteWindow else { return }
+        let target = CommandBridgeChrome.frameKeepingTop(
+            current: win.frame,
+            newHeight: activeHostHeight
+        )
+        guard abs(target.height - win.frame.height) > 0.5 else { return }
+        win.setFrame(target, display: true, animate: false)
     }
 
     public var body: some View {
@@ -1637,8 +1672,14 @@ public struct CommandBridgeRootView: View {
             .animation(.easeOut(duration: anim.recentsSlideDuration), value: panelModeKey)
         }
         .frame(width: CommandBridgeChrome.hostWidth,
-               height: CommandBridgeChrome.hostHeight,
+               height: activeHostHeight,
                alignment: .top)
+        .onChange(of: model.createAssessment != nil) { _, _ in
+            syncPaletteHostSize()
+        }
+        .onChange(of: paletteWindow != nil) { _, _ in
+            syncPaletteHostSize()
+        }
         // (PKT-1006 R4c) Publish the drag state so the legibility halos freeze
         // (rasterize) while the window moves instead of shimmering.
         .environment(\.cbIsDragging, isDraggingWindow)
