@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "4.0.4"
+    public static let marketing = "4.0.5"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -319,7 +319,9 @@ public enum AppVersion {
     /// mail inbox, registry UUID normalize (#160), and voice-memo residuals.
     /// v4.0.4: 92 -> 93 -- staged-install verify attests STAGED_APP (#177);
     /// detached worktree_claim contract (#178); Commands Search palette hint.
-    public static let build = "93"
+    /// v4.0.5: 93 -> 94 -- Command Bridge create sheet host expands so Save/Cancel
+    /// stay inside the panel (chrome UI-ITER CB-1). 4.0.4/93 stays on the feed.
+    public static let build = "94"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }

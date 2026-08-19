@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.0.5 (build 94) — Command Bridge create sheet — 2026-08-18
+
+- **Identity** — Published install after `v4.0.4` / build `93`. Marketing
+  **4.0.5**, build **94**. Sparkle tag `v4.0.5` is this release. Do not reuse 93.
+- **Command Bridge** — Create-command sheet expands the host panel to 480pt
+  so Save/Cancel stay inside the glass. Idle/search host stays 260pt.
+- **UI-ITER** — Whole-chrome Light+Dark audit; CB-1 was the only P0. Search
+  C1 and #129 unchanged (ordinary Return never creates; never NSPasteboard
+  on the insert fire path). Floor remains 3761.
+
 ## v4.0.4 (build 93) — staged install + detached claims — 2026-08-18
 
 - **Identity** — Published install after `v4.0.3` / build `92`. Marketing
