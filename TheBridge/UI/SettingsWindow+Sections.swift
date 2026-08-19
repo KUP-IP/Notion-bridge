@@ -620,20 +620,35 @@ struct SecuritySection: View {
             SettingsNavigation.shared.go(.tools)
         } label: {
             VStack(spacing: 3) {
-                HStack(spacing: 4) {
-                    Text("\(tierCounts.open)").foregroundStyle(BridgeTokens.okText)
-                    Text("·").foregroundStyle(BridgeTokens.fg5)
-                    Text("\(tierCounts.notify)").foregroundStyle(BridgeTokens.warnText)
-                    Text("·").foregroundStyle(BridgeTokens.fg5)
-                    Text("\(tierCounts.request)").foregroundStyle(BridgeTokens.badText)
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(spacing: 1) {
+                        Text("\(tierCounts.open)")
+                            .foregroundStyle(BridgeTokens.okText)
+                        Text("OPEN")
+                            .font(.system(size: 8, weight: .semibold))
+                            .tracking(0.3)
+                            .foregroundStyle(BridgeTokens.fg4)
+                    }
+                    VStack(spacing: 1) {
+                        Text("\(tierCounts.notify)")
+                            .foregroundStyle(BridgeTokens.warnText)
+                        Text("NOTIFY")
+                            .font(.system(size: 8, weight: .semibold))
+                            .tracking(0.3)
+                            .foregroundStyle(BridgeTokens.fg4)
+                    }
+                    VStack(spacing: 1) {
+                        Text("\(tierCounts.request)")
+                            .foregroundStyle(BridgeTokens.badText)
+                        Text("REQUEST")
+                            .font(.system(size: 8, weight: .semibold))
+                            .tracking(0.3)
+                            .foregroundStyle(BridgeTokens.fg4)
+                    }
                 }
                 .font(.system(size: 18, weight: .semibold, design: .monospaced))
                 .monospacedDigit()
                 HStack(spacing: 3) {
-                    Text("GATES")
-                        .font(.system(size: 11, weight: .semibold))
-                        .tracking(0.6)
-                        .foregroundStyle(BridgeTokens.fg4)
                     Image(systemName: "arrow.up.forward")
                         .font(.system(size: 8, weight: .bold))
                         .foregroundStyle(BridgeTokens.fg5)

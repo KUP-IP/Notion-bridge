@@ -22,7 +22,7 @@ func runCommandSearchCreateTests() async {
         try expect(!empty.canProposeSave)
         let fromQuery = CommandSearchCreate.draft(fromSearchText: "ship the palette")
         try expect(fromQuery.name == "ship the palette")
-        try expect(fromQuery.body == "ship the palette")
+        try expect(fromQuery.body.isEmpty, "single-line search fills name only")
     }
 
     await test("C1 exact slug and name duplicates are actionable") {
@@ -48,7 +48,20 @@ func runCommandSearchCreateTests() async {
     await test("C1 multiline search text becomes name plus body") {
         let draft = CommandSearchCreate.draft(fromSearchText: "Ship palette\nkeep the body")
         try expect(draft.name == "Ship palette")
-        try expect(draft.body == "Ship palette\nkeep the body")
+        try expect(draft.body == "keep the body")
+    }
+
+    await test("C1 single-line search truncates the name to 80 and leaves body empty") {
+        let long = String(repeating: "n", count: 90)
+        let draft = CommandSearchCreate.draft(fromSearchText: long)
+        try expect(draft.name == String(repeating: "n", count: 80))
+        try expect(draft.body.isEmpty)
+        let assessed = CommandSearchCreate.assess(
+            draft: draft,
+            existing: [],
+            sensitivePaths: []
+        )
+        try expect(assessed.canProposeSave)
     }
 
     await test("C1 near-duplicate names are flagged without blocking the draft") {

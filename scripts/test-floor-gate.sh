@@ -68,7 +68,10 @@
 # 2026-08-18: 3759 → 3761 (+2) — detached HEAD worktree_claim contract
 #   (`branch: "(detached)"` + named-branch refusal). Measured 3761 passed,
 #   0 failed on fix/v4.0.4-hardening.
-FLOOR="${BRIDGE_TEST_FLOOR:-3761}"
+# 2026-08-19: 3761 → 3763 (+2) — Electron insert keyDown/keyUp policy +
+#   C1 single-line search name-only (empty body). Measured 3763 passed,
+#   0 failed on feat/v405-local-insert-ui.
+FLOOR="${BRIDGE_TEST_FLOOR:-3763}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

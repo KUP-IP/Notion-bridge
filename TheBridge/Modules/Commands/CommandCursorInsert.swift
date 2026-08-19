@@ -200,24 +200,23 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         let replaced = len > 0
         let before = stringAttr(focused, kAXValueAttribute as String)
         let frame = axFrame(focused)
+        let electron = CommandInsertPointerFocus.hostsElectron(pid: pid)
         let trustAX = CommandInsertPointerFocus.trustsAXSet(role: role, frame: frame)
 
         if trustAX, isSettable(focused, kAXSelectedTextAttribute as String) {
             let setErr = AXUIElementSetAttributeValue(
                 focused, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
-            if setErr == .success {
-                let after = stringAttr(focused, kAXValueAttribute as String)
-                if CommandInsertAXVerify.landed(
-                    before: before,
-                    after: after,
-                    insertion: text,
-                    selectedLocationUTF16: loc,
-                    selectedLengthUTF16: len
-                ) {
-                    placeCaret(focused, afterUTF16: loc + text.utf16.count)
-                    return .inserted(replacedSelection: replaced, characters: text.count)
-                }
-                // Chromium reports success without mutating the field.
+            if setErr == .success,
+               axVerifyLanded(
+                focused,
+                before: before,
+                insertion: text,
+                loc: loc,
+                len: len,
+                electron: electron
+               ) {
+                placeCaret(focused, afterUTF16: loc + text.utf16.count)
+                return .inserted(replacedSelection: replaced, characters: text.count)
             }
         }
 
@@ -232,25 +231,31 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             )
             let setErr = AXUIElementSetAttributeValue(
                 focused, kAXValueAttribute as CFString, spliced.newValue as CFTypeRef)
-            if setErr == .success {
-                let after = stringAttr(focused, kAXValueAttribute as String)
-                if after == spliced.newValue {
-                    placeCaret(focused, afterUTF16: spliced.newCaretUTF16)
-                    return .inserted(replacedSelection: spliced.replacedSelection, characters: text.count)
-                }
+            if setErr == .success,
+               axVerifyLanded(
+                focused,
+                before: before,
+                insertion: text,
+                loc: range.location,
+                len: range.length,
+                electron: electron
+               ) {
+                placeCaret(focused, afterUTF16: spliced.newCaretUTF16)
+                return .inserted(replacedSelection: spliced.replacedSelection, characters: text.count)
             }
         }
 
         // Native AX fields that actually changed are done above. Chromium
-        // (Cursor chat) exposes AXTextArea, returns AX set success, and
-        // leaves the DOM unchanged — click then unicode-type.
+        // AXValue can lag; only type after delayed verify still fails.
         if usedCapture || looksEditable(role: role, element: focused) {
             restoreFocus(focused, pid: pid)
-            clickForPointerFocus(focused, role: role)
+            clickForPointerFocus(focused, role: role, electron: electron)
             do {
                 try postUnicode(
                     text,
-                    interChunkDelay: CommandInsertUnicodeTyping.interChunkDelay(role: role)
+                    interChunkDelay: CommandInsertUnicodeTyping.interChunkDelay(
+                        role: role, electron: electron),
+                    electron: electron
                 )
                 return .inserted(replacedSelection: replaced, characters: text.count)
             } catch {
@@ -264,11 +269,60 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
     @MainActor
     private func copyFocusedElement(of pid: pid_t) -> AXUIElement? {
         let appEl = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appEl, 2.0)
+        if let el = focusedUIElement(appEl) { return el }
+
+        // Cursor Agents publishes a chrome-only AX tree until a client
+        // sets AXManualAccessibility. Focused UI is kAXErrorNoValue.
+        _ = AXUIElementSetAttributeValue(
+            appEl, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        for _ in 0..<CommandInsertPointerFocus.chromiumAXRetrySlices {
+            _ = CFRunLoopRunInMode(
+                CFRunLoopMode.defaultMode,
+                CommandInsertPointerFocus.chromiumAXRetrySliceSeconds,
+                false)
+            if let el = focusedUIElement(appEl) { return el }
+        }
+        return nil
+    }
+
+    private func focusedUIElement(_ appEl: AXUIElement) -> AXUIElement? {
         var focusedRef: CFTypeRef?
-        let focusErr = AXUIElementCopyAttributeValue(
+        let err = AXUIElementCopyAttributeValue(
             appEl, kAXFocusedUIElementAttribute as CFString, &focusedRef)
-        guard focusErr == .success, let focusedRef else { return nil }
+        guard err == .success, let focusedRef else { return nil }
         return (focusedRef as! AXUIElement)
+    }
+
+    /// Chromium often reports AX set success before AXValue updates.
+    /// Re-read on Electron so a delayed land does not fall through to unicode.
+    private func axVerifyLanded(
+        _ focused: AXUIElement,
+        before: String?,
+        insertion: String,
+        loc: Int,
+        len: Int,
+        electron: Bool
+    ) -> Bool {
+        let check = {
+            CommandInsertAXVerify.landed(
+                before: before,
+                after: self.stringAttr(focused, kAXValueAttribute as String),
+                insertion: insertion,
+                selectedLocationUTF16: loc,
+                selectedLengthUTF16: len
+            )
+        }
+        if check() { return true }
+        guard electron else { return false }
+        for _ in 0..<CommandInsertPointerFocus.chromiumAXRetrySlices {
+            _ = CFRunLoopRunInMode(
+                CFRunLoopMode.defaultMode,
+                CommandInsertPointerFocus.chromiumAXRetrySliceSeconds,
+                false)
+            if check() { return true }
+        }
+        return false
     }
 
     /// Put the caret back on `element` so CGEvent unicode typing lands
@@ -286,7 +340,7 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
     /// Click the captured control so Electron/Chromium contenteditables
     /// actually receive the following unicode key events.
     @MainActor
-    private func clickForPointerFocus(_ element: AXUIElement, role: String) {
+    private func clickForPointerFocus(_ element: AXUIElement, role: String, electron: Bool) {
         guard let rect = axFrame(element), rect.width > 1, rect.height > 1 else { return }
         let point = CommandInsertPointerFocus.point(role: role, frame: rect)
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
@@ -304,7 +358,7 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         ) else { return }
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
-        let settle = CommandInsertPointerFocus.isWebLike(role) ? 0.08 : 0.04
+        let settle = (electron || CommandInsertPointerFocus.isWebLike(role)) ? 0.08 : 0.04
         _ = CFRunLoopRunInMode(CFRunLoopMode.defaultMode, settle, false)
     }
 
@@ -368,12 +422,15 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
     /// Unicode CGEvent typing — no pasteboard. Last-resort when AX set
     /// fails but the focused element still looks like an editor.
     ///
-    /// Unicode is attached **only** to keyUp. Cursor's markdown composer
-    /// treats keyDown unicode as live typing (`**` eaten, letters dropped).
-    /// `virtualKey` 0 is kVK_ANSI_A — leaving keyUp unset posts `"a"`.
-    /// Carrier 0xFFFF plus an explicit empty unicode payload on keyDown
-    /// avoids both the markdown chew and the A-key leak.
-    private func postUnicode(_ text: String, interChunkDelay: TimeInterval = 0) throws {
+    /// Native editors attach unicode on keyUp. Electron ignores keyUp-only
+    /// unicode, so Electron attaches on keyDown and leaves keyUp empty.
+    /// `virtualKey` 0 is kVK_ANSI_A — carrier 0xFFFF plus an empty payload
+    /// on the unused edge avoids an A-key leak.
+    private func postUnicode(
+        _ text: String,
+        interChunkDelay: TimeInterval = 0,
+        electron: Bool = false
+    ) throws {
         guard let src = CGEventSource(stateID: .hidSystemState) else {
             throw CommandInsertSynthError.source
         }
@@ -383,8 +440,8 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             guard let down = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true),
                   let up = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false)
             else { throw CommandInsertSynthError.event }
-            setUnicode(down, CommandInsertUnicodeTyping.unicodeUnits(forKeyDown: chunk))
-            setUnicode(up, CommandInsertUnicodeTyping.unicodeUnits(forKeyUp: chunk))
+            setUnicode(down, CommandInsertUnicodeTyping.unicodeUnits(forKeyDown: chunk, electron: electron))
+            setUnicode(up, CommandInsertUnicodeTyping.unicodeUnits(forKeyUp: chunk, electron: electron))
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
             if interChunkDelay > 0, i + 1 < chunks.count {
@@ -439,9 +496,20 @@ public enum CommandInsertAXVerify {
 public enum CommandInsertPointerFocus {
     public static let webLikeRoles: Set<String> = ["AXWebArea", "AXGroup", "AXUnknown"]
     public static let tallWebAreaThreshold: CGFloat = 120
+    public static let chromiumAXRetrySlices = 16
+    public static let chromiumAXRetrySliceSeconds: CFTimeInterval = 0.05
 
     public static func isWebLike(_ role: String) -> Bool {
         webLikeRoles.contains(role)
+    }
+
+    /// Cursor / VS Code: Electron Framework.framework. Native AppKit editors do not.
+    public static func hostsElectron(pid: pid_t) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: pid),
+              let url = app.bundleURL else { return false }
+        let framework = url.appendingPathComponent(
+            "Contents/Frameworks/Electron Framework.framework")
+        return FileManager.default.fileExists(atPath: framework.path)
     }
 
     /// Chromium `AXWebArea` (and page-sized groups) report settable AXValue
@@ -483,16 +551,16 @@ public enum CommandInsertUnicodeTyping {
     public static let attachUnicodeToKeyUp = true
     public static let webLikeInterChunkDelay: TimeInterval = 0.008
 
-    public static func interChunkDelay(role: String) -> TimeInterval {
-        CommandInsertPointerFocus.isWebLike(role) ? webLikeInterChunkDelay : 0
+    public static func interChunkDelay(role: String, electron: Bool = false) -> TimeInterval {
+        (electron || CommandInsertPointerFocus.isWebLike(role)) ? webLikeInterChunkDelay : 0
     }
 
-    public static func unicodeUnits(forKeyDown chunk: [UInt16]) -> [UInt16] {
-        attachUnicodeToKeyDown ? chunk : []
+    public static func unicodeUnits(forKeyDown chunk: [UInt16], electron: Bool = false) -> [UInt16] {
+        electron ? chunk : (attachUnicodeToKeyDown ? chunk : [])
     }
 
-    public static func unicodeUnits(forKeyUp chunk: [UInt16]) -> [UInt16] {
-        attachUnicodeToKeyUp ? chunk : []
+    public static func unicodeUnits(forKeyUp chunk: [UInt16], electron: Bool = false) -> [UInt16] {
+        electron ? [] : (attachUnicodeToKeyUp ? chunk : [])
     }
 
     public static func utf16Chunks(_ text: String, maxUTF16: Int = maxUTF16PerChunk) -> [[UInt16]] {

@@ -79,9 +79,17 @@ public enum CommandSearchCreate {
 
     public static func draft(fromSearchText text: String) -> CommandCreateDraft {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let firstLine = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+        let firstLine: String
+        let body: String
+        if let newline = trimmed.firstIndex(of: "\n") {
+            firstLine = String(trimmed[..<newline])
+            body = String(trimmed[trimmed.index(after: newline)...])
+        } else {
+            firstLine = trimmed
+            body = ""
+        }
         let name = String(firstLine.prefix(80))
-        return CommandCreateDraft(name: name, body: trimmed)
+        return CommandCreateDraft(name: name, body: body)
     }
 
     public static func assess(

@@ -166,6 +166,18 @@ func runCommandCursorInsertTests() async {
         try expect(CommandInsertUnicodeTyping.interChunkDelay(role: "AXTextArea") == 0, "native fields need no delay")
     }
 
+    await test("UnicodeTyping: Electron attaches unicode on keyDown; keyUp is empty") {
+        let chunk: [UInt16] = Array("ab".utf16)
+        try expect(CommandInsertUnicodeTyping.unicodeUnits(forKeyDown: chunk, electron: true) == chunk)
+        try expect(CommandInsertUnicodeTyping.unicodeUnits(forKeyUp: chunk, electron: true).isEmpty)
+        try expect(
+            CommandInsertUnicodeTyping.interChunkDelay(role: "AXTextArea", electron: true) == 0.008,
+            "Electron composers need the web-like inter-chunk delay"
+        )
+        try expect(!CommandInsertPointerFocus.hostsElectron(pid: ProcessInfo.processInfo.processIdentifier))
+        try expect(CommandInsertPointerFocus.chromiumAXRetrySlices == 16)
+    }
+
     await test("UnicodeTyping: does not end a chunk with ** when a header follows") {
         let text = "aping or acting.\n\n**Use when:** important"
         let chunks = CommandInsertUnicodeTyping.utf16Chunks(text)

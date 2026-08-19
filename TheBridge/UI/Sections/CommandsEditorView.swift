@@ -158,17 +158,6 @@ public struct CommandsEditorView: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
             }
-
-            Rectangle().fill(BridgeTokens.hairlineFaint).frame(height: 0.5)
-            HStack {
-                Text("\(commands.count) commands · \(favoriteCount) favorites")
-                    .font(BridgeTokens.Typeface.micro)
-                    .monospacedDigit()
-                    .foregroundStyle(BridgeTokens.fg4)
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
         }
         .frame(maxHeight: .infinity)
     }
@@ -806,8 +795,6 @@ public struct CommandsEditorView: View {
     private var currentCommand: CommandStore.Command? {
         commands.first(where: { $0.slug == selectedSlug })
     }
-
-    private var favoriteCount: Int { commands.filter { $0.keySlot != nil }.count }
 
     // MARK: - Mutations (bindings preserved verbatim)
 

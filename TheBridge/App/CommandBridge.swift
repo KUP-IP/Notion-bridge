@@ -2253,15 +2253,25 @@ public struct CommandBridgeRootView: View {
             .padding(.horizontal, BridgeTokens.Space.s2)
             .frame(height: 28)
             .background(BridgeTokens.wellFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            TextEditor(text: Binding(
-                get: { model.createDraft.body },
-                set: { model.createDraft.body = $0; model.refreshCreateAssessment() }
-            ))
-            .font(BridgeTokens.Typeface.meta)
-            .foregroundStyle(BridgeTokens.fg2)
-            .scrollContentBackground(.hidden)
-            .frame(minHeight: 64, maxHeight: 96)
-            .padding(4)
+            ZStack(alignment: .topLeading) {
+                if model.createDraft.body.isEmpty {
+                    Text("Body (optional)")
+                        .font(BridgeTokens.Typeface.meta)
+                        .foregroundStyle(BridgeTokens.fg4)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: Binding(
+                    get: { model.createDraft.body },
+                    set: { model.createDraft.body = $0; model.refreshCreateAssessment() }
+                ))
+                .font(BridgeTokens.Typeface.meta)
+                .foregroundStyle(BridgeTokens.fg2)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 64, maxHeight: 96)
+                .padding(4)
+            }
             .background(BridgeTokens.wellFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             Toggle("Treat as sensitive", isOn: Binding(
                 get: { model.createDraft.sensitive },
