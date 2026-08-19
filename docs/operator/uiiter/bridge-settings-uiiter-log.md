@@ -129,7 +129,7 @@ Duplicate Settings windows (win 5670 + 5628) during the audit — P3 chrome dupl
 
 | ID | Surface | P | Finding | Evidence | Status |
 |----|---------|---|---------|----------|--------|
-| CB-1 | Command Bridge | **P0** | Create sheet clipped by fixed `hostHeight` 260. AX Save/Cancel at y=1318; host bottom y=1218. Primary CTAs not visible / not hittable. Named variable: **host clip vs content-hug when create sheet is open**. | light/command-bridge-create-sheet.png | **fixed in code → F.0 recapture** |
+| CB-1 | Command Bridge | **P0** | Create sheet clipped by fixed `hostHeight` 260. AX Save/Cancel at y=1318; host bottom y=1218. Primary CTAs not visible / not hittable. Named variable: **host clip vs content-hug when create sheet is open**. | light/command-bridge-create-sheet.png | **closed** — F.0 on 4.0.5/94: host 584×480; Save/Cancel on-canvas Light+Dark (`v405-chrome`) |
 | CB-2 | Command Bridge | P2 | Create sheet Name + body both echo the query string | light/command-bridge-create-sheet.png | deferred (cheap P2 in same file if loop 1 is open) |
 | SET-DUP | Settings | P3 | Two Settings windows (5670 + 5628) | light/commands-win*.png | deferred |
 | CMD-1 | Commands | P3 | Stats repeated hero + footer | Wave A, still | deferred |
@@ -151,4 +151,94 @@ Duplicate Settings windows (win 5670 + 5628) during the audit — P3 chrome dupl
 - **Loop cap remaining after this loop:** 7.
 - **Code:** idle `hostHeight` stays 260 (`< 360`). `hostHeightCreateSheet` = 480. `CommandBridgeRootView` frames to `hostHeight(createSheetOpen:)` and `setFrame`s the NSPanel with `frameKeepingTop` (grow/shrink downward). Hosting view `autoresizingMask` width+height.
 - **CB-2:** left deferred (`CommandSearchCreate.draft` is a different file).
-- **Last loop id:** Track A loop 1. Recapture + Demo Gate in Wave 4.
+- **Last loop id:** Track A loop 1.
+
+---
+
+# v4.0.5 / 94 Wave 4 — F.0 recapture + Demo Gate (2026-08-18)
+
+**Installed:** 4.0.5 / build 94 · SHA `b9e1c8b4af997fc07093ce22d4209980939cfdb5` · dirty false  
+**Tag:** annotated `v4.0.5` at that SHA (pushed). Release run [32202976643](https://github.com/KUP-IP/the-bridge/actions/runs/32202976643).  
+**Local-sign caveat:** empty local license by design; not a substitute for the Sparkle/notarized customer binary.  
+**Captures (uncommitted):** `docs/operator/uiiter/captures/v405-chrome/{light,dark}/`  
+**Appearance:** operator Light (`AppleInterfaceStyle` absent). Dark pass via System Events; restored Light in-session (`light/commands-restore-proof.png` + key still absent).  
+**Onboarding:** `hasCompletedOnboarding = 1` untouched. Wizard **deferred** — no Advanced Reset.  
+**Probe command:** `zzzxno-match-uiiter-405` never Saved (no file under commands/). Escape cancelled the draft.  
+**MCP:** Cursor client dead after relaunch; F.0 used Streamable HTTP `http://127.0.0.1:9700/mcp`. `screen_capture` with `windowId` (Settings 6122 1080×880; palette 6136 584×260 idle / 584×480 create).
+
+## Operator restore traps
+
+| Flag | Before | After |
+|------|--------|-------|
+| Appearance | Light | Light (proven `light/commands-restore-proof.png` + `AppleInterfaceStyle` absent) |
+| `hasCompletedOnboarding` | 1 | 1 (untouched) |
+
+## F.0 capture matrix (installed 4.0.5 / 94)
+
+| Surface | Light | Dark |
+|---------|-------|------|
+| Settings Commands | commands.png | commands.png |
+| Settings Skills | skills.png | skills.png |
+| Settings Jobs | jobs.png | jobs.png |
+| Settings Tools | tools.png | tools.png |
+| Settings Security | security.png | security.png |
+| Settings Connection | connection.png | connection.png |
+| Settings Memory | memory.png | memory.png |
+| Settings Data Sources | data-sources.png | data-sources.png |
+| Settings Advanced | advanced.png | advanced.png |
+| Command Bridge idle | command-bridge-idle.png | command-bridge-idle.png |
+| Command Bridge search no-match | command-bridge-search-nomatch.png | command-bridge-search-nomatch.png |
+| Command Bridge create sheet | command-bridge-create-sheet.png | command-bridge-create-sheet.png |
+| Dashboard | **deferred** (MenuBarExtra; trailing mark is not Dashboard) | **deferred** |
+| Onboarding | **deferred** (restore trap not used) | **deferred** |
+
+Footer on Settings captures: `v4.0.5 · build 94`. Advanced About: `4.0.5 (94)`.
+
+## Critique board closeout
+
+| ID | Surface | P | Status after F.0 |
+|----|---------|---|------------------|
+| CB-1 | Command Bridge | P0 | **closed** — host idle 584×260; create sheet 584×480. Save/Cancel fully visible inside the expanded host in Light and Dark (`v405-chrome/{light,dark}/command-bridge-create-sheet.png`). SwiftUI Save/Cancel are not AX-titled (`ax_inspect title=Save` count 0); visual + CGWindow height are the close. |
+| CB-2 | Command Bridge | P2 | still deferred (Name + body still echo the query) |
+| remaining P3s | Settings | P3 | still deferred |
+
+Open P0/P1: **none**. Last loop id: Track A loop 1.
+
+## Demo Gate (installed 4.0.5 / 94)
+
+| Surface | Evidence | Verdict | Notes |
+|---------|----------|---------|-------|
+| Dashboard | — | **deferred** | MenuBarExtra popover; capture-method, not a product P0 |
+| Command Bridge (search + create) | v405-chrome light+dark command-bridge-*.png | **PASS** | ⌃⌘B opens; no-match + Create via ⌥↩; host expands 260→480; Save/Cancel on-canvas; Esc drops draft |
+| Commands Settings | v405-chrome/{light,dark}/commands.png | **PASS** | hint copy present; 13 commands / 10 favorites; v4.0.5 · 94 |
+| Security | v405-chrome/{light,dark}/security.png | **PASS** | Vault + license readable in both appearances |
+| Connection | v405-chrome/{light,dark}/connection.png | **PASS** | endpoint / handshake / clients coherent |
+| Memory | v405-chrome/{light,dark}/memory.png | **PASS** | memos list + empty preview; no chrome breakage |
+| Onboarding welcome | — | **deferred** | `hasCompletedOnboarding=1`; no Reset Onboarding |
+| Search C1 | F.0 receipt | **PASS** | ordinary Return with probe query left host at 260; sheet opened only after ⌥↩ |
+| #129 | code path unchanged | **PASS** | not reopened; no NSPasteboard on fire path this campaign |
+| Tools filter ≠ Search | light/tools.png | **PASS** | family chips + “Search 224 tools…” — not Command Bridge Search |
+
+**Demo Gate:** **PASS** with Onboarding + Dashboard deferred with reason.
+
+## Staged candidates retained
+
+- `.build/candidates/main-f4a7d4e/` (4.0.4 / 93)
+- `.build/candidates/rollback-27cfcbe/`
+- `.build/candidates/main-b9e1c8b/` (4.0.5 / 94 UI SHA)
+
+## Sparkle 4.0.5 — Released Verified
+
+| Artifact | Value |
+|---|---|
+| Tag | annotated `v4.0.5` → `b9e1c8b4af997fc07093ce22d4209980939cfdb5` |
+| GH release | published, not draft — https://github.com/KUP-IP/the-bridge/releases/tag/v4.0.5 |
+| Actions | run [32202976643](https://github.com/KUP-IP/the-bridge/actions/runs/32202976643) **success** (test 9m3s + notarize 17m17s) |
+| Feed | `origin/main` `appcast.xml` `sparkle:version` **94**, enclosure `the-bridge-v4.0.5.dmg` length 24076637 |
+| Appcast commit | `5517279` `release(v4.0.5): publish Sparkle appcast for v4.0.5 [skip ci]` |
+| `make verify-sparkle-feed` | **PASS** — feed HTTP 200, enclosure HTTP 200, Content-Length matches |
+| Prior 4.0.4 | tag + GH release **retained**. Feed is single-item (CI `generate_appcast` shape, same as 4.0.4). Clients on 93 are offered 94. |
+
+Installed app, tag SHA, and appcast agree on **4.0.5 / 94**. Build 93 was never reused. Appcast was not hand-edited.
+
+
