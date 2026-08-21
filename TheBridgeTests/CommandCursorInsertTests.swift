@@ -248,6 +248,63 @@ func runCommandCursorInsertTests() async {
         ), "compact ChatGPT composer is already the right target")
     }
 
+    await test("Placeholder: missing AXPlaceholderValue matches compact Chromium hint attributes") {
+        try expect(CommandInsertPlaceholder.isHintValue(
+            value: "Debug issues",
+            placeholder: nil,
+            description: "Debug issues",
+            title: nil,
+            compactChromiumComposer: true
+        ), "missing AXPlaceholderValue still blanks when AXValue equals AXDescription")
+        try expect(CommandInsertPlaceholder.isHintValue(
+            value: "Debug issues",
+            placeholder: nil,
+            description: nil,
+            title: "Debug issues",
+            compactChromiumComposer: true
+        ), "missing AXPlaceholderValue still blanks when AXValue equals AXTitle")
+        try expect(CommandInsertPlaceholder.isHintValue(
+            value: "Debug issues",
+            placeholder: nil,
+            description: nil,
+            title: nil,
+            help: "Debug issues",
+            compactChromiumComposer: true
+        ), "missing AXPlaceholderValue still blanks when AXValue equals AXHelp")
+        try expect(!CommandInsertPlaceholder.isHintValue(
+            value: "real draft",
+            placeholder: nil,
+            description: "Debug issues",
+            title: nil,
+            compactChromiumComposer: true
+        ), "a real one-line draft must not match a different hint attribute")
+        try expect(!CommandInsertPlaceholder.isHintValue(
+            value: "Debug issues",
+            placeholder: nil,
+            description: "Debug issues",
+            title: nil,
+            compactChromiumComposer: false
+        ), "native fields must not blank on description equality")
+        try expect(
+            CommandInsertPlaceholder.effectiveValue(
+                value: "Debug issues",
+                placeholder: nil,
+                description: "Debug issues",
+                title: nil,
+                compactChromiumComposer: true
+            ) == ""
+        )
+        try expect(
+            CommandInsertPlaceholder.effectiveValue(
+                value: "real draft",
+                placeholder: nil,
+                description: nil,
+                title: nil,
+                compactChromiumComposer: true
+            ) == "real draft"
+        )
+    }
+
     await test("PointerFocus: pointer inside a web area is the click target") {
         let frame = CGRect(x: 331, y: 207, width: 2028, height: 1179)
         let pointer = CGPoint(x: 1480, y: 1320)

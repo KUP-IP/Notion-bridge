@@ -106,10 +106,36 @@ public enum CommandTextSplicer {
 /// Ghost / placeholder strings Chromium reports as `AXValue` even when the
 /// composer is visually empty. Splicing into that string bakes the hint
 /// into the insert (`Debug issues` + command body).
+///
+/// Cursor's compact `AXTextArea` often omits `AXPlaceholderValue`. The hint
+/// still shows up as `AXValue` equal to `AXDescription` or `AXTitle`. Native
+/// fields and real one-line drafts must not be blanked by that fallback.
 public enum CommandInsertPlaceholder {
     public static func effectiveValue(value: String?, placeholder: String?) -> String? {
+        effectiveValue(
+            value: value,
+            placeholder: placeholder,
+            description: nil,
+            title: nil,
+            compactChromiumComposer: false
+        )
+    }
+
+    public static func effectiveValue(
+        value: String?,
+        placeholder: String?,
+        description: String?,
+        title: String?,
+        compactChromiumComposer: Bool
+    ) -> String? {
         guard let value else { return nil }
-        if isPlaceholder(value: value, placeholder: placeholder) { return "" }
+        if isHintValue(
+            value: value,
+            placeholder: placeholder,
+            description: description,
+            title: title,
+            compactChromiumComposer: compactChromiumComposer
+        ) { return "" }
         return value
     }
 
@@ -117,6 +143,24 @@ public enum CommandInsertPlaceholder {
         guard let value, !value.isEmpty,
               let placeholder, !placeholder.isEmpty else { return false }
         return value == placeholder
+    }
+
+    public static func isHintValue(
+        value: String?,
+        placeholder: String?,
+        description: String?,
+        title: String?,
+        help: String? = nil,
+        compactChromiumComposer: Bool
+    ) -> Bool {
+        if isPlaceholder(value: value, placeholder: placeholder) { return true }
+        guard compactChromiumComposer else { return false }
+        guard let value, !value.isEmpty else { return false }
+        guard (placeholder ?? "").isEmpty else { return false }
+        for hint in [description, title, help] {
+            if let hint, !hint.isEmpty, value == hint { return true }
+        }
+        return false
     }
 }
 
@@ -261,6 +305,11 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         let liveRange = cfRangeAttr(focused, kAXSelectedTextRangeAttribute as String)
         let liveValue = stringAttr(focused, kAXValueAttribute as String)
         let placeholder = stringAttr(focused, kAXPlaceholderValueAttribute as String)
+        let description = stringAttr(focused, kAXDescriptionAttribute as String)
+        let title = stringAttr(focused, kAXTitleAttribute as String)
+        let help = stringAttr(focused, kAXHelpAttribute as String)
+        let chromium = CommandInsertPointerFocus.hostsChromium(pid: pid)
+        let compactChromium = chromium && isCompactEditable(focused)
         var loc: Int
         var len: Int
         var before: String?
@@ -273,10 +322,20 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             len = liveRange?.length ?? 0
             before = liveValue
         }
-        let valueIsPlaceholder = CommandInsertPlaceholder.isPlaceholder(
-            value: before, placeholder: placeholder)
-            || CommandInsertPlaceholder.isPlaceholder(
-                value: liveValue, placeholder: placeholder)
+        let valueIsPlaceholder = CommandInsertPlaceholder.isHintValue(
+            value: before,
+            placeholder: placeholder,
+            description: description,
+            title: title,
+            help: help,
+            compactChromiumComposer: compactChromium)
+            || CommandInsertPlaceholder.isHintValue(
+                value: liveValue,
+                placeholder: placeholder,
+                description: description,
+                title: title,
+                help: help,
+                compactChromiumComposer: compactChromium)
         if valueIsPlaceholder {
             loc = 0
             len = 0
@@ -287,7 +346,6 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             restoreSelectedRange(focused, locationUTF16: loc, lengthUTF16: len)
         }
         let frame = axFrame(focused)
-        let chromium = CommandInsertPointerFocus.hostsChromium(pid: pid)
         let app = NSRunningApplication(processIdentifier: pid)
         let trustAX = CommandInsertPointerFocus.trustsAXSet(
             role: role,
@@ -374,7 +432,19 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         capturedSelectedLength = range?.length
         let rawValue = stringAttr(el, kAXValueAttribute as String)
         let placeholder = stringAttr(el, kAXPlaceholderValueAttribute as String)
-        if CommandInsertPlaceholder.isPlaceholder(value: rawValue, placeholder: placeholder) {
+        let description = stringAttr(el, kAXDescriptionAttribute as String)
+        let title = stringAttr(el, kAXTitleAttribute as String)
+        let help = stringAttr(el, kAXHelpAttribute as String)
+        let compactChromium = capturedPID.map(CommandInsertPointerFocus.hostsChromium) == true
+            && isCompactEditable(el)
+        if CommandInsertPlaceholder.isHintValue(
+            value: rawValue,
+            placeholder: placeholder,
+            description: description,
+            title: title,
+            help: help,
+            compactChromiumComposer: compactChromium
+        ) {
             capturedValue = ""
             capturedSelectedLocation = 0
             capturedSelectedLength = 0
