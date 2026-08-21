@@ -82,7 +82,11 @@
 #   preflight, service-correlated recovery, duplicate-Intent refusal, and exact
 #   existing-Result adoption. Additive combined floor 3780 on
 #   codex/thread-m1-reactivation-v2.
-FLOOR="${BRIDGE_TEST_FLOOR:-3780}"
+# 2026-08-21: 3780 → 3788 (+8 combined) — governed node_test: owner-bound
+#   trusted node:test imports, fixed permissions, bounded output/timeout,
+#   and post-run identity revalidation. Individually measured 3775 passed,
+#   0 failed on codex/u2-governed-node-test-v2.
+FLOOR="${BRIDGE_TEST_FLOOR:-3788}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
