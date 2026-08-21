@@ -303,6 +303,33 @@ func runCommandCursorInsertTests() async {
                 compactChromiumComposer: true
             ) == "real draft"
         )
+        try expect(CommandInsertPlaceholder.isHintValue(
+            value: "Send follow-up\n",
+            placeholder: nil,
+            description: nil,
+            title: nil,
+            compactChromiumComposer: true,
+            selectedLocationUTF16: 0,
+            selectedLengthUTF16: 0
+        ), "Cursor empty composer reports the hint as AXValue with caret 0,0")
+        try expect(!CommandInsertPlaceholder.isHintValue(
+            value: "hello",
+            placeholder: nil,
+            description: nil,
+            title: nil,
+            compactChromiumComposer: true,
+            selectedLocationUTF16: 5,
+            selectedLengthUTF16: 0
+        ), "caret at the end of a real draft is not a ghost")
+        try expect(!CommandInsertPlaceholder.isHintValue(
+            value: "Send follow-up\n",
+            placeholder: "Todo description...",
+            description: "Todo content",
+            title: nil,
+            compactChromiumComposer: true,
+            selectedLocationUTF16: 0,
+            selectedLengthUTF16: 0
+        ), "a real placeholder attribute keeps compact Chromium drafts")
     }
 
     await test("PointerFocus: pointer inside a web area is the click target") {

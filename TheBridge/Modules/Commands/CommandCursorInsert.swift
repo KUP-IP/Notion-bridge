@@ -105,12 +105,16 @@ public enum CommandTextSplicer {
 
 /// Ghost / placeholder strings Chromium reports as `AXValue` even when the
 /// composer is visually empty. Splicing into that string bakes the hint
-/// into the insert (`Debug issues` + command body).
+/// into the insert (`Debug issues` / `Send follow-up` + command body).
 ///
-/// Cursor's compact `AXTextArea` often omits `AXPlaceholderValue`. The hint
-/// still shows up as `AXValue` equal to `AXDescription` or `AXTitle`. Native
-/// fields and real one-line drafts must not be blanked by that fallback.
+/// Cursor's compact `AXTextArea` often omits `AXPlaceholderValue` and
+/// publishes the hint as `AXValue` with caret `(0,0)` and empty description.
+/// Native fields and real drafts (caret not at origin, or a real placeholder
+/// attribute) must not be blanked.
 public enum CommandInsertPlaceholder {
+    /// Cursor empty-composer hints stay on one line (optional trailing newline).
+    public static let compactHintMaxUTF16 = 48
+
     public static func effectiveValue(value: String?, placeholder: String?) -> String? {
         effectiveValue(
             value: value,
@@ -126,7 +130,9 @@ public enum CommandInsertPlaceholder {
         placeholder: String?,
         description: String?,
         title: String?,
-        compactChromiumComposer: Bool
+        compactChromiumComposer: Bool,
+        selectedLocationUTF16: Int? = nil,
+        selectedLengthUTF16: Int? = nil
     ) -> String? {
         guard let value else { return nil }
         if isHintValue(
@@ -134,7 +140,9 @@ public enum CommandInsertPlaceholder {
             placeholder: placeholder,
             description: description,
             title: title,
-            compactChromiumComposer: compactChromiumComposer
+            compactChromiumComposer: compactChromiumComposer,
+            selectedLocationUTF16: selectedLocationUTF16,
+            selectedLengthUTF16: selectedLengthUTF16
         ) { return "" }
         return value
     }
@@ -145,20 +153,34 @@ public enum CommandInsertPlaceholder {
         return value == placeholder
     }
 
+    public static func isSingleLineComposerHint(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .newlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: \.isNewline) else { return false }
+        return trimmed.utf16.count <= compactHintMaxUTF16
+    }
+
     public static func isHintValue(
         value: String?,
         placeholder: String?,
         description: String?,
         title: String?,
         help: String? = nil,
-        compactChromiumComposer: Bool
+        compactChromiumComposer: Bool,
+        selectedLocationUTF16: Int? = nil,
+        selectedLengthUTF16: Int? = nil
     ) -> Bool {
         if isPlaceholder(value: value, placeholder: placeholder) { return true }
         guard compactChromiumComposer else { return false }
         guard let value, !value.isEmpty else { return false }
         guard (placeholder ?? "").isEmpty else { return false }
+        let trimmed = value.trimmingCharacters(in: .newlines)
         for hint in [description, title, help] {
-            if let hint, !hint.isEmpty, value == hint { return true }
+            if let hint, !hint.isEmpty, value == hint || trimmed == hint { return true }
+        }
+        // Live Cursor: value "Send follow-up\n", no placeholder, caret 0,0.
+        if let loc = selectedLocationUTF16, let len = selectedLengthUTF16,
+           loc == 0, len == 0, isSingleLineComposerHint(value) {
+            return true
         }
         return false
     }
@@ -328,21 +350,28 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             description: description,
             title: title,
             help: help,
-            compactChromiumComposer: compactChromium)
+            compactChromiumComposer: compactChromium,
+            selectedLocationUTF16: loc,
+            selectedLengthUTF16: len)
             || CommandInsertPlaceholder.isHintValue(
                 value: liveValue,
                 placeholder: placeholder,
                 description: description,
                 title: title,
                 help: help,
-                compactChromiumComposer: compactChromium)
+                compactChromiumComposer: compactChromium,
+                selectedLocationUTF16: liveRange?.location,
+                selectedLengthUTF16: liveRange?.length)
+        let ghostUTF16 = (liveValue ?? before ?? "").utf16.count
         if valueIsPlaceholder {
+            // AXSelectedText inserts *beside* a ghost AXValue. Select the
+            // whole hint so replace/AXValue/typing overwrite it.
             loc = 0
-            len = 0
+            len = ghostUTF16
             before = ""
         }
         let replaced = len > 0
-        if usedCapture, capturedSelectedLocation != nil {
+        if valueIsPlaceholder || (usedCapture && capturedSelectedLocation != nil) {
             restoreSelectedRange(focused, locationUTF16: loc, lengthUTF16: len)
         }
         let frame = axFrame(focused)
@@ -359,7 +388,7 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             bundleIdentifier: app?.bundleIdentifier
         )
 
-        if trustAX, isSettable(focused, kAXSelectedTextAttribute as String) {
+        if !valueIsPlaceholder, trustAX, isSettable(focused, kAXSelectedTextAttribute as String) {
             let setErr = AXUIElementSetAttributeValue(
                 focused, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
             if setErr == .success,
@@ -443,7 +472,9 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             description: description,
             title: title,
             help: help,
-            compactChromiumComposer: compactChromium
+            compactChromiumComposer: compactChromium,
+            selectedLocationUTF16: range?.location,
+            selectedLengthUTF16: range?.length
         ) {
             capturedValue = ""
             capturedSelectedLocation = 0
