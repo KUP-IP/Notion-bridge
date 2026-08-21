@@ -885,9 +885,12 @@ public final class CommandBridgeController: NSObject {
         // captured in `snapshotInsertDestination` while the palette was
         // still not key.
         hide(immediate: true)
-        if let target,
-           target.processIdentifier != NSRunningApplication.current.processIdentifier {
-            target.activate()
+        // Activate the *resolved* pid (user Chrome), not Playwright MCP
+        // Chrome that shares `com.google.Chrome`.
+        if let pid,
+           let dest = NSRunningApplication(processIdentifier: pid),
+           dest.processIdentifier != NSRunningApplication.current.processIdentifier {
+            dest.activate()
         }
         // Let the destination become key after the non-activating panel
         // resigns, before AX / CGEvent insert. Electron otherwise keeps
@@ -904,11 +907,12 @@ public final class CommandBridgeController: NSObject {
     }
 
     /// Destination pid for insert: the captured prior app, unless it is us.
+    /// Chrome/Edge helpers publish no AX tree — map to the browser process.
     private func insertTargetPID(_ target: NSRunningApplication?) -> pid_t? {
         guard let target else { return nil }
         let me = NSRunningApplication.current.processIdentifier
         guard target.processIdentifier != me else { return nil }
-        return target.processIdentifier
+        return CommandInsertPointerFocus.axApplicationPID(for: target.processIdentifier)
     }
 
     /// Cursor-insert commit (issue #129). `.paste(body)` delivers through

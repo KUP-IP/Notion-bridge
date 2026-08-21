@@ -131,6 +131,24 @@ func runCommandCursorInsertTests() async {
             role: "AXGroup",
             frame: CGRect(x: 0, y: 0, width: 200, height: 40)
         ))
+        try expect(!CommandInsertPointerFocus.trustsAXSet(
+            role: "AXTextArea",
+            frame: CGRect(x: 1699, y: 1310, width: 768, height: 60),
+            chromium: true,
+            bundleIdentifier: "notion.id"
+        ), "Notion Electron AXTextArea reports AXValue success without mutating the composer")
+        try expect(CommandInsertPointerFocus.trustsAXSet(
+            role: "AXTextArea",
+            frame: CGRect(x: 445, y: 909, width: 261, height: 24),
+            chromium: true,
+            bundleIdentifier: "com.todesktop.230313mzl4w4u92"
+        ), "Cursor compact AXTextArea still lands via AX set")
+        try expect(!CommandInsertPointerFocus.trustsAXSet(
+            role: "AXTextArea",
+            frame: CGRect(x: 331, y: 207, width: 2028, height: 1179),
+            chromium: true,
+            bundleIdentifier: "com.google.Chrome"
+        ), "Chrome page AXTextArea is not a real AppKit field")
     }
 
     await test("UnicodeTyping: 20 UTF-16 stay one chunk; 21 split 20+1") {
@@ -175,7 +193,77 @@ func runCommandCursorInsertTests() async {
             "Electron composers need the web-like inter-chunk delay"
         )
         try expect(!CommandInsertPointerFocus.hostsElectron(pid: ProcessInfo.processInfo.processIdentifier))
+        try expect(!CommandInsertPointerFocus.hostsChromium(pid: ProcessInfo.processInfo.processIdentifier))
+        try expect(CommandInsertPointerFocus.browserBundleID(fromHelper: "com.google.Chrome.helper.Renderer") == "com.google.Chrome")
+        try expect(CommandInsertPointerFocus.browserBundleID(fromHelper: "com.google.Chrome") == nil)
+        try expect(CommandInsertPointerFocus.browserBundleID(fromHelper: "com.brave.Browser.helper") == "com.brave.Browser")
+        try expect(CommandInsertPointerFocus.axApplicationPID(for: ProcessInfo.processInfo.processIdentifier) == ProcessInfo.processInfo.processIdentifier)
+        try expect(CommandInsertPointerFocus.looksAutomatedChromiumArguments(
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --user-data-dir=/tmp/ms-playwright-mcp/mcp-chrome-7bf611f --remote-debugging-pipe about:blank"
+        ))
+        try expect(CommandInsertPointerFocus.looksAutomatedChromiumArguments(
+            "chrome --enable-automation /Users/foo/Library/Caches/ms-playwright/chromium"
+        ))
+        try expect(!CommandInsertPointerFocus.looksAutomatedChromiumArguments(
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-pipe"
+        ), "DevTools attached to the operator browser is not Playwright")
+        try expect(!CommandInsertPointerFocus.isAutomatedChromiumProcess(
+            pid: ProcessInfo.processInfo.processIdentifier
+        ))
+        try expect(CommandInsertPointerFocus.hostsChromium(bundleIdentifier: "com.google.Chrome.helper.Renderer", bundleURL: nil))
+        try expect(!CommandInsertPointerFocus.hostsChromium(bundleIdentifier: "com.apple.TextEdit", bundleURL: nil))
         try expect(CommandInsertPointerFocus.chromiumAXRetrySlices == 16)
+        try expect(CommandInsertUnicodeTyping.unicodeEdgePolicy(chromium: true, bundleIdentifier: "notion.id") == .both)
+        try expect(CommandInsertUnicodeTyping.unicodeEdgePolicy(chromium: true, bundleIdentifier: "com.google.Chrome") == .both)
+        try expect(CommandInsertUnicodeTyping.unicodeEdgePolicy(chromium: true, bundleIdentifier: "com.todesktop.230313mzl4w4u92") == .keyDownOnly)
+        try expect(CommandInsertPlaceholder.isPlaceholder(value: "Debug issues", placeholder: "Debug issues"))
+        try expect(!CommandInsertPlaceholder.isPlaceholder(value: "real text", placeholder: "Debug issues"))
+        try expect(CommandInsertPlaceholder.effectiveValue(value: "Debug issues", placeholder: "Debug issues") == "")
+        try expect(CommandInsertUnicodeTyping.carrierKeyCode(for: .both) == CommandInsertUnicodeTyping.ansiAKeyCode)
+        let chunk: [UInt16] = Array("ab".utf16)
+        try expect(CommandInsertUnicodeTyping.unicodeUnits(forKeyDown: chunk, policy: .both) == chunk)
+        try expect(CommandInsertUnicodeTyping.unicodeUnits(forKeyUp: chunk, policy: .both) == chunk)
+    }
+
+    await test("PointerFocus: pointer outside the focused frame prefers the pointer target") {
+        let frame = CGRect(x: 579, y: 681, width: 706, height: 232)
+        let pointer = CGPoint(x: 800, y: 430)
+        try expect(CommandInsertPointerFocus.shouldPreferPointerTarget(
+            focusedFrame: frame, pointer: pointer))
+        try expect(!CommandInsertPointerFocus.shouldPreferPointerTarget(
+            focusedFrame: frame, pointer: CGPoint(x: 800, y: 700)))
+        try expect(CommandInsertPointerFocus.shouldPreferPointerTarget(
+            focusedFrame: nil, pointer: pointer))
+        try expect(!CommandInsertPointerFocus.shouldPreferPointerTarget(
+            focusedFrame: frame, pointer: nil))
+        try expect(CommandInsertPointerFocus.shouldPreferPointerTarget(
+            focusedFrame: CGRect(x: 300, y: 72, width: 550, height: 910),
+            pointer: CGPoint(x: 500, y: 875),
+            focusedRole: "AXGroup"
+        ), "Cursor chat column must retarget to the composer under the pointer")
+        try expect(!CommandInsertPointerFocus.shouldPreferPointerTarget(
+            focusedFrame: CGRect(x: 612, y: 918, width: 537, height: 43),
+            pointer: CGPoint(x: 750, y: 910),
+            focusedRole: "AXTextArea"
+        ), "compact ChatGPT composer is already the right target")
+    }
+
+    await test("PointerFocus: pointer inside a web area is the click target") {
+        let frame = CGRect(x: 331, y: 207, width: 2028, height: 1179)
+        let pointer = CGPoint(x: 1480, y: 1320)
+        let p = CommandInsertPointerFocus.point(role: "AXWebArea", frame: frame, pointer: pointer)
+        try expect(p == pointer, "got \(p)")
+        let fallback = CommandInsertPointerFocus.point(
+            role: "AXWebArea", frame: frame, pointer: CGPoint(x: 10, y: 10))
+        try expect(fallback.x == frame.midX, "got \(fallback.x)")
+    }
+
+    await test("PointerFocus: cocoa mouse converts to quartz using the containing screen") {
+        let screens = [CGRect(x: 0, y: 0, width: 2560, height: 1440)]
+        let cocoa = CGPoint(x: 1480, y: 120)
+        let quartz = CommandInsertPointerFocus.quartzFromCocoa(cocoa, screens: screens)
+        try expect(quartz.x == 1480, "got \(quartz.x)")
+        try expect(quartz.y == 1320, "got \(quartz.y)")
     }
 
     await test("UnicodeTyping: does not end a chunk with ** when a header follows") {
