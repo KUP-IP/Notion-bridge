@@ -243,9 +243,13 @@ struct SkillsView: View {
                         message: "Skill retrieval is disabled in Tools. Skills won\u{2019}t be available to AI clients until you re-enable it.")
                 }
                 if state.showsPaletteEmpty {
-                    BridgeBanner(
-                        signal: .info,
-                        message: "No skills in the Commands palette yet. Flip a skill\u{2019}s Palette toggle to make it appear in the global hot-key popover. Routing is independent.")
+                    Text("No skills in the Commands palette yet. Flip a skill\u{2019}s Palette toggle to make it appear in the global hot-key popover. Routing is independent.")
+                        .font(BridgeTokens.Typeface.micro)
+                        .foregroundStyle(BridgeTokens.fg3)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("No skills in the Commands palette yet. Flip a skill\u{2019}s Palette toggle to make it appear in the global hot-key popover. Routing is independent.")
                 }
             }
             .padding(.horizontal, 14)

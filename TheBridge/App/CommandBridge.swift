@@ -885,9 +885,12 @@ public final class CommandBridgeController: NSObject {
         // captured in `snapshotInsertDestination` while the palette was
         // still not key.
         hide(immediate: true)
-        if let target,
-           target.processIdentifier != NSRunningApplication.current.processIdentifier {
-            target.activate()
+        // Activate the *resolved* pid (user Chrome), not Playwright MCP
+        // Chrome that shares `com.google.Chrome`.
+        if let pid,
+           let dest = NSRunningApplication(processIdentifier: pid),
+           dest.processIdentifier != NSRunningApplication.current.processIdentifier {
+            dest.activate()
         }
         // Let the destination become key after the non-activating panel
         // resigns, before AX / CGEvent insert. Electron otherwise keeps
@@ -904,11 +907,12 @@ public final class CommandBridgeController: NSObject {
     }
 
     /// Destination pid for insert: the captured prior app, unless it is us.
+    /// Chrome/Edge helpers publish no AX tree — map to the browser process.
     private func insertTargetPID(_ target: NSRunningApplication?) -> pid_t? {
         guard let target else { return nil }
         let me = NSRunningApplication.current.processIdentifier
         guard target.processIdentifier != me else { return nil }
-        return target.processIdentifier
+        return CommandInsertPointerFocus.axApplicationPID(for: target.processIdentifier)
     }
 
     /// Cursor-insert commit (issue #129). `.paste(body)` delivers through
@@ -2253,15 +2257,25 @@ public struct CommandBridgeRootView: View {
             .padding(.horizontal, BridgeTokens.Space.s2)
             .frame(height: 28)
             .background(BridgeTokens.wellFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            TextEditor(text: Binding(
-                get: { model.createDraft.body },
-                set: { model.createDraft.body = $0; model.refreshCreateAssessment() }
-            ))
-            .font(BridgeTokens.Typeface.meta)
-            .foregroundStyle(BridgeTokens.fg2)
-            .scrollContentBackground(.hidden)
-            .frame(minHeight: 64, maxHeight: 96)
-            .padding(4)
+            ZStack(alignment: .topLeading) {
+                if model.createDraft.body.isEmpty {
+                    Text("Body (optional)")
+                        .font(BridgeTokens.Typeface.meta)
+                        .foregroundStyle(BridgeTokens.fg4)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 8)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: Binding(
+                    get: { model.createDraft.body },
+                    set: { model.createDraft.body = $0; model.refreshCreateAssessment() }
+                ))
+                .font(BridgeTokens.Typeface.meta)
+                .foregroundStyle(BridgeTokens.fg2)
+                .scrollContentBackground(.hidden)
+                .frame(minHeight: 64, maxHeight: 96)
+                .padding(4)
+            }
             .background(BridgeTokens.wellFill, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
             Toggle("Treat as sensitive", isOn: Binding(
                 get: { model.createDraft.sensitive },

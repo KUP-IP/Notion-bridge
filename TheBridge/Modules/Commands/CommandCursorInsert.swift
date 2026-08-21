@@ -18,6 +18,7 @@ import Foundation
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 
 // ============================================================
 // MARK: - Outcome
@@ -102,6 +103,89 @@ public enum CommandTextSplicer {
     }
 }
 
+/// Ghost / placeholder strings Chromium reports as `AXValue` even when the
+/// composer is visually empty. Splicing into that string bakes the hint
+/// into the insert (`Debug issues` / `Send follow-up` + command body).
+///
+/// Cursor's compact `AXTextArea` often omits `AXPlaceholderValue` and
+/// publishes the hint as `AXValue` with caret `(0,0)` and empty description.
+/// Native fields and real drafts (caret not at origin, or a real placeholder
+/// attribute) must not be blanked.
+public enum CommandInsertPlaceholder {
+    /// Cursor empty-composer hints stay on one line (optional trailing newline).
+    public static let compactHintMaxUTF16 = 48
+
+    public static func effectiveValue(value: String?, placeholder: String?) -> String? {
+        effectiveValue(
+            value: value,
+            placeholder: placeholder,
+            description: nil,
+            title: nil,
+            compactChromiumComposer: false
+        )
+    }
+
+    public static func effectiveValue(
+        value: String?,
+        placeholder: String?,
+        description: String?,
+        title: String?,
+        compactChromiumComposer: Bool,
+        selectedLocationUTF16: Int? = nil,
+        selectedLengthUTF16: Int? = nil
+    ) -> String? {
+        guard let value else { return nil }
+        if isHintValue(
+            value: value,
+            placeholder: placeholder,
+            description: description,
+            title: title,
+            compactChromiumComposer: compactChromiumComposer,
+            selectedLocationUTF16: selectedLocationUTF16,
+            selectedLengthUTF16: selectedLengthUTF16
+        ) { return "" }
+        return value
+    }
+
+    public static func isPlaceholder(value: String?, placeholder: String?) -> Bool {
+        guard let value, !value.isEmpty,
+              let placeholder, !placeholder.isEmpty else { return false }
+        return value == placeholder
+    }
+
+    public static func isSingleLineComposerHint(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .newlines)
+        guard !trimmed.isEmpty, !trimmed.contains(where: \.isNewline) else { return false }
+        return trimmed.utf16.count <= compactHintMaxUTF16
+    }
+
+    public static func isHintValue(
+        value: String?,
+        placeholder: String?,
+        description: String?,
+        title: String?,
+        help: String? = nil,
+        compactChromiumComposer: Bool,
+        selectedLocationUTF16: Int? = nil,
+        selectedLengthUTF16: Int? = nil
+    ) -> Bool {
+        if isPlaceholder(value: value, placeholder: placeholder) { return true }
+        guard compactChromiumComposer else { return false }
+        guard let value, !value.isEmpty else { return false }
+        guard (placeholder ?? "").isEmpty else { return false }
+        let trimmed = value.trimmingCharacters(in: .newlines)
+        for hint in [description, title, help] {
+            if let hint, !hint.isEmpty, value == hint || trimmed == hint { return true }
+        }
+        // Live Cursor: value "Send follow-up\n", no placeholder, caret 0,0.
+        if let loc = selectedLocationUTF16, let len = selectedLengthUTF16,
+           loc == 0, len == 0, isSingleLineComposerHint(value) {
+            return true
+        }
+        return false
+    }
+}
+
 // ============================================================
 // MARK: - Insert seam
 // ============================================================
@@ -161,6 +245,12 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
     /// already `@unchecked Sendable` and only touched on the main actor.
     private var capturedElement: AXUIElement?
     private var capturedPID: pid_t?
+    /// Quartz pointer at snapshot time. Notion-in-Chrome composers sit in a
+    /// page-sized AXWebArea; mid-bottom click misses the right-sidebar field.
+    private var capturedPointer: CGPoint?
+    private var capturedSelectedLocation: Int?
+    private var capturedSelectedLength: Int?
+    private var capturedValue: String?
 
     public init() {}
 
@@ -168,8 +258,31 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
     public func captureFocusedElement(of pid: pid_t?) {
         capturedElement = nil
         capturedPID = pid
-        guard AXIsProcessTrusted(), let pid, pid > 0 else { return }
+        capturedPointer = quartzPointer()
+        capturedSelectedLocation = nil
+        capturedSelectedLength = nil
+        capturedValue = nil
+        let trusted = AXIsProcessTrusted()
+        guard trusted, let pid, pid > 0 else {
+            return
+        }
         capturedElement = copyFocusedElement(of: pid)
+        if let pointer = capturedPointer,
+           CommandInsertPointerFocus.shouldPreferPointerTarget(
+            focusedFrame: capturedElement.flatMap(axFrame),
+            pointer: pointer,
+            focusedRole: capturedElement.flatMap { stringAttr($0, kAXRoleAttribute as String) }
+           ),
+           let pointerEl = (
+            editableAtPointer(pointer: pointer, pid: pid)
+                ?? capturedElement.flatMap { compactEditable(in: $0, pointer: pointer) }
+                ?? compactEditable(pid: pid, pointer: pointer)
+           ) {
+            capturedElement = pointerEl
+        }
+        if let el = capturedElement {
+            snapshotCapturedCaret(el)
+        }
     }
 
     @MainActor
@@ -185,72 +298,153 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
 
         guard let pid, pid > 0 else { return .noEditableTarget }
 
-        let usedCapture = (capturedPID == pid && capturedElement != nil)
-        let focused = usedCapture ? capturedElement : copyFocusedElement(of: pid)
-        guard let focused else { return .noEditableTarget }
+        var usedCapture = (capturedPID == pid && capturedElement != nil)
+        var focused = usedCapture ? capturedElement : copyFocusedElement(of: pid)
+        let pointerForRetarget = capturedPID == pid ? capturedPointer : quartzPointer()
+        if let focusedEl = focused,
+           CommandInsertPointerFocus.shouldPreferPointerTarget(
+            focusedFrame: axFrame(focusedEl),
+            pointer: pointerForRetarget,
+            focusedRole: stringAttr(focusedEl, kAXRoleAttribute as String)
+           ),
+           let pointerEl = pointerForRetarget.flatMap({ pointer in
+               editableAtPointer(pointer: pointer, pid: pid)
+                   ?? compactEditable(in: focusedEl, pointer: pointer)
+                   ?? compactEditable(pid: pid, pointer: pointer)
+           }) {
+            focused = pointerEl
+            usedCapture = false
+        }
+        guard let focused else {
+            return .noEditableTarget
+        }
 
         let role = stringAttr(focused, kAXRoleAttribute as String) ?? ""
         if role == "AXSecureTextField" {
             return .noEditableTarget
         }
 
-        let selectedRange = cfRangeAttr(focused, kAXSelectedTextRangeAttribute as String)
-        let loc = selectedRange?.location ?? 0
-        let len = selectedRange?.length ?? 0
+        let liveRange = cfRangeAttr(focused, kAXSelectedTextRangeAttribute as String)
+        let liveValue = stringAttr(focused, kAXValueAttribute as String)
+        let placeholder = stringAttr(focused, kAXPlaceholderValueAttribute as String)
+        let description = stringAttr(focused, kAXDescriptionAttribute as String)
+        let title = stringAttr(focused, kAXTitleAttribute as String)
+        let help = stringAttr(focused, kAXHelpAttribute as String)
+        let chromium = CommandInsertPointerFocus.hostsChromium(pid: pid)
+        let compactChromium = chromium && isCompactEditable(focused)
+        var loc: Int
+        var len: Int
+        var before: String?
+        if usedCapture, let snapLoc = capturedSelectedLocation {
+            loc = snapLoc
+            len = capturedSelectedLength ?? 0
+            before = capturedValue ?? liveValue
+        } else {
+            loc = liveRange?.location ?? 0
+            len = liveRange?.length ?? 0
+            before = liveValue
+        }
+        let valueIsPlaceholder = CommandInsertPlaceholder.isHintValue(
+            value: before,
+            placeholder: placeholder,
+            description: description,
+            title: title,
+            help: help,
+            compactChromiumComposer: compactChromium,
+            selectedLocationUTF16: loc,
+            selectedLengthUTF16: len)
+            || CommandInsertPlaceholder.isHintValue(
+                value: liveValue,
+                placeholder: placeholder,
+                description: description,
+                title: title,
+                help: help,
+                compactChromiumComposer: compactChromium,
+                selectedLocationUTF16: liveRange?.location,
+                selectedLengthUTF16: liveRange?.length)
+        let ghostUTF16 = (liveValue ?? before ?? "").utf16.count
+        if valueIsPlaceholder {
+            // AXSelectedText inserts *beside* a ghost AXValue. Select the
+            // whole hint so replace/AXValue/typing overwrite it.
+            loc = 0
+            len = ghostUTF16
+            before = ""
+        }
         let replaced = len > 0
-        let before = stringAttr(focused, kAXValueAttribute as String)
+        if valueIsPlaceholder || (usedCapture && capturedSelectedLocation != nil) {
+            restoreSelectedRange(focused, locationUTF16: loc, lengthUTF16: len)
+        }
         let frame = axFrame(focused)
-        let trustAX = CommandInsertPointerFocus.trustsAXSet(role: role, frame: frame)
+        let app = NSRunningApplication(processIdentifier: pid)
+        let trustAX = CommandInsertPointerFocus.trustsAXSet(
+            role: role,
+            frame: frame,
+            chromium: chromium,
+            bundleIdentifier: app?.bundleIdentifier
+        )
+        let pointer = capturedPID == pid ? capturedPointer : quartzPointer()
+        let policy = CommandInsertUnicodeTyping.unicodeEdgePolicy(
+            chromium: chromium,
+            bundleIdentifier: app?.bundleIdentifier
+        )
 
-        if trustAX, isSettable(focused, kAXSelectedTextAttribute as String) {
+        if !valueIsPlaceholder, trustAX, isSettable(focused, kAXSelectedTextAttribute as String) {
             let setErr = AXUIElementSetAttributeValue(
                 focused, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
-            if setErr == .success {
-                let after = stringAttr(focused, kAXValueAttribute as String)
-                if CommandInsertAXVerify.landed(
-                    before: before,
-                    after: after,
-                    insertion: text,
-                    selectedLocationUTF16: loc,
-                    selectedLengthUTF16: len
-                ) {
-                    placeCaret(focused, afterUTF16: loc + text.utf16.count)
-                    return .inserted(replacedSelection: replaced, characters: text.count)
-                }
-                // Chromium reports success without mutating the field.
+            if setErr == .success,
+                axVerifyLanded(
+                focused,
+                before: before,
+                insertion: text,
+                loc: loc,
+                len: len,
+                electron: chromium
+               ) {
+                placeCaret(focused, afterUTF16: loc + text.utf16.count)
+                return .inserted(replacedSelection: replaced, characters: text.count)
             }
         }
 
         if trustAX, isSettable(focused, kAXValueAttribute as String),
-           let current = before ?? stringAttr(focused, kAXValueAttribute as String),
-           let range = selectedRange {
+           let current = before ?? liveValue {
             let spliced = CommandTextSplicer.splice(
                 value: current,
-                selectedLocationUTF16: range.location,
-                selectedLengthUTF16: range.length,
+                selectedLocationUTF16: loc,
+                selectedLengthUTF16: len,
                 insertion: text
             )
             let setErr = AXUIElementSetAttributeValue(
                 focused, kAXValueAttribute as CFString, spliced.newValue as CFTypeRef)
-            if setErr == .success {
-                let after = stringAttr(focused, kAXValueAttribute as String)
-                if after == spliced.newValue {
-                    placeCaret(focused, afterUTF16: spliced.newCaretUTF16)
-                    return .inserted(replacedSelection: spliced.replacedSelection, characters: text.count)
-                }
+            if setErr == .success,
+               axVerifyLanded(
+                focused,
+                before: before,
+                insertion: text,
+                loc: loc,
+                len: len,
+                electron: chromium
+               ) {
+                placeCaret(focused, afterUTF16: spliced.newCaretUTF16)
+                return .inserted(replacedSelection: spliced.replacedSelection, characters: text.count)
             }
         }
 
         // Native AX fields that actually changed are done above. Chromium
-        // (Cursor chat) exposes AXTextArea, returns AX set success, and
-        // leaves the DOM unchanged — click then unicode-type.
-        if usedCapture || looksEditable(role: role, element: focused) {
+        // AXValue can lag; only type after delayed verify still fails.
+        // Do not type into a captured page-sized AXGroup — that claims
+        // success while the compact composer stays empty (Cursor).
+        let mayType = looksEditable(role: role, element: focused)
+            && !(CommandInsertPointerFocus.isWebLike(role)
+                 && (frame?.height ?? 0) >= CommandInsertPointerFocus.tallWebAreaThreshold)
+        if mayType {
             restoreFocus(focused, pid: pid)
-            clickForPointerFocus(focused, role: role)
+            clickForPointerFocus(focused, role: role, electron: chromium, pointer: pointer)
             do {
                 try postUnicode(
                     text,
-                    interChunkDelay: CommandInsertUnicodeTyping.interChunkDelay(role: role)
+                    interChunkDelay: CommandInsertUnicodeTyping.interChunkDelay(
+                        role: role, electron: chromium),
+                    policy: policy
                 )
                 return .inserted(replacedSelection: replaced, characters: text.count)
             } catch {
@@ -261,14 +455,303 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         return .noEditableTarget
     }
 
+    private func snapshotCapturedCaret(_ el: AXUIElement) {
+        let range = cfRangeAttr(el, kAXSelectedTextRangeAttribute as String)
+        capturedSelectedLocation = range?.location
+        capturedSelectedLength = range?.length
+        let rawValue = stringAttr(el, kAXValueAttribute as String)
+        let placeholder = stringAttr(el, kAXPlaceholderValueAttribute as String)
+        let description = stringAttr(el, kAXDescriptionAttribute as String)
+        let title = stringAttr(el, kAXTitleAttribute as String)
+        let help = stringAttr(el, kAXHelpAttribute as String)
+        let compactChromium = capturedPID.map(CommandInsertPointerFocus.hostsChromium) == true
+            && isCompactEditable(el)
+        if CommandInsertPlaceholder.isHintValue(
+            value: rawValue,
+            placeholder: placeholder,
+            description: description,
+            title: title,
+            help: help,
+            compactChromiumComposer: compactChromium,
+            selectedLocationUTF16: range?.location,
+            selectedLengthUTF16: range?.length
+        ) {
+            capturedValue = ""
+            capturedSelectedLocation = 0
+            capturedSelectedLength = 0
+        } else {
+            capturedValue = rawValue
+        }
+    }
+
+    private func editableAtPointer(pointer: CGPoint, pid: pid_t) -> AXUIElement? {
+        let appEl = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appEl, 2.0)
+        var ref: AXUIElement?
+        let err = AXUIElementCopyElementAtPosition(
+            appEl, Float(pointer.x), Float(pointer.y), &ref)
+        guard err == .success, let start = ref else {
+            return nil
+        }
+        if let compact = nearestCompactEditable(from: start, pointer: pointer) {
+            return compact
+        }
+        return nil
+    }
+
+    private func isCompactEditable(_ el: AXUIElement) -> Bool {
+        let role = stringAttr(el, kAXRoleAttribute as String) ?? ""
+        let compact: Set<String> = [
+            "AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXText"
+        ]
+        guard compact.contains(role) else { return false }
+        if let frame = axFrame(el),
+           frame.height >= CommandInsertPointerFocus.tallWebAreaThreshold {
+            return false
+        }
+        return true
+    }
+
+    /// Cursor's composer is a compact AXTextArea beside chips; the hit test
+    /// often lands on the Debug chip or + button. Walk ancestors and BFS
+    /// children for a compact field near the pointer.
+    private func nearestCompactEditable(from start: AXUIElement, pointer: CGPoint) -> AXUIElement? {
+        var current: AXUIElement? = start
+        var hops = 0
+        var fallback: AXUIElement?
+        while let el = current, hops < 10 {
+            hops += 1
+            if isCompactEditable(el) { return el }
+            var queue = [el]
+            var seen = 0
+            while !queue.isEmpty, seen < 60 {
+                let node = queue.removeFirst()
+                seen += 1
+                if isCompactEditable(node) {
+                    if let frame = axFrame(node) {
+                        if frame.insetBy(dx: -24, dy: -24).contains(pointer) {
+                            return node
+                        }
+                        if abs(frame.midY - pointer.y) < 48 {
+                            fallback = fallback ?? node
+                        }
+                    }
+                }
+                var kidsRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(
+                    node, kAXChildrenAttribute as CFString, &kidsRef) == .success,
+                   let kids = kidsRef as? [AXUIElement] {
+                    queue.append(contentsOf: kids.prefix(20))
+                }
+            }
+            var parentRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(
+                el, kAXParentAttribute as CFString, &parentRef) == .success,
+                  let parentRef else { break }
+            current = (parentRef as! AXUIElement)
+        }
+        return fallback
+    }
+
+    private func compactEditable(in root: AXUIElement, pointer: CGPoint) -> AXUIElement? {
+        var owner: pid_t = 0
+        AXUIElementGetPid(root, &owner)
+        if owner > 0 {
+            let appEl = AXUIElementCreateApplication(owner)
+            _ = AXUIElementSetAttributeValue(
+                appEl, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
+        var queue = [root]
+        var seen = 0
+        var near: AXUIElement?
+        while !queue.isEmpty, seen < 500 {
+            let el = queue.removeFirst()
+            seen += 1
+            if isCompactEditable(el), let frame = axFrame(el) {
+                if frame.insetBy(dx: -16, dy: -16).contains(pointer) {
+                    return el
+                }
+                if abs(frame.midY - pointer.y) < 48, abs(frame.midX - pointer.x) < 400 {
+                    near = near ?? el
+                }
+            }
+            var kidsRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(
+                el, kAXChildrenAttribute as CFString, &kidsRef) == .success,
+               let kids = kidsRef as? [AXUIElement] {
+                queue.append(contentsOf: kids.prefix(40))
+            }
+        }
+        return near
+    }
+
+    private func compactEditable(pid: pid_t, pointer: CGPoint) -> AXUIElement? {
+        let appEl = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appEl, 2.0)
+        _ = AXUIElementSetAttributeValue(
+            appEl, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            appEl, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement] else { return nil }
+        var queue = windows
+        var seen = 0
+        var near: AXUIElement?
+        while !queue.isEmpty, seen < 800 {
+            let el = queue.removeFirst()
+            seen += 1
+            if isCompactEditable(el), let frame = axFrame(el) {
+                if frame.insetBy(dx: -16, dy: -16).contains(pointer) {
+                    return el
+                }
+                if abs(frame.midY - pointer.y) < 64, abs(frame.midX - pointer.x) < 500 {
+                    near = near ?? el
+                }
+            }
+            var kidsRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(
+                el, kAXChildrenAttribute as CFString, &kidsRef) == .success,
+               let kids = kidsRef as? [AXUIElement] {
+                queue.append(contentsOf: kids.prefix(40))
+            }
+        }
+        return near
+    }
+
     @MainActor
     private func copyFocusedElement(of pid: pid_t) -> AXUIElement? {
         let appEl = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appEl, 2.0)
+        let chromium = CommandInsertPointerFocus.hostsChromium(pid: pid)
+        if let el = focusedUIElement(appEl) {
+            let role = stringAttr(el, kAXRoleAttribute as String) ?? ""
+            let frame = axFrame(el)
+            let tallWeb = CommandInsertPointerFocus.isWebLike(role)
+                && (frame?.height ?? 0) >= CommandInsertPointerFocus.tallWebAreaThreshold
+            if !chromium || !tallWeb {
+                return el
+            }
+            // Cursor chat column is a focused AXGroup until ManualAX
+            // publishes the compact composer AXTextArea.
+            _ = AXUIElementSetAttributeValue(
+                appEl, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            for _ in 0..<CommandInsertPointerFocus.chromiumAXRetrySlices {
+                _ = CFRunLoopRunInMode(
+                    CFRunLoopMode.defaultMode,
+                    CommandInsertPointerFocus.chromiumAXRetrySliceSeconds,
+                    false)
+                if let next = focusedUIElement(appEl) {
+                    let nextRole = stringAttr(next, kAXRoleAttribute as String) ?? ""
+                    let nextFrame = axFrame(next)
+                    let nextTall = CommandInsertPointerFocus.isWebLike(nextRole)
+                        && (nextFrame?.height ?? 0) >= CommandInsertPointerFocus.tallWebAreaThreshold
+                    if !nextTall {
+                        return next
+                    }
+                }
+            }
+            return el
+        }
+        if let el = systemWideFocusedElement(matching: pid) {
+            return el
+        }
+        if chromium {
+            _ = AXUIElementSetAttributeValue(
+                appEl, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            for _ in 0..<CommandInsertPointerFocus.chromiumAXRetrySlices {
+                _ = CFRunLoopRunInMode(
+                    CFRunLoopMode.defaultMode,
+                    CommandInsertPointerFocus.chromiumAXRetrySliceSeconds,
+                    false)
+                if let el = focusedUIElement(appEl) {
+                    return el
+                }
+            }
+            if let el = systemWideFocusedElement(matching: pid) {
+                return el
+            }
+            if let el = firstWebArea(in: pid) {
+                return el
+            }
+        }
+        return nil
+    }
+
+    private func systemWideFocusedElement(matching pid: pid_t) -> AXUIElement? {
+        let sys = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(sys, 2.0)
+        var appRef: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(
+            sys, kAXFocusedApplicationAttribute as CFString, &appRef)
+        guard err == .success, let appRef else { return nil }
+        let focusedApp = appRef as! AXUIElement
+        var appPid: pid_t = 0
+        AXUIElementGetPid(focusedApp, &appPid)
+        guard CommandInsertPointerFocus.isDestinationFamily(
+            destinationPID: pid, elementPID: appPid) else { return nil }
+        return focusedUIElement(focusedApp)
+    }
+
+    private func firstWebArea(in pid: pid_t) -> AXUIElement? {
+        let appEl = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appEl, 2.0)
+        var windowsRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            appEl, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+              let windows = windowsRef as? [AXUIElement] else { return nil }
+        var queue = windows
+        var seen = 0
+        while !queue.isEmpty, seen < 500 {
+            let el = queue.removeFirst()
+            seen += 1
+            if stringAttr(el, kAXRoleAttribute as String) == "AXWebArea" { return el }
+            var kidsRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(
+                el, kAXChildrenAttribute as CFString, &kidsRef) == .success,
+               let kids = kidsRef as? [AXUIElement] {
+                queue.append(contentsOf: kids.prefix(50))
+            }
+        }
+        return nil
+    }
+
+    private func focusedUIElement(_ appEl: AXUIElement) -> AXUIElement? {
         var focusedRef: CFTypeRef?
-        let focusErr = AXUIElementCopyAttributeValue(
+        let err = AXUIElementCopyAttributeValue(
             appEl, kAXFocusedUIElementAttribute as CFString, &focusedRef)
-        guard focusErr == .success, let focusedRef else { return nil }
+        guard err == .success, let focusedRef else { return nil }
         return (focusedRef as! AXUIElement)
+    }
+
+    /// Chromium often reports AX set success before AXValue updates.
+    /// Re-read on Electron so a delayed land does not fall through to unicode.
+    private func axVerifyLanded(
+        _ focused: AXUIElement,
+        before: String?,
+        insertion: String,
+        loc: Int,
+        len: Int,
+        electron: Bool
+    ) -> Bool {
+        let check = {
+            CommandInsertAXVerify.landed(
+                before: before,
+                after: self.stringAttr(focused, kAXValueAttribute as String),
+                insertion: insertion,
+                selectedLocationUTF16: loc,
+                selectedLengthUTF16: len
+            )
+        }
+        if check() { return true }
+        guard electron else { return false }
+        for _ in 0..<CommandInsertPointerFocus.chromiumAXRetrySlices {
+            _ = CFRunLoopRunInMode(
+                CFRunLoopMode.defaultMode,
+                CommandInsertPointerFocus.chromiumAXRetrySliceSeconds,
+                false)
+            if check() { return true }
+        }
+        return false
     }
 
     /// Put the caret back on `element` so CGEvent unicode typing lands
@@ -286,9 +769,14 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
     /// Click the captured control so Electron/Chromium contenteditables
     /// actually receive the following unicode key events.
     @MainActor
-    private func clickForPointerFocus(_ element: AXUIElement, role: String) {
+    private func clickForPointerFocus(
+        _ element: AXUIElement,
+        role: String,
+        electron: Bool,
+        pointer: CGPoint?
+    ) {
         guard let rect = axFrame(element), rect.width > 1, rect.height > 1 else { return }
-        let point = CommandInsertPointerFocus.point(role: role, frame: rect)
+        let point = CommandInsertPointerFocus.point(role: role, frame: rect, pointer: pointer)
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
         guard let down = CGEvent(
             mouseEventSource: src,
@@ -304,7 +792,7 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
         ) else { return }
         down.post(tap: .cghidEventTap)
         up.post(tap: .cghidEventTap)
-        let settle = CommandInsertPointerFocus.isWebLike(role) ? 0.08 : 0.04
+        let settle = (electron || CommandInsertPointerFocus.isWebLike(role)) ? 0.08 : 0.04
         _ = CFRunLoopRunInMode(CFRunLoopMode.defaultMode, settle, false)
     }
 
@@ -350,6 +838,7 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
     }
 
     private func looksEditable(role: String, element: AXUIElement) -> Bool {
+        if role == "AXWebArea" { return true }
         let editable: Set<String> = [
             "AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "AXText"
         ]
@@ -358,33 +847,51 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             || isSettable(element, kAXSelectedTextAttribute as String)
     }
 
-    private func placeCaret(_ el: AXUIElement, afterUTF16 loc: Int) {
-        var range = CFRange(location: loc, length: 0)
+    private func quartzPointer() -> CGPoint {
+        let cocoa = NSEvent.mouseLocation
+        return CommandInsertPointerFocus.quartzFromCocoa(cocoa, screens: NSScreen.screens.map(\.frame))
+    }
+
+    private func restoreSelectedRange(
+        _ el: AXUIElement,
+        locationUTF16 loc: Int,
+        lengthUTF16 len: Int
+    ) {
+        var range = CFRange(location: max(0, loc), length: max(0, len))
         guard let axRange = AXValueCreate(.cfRange, &range) else { return }
         _ = AXUIElementSetAttributeValue(
             el, kAXSelectedTextRangeAttribute as CFString, axRange)
     }
 
+    private func placeCaret(_ el: AXUIElement, afterUTF16 loc: Int) {
+        restoreSelectedRange(el, locationUTF16: loc, lengthUTF16: 0)
+    }
+
     /// Unicode CGEvent typing — no pasteboard. Last-resort when AX set
     /// fails but the focused element still looks like an editor.
     ///
-    /// Unicode is attached **only** to keyUp. Cursor's markdown composer
-    /// treats keyDown unicode as live typing (`**` eaten, letters dropped).
-    /// `virtualKey` 0 is kVK_ANSI_A — leaving keyUp unset posts `"a"`.
-    /// Carrier 0xFFFF plus an explicit empty unicode payload on keyDown
-    /// avoids both the markdown chew and the A-key leak.
-    private func postUnicode(_ text: String, interChunkDelay: TimeInterval = 0) throws {
+    /// Native editors attach unicode on keyUp. Electron ignores keyUp-only
+    /// unicode, so Electron attaches on keyDown and leaves keyUp empty.
+    /// `virtualKey` 0 is kVK_ANSI_A — carrier 0xFFFF plus an empty payload
+    /// on the unused edge avoids an A-key leak.
+    private func postUnicode(
+        _ text: String,
+        interChunkDelay: TimeInterval = 0,
+        electron: Bool = false,
+        policy: CommandInsertUnicodeTyping.EdgePolicy? = nil
+    ) throws {
+        let policy = policy ?? (electron ? .keyDownOnly : .keyUpOnly)
         guard let src = CGEventSource(stateID: .hidSystemState) else {
             throw CommandInsertSynthError.source
         }
         let chunks = CommandInsertUnicodeTyping.utf16Chunks(text)
-        let vk = CommandInsertUnicodeTyping.carrierKeyCode
+        let vk = CommandInsertUnicodeTyping.carrierKeyCode(for: policy)
         for (i, chunk) in chunks.enumerated() {
             guard let down = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: true),
                   let up = CGEvent(keyboardEventSource: src, virtualKey: vk, keyDown: false)
             else { throw CommandInsertSynthError.event }
-            setUnicode(down, CommandInsertUnicodeTyping.unicodeUnits(forKeyDown: chunk))
-            setUnicode(up, CommandInsertUnicodeTyping.unicodeUnits(forKeyUp: chunk))
+            setUnicode(down, CommandInsertUnicodeTyping.unicodeUnits(forKeyDown: chunk, policy: policy))
+            setUnicode(up, CommandInsertUnicodeTyping.unicodeUnits(forKeyUp: chunk, policy: policy))
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
             if interChunkDelay > 0, i + 1 < chunks.count {
@@ -439,22 +946,206 @@ public enum CommandInsertAXVerify {
 public enum CommandInsertPointerFocus {
     public static let webLikeRoles: Set<String> = ["AXWebArea", "AXGroup", "AXUnknown"]
     public static let tallWebAreaThreshold: CGFloat = 120
+    public static let chromiumAXRetrySlices = 16
+    public static let chromiumAXRetrySliceSeconds: CFTimeInterval = 0.05
 
     public static func isWebLike(_ role: String) -> Bool {
         webLikeRoles.contains(role)
     }
 
+    /// Cursor / VS Code: Electron Framework.framework. Native AppKit editors do not.
+    public static func hostsElectron(pid: pid_t) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: pid),
+              let url = app.bundleURL else { return false }
+        let framework = url.appendingPathComponent(
+            "Contents/Frameworks/Electron Framework.framework")
+        return FileManager.default.fileExists(atPath: framework.path)
+    }
+
+    /// Chrome / Edge / Brave / Electron: unicode must ride keyDown.
+    public static func hostsChromium(pid: pid_t) -> Bool {
+        if hostsElectron(pid: pid) { return true }
+        let app = NSRunningApplication(processIdentifier: pid)
+        return hostsChromium(bundleIdentifier: app?.bundleIdentifier, bundleURL: app?.bundleURL)
+    }
+
+    public static func hostsChromium(bundleIdentifier: String?, bundleURL: URL?) -> Bool {
+        if let url = bundleURL {
+            let names = [
+                "Contents/Frameworks/Electron Framework.framework",
+                "Contents/Frameworks/Google Chrome Framework.framework",
+                "Contents/Frameworks/Chromium Embedded Framework.framework",
+                // ChatGPT.app (com.openai.codex) — Chromium, not Electron.
+                "Contents/Frameworks/Codex Framework.framework"
+            ]
+            for name in names {
+                if FileManager.default.fileExists(atPath: url.appendingPathComponent(name).path) {
+                    return true
+                }
+            }
+        }
+        let id = bundleIdentifier ?? ""
+        if id.hasPrefix("com.google.Chrome") { return true }
+        switch id {
+        case "com.brave.Browser",
+             "com.microsoft.edgemac",
+             "company.thebrowser.Browser",
+             "com.operasoftware.Opera",
+             "com.vivaldi.Vivaldi",
+             "com.openai.codex",
+             "com.openai.chat":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Chrome/Edge/Brave renderer helpers have no AX tree. The browser
+    /// process (`com.google.Chrome`) does. `com.google.Chrome.helper.Renderer`
+    /// → `com.google.Chrome`.
+    public static func browserBundleID(fromHelper id: String) -> String? {
+        guard let range = id.range(of: ".helper") else { return nil }
+        let root = String(id[..<range.lowerBound])
+        return root.isEmpty ? nil : root
+    }
+
+    /// Playwright MCP / Chromedriver launch a second Chrome with the same
+    /// bundle ID. `NSWorkspace.frontmostApplication` and
+    /// `runningApplications(withBundleIdentifier:).first` often pick that
+    /// instance (`about:blank`) instead of the operator's browser.
+    public static func looksAutomatedChromiumArguments(_ blob: String) -> Bool {
+        let lower = blob.lowercased()
+        return lower.contains("playwright")
+            || lower.contains("mcp-chrome")
+            || lower.contains("/ms-playwright")
+    }
+
+    public static func processArgumentBlob(pid: pid_t) -> String? {
+        let kernProcArgs2: Int32 = 49
+        var mib: [Int32] = [CTL_KERN, kernProcArgs2, pid]
+        var size = 0
+        guard sysctl(&mib, 3, nil, &size, nil, 0) == 0, size > 4 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: size)
+        guard sysctl(&mib, 3, &buffer, &size, nil, 0) == 0, size > 4 else { return nil }
+        for i in 0..<size where buffer[i] == 0 {
+            buffer[i] = 32
+        }
+        return String(bytes: buffer.prefix(size), encoding: .utf8)
+            ?? String(decoding: buffer.prefix(size), as: UTF8.self)
+    }
+
+    public static func isAutomatedChromiumProcess(pid: pid_t) -> Bool {
+        guard let blob = processArgumentBlob(pid: pid) else { return false }
+        return looksAutomatedChromiumArguments(blob)
+    }
+
+    /// Map helpers to the browser process, then skip Playwright/MCP Chrome
+    /// siblings that share `com.google.Chrome`.
+    public static func preferredBrowserPID(for pid: pid_t) -> pid_t {
+        guard let app = NSRunningApplication(processIdentifier: pid),
+              let id = app.bundleIdentifier else { return pid }
+        let rootID = browserBundleID(fromHelper: id) ?? id
+        let siblings = NSRunningApplication.runningApplications(withBundleIdentifier: rootID)
+        guard !siblings.isEmpty else { return pid }
+        let interactive = siblings.filter { !isAutomatedChromiumProcess(pid: $0.processIdentifier) }
+        let pool = interactive.isEmpty ? siblings : interactive
+        if pool.contains(where: { $0.processIdentifier == pid }) {
+            return pid
+        }
+        if let active = pool.first(where: { $0.isActive }) {
+            return active.processIdentifier
+        }
+        return pool.first?.processIdentifier ?? pid
+    }
+
+    public static func axApplicationPID(for pid: pid_t) -> pid_t {
+        preferredBrowserPID(for: pid)
+    }
+
+    public static func isDestinationFamily(destinationPID: pid_t, elementPID: pid_t) -> Bool {
+        if destinationPID == elementPID { return true }
+        guard let dest = NSRunningApplication(processIdentifier: destinationPID),
+              let el = NSRunningApplication(processIdentifier: elementPID) else {
+            return false
+        }
+        let destID = dest.bundleIdentifier ?? ""
+        let elID = el.bundleIdentifier ?? ""
+        if !destID.isEmpty, (elID == destID || elID.hasPrefix(destID + ".")) { return true }
+        guard let destURL = dest.bundleURL, let elURL = el.bundleURL else { return false }
+        if destURL == elURL { return true }
+        return elURL.path.hasPrefix(destURL.path)
+    }
+
+    /// Cocoa mouse (`NSEvent.mouseLocation`, y-up) → Quartz / AX (y-down).
+    public static func quartzFromCocoa(_ cocoa: CGPoint, screens: [CGRect]) -> CGPoint {
+        let screen = screens.first(where: { $0.insetBy(dx: -2, dy: -2).contains(cocoa) })
+            ?? screens.max(by: { $0.height * $0.width < $1.height * $1.width })
+        let maxY = screen?.maxY ?? screens.map(\.maxY).max() ?? cocoa.y
+        return CGPoint(x: cocoa.x, y: maxY - cocoa.y)
+    }
+
     /// Chromium `AXWebArea` (and page-sized groups) report settable AXValue
-    /// without mutating the DOM. Native fields still use AX set + read-back.
-    public static func trustsAXSet(role: String, frame: CGRect?) -> Bool {
+    /// without mutating the DOM. Notion Electron also lies for compact
+    /// `AXTextArea`: AXValue read-back matches while the composer stays empty.
+    /// Cursor / VS Code compact `AXTextArea` still lands via AX set — blanket
+    /// Chromium distrust skipped that path and synthetic keyDown claimed success.
+    /// Native AppKit fields still use AX set + read-back.
+    public static func trustsAXSet(
+        role: String,
+        frame: CGRect?,
+        chromium: Bool = false,
+        bundleIdentifier: String? = nil
+    ) -> Bool {
         if role == "AXWebArea" { return false }
         if isWebLike(role), let frame, frame.height >= tallWebAreaThreshold {
+            return false
+        }
+        if chromium, chromiumAXValueIsALie(bundleIdentifier: bundleIdentifier) {
             return false
         }
         return true
     }
 
-    public static func point(role: String, frame: CGRect) -> CGPoint {
+    /// Notion AI and Chromium *browsers* report AXTextArea success without
+    /// mutating the focused composer. Cursor/Electron editors do not.
+    public static func chromiumAXValueIsALie(bundleIdentifier: String?) -> Bool {
+        let id = bundleIdentifier ?? ""
+        if id == "notion.id" { return true }
+        if id.hasPrefix("com.google.Chrome") { return true }
+        switch id {
+        case "com.brave.Browser",
+             "com.microsoft.edgemac",
+             "company.thebrowser.Browser",
+             "com.operasoftware.Opera",
+             "com.vivaldi.Vivaldi":
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Stale AX focus (other Chrome tab, Playwright remap) vs the field
+    /// the operator actually clicked. Prefer the control under the pointer.
+    /// Tall AXGroup/AXWebArea also retargets: the pointer can sit in a
+    /// composer while AX focus is the whole chat column.
+    public static func shouldPreferPointerTarget(
+        focusedFrame: CGRect?,
+        pointer: CGPoint?,
+        focusedRole: String? = nil
+    ) -> Bool {
+        guard let pointer else { return false }
+        guard let focusedFrame else { return true }
+        if !focusedFrame.insetBy(dx: -12, dy: -12).contains(pointer) { return true }
+        if isWebLike(focusedRole ?? ""), focusedFrame.height >= tallWebAreaThreshold {
+            return true
+        }
+        return false
+    }
+
+    public static func point(role: String, frame: CGRect, pointer: CGPoint? = nil) -> CGPoint {
+        if let pointer, frame.insetBy(dx: -12, dy: -12).contains(pointer) {
+            return pointer
+        }
         if isWebLike(role) {
             let inset: CGFloat
             if frame.height >= tallWebAreaThreshold {
@@ -483,16 +1174,63 @@ public enum CommandInsertUnicodeTyping {
     public static let attachUnicodeToKeyUp = true
     public static let webLikeInterChunkDelay: TimeInterval = 0.008
 
-    public static func interChunkDelay(role: String) -> TimeInterval {
-        CommandInsertPointerFocus.isWebLike(role) ? webLikeInterChunkDelay : 0
+    public static func interChunkDelay(role: String, electron: Bool = false) -> TimeInterval {
+        (electron || CommandInsertPointerFocus.isWebLike(role)) ? webLikeInterChunkDelay : 0
     }
 
-    public static func unicodeUnits(forKeyDown chunk: [UInt16]) -> [UInt16] {
-        attachUnicodeToKeyDown ? chunk : []
+    public enum EdgePolicy: String, Sendable {
+        /// Native AppKit: unicode rides keyUp.
+        case keyUpOnly
+        /// Cursor / VS Code Electron: unicode rides keyDown; empty keyUp.
+        case keyDownOnly
+        /// Notion (and `keyboard_type`): unicode on both edges, vk 0.
+        case both
+        /// Chrome / ChatGPT.com: unicode on keyDown only, ANSI A carrier.
+        /// `.both` mutates the DOM but ProseMirror reinterprets the keyUp
+        /// (markdown `**` + leftover glyphs like `tur:ed` / `nv`).
+        /// `.keyDownOnly` uses 0xFFFF and does not land in browser composers.
+        case keyDownAnsiA
     }
 
-    public static func unicodeUnits(forKeyUp chunk: [UInt16]) -> [UInt16] {
-        attachUnicodeToKeyUp ? chunk : []
+    public static func unicodeEdgePolicy(
+        chromium: Bool,
+        bundleIdentifier: String?
+    ) -> EdgePolicy {
+        if !chromium { return .keyUpOnly }
+        if CommandInsertPointerFocus.chromiumAXValueIsALie(bundleIdentifier: bundleIdentifier) {
+            if bundleIdentifier == "notion.id" { return .both }
+            return .keyDownAnsiA
+        }
+        return .keyDownOnly
+    }
+
+    public static func carrierKeyCode(for policy: EdgePolicy) -> CGKeyCode {
+        switch policy {
+        case .both, .keyDownAnsiA: return ansiAKeyCode
+        case .keyUpOnly, .keyDownOnly: return carrierKeyCode
+        }
+    }
+
+    public static func unicodeUnits(forKeyDown chunk: [UInt16], electron: Bool = false) -> [UInt16] {
+        unicodeUnits(forKeyDown: chunk, policy: electron ? .keyDownOnly : .keyUpOnly)
+    }
+
+    public static func unicodeUnits(forKeyUp chunk: [UInt16], electron: Bool = false) -> [UInt16] {
+        unicodeUnits(forKeyUp: chunk, policy: electron ? .keyDownOnly : .keyUpOnly)
+    }
+
+    public static func unicodeUnits(forKeyDown chunk: [UInt16], policy: EdgePolicy) -> [UInt16] {
+        switch policy {
+        case .keyUpOnly: return []
+        case .keyDownOnly, .both, .keyDownAnsiA: return chunk
+        }
+    }
+
+    public static func unicodeUnits(forKeyUp chunk: [UInt16], policy: EdgePolicy) -> [UInt16] {
+        switch policy {
+        case .keyDownOnly, .keyDownAnsiA: return []
+        case .keyUpOnly, .both: return chunk
+        }
     }
 
     public static func utf16Chunks(_ text: String, maxUTF16: Int = maxUTF16PerChunk) -> [[UInt16]] {

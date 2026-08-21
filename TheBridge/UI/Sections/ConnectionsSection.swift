@@ -349,7 +349,7 @@ public struct ConnectionsSection: View {
                     BridgeCardLabel("Agent handshake")
                     Text("handed to an agent the moment it connects")
                         .font(BridgeTokens.Typeface.micro)
-                        .foregroundStyle(BridgeTokens.fg5)
+                        .foregroundStyle(BridgeTokens.fg4)
                     Spacer(minLength: 0)
                 }
 
