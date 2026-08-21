@@ -71,7 +71,10 @@
 # 2026-08-19: 3761 → 3763 (+2) — Electron insert keyDown/keyUp policy +
 #   C1 single-line search name-only (empty body). Measured 3763 passed,
 #   0 failed on feat/v405-local-insert-ui.
-FLOOR="${BRIDGE_TEST_FLOOR:-3763}"
+# 2026-08-21: 3763 → 3767 (+4) — Cursor caret-origin ghost, ChatGPT.app
+#   Codex Chromium hint replace, Chrome keyDownAnsiA. Measured 3767
+#   passed, 0 failed on feat/v405-local-insert-ui.
+FLOOR="${BRIDGE_TEST_FLOOR:-3767}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
