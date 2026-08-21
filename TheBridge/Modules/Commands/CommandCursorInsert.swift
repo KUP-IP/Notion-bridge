@@ -974,7 +974,9 @@ public enum CommandInsertPointerFocus {
             let names = [
                 "Contents/Frameworks/Electron Framework.framework",
                 "Contents/Frameworks/Google Chrome Framework.framework",
-                "Contents/Frameworks/Chromium Embedded Framework.framework"
+                "Contents/Frameworks/Chromium Embedded Framework.framework",
+                // ChatGPT.app (com.openai.codex) — Chromium, not Electron.
+                "Contents/Frameworks/Codex Framework.framework"
             ]
             for name in names {
                 if FileManager.default.fileExists(atPath: url.appendingPathComponent(name).path) {
@@ -989,7 +991,9 @@ public enum CommandInsertPointerFocus {
              "com.microsoft.edgemac",
              "company.thebrowser.Browser",
              "com.operasoftware.Opera",
-             "com.vivaldi.Vivaldi":
+             "com.vivaldi.Vivaldi",
+             "com.openai.codex",
+             "com.openai.chat":
             return true
         default:
             return false
@@ -1181,6 +1185,11 @@ public enum CommandInsertUnicodeTyping {
         case keyDownOnly
         /// Notion (and `keyboard_type`): unicode on both edges, vk 0.
         case both
+        /// Chrome / ChatGPT.com: unicode on keyDown only, ANSI A carrier.
+        /// `.both` mutates the DOM but ProseMirror reinterprets the keyUp
+        /// (markdown `**` + leftover glyphs like `tur:ed` / `nv`).
+        /// `.keyDownOnly` uses 0xFFFF and does not land in browser composers.
+        case keyDownAnsiA
     }
 
     public static func unicodeEdgePolicy(
@@ -1188,17 +1197,18 @@ public enum CommandInsertUnicodeTyping {
         bundleIdentifier: String?
     ) -> EdgePolicy {
         if !chromium { return .keyUpOnly }
-        // Chrome / Notion / other Chromium browsers: unicode on both edges
-        // (same as keyboard_type). keyDown-only + 0xFFFF claims success
-        // without mutating contenteditables.
         if CommandInsertPointerFocus.chromiumAXValueIsALie(bundleIdentifier: bundleIdentifier) {
-            return .both
+            if bundleIdentifier == "notion.id" { return .both }
+            return .keyDownAnsiA
         }
         return .keyDownOnly
     }
 
     public static func carrierKeyCode(for policy: EdgePolicy) -> CGKeyCode {
-        policy == .both ? ansiAKeyCode : carrierKeyCode
+        switch policy {
+        case .both, .keyDownAnsiA: return ansiAKeyCode
+        case .keyUpOnly, .keyDownOnly: return carrierKeyCode
+        }
     }
 
     public static func unicodeUnits(forKeyDown chunk: [UInt16], electron: Bool = false) -> [UInt16] {
@@ -1212,13 +1222,13 @@ public enum CommandInsertUnicodeTyping {
     public static func unicodeUnits(forKeyDown chunk: [UInt16], policy: EdgePolicy) -> [UInt16] {
         switch policy {
         case .keyUpOnly: return []
-        case .keyDownOnly, .both: return chunk
+        case .keyDownOnly, .both, .keyDownAnsiA: return chunk
         }
     }
 
     public static func unicodeUnits(forKeyUp chunk: [UInt16], policy: EdgePolicy) -> [UInt16] {
         switch policy {
-        case .keyDownOnly: return []
+        case .keyDownOnly, .keyDownAnsiA: return []
         case .keyUpOnly, .both: return chunk
         }
     }

@@ -214,15 +214,21 @@ func runCommandCursorInsertTests() async {
         try expect(!CommandInsertPointerFocus.hostsChromium(bundleIdentifier: "com.apple.TextEdit", bundleURL: nil))
         try expect(CommandInsertPointerFocus.chromiumAXRetrySlices == 16)
         try expect(CommandInsertUnicodeTyping.unicodeEdgePolicy(chromium: true, bundleIdentifier: "notion.id") == .both)
-        try expect(CommandInsertUnicodeTyping.unicodeEdgePolicy(chromium: true, bundleIdentifier: "com.google.Chrome") == .both)
+        try expect(CommandInsertUnicodeTyping.unicodeEdgePolicy(chromium: true, bundleIdentifier: "com.google.Chrome") == .keyDownAnsiA)
         try expect(CommandInsertUnicodeTyping.unicodeEdgePolicy(chromium: true, bundleIdentifier: "com.todesktop.230313mzl4w4u92") == .keyDownOnly)
+        try expect(CommandInsertPointerFocus.hostsChromium(bundleIdentifier: "com.openai.codex", bundleURL: nil))
+        try expect(CommandInsertPointerFocus.hostsChromium(bundleIdentifier: "com.openai.chat", bundleURL: nil))
+        try expect(!CommandInsertPointerFocus.chromiumAXValueIsALie(bundleIdentifier: "com.openai.codex"),
+                   "ChatGPT.app must keep the AX ghost-replace path; Chrome.com still types")
         try expect(CommandInsertPlaceholder.isPlaceholder(value: "Debug issues", placeholder: "Debug issues"))
         try expect(!CommandInsertPlaceholder.isPlaceholder(value: "real text", placeholder: "Debug issues"))
         try expect(CommandInsertPlaceholder.effectiveValue(value: "Debug issues", placeholder: "Debug issues") == "")
         try expect(CommandInsertUnicodeTyping.carrierKeyCode(for: .both) == CommandInsertUnicodeTyping.ansiAKeyCode)
-        let chunk: [UInt16] = Array("ab".utf16)
+        try expect(CommandInsertUnicodeTyping.carrierKeyCode(for: .keyDownAnsiA) == CommandInsertUnicodeTyping.ansiAKeyCode)
         try expect(CommandInsertUnicodeTyping.unicodeUnits(forKeyDown: chunk, policy: .both) == chunk)
         try expect(CommandInsertUnicodeTyping.unicodeUnits(forKeyUp: chunk, policy: .both) == chunk)
+        try expect(CommandInsertUnicodeTyping.unicodeUnits(forKeyDown: chunk, policy: .keyDownAnsiA) == chunk)
+        try expect(CommandInsertUnicodeTyping.unicodeUnits(forKeyUp: chunk, policy: .keyDownAnsiA).isEmpty)
     }
 
     await test("PointerFocus: pointer outside the focused frame prefers the pointer target") {
@@ -330,6 +336,33 @@ func runCommandCursorInsertTests() async {
             selectedLocationUTF16: 0,
             selectedLengthUTF16: 0
         ), "a real placeholder attribute keeps compact Chromium drafts")
+        try expect(CommandInsertPlaceholder.isHintValue(
+            value: "\nMessage ChatGPT",
+            placeholder: nil,
+            description: "Message ChatGPT",
+            title: nil,
+            compactChromiumComposer: true,
+            selectedLocationUTF16: 0,
+            selectedLengthUTF16: 0
+        ), "ChatGPT.app empty composer is a leading-newline hint equal to AXDescription")
+        try expect(
+            CommandInsertPlaceholder.effectiveValue(
+                value: "\nMessage ChatGPT",
+                placeholder: nil,
+                description: "Message ChatGPT",
+                title: nil,
+                compactChromiumComposer: true,
+                selectedLocationUTF16: 0,
+                selectedLengthUTF16: 0
+            ) == ""
+        )
+        try expect(!CommandInsertPlaceholder.isHintValue(
+            value: "\nMessage ChatGPT",
+            placeholder: nil,
+            description: "Message ChatGPT",
+            title: nil,
+            compactChromiumComposer: false
+        ), "native fields must not blank the ChatGPT hint string")
     }
 
     await test("PointerFocus: pointer inside a web area is the click target") {
