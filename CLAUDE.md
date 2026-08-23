@@ -10,7 +10,7 @@ A macOS menu-bar app that exposes the Mac + a Notion workspace to AI agents over
   executable wraps it. Tests are a custom harness (`TheBridgeTests`), NOT XCTest.
 - **MCP server:** `Server/SSEServer` (`SSETransport.swift`) serves `/mcp`, `/sse`,
   `/health`, job callbacks. Tools register via `Server/BridgeModuleRegistry.swift`
-  (223 static feature-module tools across 32 families; conditional tools are counted
+  (224 static feature-module tools across 32 families; conditional tools are counted
   separately) → `ToolRouter` → `MCPToolFactory`.
 - **Tools:** `ToolRegistration {name, module, tier, inputSchema (MCP Value), handler}`.
   Every live tool MUST have a `ToolAnnotationCatalog` entry — `ToolAnnotationAuditTests`

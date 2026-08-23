@@ -4,7 +4,7 @@
 
 The Bridge exposes your local Mac and connected services as Model Context Protocol (MCP) tools over **Streamable HTTP**, **legacy SSE**, and **stdio** — locally on `127.0.0.1` for clients like Claude Code, Cursor, and Notion agents, and **securely from the cloud** (claude.ai and ChatGPT custom connectors) through a customer-owned Cloudflare Tunnel with OAuth. Built in Swift 6.2 for macOS 26+ on Apple Silicon, it is designed to be always-on, auto-launched, and safe enough for daily operator use.
 
-**223 static feature-module tools** across **32 module families** · **3 transports + cloud connector** (Claude web · ChatGPT) · **3-tier security model** with on-device approvals · **Liquid Glass UI**
+**224 static feature-module tools** across **32 module families** · **3 transports + cloud connector** (Claude web · ChatGPT) · **3-tier security model** with on-device approvals · **Liquid Glass UI**
 
 **Latest published release:** [v4.0.5](https://github.com/KUP-IP/the-bridge/releases/tag/v4.0.5) (August 2026). The current source version is 4.0.5 (build 94). Existing installs auto-update via Sparkle.
 
@@ -29,7 +29,7 @@ Current commercial posture:
 
 ## Current product surface
 
-The Bridge registers **223 static feature-module tools across 32 module families**, surfaced collapsibly in **Settings → Tools**. Conditional tools such as cloud status are outside that static count, and the displayed list can be smaller when a feature group is disabled. Highlights below; the full live registry is in-app.
+The Bridge registers **224 static feature-module tools across 32 module families**, surfaced collapsibly in **Settings → Tools**. Conditional tools such as cloud status are outside that static count, and the displayed list can be smaller when a feature group is disabled. Highlights below; the full live registry is in-app.
 
 | Module | Tools | Notes |
 |---|---:|---|
@@ -45,8 +45,8 @@ The Bridge registers **223 static feature-module tools across 32 module families
 | ScreenModule | 5 | capture, OCR, recording, screen analysis |
 | CredentialModule | 4 | Keychain-backed credential storage |
 | SkillsModule | 3 | `fetch_skill`, `list_routing_skills`, `manage_skill` |
-| ConnectionsModule | 5 | connection inventory, health, validation |
-| **Total** | **223 static** | Across 32 feature-module families. The former builtin `echo` and Stripe/payment surfaces are removed; conditional tools are counted separately. The table highlights selected families, while **Settings → Tools** shows the full live registry. |
+| ConnectionsModule | 6 | connection inventory, health, validation, and local reset |
+| **Total** | **224 static** | Across 32 feature-module families. The former builtin `echo` and Stripe/payment surfaces are removed; conditional tools are counted separately. The table highlights selected families, while **Settings → Tools** shows the full live registry. |
 
 Core product traits:
 - Native macOS menu-bar app with onboarding, settings, and a status popover
@@ -153,7 +153,7 @@ Use stdio when connecting local clients such as Claude Code or Cursor directly t
 
 #### Using Bridge with Antigravity
 
-Google Antigravity enforces a strict 100-tool limit per MCP server, whereas The Bridge registers 223 static feature-module tools. To use Bridge with Antigravity, we have curated a subset of ~84 tools to stay under the limit.
+Google Antigravity enforces a strict 100-tool limit per MCP server, whereas The Bridge registers 224 static feature-module tools. To use Bridge with Antigravity, we have curated a subset of ~84 tools to stay under the limit.
 
 You can launch the Bridge process with a `--multi-instance` flag (bypasses single-instance GUI guard) and `--allow-tools` flag pointing to the Antigravity allowlist:
 
