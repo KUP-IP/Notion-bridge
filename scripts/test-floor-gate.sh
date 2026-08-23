@@ -78,7 +78,11 @@
 #   34-column read-only schema preflight, live-schema metadata retention, and
 #   config non-mutation proof. Measured 3776 passed, 0 failed on
 #   codex/a1-integrity-preflight-v2.
-FLOOR="${BRIDGE_TEST_FLOOR:-3776}"
+# 2026-08-21: 3776 → 3780 (+4) — bounded THREAD Messages M1 explicit-service
+#   preflight, service-correlated recovery, duplicate-Intent refusal, and exact
+#   existing-Result adoption. Additive combined floor 3780 on
+#   codex/thread-m1-reactivation-v2.
+FLOOR="${BRIDGE_TEST_FLOOR:-3780}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
