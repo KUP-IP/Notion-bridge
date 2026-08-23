@@ -7,6 +7,8 @@ import Darwin
 public struct NodeTestInvocation: Sendable, Equatable {
     public let workingDirectory: String
     public let worktreePath: String
+    public let executionDirectory: String
+    public let filesystemPermissionRoot: String
     public let branch: String
     public let stableID: String
     public let testPaths: [String]
@@ -17,6 +19,16 @@ public enum NodeTestContract {
     private static let allowedExtensions: Set<String> = ["js", "mjs", "cjs"]
     private static let maximumTestPaths = 32
     private static let maximumPathBytes = 4_096
+
+    public static func physicalPath(_ path: String) throws -> String {
+        guard let pointer = Darwin.realpath(path, nil) else {
+            throw WorktreeOwnershipError.invalid(
+                "node_test could not resolve an existing physical path: \(path)"
+            )
+        }
+        defer { free(pointer) }
+        return String(cString: pointer)
+    }
 
     public static func prepare(
         workingDirectory: String,
@@ -54,8 +66,14 @@ public enum NodeTestContract {
         let canonicalWorking = URL(fileURLWithPath: canonicalWorkingDirectory)
             .resolvingSymlinksInPath()
             .standardizedFileURL.path
-        guard canonicalWorking == canonicalWorktree
-                || canonicalWorking.hasPrefix(canonicalWorktree + "/") else {
+        // Preserve the canonical Git/claim spelling above. Node's permission
+        // model separately resolves macOS's /tmp alias to /private/tmp before
+        // loading ESM imports, so execution and permission paths must use the
+        // same physical spelling without changing the ownership identity tuple.
+        let physicalWorktree = try physicalPath(canonicalWorktree)
+        let physicalWorking = try physicalPath(canonicalWorking)
+        guard physicalWorking == physicalWorktree
+                || physicalWorking.hasPrefix(physicalWorktree + "/") else {
             throw WorktreeOwnershipError.identityChanged(
                 "node_test workingDir resolved outside its live Git worktree"
             )
@@ -80,50 +98,51 @@ public enum NodeTestContract {
                 )
             }
 
-            let candidate = URL(fileURLWithPath: canonicalWorking)
+            let lexicalCandidate = URL(fileURLWithPath: physicalWorking)
                 .appendingPathComponent(rawPath)
                 .standardizedFileURL
-                .resolvingSymlinksInPath()
-                .standardizedFileURL
-            guard candidate.path.hasPrefix(canonicalWorking + "/") else {
-                throw WorktreeOwnershipError.targetUnresolved(
-                    "node_test path escapes workingDir: \(rawPath)"
-                )
-            }
-            let extensionName = candidate.pathExtension.lowercased()
-            guard allowedExtensions.contains(extensionName) else {
-                throw WorktreeOwnershipError.invalid(
-                    "node_test accepts only .js, .mjs, or .cjs test files"
-                )
-            }
             var candidateIsDirectory: ObjCBool = false
             guard fileManager.fileExists(
-                atPath: candidate.path,
+                atPath: lexicalCandidate.path,
                 isDirectory: &candidateIsDirectory
             ), !candidateIsDirectory.boolValue else {
                 throw WorktreeOwnershipError.invalid(
                     "node_test test path must be an existing file: \(rawPath)"
                 )
             }
-            let attributes = try fileManager.attributesOfItem(atPath: candidate.path)
+            let candidatePath = try physicalPath(lexicalCandidate.path)
+            guard candidatePath.hasPrefix(physicalWorking + "/") else {
+                throw WorktreeOwnershipError.targetUnresolved(
+                    "node_test path escapes workingDir: \(rawPath)"
+                )
+            }
+            let extensionName = (candidatePath as NSString).pathExtension.lowercased()
+            guard allowedExtensions.contains(extensionName) else {
+                throw WorktreeOwnershipError.invalid(
+                    "node_test accepts only .js, .mjs, or .cjs test files"
+                )
+            }
+            let attributes = try fileManager.attributesOfItem(atPath: candidatePath)
             guard attributes[.type] as? FileAttributeType == .typeRegular else {
                 throw WorktreeOwnershipError.invalid(
                     "node_test test path must resolve to a regular file: \(rawPath)"
                 )
             }
-            let relative = String(candidate.path.dropFirst(canonicalWorking.count + 1))
+            let relative = String(candidatePath.dropFirst(physicalWorking.count + 1))
             guard !normalized.contains(relative) else {
                 throw WorktreeOwnershipError.invalid(
                     "node_test test paths must be unique"
                 )
             }
             normalized.append(relative)
-            resolved.append(candidate.path)
+            resolved.append(candidatePath)
         }
 
         return NodeTestInvocation(
             workingDirectory: canonicalWorking,
             worktreePath: canonicalWorktree,
+            executionDirectory: physicalWorking,
+            filesystemPermissionRoot: physicalWorktree,
             branch: identity.branch,
             stableID: identity.stableID,
             testPaths: normalized,
@@ -388,14 +407,14 @@ public enum NodeTestModule {
                 process.executableURL = URL(fileURLWithPath: nodeExecutable)
                 let nodeArguments = [
                     "--permission",
-                    "--allow-fs-read=\(invocation.worktreePath)",
-                    "--allow-fs-write=\(invocation.worktreePath)",
+                    "--allow-fs-read=\(invocation.filesystemPermissionRoot)",
+                    "--allow-fs-write=\(invocation.filesystemPermissionRoot)",
                     "--eval",
                     "",
                 ] + invocation.resolvedTestPaths.map { "--import=\($0)" }
                 process.arguments = nodeArguments
                 process.currentDirectoryURL = URL(
-                    fileURLWithPath: invocation.workingDirectory
+                    fileURLWithPath: invocation.executionDirectory
                 )
                 process.environment = NodeTestContract.sanitizedEnvironment()
 

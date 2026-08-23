@@ -138,6 +138,13 @@ func runNodeTestModuleTests() async {
         }
     }
 
+    await test("node_test resolves the macOS /tmp alias before building permissions") {
+        try expect(
+            NodeTestContract.physicalPath("/tmp") == "/private/tmp",
+            "node_test must bind Node permissions to the physical /private/tmp path"
+        )
+    }
+
     await test("node_test rejects absolute, dynamic, and parent-escape test paths") {
         let fixture = try await makeNodeTestFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
