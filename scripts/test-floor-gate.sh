@@ -80,9 +80,15 @@
 #   codex/a1-integrity-preflight-v2.
 # 2026-08-21: 3776 → 3780 (+4) — bounded THREAD Messages M1 explicit-service
 #   preflight, service-correlated recovery, duplicate-Intent refusal, and exact
-#   existing-Result adoption. Additive combined floor 3780 on
+#   existing-Result adoption. Individually measured 3771 passed, 0 failed on
 #   codex/thread-m1-reactivation-v2.
-FLOOR="${BRIDGE_TEST_FLOOR:-3780}"
+# 2026-08-21: 3780 → 3788 (+8) — governed node_test: owner-bound
+#   trusted node:test imports, fixed permissions, bounded output/timeout,
+#   and post-run identity revalidation. Individually measured 3775 passed, 0 failed
+#   on codex/u2-governed-node-test-v2.
+# 2026-08-22: 3788 → 3789 (+1) — physically canonicalize macOS's
+#   /tmp → /private/tmp alias before constructing Node permission paths.
+FLOOR="${BRIDGE_TEST_FLOOR:-3789}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

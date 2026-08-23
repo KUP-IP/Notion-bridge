@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-TheBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. The current source version is **4.0.5** (build **94**). It registers **223 static feature-module tools** (`BridgeConstants.staticFeatureModuleToolCount`) across **32 module families** (`BridgeConstants.staticFeatureModuleFamilyCount`) over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Conditional tools such as `bridge_status` are outside that static count, and client listings may be filtered by enabled feature groups. The former builtin `echo` and Stripe/payment surfaces are no longer registered.
+TheBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. The current source version is **4.0.5** (build **94**). It registers **224 static feature-module tools** (`BridgeConstants.staticFeatureModuleToolCount`) across **32 module families** (`BridgeConstants.staticFeatureModuleFamilyCount`) over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Conditional tools such as `bridge_status` are outside that static count, and client listings may be filtered by enabled feature groups. The former builtin `echo` and Stripe/payment surfaces are no longer registered.
 
 Bundle ID: `kup.solutions.the-bridge` (legacy: `kup.solutions.notion-bridge`, `solutions.kup.keepr`)
 
