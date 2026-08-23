@@ -3,6 +3,7 @@
 
 import Foundation
 import MCP
+import SQLite3
 import TheBridgeLib
 
 // MARK: - MessagesModule Tests
@@ -277,6 +278,31 @@ func runMessagesModuleTests() async {
             }
             try expect(guardIndex < seamIndex, "exact approval must precede \(seam)")
         }
+    }
+
+    await test("delivery verification coerces the bound timestamp to numeric affinity") {
+        var database: OpaquePointer?
+        try expect(sqlite3_open(":memory:", &database) == SQLITE_OK, "failed to open in-memory SQLite database")
+        defer { sqlite3_close(database) }
+
+        var statement: OpaquePointer?
+        let sql = "SELECT 1787334139.219 >= ?1, 1787334139.219 >= CAST(?1 AS REAL)"
+        try expect(sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK, "failed to prepare affinity probe")
+        defer { sqlite3_finalize(statement) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(statement, 1, "1787334130.4726059", -1, transient)
+        try expect(sqlite3_step(statement) == SQLITE_ROW, "affinity probe returned no row")
+        try expect(sqlite3_column_int(statement, 0) == 0, "the regression precondition no longer holds")
+        try expect(sqlite3_column_int(statement, 1) == 1, "numeric coercion must preserve eligible rows")
+
+        let testsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let sourceURL = testsURL.deletingLastPathComponent()
+            .appendingPathComponent("TheBridge/Modules/MessagesModule.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        try expect(
+            source.contains(">= CAST(?2 AS REAL)"),
+            "delivery verification timestamp parameter must be explicitly numeric"
+        )
     }
 
     await test("messages_send source exposes only the bounded M1 lane and internal journal context") {

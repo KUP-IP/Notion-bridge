@@ -88,7 +88,9 @@
 #   on codex/u2-governed-node-test-v2.
 # 2026-08-22: 3788 → 3789 (+1) — physically canonicalize macOS's
 #   /tmp → /private/tmp alias before constructing Node permission paths.
-FLOOR="${BRIDGE_TEST_FLOOR:-3789}"
+# 2026-08-23: 3789 → 3790 (+1) — coerce the text-bound Messages delivery
+#   verification timestamp to SQLite numeric affinity before comparison.
+FLOOR="${BRIDGE_TEST_FLOOR:-3790}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
