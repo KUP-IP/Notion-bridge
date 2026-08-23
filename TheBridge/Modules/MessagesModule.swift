@@ -708,7 +708,7 @@ public enum MessagesModule {
             JOIN chat c ON c.ROWID = cmj.chat_id
             WHERE m.ROWID > ?1
               AND m.is_from_me = 1
-              AND (CAST(m.date AS REAL) / 1000000000.0 + 978307200.0) >= ?2
+              AND (CAST(m.date AS REAL) / 1000000000.0 + 978307200.0) >= CAST(?2 AS REAL)
             ORDER BY m.ROWID ASC
             LIMIT ?3
             """
