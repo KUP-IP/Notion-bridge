@@ -21,11 +21,14 @@ struct CachedSkill: Sendable {
 }
 
 /// Thread-safe actor cache for fetched skill content.
-actor SkillCache {
-    static let shared = SkillCache()
+@_spi(Testing)
+public actor SkillCache {
+    public static let shared = SkillCache()
     private var cache: [String: CachedSkill] = [:]
 
-    func get(_ key: String) -> Value? {
+    public init() {}
+
+    public func get(_ key: String) -> Value? {
         guard let entry = cache[key], !entry.isExpired else {
             cache.removeValue(forKey: key)
             return nil
@@ -33,12 +36,56 @@ actor SkillCache {
         return entry.content
     }
 
-    func set(_ key: String, content: Value) {
+    public func set(_ key: String, content: Value) {
         cache[key] = CachedSkill(content: content, fetchedAt: Date())
     }
 
-    func clear() {
+    public func clear() {
         cache.removeAll()
+    }
+}
+
+extension SkillsModule {
+    /// Policy-then-memory decision used by `fetch_skill`. Tests seed `cache`
+    /// and call this function so a helper cannot stay cache-first while the
+    /// handler stays wrong.
+    @_spi(Testing)
+    public enum FetchMemoryResult: Sendable {
+        case disabled
+        case invalidPageId
+        case unpublished
+        case cached(Value)
+        case miss
+    }
+
+    @_spi(Testing)
+    public static func fetchMemoryResult(
+        enabled: Bool,
+        pageId: String,
+        cacheKey: String,
+        cache: SkillCache,
+        gate: SkillRuntimeExposureGate?,
+        skipMemoryCache: Bool = false
+    ) async -> FetchMemoryResult {
+        guard enabled else { return .disabled }
+        let trimmed = pageId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard NotionPageRef.isValidStoredPageId(trimmed) else { return .invalidPageId }
+        if let gate, !gate.allows(pageID: trimmed, surface: .exactFetch) {
+            return .unpublished
+        }
+        if skipMemoryCache { return .miss }
+        if let cached = await cache.get(cacheKey) { return .cached(cached) }
+        return .miss
+    }
+
+    static func cachedSpecialistPageID(parentPageID: String, childTitle: String) async -> String? {
+        let wanted = childTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !wanted.isEmpty else { return nil }
+        guard let parent = await SkillsCacheReader.shared.read(parentId: parentPageID) else { return nil }
+        return parent.children.first { child in
+            child.title.lowercased() == wanted
+                || child.aliases.contains { $0.lowercased() == wanted }
+        }?.id
     }
 }
 
@@ -411,37 +458,57 @@ public enum SkillsModule {
                 let sectionKey = sectionArg.map { "|s=\($0.lowercased())" } ?? ""
                 let cacheKey = "\(name.lowercased())|n=\(includeNested)|mb=\(maxBlocks)|md=\(maxDepth)|meta=\(skillConfig.metadataCacheToken)\(pathSelectorKey)\(sectionKey)"
 
-                if let cached = await cache.get(cacheKey) {
+                let parentPageId = skillConfig.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines)
+                var fetchPageId = parentPageId
+                var skipMemoryCache = false
+                if let child = parsedPath.child {
+                    if let childId = await Self.cachedSpecialistPageID(
+                        parentPageID: parentPageId, childTitle: child
+                    ) {
+                        fetchPageId = childId
+                    } else {
+                        skipMemoryCache = true
+                    }
+                } else if intentArg != nil {
+                    skipMemoryCache = true
+                }
+
+                let exposureGate = await SkillRuntimeGenerationStore.shared.gate()
+                switch await Self.fetchMemoryResult(
+                    enabled: skillConfig.enabled,
+                    pageId: fetchPageId,
+                    cacheKey: cacheKey,
+                    cache: cache,
+                    gate: exposureGate,
+                    skipMemoryCache: skipMemoryCache
+                ) {
+                case .disabled:
+                    return .object([
+                        "error": .string("Skill '\(name)' is disabled."),
+                        "hint": .string("Enable it in Settings \u{2192} Skills tab.")
+                    ])
+                case .invalidPageId:
+                    return .object([
+                        "error": .string("Invalid Notion page ID for skill '\(name)'."),
+                        "hint": .string("Update the page URL or ID in Settings \u{2192} Skills to a valid Notion page (32 hex digits or a notion.so / notion.site link).")
+                    ])
+                case .unpublished:
+                    return .object([
+                        "error": .string("Skill '\(name)' is not published in the active runtime generation."),
+                        "hint": .string("Review Runtime Exposure and the latest reconciliation receipt in Settings → Skills.")
+                    ])
+                case .cached(let cached):
                     let cachedResult = await MemoryRoutingAppendix.attach(
                         to: cached,
                         parent: name,
                         intent: intentArg
                     )
                     return Self.projectSkillResult(cachedResult, fields: fieldsArg)
+                case .miss:
+                    break
                 }
 
-                guard skillConfig.enabled else {
-                    return .object([
-                        "error": .string("Skill '\(name)' is disabled."),
-                        "hint": .string("Enable it in Settings \u{2192} Skills tab.")
-                    ])
-                }
-
-                let pageIdRaw = skillConfig.notionPageId.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard NotionPageRef.isValidStoredPageId(pageIdRaw) else {
-                    return .object([
-                        "error": .string("Invalid Notion page ID for skill '\(name)'."),
-                        "hint": .string("Update the page URL or ID in Settings \u{2192} Skills to a valid Notion page (32 hex digits or a notion.so / notion.site link).")
-                    ])
-                }
-
-                if let exposureGate = await SkillRuntimeGenerationStore.shared.gate(),
-                   !exposureGate.allows(pageID: pageIdRaw, surface: .exactFetch) {
-                    return .object([
-                        "error": .string("Skill '\(name)' is not published in the active runtime generation."),
-                        "hint": .string("Review Runtime Exposure and the latest reconciliation receipt in Settings → Skills.")
-                    ])
-                }
+                let pageIdRaw = parentPageId
 
                 // cmd-w4: includeNested / maxBlocks / maxDepth are retained
                 // for input-schema + cache-key stability (existing callers

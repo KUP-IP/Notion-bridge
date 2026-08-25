@@ -397,9 +397,9 @@ extension SkillsModule {
             try c.encode(platform, forKey: .platform)
         }
 
-        /// Stable token for `fetch_skill` cache invalidation when metadata changes.
+        /// Stable token for `fetch_skill` cache invalidation when metadata or page identity changes.
         var metadataCacheToken: String {
-            let raw = "\(summary)\u{1e}\(triggerPhrases.joined(separator: "\u{1f}"))\u{1e}\(antiTriggerPhrases.joined(separator: "\u{1f}"))"
+            let raw = "\(notionPageId)\u{1e}\(summary)\u{1e}\(triggerPhrases.joined(separator: "\u{1f}"))\u{1e}\(antiTriggerPhrases.joined(separator: "\u{1f}"))"
             var h: UInt64 = 14695981039346656037
             for b in raw.utf8 {
                 h ^= UInt64(b)

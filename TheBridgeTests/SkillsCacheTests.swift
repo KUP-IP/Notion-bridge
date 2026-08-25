@@ -435,4 +435,65 @@ func runSkillsCacheTests() async {
                        "children not deterministically sorted: \(got.children.map(\.title))")
         }
     }
+
+    // -----------------------------------------------------------------
+    // 13. Publish prune is filter-only; enrollment expansions require
+    //     refreshRouting() after prune (handshake specialist-list lag).
+    // -----------------------------------------------------------------
+    await test("prune does not add newly allowed specialists; refreshRouting does") {
+        try await withTempHome { _ in
+            let parentId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            let oldChild = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            let newChild = "cccccccccccccccccccccccccccccccc"
+            let now = Date()
+            try await SkillsCacheWriter.shared.write(parent: CachedParent(
+                writtenAt: now, ttlHours: 24, parentId: parentId,
+                parentTitle: "Parent",
+                children: [CachedSpecialist(id: oldChild, title: "Old", summary: "old")]
+            ))
+
+            let generation = SkillRuntimeGeneration(
+                generationID: "generation-1", snapshotID: "snapshot-1",
+                compilerVersion: "1.0.0", compiledAt: now,
+                entries: [
+                    .init(notionPageUUID: parentId, displayName: "Parent", slug: "parent",
+                          desiredExposure: .routing, publishedExposure: .routing,
+                          lifecycleOverrideReason: nil, approvalID: "approval-1",
+                          notionLastEditedTime: "2026-07-28T00:00:00.000Z",
+                          url: "https://www.notion.so/\(parentId)"),
+                    .init(notionPageUUID: oldChild, displayName: "Old", slug: "old",
+                          desiredExposure: .standard, publishedExposure: .standard,
+                          lifecycleOverrideReason: nil, approvalID: "approval-1",
+                          notionLastEditedTime: "2026-07-28T00:00:00.000Z",
+                          url: "https://www.notion.so/\(oldChild)"),
+                    .init(notionPageUUID: newChild, displayName: "New", slug: "new",
+                          desiredExposure: .standard, publishedExposure: .standard,
+                          lifecycleOverrideReason: nil, approvalID: "approval-1",
+                          notionLastEditedTime: "2026-07-28T00:00:00.000Z",
+                          url: "https://www.notion.so/\(newChild)"),
+                ]
+            )
+            await SkillRuntimeCachePruner.prune(using: .init(generation: generation), now: now)
+            let afterPrune = await SkillsCacheReader.shared.read(parentId: parentId)
+            try expect(afterPrune?.children.map(\.id) == [oldChild],
+                       "prune must keep existing allowed children only, got \(afterPrune?.children.map(\.id) ?? [])")
+
+            let source = SkillsCacheWriter.ParentSource(load: {
+                [SkillsCacheWriter.ParentSource.Parent(id: parentId, title: "Parent")]
+            })
+            let enumerator = SkillsCacheWriter.ChildEnumerator(listChildren: { _ in
+                [
+                    CachedSpecialist(id: oldChild, title: "Old", summary: "old"),
+                    CachedSpecialist(id: newChild, title: "New", summary: "new"),
+                ]
+            })
+            let refreshed = await SkillRuntimeCachePruner.refreshRouting(
+                source: source, enumerator: enumerator, ttlHours: 24, now: now
+            )
+            try expect(refreshed == 1, "refreshRouting must report 1 parent, got \(refreshed)")
+            let afterRefresh = await SkillsCacheReader.shared.read(parentId: parentId)
+            try expect(afterRefresh?.children.map(\.id) == [oldChild, newChild].sorted(),
+                       "refreshRouting must enumerate newly allowed specialists, got \(afterRefresh?.children.map(\.id) ?? [])")
+        }
+    }
 }
