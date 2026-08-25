@@ -391,6 +391,7 @@ func runBridgeInitializeTests() async {
 
             let receipt = await BridgeInitializeService.run(
                 context: ctx(),
+                includeConstitution: true,
                 store: supplementalStore,
                 receiptStore: receiptStore,
                 commandStore: commandStore

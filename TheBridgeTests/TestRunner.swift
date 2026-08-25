@@ -947,6 +947,7 @@ await runSkillsCacheTests()
 // envelope-equivalence between the cache-hit and network paths.
 await runSkillBodyCacheTests()
 await runSkillExposureAuthorityTests() // Runtime Exposure authority, lifecycle, authorization, generations
+await runSkillFetchMemoryTests() // fetch_skill policy-then-memory + SkillCache.clear
 await runSkillBodyCacheEvictionTests()
 await runSkillMutationTargetResolverTests()
 await runToolRouterListToolsReadyTests()

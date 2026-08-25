@@ -4,6 +4,21 @@
 import Foundation
 import MCP
 
+/// Persisted freshness lease for an active Runtime Exposure generation.
+/// Independent of `latest-receipt.json`, which remains the audit of the last
+/// reconciliation *attempt* (including failed/blocked/changed shadows).
+public struct SkillFreshnessLease: Codable, Sendable, Equatable {
+    public let generationID: String
+    public let renewedAt: Date
+    public let receiptID: String
+
+    public init(generationID: String, renewedAt: Date, receiptID: String) {
+        self.generationID = generationID
+        self.renewedAt = renewedAt
+        self.receiptID = receiptID
+    }
+}
+
 public struct SkillExposureReconciliationReceipt: Codable, Sendable, Equatable {
     public enum Mode: String, Codable, Sendable { case shadow, publish }
     public enum Outcome: String, Codable, Sendable { case blocked, shadowReady, published, failed }
@@ -45,6 +60,9 @@ public actor SkillRuntimeGenerationStore {
     private var generationsDir: URL { root.appendingPathComponent("generations", isDirectory: true) }
     private var receiptsDir: URL { root.appendingPathComponent("receipts", isDirectory: true) }
     private var pointerURL: URL { root.appendingPathComponent("active.json") }
+    private var leaseURL: URL { root.appendingPathComponent("freshness-lease.json") }
+    /// One-shot upgrade seed per store instance when the lease file is absent.
+    private var didAttemptLeaseSeed = false
 
     public func activeGenerationID() -> String? {
         guard let data = try? Data(contentsOf: pointerURL),
@@ -75,7 +93,7 @@ public actor SkillRuntimeGenerationStore {
         return .init(
             generation: generation,
             emergencyDenylist: emergencyDenylist(),
-            freshnessRenewedAt: unchangedShadowRenewal(for: generation)
+            freshnessRenewedAt: freshnessRenewedAt(for: generation)
         )
     }
 
@@ -91,7 +109,7 @@ public actor SkillRuntimeGenerationStore {
         return .active(.init(
             generation: generation,
             emergencyDenylist: emergencyDenylist(),
-            freshnessRenewedAt: unchangedShadowRenewal(for: generation)
+            freshnessRenewedAt: freshnessRenewedAt(for: generation)
         ))
     }
 
@@ -124,6 +142,17 @@ public actor SkillRuntimeGenerationStore {
         let url = receiptsDir.appendingPathComponent("\(receipt.receiptID).json")
         try atomicWrite(receipt, to: url)
         try atomicWrite(receipt, to: root.appendingPathComponent("latest-receipt.json"))
+        if Self.receiptQualifiesAsUnchangedShadow(receipt),
+           let generationID = receipt.activeGenerationID, !generationID.isEmpty {
+            try atomicWrite(
+                SkillFreshnessLease(
+                    generationID: generationID,
+                    renewedAt: receipt.attemptedAt,
+                    receiptID: receipt.receiptID
+                ),
+                to: leaseURL
+            )
+        }
     }
 
     public func latestReceipt() -> SkillExposureReconciliationReceipt? {
@@ -131,7 +160,15 @@ public actor SkillRuntimeGenerationStore {
         return try? decoder().decode(SkillExposureReconciliationReceipt.self, from: data)
     }
 
+    public func freshnessLease() -> SkillFreshnessLease? {
+        readLease()
+    }
+
     /// An unchanged shadow renews the active generation's freshness window.
+    ///
+    /// The lease is a separate pointer from `latest-receipt.json`. Failed,
+    /// blocked, and changed shadows still overwrite the latest-attempt audit
+    /// but must not erase a prior good lease for this generation.
     ///
     /// Key off empty exposure `changes` + the receipt's `activeGenerationID`,
     /// not `snapshotID` equality. The registry snapshot hash includes
@@ -140,15 +177,59 @@ public actor SkillRuntimeGenerationStore {
     /// (`changes == []`). Requiring snapshot equality left cold starts stuck
     /// on `runtime_exposure_freshness_expired` after a successful shadowReady
     /// (build 89 local pilot, 2026-08-03).
-    private func unchangedShadowRenewal(for generation: SkillRuntimeGeneration) -> Date? {
-        guard let receipt = latestReceipt(),
-              receipt.mode == .shadow,
-              receipt.outcome == .shadowReady,
-              receipt.errors.isEmpty,
-              receipt.changes.isEmpty,
-              receipt.activeGenerationID == generation.generationID
-        else { return nil }
-        return receipt.attemptedAt
+    private func freshnessRenewedAt(for generation: SkillRuntimeGeneration) -> Date? {
+        if let lease = readLease(), lease.generationID == generation.generationID {
+            return lease.renewedAt
+        }
+        guard !didAttemptLeaseSeed else { return nil }
+        didAttemptLeaseSeed = true
+        guard let seeded = newestQualifyingLease(for: generation.generationID) else { return nil }
+        try? atomicWrite(seeded, to: leaseURL)
+        return seeded.renewedAt
+    }
+
+    private func readLease() -> SkillFreshnessLease? {
+        guard let data = try? Data(contentsOf: leaseURL) else { return nil }
+        return try? decoder().decode(SkillFreshnessLease.self, from: data)
+    }
+
+    private static func receiptQualifiesAsUnchangedShadow(
+        _ receipt: SkillExposureReconciliationReceipt
+    ) -> Bool {
+        receipt.mode == .shadow
+            && receipt.outcome == .shadowReady
+            && receipt.errors.isEmpty
+            && receipt.changes.isEmpty
+            && !(receipt.activeGenerationID ?? "").isEmpty
+    }
+
+    private func newestQualifyingLease(for generationID: String) -> SkillFreshnessLease? {
+        let names: [String]
+        do {
+            names = try FileManager.default.contentsOfDirectory(atPath: receiptsDir.path)
+        } catch {
+            return nil
+        }
+        var best: SkillExposureReconciliationReceipt?
+        for name in names where name.hasSuffix(".json") {
+            let url = receiptsDir.appendingPathComponent(name)
+            guard let data = try? Data(contentsOf: url),
+                  let receipt = try? decoder().decode(SkillExposureReconciliationReceipt.self, from: data),
+                  Self.receiptQualifiesAsUnchangedShadow(receipt),
+                  receipt.activeGenerationID == generationID
+            else { continue }
+            if let current = best {
+                if receipt.attemptedAt > current.attemptedAt { best = receipt }
+            } else {
+                best = receipt
+            }
+        }
+        guard let receipt = best, let gid = receipt.activeGenerationID else { return nil }
+        return SkillFreshnessLease(
+            generationID: gid,
+            renewedAt: receipt.attemptedAt,
+            receiptID: receipt.receiptID
+        )
     }
 
     public func emergencyDenylist() -> Set<String> {
@@ -359,6 +440,9 @@ public struct SkillExposureReconciler: Sendable {
                     throw ReconcileError.publicationVerificationFailed
                 }
                 await SkillRuntimeCachePruner.prune(using: .init(generation: candidate, emergencyDenylist: denylist))
+                // Prune only filters existing cache children. Enrollment
+                // expansions (new Standard specialists) need a live re-enumeration.
+                await SkillRuntimeCachePruner.refreshRouting()
             } catch {
                 SkillRuntimeProjectionPublisher.rollback(backup)
                 try? await generationStore.restoreActiveGeneration(id: previousID)
@@ -435,6 +519,9 @@ public struct SkillExposureReconciler: Sendable {
 
 public enum SkillRuntimeCachePruner {
     public static func prune(using gate: SkillRuntimeExposureGate, now: Date = Date()) async {
+        // Memory keys are name+params+meta, not page id — selective evict is
+        // not possible. Full clear matches SkillBodyCacheEviction.
+        await SkillCache.shared.clear()
         for body in await SkillBodyCacheStore.shared.readAll()
             where !gate.allows(pageID: body.pageId, surface: .bodyCache, now: now) {
             await SkillBodyCacheStore.shared.evict(pageId: body.pageId)
@@ -451,6 +538,33 @@ public enum SkillRuntimeCachePruner {
                     parentTitle: parent.parentTitle, children: children))
             }
         }
+    }
+
+    /// Re-enumerate Specialist-relation children after a generation change.
+    /// `prune` cannot add newly allowed children; handshake lists stay stale
+    /// until this refresh (or Settings → Refresh routing cache).
+    @discardableResult
+    public static func refreshRouting(
+        source: SkillsCacheWriter.ParentSource,
+        enumerator: SkillsCacheWriter.ChildEnumerator,
+        ttlHours: Int = BridgeDefaults.skillsCacheTTLHoursEffective,
+        now: Date = Date()
+    ) async -> Int {
+        await SkillsCacheWriter.shared.refreshAll(
+            source: source, enumerator: enumerator, ttlHours: ttlHours, now: now
+        )
+    }
+
+    @discardableResult
+    public static func refreshRouting() async -> Int {
+        guard let client = try? NotionClient() else {
+            NSLog("[SkillRuntimeCachePruner] routing refresh skipped — no Notion token")
+            return 0
+        }
+        let source = await MainActor.run {
+            SkillsCacheWriter.ParentSource.fromSkillsManager(SkillsManager())
+        }
+        return await refreshRouting(source: source, enumerator: .live(client: client))
     }
 }
 

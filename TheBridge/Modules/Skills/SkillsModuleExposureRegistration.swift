@@ -13,7 +13,7 @@ extension SkillsModule {
             name: "skills_exposure_status",
             module: moduleName,
             tier: .open,
-            description: "Read Runtime Exposure state: active verified generation, latest reconciliation receipt, enabled migration baseline, degraded status, and emergency denylist. Read-only.",
+            description: "Read Runtime Exposure state: active verified generation, freshness lease, latest reconciliation receipt (last attempt — may disagree with the lease after failed/blocked/changed shadows), enabled migration baseline, degraded status, and emergency denylist. Read-only.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -24,6 +24,7 @@ extension SkillsModule {
                 let active = await store.activeGeneration()
                 let gate = await store.gate()
                 let latest = await store.latestReceipt()
+                let lease = await store.freshnessLease()
                 let denylist = await store.emergencyDenylist().sorted()
                 let baseline = await MainActor.run {
                     SkillExposureBaselineEntry.fromSkillsManager(SkillsManager())
@@ -43,7 +44,14 @@ extension SkillsModule {
                     "enabledBaselineCount": .int(baseline.count),
                     "emergencyDenylist": .array(denylist.map(Value.string)),
                     "emergencyDenylistCount": .int(denylist.count),
-                    "latestReceipt": latest.map(Self.exposureReceiptValue) ?? .null
+                    "latestReceipt": latest.map(Self.exposureReceiptValue) ?? .null,
+                    "freshnessLease": lease.map { lease in
+                        .object([
+                            "generationId": .string(lease.generationID),
+                            "renewedAt": .string(Self.exposureISO8601(lease.renewedAt)),
+                            "receiptId": .string(lease.receiptID)
+                        ])
+                    } ?? .null
                 ]
                 if let active {
                     var counts: [String: Int] = [:]
@@ -204,6 +212,7 @@ extension SkillsModule {
                 await store.setEmergencyDenylist(ids)
                 if let gate = await store.gate() {
                     await SkillRuntimeCachePruner.prune(using: gate)
+                    await SkillRuntimeCachePruner.refreshRouting()
                 }
                 return .object([
                     "action": .string(action),
