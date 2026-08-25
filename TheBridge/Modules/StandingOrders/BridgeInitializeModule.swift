@@ -150,7 +150,7 @@ public enum BridgeInitializeModule {
                     ]),
                     "includeConstitution": .object([
                         "type": .string("boolean"),
-                        "description": .string("When true or omitted, include the W1 constitution bundle in the receipt.")
+                        "description": .string("When true, include the constitution bundle (doctrine + command index + routing roster + supplemental order bodies). Defaults to false — lean receipt. Prefer false unless you need constitution.orders.")
                     ])
                 ]),
                 "required": .array([])
@@ -193,9 +193,9 @@ public enum BridgeInitializeModule {
                 let includeConstitution: Bool = {
                     guard case .object(let a) = arguments,
                           let raw = a["includeConstitution"]
-                    else { return true }
+                    else { return false }
                     if case .bool(let value) = raw { return value }
-                    return true
+                    return false
                 }()
                 let context = await contextProvider(client)
                 let routingSnapshot = await routingSnapshotProvider(context.now)

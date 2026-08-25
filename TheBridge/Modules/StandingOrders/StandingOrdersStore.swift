@@ -541,13 +541,7 @@ public final class StandingOrdersStore: @unchecked Sendable {
                 )
             ),
             initializationSequence: [
-                "bridge_status",
-                "load_manifest",
-                "load_handshake_doctrine",
-                "verify_metadata_and_hash",
-                "skills_routing_list",
-                "standing_orders_list",
-                "emit_completion_receipt",
+                "bridge_initialize",
             ],
             completionReceiptFields: [
                 "bridgeState",

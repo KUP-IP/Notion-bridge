@@ -379,7 +379,7 @@ public enum BridgeInitializeService {
     public static func run(
         context: BridgeInitializeContext,
         mode: BrokerSessionMode = .general,
-        includeConstitution: Bool = true,
+        includeConstitution: Bool = false,
         sessionRegistry: SessionRegistry = .shared,
         store: StandingOrdersRecordStore = .shared,
         receiptStore: HandshakeReceiptStore = .shared,

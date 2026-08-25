@@ -126,7 +126,7 @@ func runWave1BrokerTests() async {
         }
     }
 
-    await test("W1 bridge_initialize v2: writes session and returns constitution by default") {
+    await test("W1 bridge_initialize v2: writes session and returns constitution when includeConstitution is true") {
         try await withWave1TempHome { tmp in
             try StandingOrdersStore.shared.resetForTesting()
             _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v8.0.1\n\nRoot doctrine.")
@@ -159,6 +159,37 @@ func runWave1BrokerTests() async {
             try expect(receipt.session?.governed == true)
             try expect(receipt.constitution?.doctrineVersion == "v8.0.1")
             try expect(try await registry.current(transportSessionId: "http-session-2")?.sessionId == receipt.session?.sessionId)
+        }
+    }
+
+    await test("W1 bridge_initialize v2: omitted includeConstitution is lean (no constitution bundle)") {
+        try await withWave1TempHome { tmp in
+            try StandingOrdersStore.shared.resetForTesting()
+            _ = try StandingOrdersStore.shared.write("# Orders\n\n> **Amendment record:** v8.0.1\n\nRoot doctrine.")
+            let registry = SessionRegistry(path: tmp.appendingPathComponent("sessions.sqlite"))
+            try await registry.resetForTesting()
+            let receiptStore = HandshakeReceiptStore(baseDir: tmp.appendingPathComponent("handshakes", isDirectory: true))
+            receiptStore.resetForTesting()
+
+            let receipt = await ToolDispatchContext.$current.withValue(
+                .init(transportSessionId: "http-session-lean", origin: .local, client: "codex")
+            ) {
+                await BridgeInitializeService.run(
+                    context: BridgeInitializeContext(
+                        client: "codex",
+                        connectionState: "local",
+                        macToolsAvailable: true,
+                        bridgeState: "running",
+                        now: Date(timeIntervalSince1970: 1_800_000_011)
+                    ),
+                    mode: .execute,
+                    sessionRegistry: registry,
+                    receiptStore: receiptStore
+                )
+            }
+
+            try expect(receipt.constitution == nil, "lean init must not inject constitution.orders")
+            try expect(receipt.session?.transportSessionId == "http-session-lean")
         }
     }
 
