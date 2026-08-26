@@ -36,6 +36,21 @@ func runRoutingIntegrityLayerTests() async {
         try expect(binding.requiresManifestFetch)
     }
 
+    await test("RIL authority alias: mac-message canonicalizes to message without widening other authorities") {
+        try expect(ToolSkillBindingRegistry.normalizeAuthoritySlug("mac-message") == "message")
+        try expect(ToolSkillBindingRegistry.normalizeAuthoritySlug("message") == "message")
+        try expect(ToolSkillBindingRegistry.normalizeAuthoritySlug("PEOPLE Keepr") == "people-keepr")
+
+        let canonicalScopes = ToolSkillBindingRegistry.scopeIDs(governedBy: "message")
+        let legacyScopes = ToolSkillBindingRegistry.scopeIDs(governedBy: "mac-message")
+        try expect(canonicalScopes == legacyScopes,
+                   "canonical message authority must inherit exactly the legacy mac-message scopes")
+        try expect(canonicalScopes.contains("tool:messages_recent"),
+                   "message authority must govern recent Messages reads")
+        try expect(canonicalScopes.contains("tool:messages_send"),
+                   "message authority must govern exact approved Messages sends")
+    }
+
     await test("RIL discovery: messages_send tool description includes governance") {
         let rendered = MCPToolFactory.tool(for: fakeMessagesSendRegistration()).description ?? ""
         try expect(rendered.contains("Governance:"), "description must include governance annotation: \(rendered)")

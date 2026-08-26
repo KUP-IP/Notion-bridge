@@ -343,8 +343,13 @@ public actor ToolRouter {
 
     private func hasRouteAcknowledgement(context: ToolDispatchContext, binding: ToolSkillBinding) -> Bool {
         guard let clientKey = context.transportSessionId, !clientKey.isEmpty else { return false }
-        let present = clientRouteAuthorities[clientKey]?[binding.scopeID] ?? []
-        return Set(binding.governingSkills.map(\.slug)).isSubset(of: present)
+        let present = Set((clientRouteAuthorities[clientKey]?[binding.scopeID] ?? []).map {
+            ToolSkillBindingRegistry.normalizeAuthoritySlug($0)
+        })
+        let required = Set(binding.governingSkills.map {
+            ToolSkillBindingRegistry.normalizeAuthoritySlug($0.slug)
+        })
+        return required.isSubset(of: present)
     }
 
     private func clientAuthorityDigest(_ context: ToolDispatchContext) -> String {
@@ -388,8 +393,11 @@ public actor ToolRouter {
             authorities.formUnion(receipt.authorityIDs)
             nonces.append(receipt.nonce)
         }
-        let required = Set(binding.governingSkills.map(\.slug))
-        guard required.isSubset(of: authorities) else { return .rejected("incomplete_authorities") }
+        let required = Set(binding.governingSkills.map {
+            ToolSkillBindingRegistry.normalizeAuthoritySlug($0.slug)
+        })
+        let presented = Set(authorities.map(ToolSkillBindingRegistry.normalizeAuthoritySlug))
+        guard required.isSubset(of: presented) else { return .rejected("incomplete_authorities") }
         for nonce in nonces { issuedRouteReceipts.removeValue(forKey: nonce) }
         return .accepted
     }
@@ -455,7 +463,9 @@ public actor ToolRouter {
     }
 
     private func fetchedAuthorityIDs(slug: String?, name: String?) -> Set<String> {
-        let known = Set(ToolSkillBindingRegistry.bindings.flatMap { $0.governingSkills.map(\.slug) })
+        let known = Set(ToolSkillBindingRegistry.bindings.flatMap {
+            $0.governingSkills.map { ToolSkillBindingRegistry.normalizeAuthoritySlug($0.slug) }
+        })
         let normalizedName = name.map(ToolSkillBindingRegistry.normalizeAuthoritySlug)
         if let slug, !slug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let normalizedSlug = ToolSkillBindingRegistry.normalizeAuthoritySlug(slug)
@@ -506,7 +516,9 @@ public actor ToolRouter {
         if toolName == "fetch_skill" {
             let fetched = fetchedAuthorityIDs(slug: routed.slug, name: routed.name)
             for binding in ToolSkillBindingRegistry.bindings {
-                let relevant = Set(binding.governingSkills.map(\.slug)).intersection(fetched)
+                let relevant = Set(binding.governingSkills.map {
+                    ToolSkillBindingRegistry.normalizeAuthoritySlug($0.slug)
+                }).intersection(fetched)
                 if !relevant.isEmpty { byScope[binding.scopeID] = relevant }
             }
         }

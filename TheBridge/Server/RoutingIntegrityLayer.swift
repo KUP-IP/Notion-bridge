@@ -309,7 +309,8 @@ public enum ToolSkillBindingRegistry {
         let lowered = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased(with: Locale(identifier: "en_US_POSIX"))
         let words = lowered.split { !$0.isLetter && !$0.isNumber }.map(String.init)
-        return words.joined(separator: "-")
+        let normalized = words.joined(separator: "-")
+        return normalized == "mac-message" ? "message" : normalized
     }
 
     public static func callSatisfiesManifestMarker(toolName: String, result: Value) -> Bool {
