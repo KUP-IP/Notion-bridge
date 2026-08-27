@@ -4,6 +4,7 @@
 // Two tools: shell_exec (request), run_script (request).
 // Auto-escalation and forbidden path enforcement handled by SecurityGate.
 
+import Darwin
 import Foundation
 import MCP
 
@@ -159,17 +160,57 @@ public enum ShellModule {
                 process.standardOutput = stdoutPipe
                 process.standardError = stderrPipe
 
+                let startedAt = Date()
                 let startTime = ContinuousClock.now
                 let timeoutFlag = TimeoutFlag()
 
-                try process.run()
+                do {
+                    try process.run()
+                } catch {
+                    let receipt = ProcessLifecycleTruth.classifyShell(
+                        command: command,
+                        timedOut: false,
+                        pid: 0,
+                        pidAlive: false,
+                        processGroupAlive: false,
+                        exitCode: -1,
+                        signaled: nil,
+                        launchError: error.localizedDescription,
+                        startedAt: startedAt,
+                        endedAt: Date(),
+                        now: Date()
+                    )
+                    return Self.lifecycleValue(
+                        receipt: receipt,
+                        stdout: "",
+                        stderr: error.localizedDescription,
+                        success: false,
+                        status: "launch_failed",
+                        timedOut: false,
+                        timeoutSeconds: timeout,
+                        terminationReason: "launch_failed",
+                        durationSec: 0,
+                        isBackground: isBackground,
+                        stdoutLineCount: 0,
+                        stderrLineCount: 1,
+                        stdoutTruncated: false,
+                        stderrTruncated: false
+                    )
+                }
 
-                // Timeout enforcement — terminate process if it exceeds the limit. The response explicitly
-                // reports timeout state so agents can distinguish killed work from ordinary non-zero exits.
+                // Timeout: SIGTERM then, if still running after 1s, SIGKILL on the
+                // requested pid. Process-group ownership stays with BgProcessRuntime;
+                // this is residual request-window truth for shell_exec only.
                 let timeoutItem = DispatchWorkItem {
                     if process.isRunning {
                         timeoutFlag.value = true
+                        let pid = process.processIdentifier
                         process.terminate()
+                        DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                            if process.isRunning {
+                                _ = Darwin.kill(pid, SIGKILL)
+                            }
+                        }
                     }
                 }
                 DispatchQueue.global().asyncAfter(
@@ -198,30 +239,71 @@ public enum ShellModule {
                     head: Self.valueToInt(args["stderrHeadLines"]),
                     tail: Self.valueToInt(args["stderrTailLines"])
                 )
-                let exitCode = Int(process.terminationStatus)
+                let pid = process.processIdentifier
+                let signaled: Int32? = process.terminationReason == .uncaughtSignal
+                    ? process.terminationStatus : nil
+                let pidAlive = ProcessLifecycleTruth.processAlive(pid)
+                let pgid = pid > 0 ? getpgid(pid) : Int32(-1)
+                let groupAlive = ProcessLifecycleTruth.processGroupAlive(pgid > 0 ? pgid : pid)
                 let timedOut = timeoutFlag.value
-                let success = exitCode == 0 && !timedOut
-                let terminationReason: String = timedOut
-                    ? "timeout_killed"
-                    : (success ? "exited" : "non_zero_exit")
+                let receipt = ProcessLifecycleTruth.classifyShell(
+                    command: command,
+                    timedOut: timedOut,
+                    pid: pid,
+                    pidAlive: pidAlive,
+                    processGroupAlive: groupAlive,
+                    exitCode: process.terminationStatus,
+                    signaled: signaled,
+                    launchError: nil,
+                    startedAt: startedAt,
+                    endedAt: Date(),
+                    now: Date()
+                )
+                let success = process.terminationStatus == 0 && !timedOut && !receipt.stillRunning
+                let terminationReason: String
+                if let outcome = receipt.timeoutOutcome {
+                    switch outcome {
+                    case .verifiedGroupTermination:
+                        terminationReason = "timeout_killed"
+                    case .requestTimeoutWorkloadContinuing, .ambiguous:
+                        terminationReason = outcome.rawValue
+                    }
+                } else if success {
+                    terminationReason = "exited"
+                } else if signaled != nil {
+                    terminationReason = "signaled"
+                } else {
+                    terminationReason = "non_zero_exit"
+                }
+                // Compat: verified timeout kill keeps the historical timeout_killed token
+                // in `status` while `terminationReason` carries the classified outcome.
+                let statusToken: String
+                if success {
+                    statusToken = "success"
+                } else if timedOut {
+                    statusToken = receipt.stillRunning ? "timed_out_still_running" : "timed_out"
+                } else if receipt.state == .launchFailed {
+                    statusToken = "launch_failed"
+                } else {
+                    statusToken = "failed"
+                }
 
-                return .object([
-                    "stdout": .string(stdoutSummary.text),
-                    "stderr": .string(stderrSummary.text),
-                    "exitCode": .int(exitCode),
-                    "success": .bool(success),
-                    "status": .string(success ? "success" : (timedOut ? "timed_out" : "failed")),
-                    "timedOut": .bool(timedOut),
-                    "timeoutSeconds": .int(timeout),
-                    "terminationReason": .string(terminationReason),
-                    "duration": .double(durationSec),
-                    "backgroundCommand": .bool(isBackground),
-                    "recoveryHint": .string(isBackground ? "Background commands (trailing &) are capped at 5s by the MCP request. For work that must outlive the request, use bg_run (detached, returns immediately) and poll it with bg_poll." : "For long-running work, increase timeout — or use bg_run to launch it detached (returns a jobId immediately) and poll with bg_poll / stop with bg_kill."),
-                    "stdoutLineCount": .int(stdoutSummary.lineCount),
-                    "stderrLineCount": .int(stderrSummary.lineCount),
-                    "stdoutTruncated": .bool(stdoutSummary.truncated),
-                    "stderrTruncated": .bool(stderrSummary.truncated)
-                ])
+                return Self.lifecycleValue(
+                    receipt: receipt,
+                    stdout: stdoutSummary.text,
+                    stderr: stderrSummary.text,
+                    success: success,
+                    status: statusToken,
+                    timedOut: timedOut,
+                    timeoutSeconds: timeout,
+                    terminationReason: terminationReason,
+                    durationSec: durationSec,
+                    isBackground: isBackground,
+                    stdoutLineCount: stdoutSummary.lineCount,
+                    stderrLineCount: stderrSummary.lineCount,
+                    stdoutTruncated: stdoutSummary.truncated,
+                    stderrTruncated: stderrSummary.truncated
+                )
             }
         ))
 
@@ -355,5 +437,64 @@ public enum ShellModule {
                 ])
             }
         ))
+    }
+
+    private static func lifecycleValue(
+        receipt: ProcessLifecycleReceipt,
+        stdout: String,
+        stderr: String,
+        success: Bool,
+        status: String,
+        timedOut: Bool,
+        timeoutSeconds: Int,
+        terminationReason: String,
+        durationSec: Double,
+        isBackground: Bool,
+        stdoutLineCount: Int,
+        stderrLineCount: Int,
+        stdoutTruncated: Bool,
+        stderrTruncated: Bool
+    ) -> Value {
+        var obj: [String: Value] = [
+            "stdout": .string(stdout),
+            "stderr": .string(stderr),
+            "exitCode": .int(Int(receipt.exitCode ?? -1)),
+            "success": .bool(success),
+            "status": .string(status),
+            "timedOut": .bool(timedOut),
+            "timeoutSeconds": .int(timeoutSeconds),
+            "terminationReason": .string(terminationReason),
+            "duration": .double(durationSec),
+            "backgroundCommand": .bool(isBackground),
+            "recoveryHint": .string(isBackground
+                ? "Background commands (trailing &) are capped at 5s by the MCP request. For work that must outlive the request, use bg_run (detached, returns immediately) and poll it with bg_poll."
+                : "For long-running work, increase timeout — or use bg_run to launch it detached (returns a jobId immediately) and poll with bg_poll / stop with bg_kill."),
+            "stdoutLineCount": .int(stdoutLineCount),
+            "stderrLineCount": .int(stderrLineCount),
+            "stdoutTruncated": .bool(stdoutTruncated),
+            "stderrTruncated": .bool(stderrTruncated),
+            "terminalState": .string(receipt.state.rawValue),
+            "stillRunning": .bool(receipt.stillRunning),
+            "descendantCleanup": .string(receipt.descendantCleanup.rawValue),
+            "commandHash": .string(receipt.commandHash),
+            "supervisorPid": .int(Int(receipt.supervisorPid)),
+            "observedAt": .double(receipt.observedAt.timeIntervalSince1970)
+        ]
+        if let outcome = receipt.timeoutOutcome {
+            obj["timeoutOutcome"] = .string(outcome.rawValue)
+        }
+        if let signal = receipt.signal {
+            obj["signal"] = .int(Int(signal))
+        }
+        if let launchError = receipt.launchError {
+            obj["launchError"] = .string(launchError)
+        }
+        if let pid = receipt.rootPid {
+            obj["rootPid"] = .int(Int(pid))
+        }
+        if let pgid = receipt.pgid {
+            obj["pgid"] = .int(Int(pgid))
+        }
+        return .object(obj)
     }
 }
