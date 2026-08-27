@@ -192,4 +192,29 @@ func runLaunchReadinessTests() async {
         try expect(report.safeToLaunch, "optional unknown transport must not veto launch")
         try expect(check(report, "optional.telemetry")?.verdict == .transportUnknown)
     }
+
+    await test("LaunchReadiness live attach: runtime residual is TRANSPORT_UNKNOWN, axes distinguished") {
+        var config = passingPacketConfig()
+        var packet = config.entities[0]
+        packet.properties.removeAll { $0.key == "objective" }
+        config.entities[0] = packet
+        let probes = LaunchReadinessLive.registryEntitiesProbes(
+            config: config,
+            schema: passingPacketSchema(),
+            schemaError: nil,
+            storagePath: NSTemporaryDirectory(),
+            coverageLocator: "030d03887650dce5b2898cb9d8de231b43fecedd"
+        )
+        let report = await LaunchReadinessContract.evaluate(probes: probes, now: checkedAt)
+        try expect(check(report, LaunchReadinessContract.commandAuthCheck)?.verdict == .pass)
+        let registry = check(report, LaunchReadinessContract.registryConsumerCheck)
+        try expect(registry?.verdict == .blocked)
+        try expect(registry?.evidence.contains("binding=DRIFT") == true)
+        try expect(registry?.evidence.contains("consumer=PASS") == true)
+        try expect(check(report, LaunchReadinessContract.runtimeBrowserCheck)?.verdict == .transportUnknown)
+        try expect(check(report, LaunchReadinessContract.storageWriteCheck)?.verdict == .pass)
+        try expect(check(report, LaunchReadinessContract.implementationCoverageCheck)?.verdict == .pass)
+        try expect(!report.safeToLaunch)
+        try expect(report.value != .null)
+    }
 }

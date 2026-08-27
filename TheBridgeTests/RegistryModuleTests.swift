@@ -245,6 +245,25 @@ func runRegistryModuleTests() async {
             try expect(preflight["contractVersion"] == .string(PacketRegistryContract.version))
             try expect(preflight["canonicalEntity"] == .string("packet"))
             try expect(preflight["result"] == .string("DRIFT"), "three-column fixture must report the missing classified columns")
+            try expect(preflight["bindingResult"] != nil, "binding vs consumer axes must be distinguished")
+            try expect(preflight["consumerResult"] == .string("DRIFT"))
+
+            guard case .object(let launch)? = obj(out)["launchReadiness"] else {
+                throw TestError.assertion("launchReadiness missing from includePacketPreflight")
+            }
+            try expect(launch["safeToLaunch"] == .bool(false), "runtime.browser residual is TRANSPORT_UNKNOWN")
+            guard case .array(let checks)? = launch["checks"] else {
+                throw TestError.assertion("launchReadiness.checks missing")
+            }
+            let names = Set(checks.compactMap { obj($0)["name"] }.compactMap { if case .string(let n) = $0 { return n } else { return nil } })
+            try expect(names.isSuperset(of: [
+                LaunchReadinessContract.commandAuthCheck,
+                LaunchReadinessContract.registryConsumerCheck,
+                LaunchReadinessContract.runtimeBrowserCheck,
+            ]))
+            let runtime = checks.first { obj($0)["name"] == .string(LaunchReadinessContract.runtimeBrowserCheck) }
+            try expect(obj(runtime ?? .null)["verdict"] == .string("TRANSPORT_UNKNOWN"),
+                       "Packet Runner residual must not collapse to BLOCKED")
 
             let after = try Data(contentsOf: storeURL)
             try expect(after == before, "read-only preflight must not rewrite registry.json")
