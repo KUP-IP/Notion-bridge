@@ -161,6 +161,11 @@ public enum PacketRegistryContract {
 }
 
 public enum PacketRegistryPreflight {
+    public enum Axis: String, Sendable, Equatable {
+        case binding
+        case consumer
+    }
+
     public struct Defect: Sendable, Equatable {
         public let code: String
         public let field: String
@@ -173,6 +178,25 @@ public enum PacketRegistryPreflight {
             self.expected = expected
             self.actual = actual
         }
+
+        /// Configured-binding defects describe registry.json identity and
+        /// property-id maps. Consumer-contract defects describe live schema
+        /// completeness against the classified PACKETS contract.
+        public var axis: Axis {
+            Self.bindingCodes.contains(code) ? .binding : .consumer
+        }
+
+        private static let bindingCodes: Set<String> = [
+            "BINDING_MISSING",
+            "DUPLICATE_BINDING",
+            "LEGACY_BINDING_ALIAS",
+            "UNCLASSIFIED_BINDING",
+            "DUPLICATE_FIELD_BINDING",
+            "UNBOUND_FIELD",
+            "BINDING_CONTRACT_MISMATCH",
+            "BINDING_ID_MISMATCH",
+            "RELATION_TARGET_UNRESOLVED",
+        ]
     }
 
     public struct Report: Sendable, Equatable {
@@ -183,20 +207,29 @@ public enum PacketRegistryPreflight {
         public let liveColumnCount: Int
         public let defects: [Defect]
 
+        public var bindingDefects: [Defect] { defects.filter { $0.axis == .binding } }
+        public var consumerDefects: [Defect] { defects.filter { $0.axis == .consumer } }
+        public var bindingPasses: Bool { bindingDefects.isEmpty }
+        public var consumerPasses: Bool { consumerDefects.isEmpty }
         public var passes: Bool { defects.isEmpty }
 
         public var value: Value {
             .object([
                 "result": .string(passes ? "PASS" : "DRIFT"),
+                "bindingResult": .string(bindingPasses ? "PASS" : "DRIFT"),
+                "consumerResult": .string(consumerPasses ? "PASS" : "DRIFT"),
                 "contractVersion": .string(contractVersion),
                 "canonicalEntity": .string(canonicalEntity),
                 "bindingCandidates": .array(bindingCandidates.map(Value.string)),
                 "classifiedColumnCount": .int(classifiedColumnCount),
                 "liveColumnCount": .int(liveColumnCount),
                 "defectCount": .int(defects.count),
+                "bindingDefectCount": .int(bindingDefects.count),
+                "consumerDefectCount": .int(consumerDefects.count),
                 "defects": .array(defects.map { defect in
                     .object([
                         "code": .string(defect.code),
+                        "axis": .string(defect.axis.rawValue),
                         "field": .string(defect.field),
                         "expected": .string(defect.expected),
                         "actual": .string(defect.actual),

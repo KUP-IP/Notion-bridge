@@ -232,13 +232,13 @@ public enum RegistryModule {
     public static func makeEntities() -> ToolRegistration {
         ToolRegistration(
             name: "registry_entities", module: moduleName, tier: .open,
-            description: "List the configured data-source registry entities (entity → Notion data source + property map), including per-property binding status. Read-only. Pass includePacketPreflight:true to also read the live PACKETS schema and report canonical-binding/schema drift without persisting or repairing anything.",
+            description: "List the configured data-source registry entities (entity → Notion data source + property map), including per-property binding status. Read-only. Pass includePacketPreflight:true to also read the live PACKETS schema and report canonical-binding vs consumer-contract drift plus LaunchReadiness (PASS/BLOCKED/TRANSPORT_UNKNOWN) without persisting or repairing anything. No new MCP product surface.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "includePacketPreflight": .object([
                         "type": .string("boolean"),
-                        "description": .string("Optional. Read the live PACKETS schema and include the read-only canonical identity/execution-schema preflight report. Never mutates registry config, cache, or Notion."),
+                        "description": .string("Optional. Read the live PACKETS schema and include packetPreflight (binding vs consumer axes) plus launchReadiness. Never mutates registry config, cache, or Notion."),
                     ]),
                 ]),
             ]),
@@ -250,24 +250,53 @@ public enum RegistryModule {
                 ]
                 if case .object(let object) = args,
                    case .bool(true)? = object["includePacketPreflight"] {
-                    guard let packet = PacketRegistryContract.preferredStoredEntity(in: config) else {
-                        result["packetPreflight"] = PacketRegistryPreflight.evaluate(
-                            config: config,
-                            schema: DataSourceSchema(columnsByName: [:])
-                        ).value
-                        return .object(result)
-                    }
-                    let schema = try await gateway().schema(
-                        dataSourceId: packet.dataSourceId,
-                        workspace: packet.workspace
-                    )
-                    result["packetPreflight"] = PacketRegistryPreflight.evaluate(
-                        config: config,
-                        schema: schema
-                    ).value
+                    let readiness = await packetReadiness(config: config)
+                    result["packetPreflight"] = readiness.preflight
+                    result["launchReadiness"] = readiness.launch
                 }
                 return .object(result)
             })
+    }
+
+    /// Read-only PACKETS preflight + LaunchReadiness attach. Schema-read
+    /// failure is TRANSPORT_UNKNOWN, never a false product DRIFT/BLOCKED.
+    private static func packetReadiness(config: RegistryConfig) async -> (preflight: Value, launch: Value) {
+        guard let packet = PacketRegistryContract.preferredStoredEntity(in: config) else {
+            let schema = DataSourceSchema(columnsByName: [:])
+            let preflight = PacketRegistryPreflight.evaluate(config: config, schema: schema)
+            let launch = await LaunchReadinessContract.evaluate(
+                probes: LaunchReadinessLive.registryEntitiesProbes(
+                    config: config, schema: schema, schemaError: nil)
+            )
+            return (preflight.value, launch.value)
+        }
+        do {
+            let schema = try await gateway().schema(
+                dataSourceId: packet.dataSourceId,
+                workspace: packet.workspace
+            )
+            let preflight = PacketRegistryPreflight.evaluate(config: config, schema: schema)
+            let launch = await LaunchReadinessContract.evaluate(
+                probes: LaunchReadinessLive.registryEntitiesProbes(
+                    config: config, schema: schema, schemaError: nil)
+            )
+            return (preflight.value, launch.value)
+        } catch {
+            let reason = error.localizedDescription
+            let preflight: Value = .object([
+                "result": .string("TRANSPORT_UNKNOWN"),
+                "bindingResult": .string("TRANSPORT_UNKNOWN"),
+                "consumerResult": .string("TRANSPORT_UNKNOWN"),
+                "contractVersion": .string(PacketRegistryContract.version),
+                "canonicalEntity": .string("packet"),
+                "reason": .string(reason),
+            ])
+            let launch = await LaunchReadinessContract.evaluate(
+                probes: LaunchReadinessLive.registryEntitiesProbes(
+                    config: config, schema: nil, schemaError: reason)
+            )
+            return (preflight, launch.value)
+        }
     }
 
     // MARK: - registry_add_entity

@@ -16,6 +16,7 @@
 // mutation, no new MCP product surface.
 
 import Foundation
+import MCP
 
 // MARK: - Verdict
 
@@ -217,12 +218,15 @@ public struct RegistryConsumerReadinessSeam: LaunchReadinessSeam {
             return .transportUnknown(evidence: reason)
         case .snapshot(let config, let schema):
             let report = PacketRegistryPreflight.evaluate(config: config, schema: schema)
+            let binding = report.bindingPasses ? "PASS" : "DRIFT"
+            let consumer = report.consumerPasses ? "PASS" : "DRIFT"
             if report.passes {
                 return .ready(evidence:
-                    "\(report.contractVersion) PASS classified=\(report.classifiedColumnCount) live=\(report.liveColumnCount)")
+                    "\(report.contractVersion) PASS binding=\(binding) consumer=\(consumer) classified=\(report.classifiedColumnCount) live=\(report.liveColumnCount)")
             }
             let codes = report.defects.map(\.code).joined(separator: ",")
-            return .unavailable(evidence: "\(report.contractVersion) DRIFT codes=\(codes)")
+            return .unavailable(evidence:
+                "\(report.contractVersion) DRIFT binding=\(binding) consumer=\(consumer) codes=\(codes)")
         }
     }
 }
@@ -304,5 +308,75 @@ public struct ImplementationCoverageSeam: LaunchReadinessSeam {
         case .evidenceUnavailable(let reason):
             return .transportUnknown(evidence: reason)
         }
+    }
+}
+
+extension LaunchReadinessReport {
+    public var value: Value {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return .object([
+            "safeToLaunch": .bool(safeToLaunch),
+            "checkedAt": .string(formatter.string(from: checkedAt)),
+            "checks": .array(checks.map { check in
+                .object([
+                    "name": .string(check.name),
+                    "required": .bool(check.required),
+                    "verdict": .string(check.verdict.rawValue),
+                    "evidence": .string(check.evidence),
+                ])
+            }),
+        ])
+    }
+}
+
+/// Live (non-fixture) probe assembly for existing MCP surfaces.
+/// No new product tool: `registry_entities(includePacketPreflight:true)` is the
+/// attach point. `runtime.browser` stays a required check and is honestly
+/// TRANSPORT_UNKNOWN here — Packet Runner dispatch wiring is residual.
+public enum LaunchReadinessLive {
+    public static func registryEntitiesProbes(
+        config: RegistryConfig,
+        schema: DataSourceSchema?,
+        schemaError: String?,
+        storagePath: String = NSTemporaryDirectory(),
+        coverageLocator: String? = Bundle.main.object(forInfoDictionaryKey: "BridgeGitSHA") as? String
+    ) -> [LaunchReadinessProbe] {
+        let commandAuth: LaunchReadinessSeam
+        let registry: LaunchReadinessSeam
+        if let schemaError {
+            commandAuth = CommandAuthReadinessSeam(.evidenceUnavailable(reason: schemaError))
+            registry = RegistryConsumerReadinessSeam(.evidenceUnavailable(reason: schemaError))
+        } else if let schema {
+            commandAuth = CommandAuthReadinessSeam(.authenticated(tool: "registry_entities"))
+            registry = RegistryConsumerReadinessSeam(.snapshot(config: config, schema: schema))
+        } else {
+            commandAuth = CommandAuthReadinessSeam(.missing(tool: "packet"))
+            registry = RegistryConsumerReadinessSeam(.snapshot(
+                config: config, schema: DataSourceSchema(columnsByName: [:])))
+        }
+
+        let storage: LaunchReadinessSeam
+        if FileManager.default.isWritableFile(atPath: storagePath) {
+            storage = StorageWriteabilitySeam(.writable(path: storagePath))
+        } else {
+            storage = StorageWriteabilitySeam(.unavailable(path: storagePath, reason: "not writable"))
+        }
+
+        let trimmed = coverageLocator?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let coverage: LaunchReadinessSeam = trimmed.isEmpty
+            ? ImplementationCoverageSeam(.evidenceUnavailable(reason: "BridgeGitSHA not readable in this process"))
+            : ImplementationCoverageSeam(.proven(locator: "sha:\(trimmed)"))
+
+        let runtime = RuntimeAvailabilitySeam(.evidenceUnavailable(
+            reason: "runtime.browser not probed on registry_entities; Packet Runner dispatch residual"))
+
+        return LaunchReadinessContract.standardProbes(
+            commandAuth: commandAuth,
+            registryConsumer: registry,
+            runtimeBrowser: runtime,
+            storageWrite: storage,
+            implementationCoverage: coverage
+        )
     }
 }

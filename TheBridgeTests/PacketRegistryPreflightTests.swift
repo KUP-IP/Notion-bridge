@@ -153,4 +153,37 @@ func runPacketRegistryPreflightTests() async {
         try expect(schema.column(named: "PROJECT")?.relationDataSourceId == "projects-ds")
         try expect(schema.column(withID: "project-id")?.name == "PROJECT")
     }
+
+    await test("Packet preflight: binding DRIFT can leave consumer PASS") {
+        var config = packetConfig()
+        var packet = config.entities[0]
+        packet.properties.removeAll { $0.key == "objective" }
+        config.entities[0] = packet
+        let report = PacketRegistryPreflight.evaluate(config: config, schema: packetSchema())
+        try expect(!report.bindingPasses)
+        try expect(report.consumerPasses, "live schema is still complete: \(report.consumerDefects)")
+        try expect(codes(report).contains("UNBOUND_FIELD"))
+        try expect(report.defects.contains { $0.axis == .binding && $0.code == "UNBOUND_FIELD" })
+        guard case .object(let value) = report.value else {
+            throw TestError.assertion("report.value not object")
+        }
+        try expect(value["bindingResult"] == .string("DRIFT"))
+        try expect(value["consumerResult"] == .string("PASS"))
+    }
+
+    await test("Packet preflight: consumer DRIFT can leave binding PASS") {
+        var columns = packetSchema().columnsByName
+        columns["Surprise"] = .init(id: "surprise", type: "rich_text")
+        let report = PacketRegistryPreflight.evaluate(
+            config: packetConfig(), schema: DataSourceSchema(columnsByName: columns)
+        )
+        try expect(report.bindingPasses, "bindings still match classified columns: \(report.bindingDefects)")
+        try expect(!report.consumerPasses)
+        try expect(report.defects.contains { $0.axis == .consumer && $0.code == "UNCLASSIFIED_COLUMN" })
+        guard case .object(let value) = report.value else {
+            throw TestError.assertion("report.value not object")
+        }
+        try expect(value["bindingResult"] == .string("PASS"))
+        try expect(value["consumerResult"] == .string("DRIFT"))
+    }
 }
