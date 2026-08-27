@@ -1095,22 +1095,34 @@ public actor SSEServer {
             } else {
                 argsValue = .object([:])
             }
-            let (text, isError) = await router.dispatchFormatted(
+            let queued = origin == .remote
+            let (payload, receipt) = await ConnectorCallQueue.shared.runSerialized(
+                sessionKey: brokerSessionID,
                 toolName: name,
-                arguments: argsValue,
-                context: ToolDispatchContext(
-                    transportSessionId: brokerSessionID,
-                    origin: origin,
-                    client: origin == .remote ? "remote-connector" : nil,
-                    governancePrincipal: principal,
-                    routeAcknowledgementMode: origin == .remote ? .explicitReceipt : .transportSession
+                queued: queued
+            ) { () -> Result<(text: String, isError: Bool), ConnectorDeliveryError> in
+                let (text, isError) = await router.dispatchFormatted(
+                    toolName: name,
+                    arguments: argsValue,
+                    context: ToolDispatchContext(
+                        transportSessionId: brokerSessionID,
+                        origin: origin,
+                        client: origin == .remote ? "remote-connector" : nil,
+                        governancePrincipal: principal,
+                        routeAcknowledgementMode: origin == .remote ? .explicitReceipt : .transportSession
+                    )
                 )
-            )
-            if !isError { await MainActor.run { onToolCall() } }
-            let data = buildRPCResponse(id: requestId, result: [
+                return .success((text: text, isError: isError))
+            }
+            let text = payload?.text ?? "Error: connector dispatch did not execute"
+            let isError = payload?.isError ?? true
+            if payload != nil && !isError { await MainActor.run { onToolCall() } }
+            var result: [String: Any] = [
                 "content": [["type": "text", "text": text] as [String: Any]],
                 "isError": isError
-            ] as [String: Any]) ?? Data()
+            ]
+            result["_meta"] = ["connectorObservation": receipt.observationDictionary]
+            let data = buildRPCResponse(id: requestId, result: result) ?? Data()
             return .data(data, headers: headers)
 
         case "ping":
@@ -1879,7 +1891,10 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         var bodyBuffer: ByteBuffer
     }
 
-    private var pending: PendingRequest?
+    private var assemblies: [PendingRequest] = []
+    private var completed: [(head: HTTPRequestHead, body: Data?)] = []
+    private var drainTask: Task<Void, Never>?
+    private let assemblyLock = NSLock()
     private var legacySessionID: String?
 
     init(
@@ -1904,28 +1919,90 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
-        let part = unwrapInboundIn(data)
+        ingest(unwrapInboundIn(data), context: context)
+    }
+
+    /// PKT-1296: assemble HTTP/1.1 requests in FIFO order and drain them
+    /// serially so overlapping keepalive POSTs cannot clobber each other or
+    /// interleave response writers on one channel.
+    fileprivate func ingest(_ part: HTTPServerRequestPart, context: ChannelHandlerContext) {
         switch part {
         case .head(let head):
-            pending = PendingRequest(
-                head: head,
-                bodyBuffer: context.channel.allocator.buffer(capacity: 0)
-            )
-        case .body(var buffer):
-            pending?.bodyBuffer.writeBuffer(&buffer)
-        case .end:
-            guard let req = pending else { return }
-            pending = nil
-            
-            let head = req.head
-            let bodyData: Data? = req.bodyBuffer.readableBytes > 0 
-                ? req.bodyBuffer.getBytes(at: 0, length: req.bodyBuffer.readableBytes).map { Data($0) }
-                : nil
-            
-            nonisolated(unsafe) let ctx = context
-            Task {
-                await self.processRequest(head: head, body: bodyData, context: ctx)
+            withAssemblyLock {
+                assemblies.append(PendingRequest(
+                    head: head,
+                    bodyBuffer: context.channel.allocator.buffer(capacity: 0)
+                ))
             }
+        case .body(var buffer):
+            withAssemblyLock {
+                if !assemblies.isEmpty {
+                    assemblies[assemblies.count - 1].bodyBuffer.writeBuffer(&buffer)
+                }
+            }
+        case .end:
+            withAssemblyLock {
+                let req: PendingRequest? = assemblies.isEmpty ? nil : assemblies.removeFirst()
+                if let req {
+                    completed.append(Self.completedTuple(req))
+                }
+            }
+            startDrain(context: context)
+        }
+    }
+
+    private static func completedTuple(_ req: PendingRequest) -> (head: HTTPRequestHead, body: Data?) {
+        let bodyData: Data? = req.bodyBuffer.readableBytes > 0
+            ? req.bodyBuffer.getBytes(at: 0, length: req.bodyBuffer.readableBytes).map { Data($0) }
+            : nil
+        return (req.head, bodyData)
+    }
+
+    nonisolated private func withAssemblyLock(_ body: () -> Void) {
+        assemblyLock.lock()
+        defer { assemblyLock.unlock() }
+        body()
+    }
+
+    nonisolated private func takeNextCompleted() -> (head: HTTPRequestHead, body: Data?)? {
+        assemblyLock.lock()
+        defer { assemblyLock.unlock() }
+        guard !completed.isEmpty else {
+            drainTask = nil
+            return nil
+        }
+        return completed.removeFirst()
+    }
+
+    nonisolated private func snapshotDrainState() -> (task: Task<Void, Never>?, remaining: Int) {
+        assemblyLock.lock()
+        defer { assemblyLock.unlock() }
+        return (drainTask, completed.count)
+    }
+
+    private func startDrain(context: ChannelHandlerContext) {
+        assemblyLock.lock()
+        if drainTask == nil {
+            nonisolated(unsafe) let ctx = context
+            drainTask = Task { [weak self] in
+                await self?.drainQueue(context: ctx)
+            }
+        }
+        assemblyLock.unlock()
+    }
+
+    private func drainQueue(context: ChannelHandlerContext) async {
+        while true {
+            guard let next = takeNextCompleted() else { return }
+            await processRequest(head: next.head, body: next.body, context: context)
+        }
+    }
+
+    fileprivate func waitUntilIdleForTesting() async {
+        while true {
+            let snapshot = snapshotDrainState()
+            if snapshot.task == nil && snapshot.remaining == 0 { return }
+            await snapshot.task?.value
         }
     }
 
@@ -2313,5 +2390,28 @@ extension SSEServer {
         try await channel.pipeline.addHandler(handler).get()
         let context = try await channel.pipeline.context(handler: handler).get()
         await handler.processRequest(head: head, body: body, context: context)
+    }
+
+    /// PKT-1296 test seam: feed raw HTTP/1.1 parts (including overlapping
+    /// heads) through the live assembler + serial drain.
+    public static func ingestHTTPPartsForTesting(
+        on channel: Channel,
+        parts: [HTTPServerRequestPart]
+    ) async throws {
+        let handler = SSEHTTPHandler(
+            legacyBridge: LegacySSEBridge(),
+            endpoint: "/mcp",
+            rpcHandler: { _, _ in nil },
+            httpRequestHandler: { _ in .ok() },
+            healthHandler: { Data("{\"ok\":true}".utf8) },
+            jobsCallbackHandler: { _ in Data() },
+            onClientDisconnected: { _ in }
+        )
+        try await channel.pipeline.addHandler(handler).get()
+        let context = try await channel.pipeline.context(handler: handler).get()
+        for part in parts {
+            handler.ingest(part, context: context)
+        }
+        await handler.waitUntilIdleForTesting()
     }
 }

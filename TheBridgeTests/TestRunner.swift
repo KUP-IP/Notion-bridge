@@ -669,6 +669,7 @@ await test("AuditEntry is Codable (JSON round-trip)") {
 // SKIPPED: checkAll() hangs in CLI — NSAppleScript probes need AppKit run loop
 // await runPermissionManagerTests()
 await runShellModuleTests()
+await runProcessLifecycleTruthTests() // PKT-1196: residual terminal / timeout / descendant-cleanup truth
 await runNodeTestModuleTests() // U2: owner-bound foreground Node test runner
 await runBgProcessModuleTests()   // Tool-Dev (PRJCT-2754): bg_run/bg_poll/bg_kill detached background execution (registration/tier/annotation + LIVE run→poll→exit round-trip + bg_kill SIGTERM)
 await runBgProcessRuntimeTests()  // v4 audit #3: BgProcessRuntime actor — kill cascade SIGTERM→SIGKILL, reconcileOrphans (dead→unknown / live-reattach / TTL sweep), finalizeExit signaled-not-killed, concurrency-safe start
@@ -781,6 +782,7 @@ await runGovernancePropagationTests() // PKT-1124 W2C: real Streamable-HTTP gove
 await runRemoteGovernanceContinuityTests() // principal-keyed remote governance + routing-manifest continuity across session churn
 await runRoutingCustodyStoreTests() // WU2: atomic durable routing bootstrap + checksum recovery
 await runCapabilityPreflightTests() // PKT-1065C: intent-sensitive capability preflight + Reminders adapter
+await runLaunchReadinessTests() // PKT-1305: provider-neutral PASS/BLOCKED/TRANSPORT_UNKNOWN + safeToLaunch
 await runShortcutsModuleTests()   // PKT-959 (v3.7·F): shortcuts_* MCP tools (mock CLI seam)
 await runCommandsDataTests()      // cmd-w2: Commands data layer (CommandsManager + MentionResolver + cache)
 await runFetchSkillMarkdownTests() // cmd-w4: fetch_skill /markdown + shared MentionResolver
@@ -817,6 +819,7 @@ await runRemoteOAuthBearerTests()   // PKT-800 (S2): JWTKit bearer + ScopeGate +
 await runRemoteOAuthHardeningTests() // PKT-800 (S3): step-up + confused-deputy + leak-sweep + gating
 await runRemoteOAuthHardeningS4Tests() // PKT-800 (S4): contacts.read split + TransportRouter seam + step-up scope-only
 await runRemoteOAuthOriginGatingTests() // PKT-810 R5: origin split — loopback token-free, tunnel OAuth-gated
+await runConnectorContinuityTests()    // PKT-1296: connector continuity + executed truth + HTTP overlap drain
 await runBridgeFeatureFlagsTests()  // PKT-798 (v2.3 · WS-C): fail-closed capability gates
 await runBridgeModuleRegistryTests() // PKT v3.0·0.4: single-source module registrar
 await runMCPToolFactoryTests()       // PKT v3.0·0.5: metadata contract + unified Tool factory
