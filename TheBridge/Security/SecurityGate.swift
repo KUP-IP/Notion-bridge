@@ -190,12 +190,6 @@ public actor SecurityGate {
 
     private let approvalProvider: any SecurityApprovalProviding
     private var sessionAllowedPaths: Set<String> = []
-    /// Transport session IDs that already passed an on-device ordinary
-    /// `messages_send` prompt while mode is `.session`.
-    private var messagesSendSessionApprovals: Set<String> = []
-    /// Last observed `BridgeDefaults.messagesSendApprovalGeneration`. A bump
-    /// (including Always-ask revert without an intervening send) drops skips.
-    private var messagesSendApprovalGeneration = 0
 
     private static let permanentAllowPrefix = "com.notionbridge.security.pathAllow."
 
@@ -234,6 +228,10 @@ public actor SecurityGate {
         module: String = "",
         context: ToolDispatchContext = .localDefault
     ) async -> GateDecision {
+        // Origin (local vs remote) is not a second gate. ToolRouter already
+        // resolved the operator's effective open/notify/request tier; this
+        // method honors that tier for every session, including tunnel/cloud.
+        _ = context
         let allStrings = extractStrings(from: arguments)
         let combined = allStrings.joined(separator: " ")
         let detail = requestDetail(toolName: toolName, arguments: arguments, fallback: combined)
@@ -273,43 +271,14 @@ public actor SecurityGate {
             // Learned command prefixes no longer bypass Request prompts — use Tool Registry
             // (tier override) or per-call approval. `neverAutoApprove` tools use notification
             // category NO_ALWAYS (no Always Allow action); alert fallback is Allow/Deny only.
-            if toolName == "messages_send" {
-                let mode = MessagesSendApprovalPolicy.load()
-                let generation = UserDefaults.standard.integer(
-                    forKey: BridgeDefaults.messagesSendApprovalGeneration
-                )
-                if mode != .session || generation != messagesSendApprovalGeneration {
-                    messagesSendSessionApprovals.removeAll()
-                    messagesSendApprovalGeneration = generation
-                }
-                let sessionKey = context.transportSessionId?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let alreadyApproved = !sessionKey.isEmpty && messagesSendSessionApprovals.contains(sessionKey)
-                if !MessagesSendApprovalPolicy.requiresOnDevicePrompt(
-                    arguments: arguments,
-                    context: context,
-                    mode: mode,
-                    sessionAlreadyApproved: alreadyApproved
-                ) {
-                    return .allow
-                }
-            }
-            let decision = await requestToolTierApproval(
+            // `messages_send` uses this same ladder: Open/Notify skip the prompt
+            // (including remote/tunnel); Request prompts. No send-only policy.
+            return await requestToolTierApproval(
                 toolName: toolName,
                 module: module,
                 detail: detail,
                 neverAutoApprove: neverAutoApprove
             )
-            if case .allow = decision,
-               toolName == "messages_send",
-               MessagesSendApprovalPolicy.load() == .session,
-               MessagesSendApprovalPolicy.isOrdinaryOneToOne(arguments),
-               let sessionKey = context.transportSessionId?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-               !sessionKey.isEmpty {
-                messagesSendSessionApprovals.insert(sessionKey)
-            }
-            return decision
         }
     }
 
@@ -536,14 +505,17 @@ public actor SecurityGate {
         neverAutoApprove: Bool
     ) async -> GateDecision {
         // Consequence tools marked neverAutoApprove must show the complete
-        // payload prepared by requestDetail. Other generic Request tools keep
-        // the compact notification treatment.
-        let approvalBody = neverAutoApprove ? detail : String(detail.prefix(120))
+        // payload prepared by requestDetail. `messages_send` also shows the
+        // full recipient/body detail when it is still at Request; Open/Notify
+        // never reach this prompt. Other generic Request tools stay compact.
+        let approvalBody = (neverAutoApprove || toolName == "messages_send")
+            ? detail
+            : String(detail.prefix(120))
         let decision = await approvalProvider.requestApproval(
             title: "The Bridge wants to \(toolName)",
             body: approvalBody,
             allowAlwaysAllowAction: !neverAutoApprove,
-            forceModalReview: neverAutoApprove && toolName == "messages_send"
+            forceModalReview: false
         )
 
         switch decision {

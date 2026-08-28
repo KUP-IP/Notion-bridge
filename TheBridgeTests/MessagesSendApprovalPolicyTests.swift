@@ -1,255 +1,281 @@
-// MessagesSendApprovalPolicyTests.swift — issue #126
+// MessagesSendApprovalPolicyTests.swift
 // TheBridge · Tests
 //
-// Operator-selectable on-device approval for ordinary local one-to-one
-// messages_send. Default Always ask. Group / THREAD / remote / jobs / raw
-// chatNNN never inherit a skip. No live Messages.app send.
+// `messages_send` uses the ordinary SecurityGate ladder (open / notify /
+// request). Catalog default stays .request with neverAutoApprove false so
+// Settings can lower it, including for remote/tunnel sessions. confirm:SEND
+// and explicit iMessage/SMS remain handler-required. No live Messages.app send.
 
 import Foundation
 import MCP
 import TheBridgeLib
 
 func runMessagesSendApprovalPolicyTests() async {
-    print("\n📬 Messages send approval policy (#126)")
+    print("\n📬 Messages send 3-tier SecurityGate ladder")
 
-    await test("missing stored mode defaults to alwaysAsk") {
-        let suite = isolatedDefaults()
-        defer { suite.tearDown() }
-        try expect(MessagesSendApprovalPolicy.load(from: suite.defaults) == .alwaysAsk)
-    }
-
-    await test("invalid stored mode defaults to alwaysAsk") {
-        let suite = isolatedDefaults()
-        defer { suite.tearDown() }
-        suite.defaults.set("not-a-mode", forKey: BridgeDefaults.messagesSendApprovalMode)
-        try expect(MessagesSendApprovalPolicy.load(from: suite.defaults) == .alwaysAsk)
-    }
-
-    await test("save session round-trips and alwaysAsk clears the key") {
-        let suite = isolatedDefaults()
-        defer { suite.tearDown() }
-        MessagesSendApprovalPolicy.save(.session, to: suite.defaults)
-        try expect(MessagesSendApprovalPolicy.load(from: suite.defaults) == .session)
-        try expect(suite.defaults.string(forKey: BridgeDefaults.messagesSendApprovalMode) == "session")
-        MessagesSendApprovalPolicy.save(.alwaysAsk, to: suite.defaults)
-        try expect(MessagesSendApprovalPolicy.load(from: suite.defaults) == .alwaysAsk)
-        try expect(suite.defaults.object(forKey: BridgeDefaults.messagesSendApprovalMode) == nil,
-                   "Always ask must remove the stored key")
-        try expect(suite.defaults.integer(forKey: BridgeDefaults.messagesSendApprovalGeneration) >= 2,
-                   "each save must bump the generation so session skips can be dropped")
-    }
-
-    await test("ordinary one-to-one iMessage/SMS with confirm SEND is eligible") {
-        try expect(MessagesSendApprovalPolicy.isOrdinaryOneToOne(ordinarySend()))
-        try expect(MessagesSendApprovalPolicy.isOrdinaryOneToOne(ordinarySend(service: "SMS")))
-    }
-
-    await test("chatIdentifier, THREAD, chatNNN, missing service, and missing SEND are not ordinary") {
-        try expect(!MessagesSendApprovalPolicy.isOrdinaryOneToOne(ordinarySend(extra: [
-            "chatIdentifier": .string("chat1234567890")
-        ])))
-        try expect(!MessagesSendApprovalPolicy.isOrdinaryOneToOne(ordinarySend(extra: [
-            "threadPageId": .string("thread-page")
-        ])))
-        try expect(!MessagesSendApprovalPolicy.isOrdinaryOneToOne(ordinarySend(recipient: "chat42")))
-        try expect(!MessagesSendApprovalPolicy.isOrdinaryOneToOne(ordinarySend(omitService: true)))
-        try expect(!MessagesSendApprovalPolicy.isOrdinaryOneToOne(ordinarySend(confirm: "yes")))
-        try expect(MessagesSendApprovalPolicy.isRawChatIdentifier("chat123"))
-        try expect(!MessagesSendApprovalPolicy.isRawChatIdentifier("+15551234567"))
-    }
-
-    await test("policy: remote, jobs, and non-ordinary always require a prompt") {
-        let local = localSession("s1")
-        let remote = ToolDispatchContext(transportSessionId: "s1", origin: .remote)
-        try expect(MessagesSendApprovalPolicy.requiresOnDevicePrompt(
-            arguments: ordinarySend(), context: remote, mode: .trustedDirect, sessionAlreadyApproved: true
-        ))
-        try expect(MessagesSendApprovalPolicy.requiresOnDevicePrompt(
-            arguments: ordinarySend(), context: .localDefault, mode: .trustedDirect, sessionAlreadyApproved: true
-        ))
-        try expect(MessagesSendApprovalPolicy.requiresOnDevicePrompt(
-            arguments: ordinarySend(extra: ["chatIdentifier": .string("iMessage;-;+1555")]),
-            context: local, mode: .trustedDirect, sessionAlreadyApproved: true
-        ))
-        try expect(MessagesSendApprovalPolicy.requiresOnDevicePrompt(
-            arguments: ordinarySend(), context: local, mode: .alwaysAsk, sessionAlreadyApproved: true
-        ))
-        try expect(MessagesSendApprovalPolicy.requiresOnDevicePrompt(
-            arguments: ordinarySend(), context: local, mode: .session, sessionAlreadyApproved: false
-        ))
-        try expect(!MessagesSendApprovalPolicy.requiresOnDevicePrompt(
-            arguments: ordinarySend(), context: local, mode: .session, sessionAlreadyApproved: true
-        ))
-        try expect(!MessagesSendApprovalPolicy.requiresOnDevicePrompt(
-            arguments: ordinarySend(), context: local, mode: .trustedDirect, sessionAlreadyApproved: false
-        ))
-    }
-
-    await test("gate trustedDirect skips the modal for ordinary local session sends") {
-        try await withStandardApprovalMode(.trustedDirect) {
-            let provider = TestSecurityApprovalProvider()
-            let gate = SecurityGate(approvalProvider: provider)
-            let decision = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("live-1"))
-            try expectAllow(decision, "trustedDirect ordinary local send")
-            try expect(provider.approvalRequestCount == 0, "trustedDirect must not show the modal")
-        }
-    }
-
-    await test("gate trustedDirect still prompts group, THREAD, remote, jobs, and chatNNN") {
-        try await withStandardApprovalMode(.trustedDirect) {
-            let cases: [(String, Value, ToolDispatchContext)] = [
-                ("group", ordinarySend(extra: ["chatIdentifier": .string("chat1234567890")]), localSession("live-1")),
-                ("THREAD", ordinarySend(extra: ["threadPageId": .string("thread-page")]), localSession("live-1")),
-                ("chatNNN", ordinarySend(recipient: "chat99"), localSession("live-1")),
-                ("remote", ordinarySend(), ToolDispatchContext(transportSessionId: "live-1", origin: .remote)),
-                ("job", ordinarySend(), .localDefault),
-            ]
-            for (label, arguments, context) in cases {
-                let provider = TestSecurityApprovalProvider()
-                let gate = SecurityGate(approvalProvider: provider)
-                let decision = await enforceMessages(gate: gate, arguments: arguments, context: context)
-                try expectAllow(decision, "\(label) still executes after prompt")
-                try expect(provider.approvalRequestCount == 1, "\(label) must prompt under trustedDirect")
-            }
-        }
-    }
-
-    await test("gate session: first ordinary send prompts, later same session skips, other session prompts") {
-        try await withStandardApprovalMode(.session) {
-            let provider = TestSecurityApprovalProvider()
-            let gate = SecurityGate(approvalProvider: provider)
-            let first = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            try expectAllow(first, "first session send")
-            try expect(provider.approvalRequestCount == 1, "first session send must prompt")
-            let second = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            try expectAllow(second, "second same-session send")
-            try expect(provider.approvalRequestCount == 1, "same session must skip the second prompt")
-            let other = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s2"))
-            try expectAllow(other, "different session send")
-            try expect(provider.approvalRequestCount == 2, "a new session must prompt")
-        }
-    }
-
-    await test("gate session denial does not grant later skips") {
-        try await withStandardApprovalMode(.session) {
-            let provider = TestSecurityApprovalProvider(decision: .deny)
-            let gate = SecurityGate(approvalProvider: provider)
-            let first = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            guard case .reject = first else {
-                throw TestError.assertion("denied first send must reject")
-            }
-            try expect(provider.approvalRequestCount == 1)
-            let second = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            guard case .reject = second else {
-                throw TestError.assertion("denied session must still prompt and reject")
-            }
-            try expect(provider.approvalRequestCount == 2, "denial must not record a session skip")
-        }
-    }
-
-    await test("gate alwaysAsk never skips ordinary local session sends") {
-        try await withStandardApprovalMode(.alwaysAsk) {
-            let provider = TestSecurityApprovalProvider()
-            let gate = SecurityGate(approvalProvider: provider)
-            _ = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            _ = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            try expect(provider.approvalRequestCount == 2, "Always ask must prompt every send")
-        }
-    }
-
-    await test("leaving session mode forgets prior session approvals") {
-        try await withStandardApprovalMode(.session) {
-            let provider = TestSecurityApprovalProvider()
-            let gate = SecurityGate(approvalProvider: provider)
-            _ = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            try expect(provider.approvalRequestCount == 1)
-            MessagesSendApprovalPolicy.save(.trustedDirect)
-            _ = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            try expect(provider.approvalRequestCount == 1, "trustedDirect skip after leaving session")
-            MessagesSendApprovalPolicy.save(.session)
-            _ = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            try expect(provider.approvalRequestCount == 2, "returning to session must prompt again")
-        }
-    }
-
-    await test("reverting Always ask then returning to session forgets skips without an intervening send") {
-        try await withStandardApprovalMode(.session) {
-            let provider = TestSecurityApprovalProvider()
-            let gate = SecurityGate(approvalProvider: provider)
-            _ = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            try expect(provider.approvalRequestCount == 1)
-            MessagesSendApprovalPolicy.save(.alwaysAsk)
-            MessagesSendApprovalPolicy.save(.session)
-            _ = await enforceMessages(gate: gate, arguments: ordinarySend(), context: localSession("s1"))
-            try expect(provider.approvalRequestCount == 2, "mode revert must drop in-memory session skips")
-        }
-    }
-
-    await test("messages_send result includes the active approvalMode") {
-        try await withStandardApprovalMode(.session) {
-            let router = ToolRouter(
-                securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
-                auditLog: AuditLog()
-            )
-            await MessagesModule.register(on: router)
-            let result = try await router.dispatch(
-                toolName: "messages_send",
-                arguments: .object([
-                    "recipient": .string("+15551234567"),
-                    "body": .string("diagnostic-only invalid-service probe"),
-                    "confirm": .string("SEND"),
-                    "service": .string("auto")
-                ])
-            )
-            guard case .object(let object) = result else {
-                throw TestError.assertion("invalid-service result must be an object")
-            }
-            try expect(object["sent"] == .bool(false))
-            try expect(object["approvalMode"] == .string("session"),
-                       "diagnostics must surface the live approval mode")
-        }
-    }
-
-    await test("messages_send stays neverAutoApprove and documents configurable approval") {
+    await test("messages_send is catalog request and downgradable") {
         let router = ToolRouter(
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog()
         )
         await MessagesModule.register(on: router)
         let tool = await router.registrations(forModule: "messages").first { $0.name == "messages_send" }!
-        try expect(tool.neverAutoApprove, "Always Allow must not persist a downgrade")
-        try expect(tool.tier == .request)
-        try expect(tool.description.contains("Always ask"), "tool description must name the default mode")
-        try expect(tool.description.contains("remote"), "tool description must name remote as always-prompt")
+        try expect(tool.tier == .request, "catalog default must stay .request")
+        try expect(!tool.neverAutoApprove, "Settings must be able to lower messages_send")
+        try expect(tool.description.localizedCaseInsensitiveContains("confirm"),
+                   "tool description must name confirm:SEND")
+        try expect(tool.description.localizedCaseInsensitiveContains("iMessage")
+                   || tool.description.localizedCaseInsensitiveContains("SMS"),
+                   "tool description must name the explicit service contract")
+        try expect(!tool.description.contains("Always ask"),
+                   "send-only Always ask copy must not remain on the tool")
     }
 
-    await test("Gates UI and AX lock the messages send approval control") {
+    await test("effective Open also skips the prompt for a local session") {
+        let provider = TestSecurityApprovalProvider()
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await enforceMessages(
+            gate: gate, tier: .open, arguments: ordinarySend(), context: localSession("s1")
+        )
+        try expectAllow(decision, "Open local ordinary send")
+        try expect(provider.approvalRequestCount == 0)
+    }
+
+    await test("Always Allow on messages_send persists a Notify override") {
+        let toolKey = BridgeDefaults.tierOverrides
+        let moduleKey = BridgeDefaults.moduleTierOverrides
+        let previousTool = UserDefaults.standard.object(forKey: toolKey)
+        let previousModule = UserDefaults.standard.object(forKey: moduleKey)
+        defer {
+            if let previousTool {
+                UserDefaults.standard.set(previousTool, forKey: toolKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: toolKey)
+            }
+            if let previousModule {
+                UserDefaults.standard.set(previousModule, forKey: moduleKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: moduleKey)
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: toolKey)
+        UserDefaults.standard.removeObject(forKey: moduleKey)
+        let provider = TestSecurityApprovalProvider(decision: .alwaysAllow)
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await enforceMessages(
+            gate: gate, tier: .request, arguments: ordinarySend(), context: localSession("s1")
+        )
+        try expectAllow(decision, "Always Allow send")
+        let stored = UserDefaults.standard.dictionary(forKey: toolKey) as? [String: String] ?? [:]
+        try expect(stored["messages_send"] == SecurityTier.notify.rawValue,
+                   "Always Allow must persist a notify override for messages_send, got \(stored)")
+    }
+
+    await test("SecurityGate no longer consults a send-only approval policy") {
+        let testsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let source = try String(
+            contentsOf: testsURL.deletingLastPathComponent()
+                .appendingPathComponent("TheBridge/Security/SecurityGate.swift"),
+            encoding: .utf8
+        )
+        try expect(!source.contains("MessagesSendApprovalPolicy"),
+                   "SecurityGate must use resolveEffectiveTier only for messages_send")
+        try expect(!source.contains("messagesSendSessionApprovals"),
+                   "send-only session skip state must be gone")
+    }
+
+    await test("effective Open + confirm SEND + explicit service skips the on-device prompt for a remote session") {
+        let provider = TestSecurityApprovalProvider()
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await enforceMessages(
+            gate: gate,
+            tier: .open,
+            arguments: ordinarySend(),
+            context: ToolDispatchContext(transportSessionId: "cloud-agent-1", origin: .remote)
+        )
+        try expectAllow(decision, "Open remote ordinary send")
+        try expect(provider.approvalRequestCount == 0,
+                   "effective Open must not force a Mac modal for remote origin")
+    }
+
+    await test("effective Notify skips the prompt for remote, jobs, group, and THREAD") {
+        let cases: [(String, Value, ToolDispatchContext)] = [
+            ("remote", ordinarySend(), ToolDispatchContext(transportSessionId: "s1", origin: .remote)),
+            ("job", ordinarySend(), .localDefault),
+            ("group", ordinarySend(extra: ["chatIdentifier": .string("iMessage;-;+1555")]), localSession("s1")),
+            ("THREAD", ordinarySend(extra: ["threadPageId": .string("thread-page")]), localSession("s1")),
+        ]
+        for (label, arguments, context) in cases {
+            let provider = TestSecurityApprovalProvider()
+            let gate = SecurityGate(approvalProvider: provider)
+            let decision = await enforceMessages(
+                gate: gate, tier: .notify, arguments: arguments, context: context
+            )
+            try expectAllow(decision, "\(label) at Notify")
+            try expect(provider.approvalRequestCount == 0,
+                       "\(label) must follow the tool's Notify tier, not a send-only remote/group lock")
+        }
+    }
+
+    await test("effective Request still prompts, including remote") {
+        let provider = TestSecurityApprovalProvider()
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await enforceMessages(
+            gate: gate,
+            tier: .request,
+            arguments: ordinarySend(),
+            context: ToolDispatchContext(transportSessionId: "cloud-agent-1", origin: .remote)
+        )
+        try expectAllow(decision, "Request remote send after prompt")
+        try expect(provider.approvalRequestCount == 1,
+                   "catalog/request effective tier must still show the on-device prompt")
+    }
+
+    await test("effective Request denial still rejects") {
+        let provider = TestSecurityApprovalProvider(decision: .deny)
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await enforceMessages(
+            gate: gate,
+            tier: .request,
+            arguments: ordinarySend(),
+            context: ToolDispatchContext(transportSessionId: "cloud-agent-1", origin: .remote)
+        )
+        guard case .reject = decision else {
+            throw TestError.assertion("Request deny must reject, got \(String(describing: decision))")
+        }
+        try expect(provider.approvalRequestCount == 1)
+    }
+
+    await test("Request still prompts every send — no send-only session skip") {
+        let provider = TestSecurityApprovalProvider()
+        let gate = SecurityGate(approvalProvider: provider)
+        _ = await enforceMessages(gate: gate, tier: .request, arguments: ordinarySend(), context: localSession("s1"))
+        _ = await enforceMessages(gate: gate, tier: .request, arguments: ordinarySend(), context: localSession("s1"))
+        try expect(provider.approvalRequestCount == 2,
+                   "ordinary Request has no send-only session grant")
+    }
+
+    await test("router Open override reaches the handler without a prompt") {
+        let provider = TestSecurityApprovalProvider()
+        let gate = SecurityGate(approvalProvider: provider)
+        let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+        await MessagesModule.register(on: router)
+        try await withToolOverride("messages_send", SecurityTier.open) {
+            let result = try await router.dispatch(
+                toolName: "messages_send",
+                arguments: ordinarySend(service: "auto")
+            )
+            guard case .object(let object) = result else {
+                throw TestError.assertion("invalid-service result must be an object")
+            }
+            try expect(object["sent"] == .bool(false), "auto service must still fail closed")
+            try expect(object["approvalMode"] == nil,
+                       "retired send-only approvalMode must not appear on results")
+            try expect(provider.approvalRequestCount == 0,
+                       "Open override must skip the Mac modal")
+        }
+    }
+
+    await test("handler still requires confirm SEND and explicit service under Open") {
+        let provider = TestSecurityApprovalProvider()
+        let gate = SecurityGate(approvalProvider: provider)
+        let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+        await MessagesModule.register(on: router)
+        try await withToolOverride("messages_send", SecurityTier.open) {
+            let missingConfirm = try await router.dispatch(
+                toolName: "messages_send",
+                arguments: ordinarySend(confirm: "yes")
+            )
+            guard case .object(let denied) = missingConfirm else {
+                throw TestError.assertion("missing SEND must return an object")
+            }
+            try expect(denied["sent"] == .bool(false), "confirm:SEND remains required at Open")
+            try expect(provider.approvalRequestCount == 0)
+
+            let missingService = try await router.dispatch(
+                toolName: "messages_send",
+                arguments: ordinarySend(omitService: true)
+            )
+            guard case .object(let noService) = missingService else {
+                throw TestError.assertion("missing service must return an object")
+            }
+            try expect(noService["sent"] == .bool(false), "explicit service remains required at Open")
+        }
+    }
+
+    await test("raw chatNNN is still rejected at Open without an on-device prompt") {
+        let provider = TestSecurityApprovalProvider()
+        let gate = SecurityGate(approvalProvider: provider)
+        let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+        await MessagesModule.register(on: router)
+        try await withToolOverride("messages_send", SecurityTier.open) {
+            let result = try await router.dispatch(
+                toolName: "messages_send",
+                arguments: ordinarySend(recipient: "chat99")
+            )
+            guard case .object(let object) = result else {
+                throw TestError.assertion("raw chatNNN result must be an object")
+            }
+            try expect(object["sent"] == .bool(false), "raw chatNNN must stay rejected")
+            try expect(provider.approvalRequestCount == 0)
+        }
+    }
+
+    await test("live mail_trash and snippets_delete remain neverAutoApprove") {
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog()
+        )
+        await MailModule.register(on: router)
+        await SnippetsModule.register(on: router)
+        let trash = await router.registrations(forModule: "mail").first { $0.name == "mail_trash" }
+        let snippets = await router.registrations(forModule: "snippets").first { $0.name == "snippets_delete" }
+        try expect(trash?.neverAutoApprove == true, "mail_trash must stay locked")
+        try expect(snippets?.neverAutoApprove == true, "snippets_delete must stay locked")
+        try expect(trash?.tier == .request)
+        try expect(snippets?.tier == .request)
+    }
+
+    await test("neverAutoApprove tools stay locked while messages_send does not") {
+        let send = ToolRouter.resolveEffectiveTier(
+            toolName: "messages_send", module: "messages",
+            registeredTier: .request, neverAutoApprove: false,
+            toolOverrides: ["messages_send": "open"], moduleOverrides: [:]
+        )
+        try expect(send == .open)
+
+        let trash = ToolRouter.resolveEffectiveTier(
+            toolName: "mail_trash", module: "mail",
+            registeredTier: .request, neverAutoApprove: true,
+            toolOverrides: ["mail_trash": "open"], moduleOverrides: ["mail": "open"]
+        )
+        try expect(trash == .request, "mail_trash must remain locked")
+
+        let snippets = ToolRouter.resolveEffectiveTier(
+            toolName: "snippets_delete", module: "snippets",
+            registeredTier: .request, neverAutoApprove: true,
+            toolOverrides: ["snippets_delete": "notify"], moduleOverrides: ["snippets": "open"]
+        )
+        try expect(snippets == .request, "snippets_delete must remain locked")
+    }
+
+    await test("Gates UI no longer hosts a send-only approval card") {
         let testsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         let ui = try String(
             contentsOf: testsURL.deletingLastPathComponent()
                 .appendingPathComponent("TheBridge/UI/Sections/PermissionsSection.swift"),
             encoding: .utf8
         )
-        try expect(ui.contains("messagesApprovalCard"), "Gates tab must render the approval card")
-        try expect(ui.contains("BridgeAXID.Security.messagesSendApproval"),
-                   "Gates card must use the locked AX id")
-        let id = await MainActor.run { BridgeAXID.Security.messagesSendApproval }
-        try expect(id == "bridge.settings.security.messages.approval", "got \(id)")
+        try expect(!ui.contains("messagesApprovalCard"),
+                   "Gates tab must not render a send-only approval card")
+        try expect(!ui.contains("MessagesSendApprovalMode"),
+                   "Gates tab must not mention the retired send-only mode enum")
+        try expect(ui.contains("alwaysAllowCard"),
+                   "ordinary Always-Allow grants card must remain")
     }
 }
 
 // MARK: - Helpers
-
-private struct IsolatedDefaults {
-    let name: String
-    let defaults: UserDefaults
-    func tearDown() { defaults.removePersistentDomain(forName: name) }
-}
-
-private func isolatedDefaults() -> IsolatedDefaults {
-    let name = "bridge.test.messages-approval.\(UUID().uuidString)"
-    return IsolatedDefaults(name: name, defaults: UserDefaults(suiteName: name)!)
-}
 
 private func ordinarySend(
     recipient: String = "+15551234567",
@@ -276,39 +302,16 @@ private func localSession(_ id: String) -> ToolDispatchContext {
     ToolDispatchContext(transportSessionId: id, origin: .local)
 }
 
-private func withStandardApprovalMode(
-    _ mode: MessagesSendApprovalMode,
-    _ body: () async throws -> Void
-) async throws {
-    let key = BridgeDefaults.messagesSendApprovalMode
-    let generationKey = BridgeDefaults.messagesSendApprovalGeneration
-    let previous = UserDefaults.standard.object(forKey: key)
-    let previousGeneration = UserDefaults.standard.object(forKey: generationKey)
-    defer {
-        if let previous {
-            UserDefaults.standard.set(previous, forKey: key)
-        } else {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
-        if let previousGeneration {
-            UserDefaults.standard.set(previousGeneration, forKey: generationKey)
-        } else {
-            UserDefaults.standard.removeObject(forKey: generationKey)
-        }
-    }
-    MessagesSendApprovalPolicy.save(mode)
-    try await body()
-}
-
 private func enforceMessages(
     gate: SecurityGate,
+    tier: SecurityTier,
     arguments: Value,
     context: ToolDispatchContext
 ) async -> GateDecision {
     await gate.enforce(
         toolName: "messages_send",
-        tier: .request,
-        neverAutoApprove: true,
+        tier: tier,
+        neverAutoApprove: false,
         arguments: arguments,
         module: "messages",
         context: context
@@ -322,4 +325,22 @@ private func expectAllow(_ decision: GateDecision, _ msg: String) throws {
     default:
         throw TestError.assertion("\(msg): expected .allow, got \(String(describing: decision))")
     }
+}
+
+private func withToolOverride(
+    _ toolName: String,
+    _ tier: SecurityTier,
+    _ body: () async throws -> Void
+) async throws {
+    let key = BridgeDefaults.tierOverrides
+    let previous = UserDefaults.standard.object(forKey: key)
+    defer {
+        if let previous {
+            UserDefaults.standard.set(previous, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+    UserDefaults.standard.set([toolName: tier.rawValue], forKey: key)
+    try await body()
 }

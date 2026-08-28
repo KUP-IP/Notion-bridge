@@ -214,6 +214,28 @@ func runSecurityGateUXTests() async {
                    "a snippets module grant must not affect the messages module: got \(t.rawValue)")
     }
 
+    await test("resolveEffectiveTier: messages_send Open override is honored (downgradable)") {
+        let t = ToolRouter.resolveEffectiveTier(
+            toolName: "messages_send", module: "messages",
+            registeredTier: .request, neverAutoApprove: false,
+            toolOverrides: ["messages_send": "open"], moduleOverrides: [:]
+        )
+        try expect(t == .open, "messages_send must follow an operator Open override: got \(t.rawValue)")
+    }
+
+    await test("resolveEffectiveTier: mail_trash and snippets_delete stay locked at request") {
+        for name in ["mail_trash", "snippets_delete"] {
+            let t = ToolRouter.resolveEffectiveTier(
+                toolName: name, module: name == "mail_trash" ? "mail" : "snippets",
+                registeredTier: .request, neverAutoApprove: true,
+                toolOverrides: [name: "open"],
+                moduleOverrides: ["mail": "open", "snippets": "open"]
+            )
+            try expect(t == .request,
+                       "\(name) must remain neverAutoApprove-locked at .request: got \(t.rawValue)")
+        }
+    }
+
     // ============================================================
     // MARK: - (2) End-to-end: persisted module override resolves allow
     // ============================================================

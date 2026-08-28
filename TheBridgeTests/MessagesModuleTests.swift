@@ -66,10 +66,29 @@ func runMessagesModuleTests() async {
         try expect(tool.tier == .request, "Expected request, got \(tool.tier.rawValue)")
     }
 
-    await test("messages_send is non-downgradable and requires fresh approval") {
+    await test("messages_send is downgradable on the ordinary 3-tier ladder") {
         let tools = await router.registrations(forModule: "messages")
         let tool = tools.first(where: { $0.name == "messages_send" })!
-        try expect(tool.neverAutoApprove, "messages_send must not accept Always Allow or tier downgrades")
+        try expect(tool.tier == .request, "catalog default stays .request")
+        try expect(!tool.neverAutoApprove, "Settings must be able to lower messages_send to notify/open")
+        let opened = ToolRouter.resolveEffectiveTier(
+            toolName: "messages_send",
+            module: "messages",
+            registeredTier: tool.tier,
+            neverAutoApprove: tool.neverAutoApprove,
+            toolOverrides: ["messages_send": SecurityTier.open.rawValue],
+            moduleOverrides: [:]
+        )
+        try expect(opened == .open, "operator Open override must win: got \(opened.rawValue)")
+        let notified = ToolRouter.resolveEffectiveTier(
+            toolName: "messages_send",
+            module: "messages",
+            registeredTier: tool.tier,
+            neverAutoApprove: tool.neverAutoApprove,
+            toolOverrides: [:],
+            moduleOverrides: ["messages": SecurityTier.notify.rawValue]
+        )
+        try expect(notified == .notify, "module Always-Allow must cover messages_send: got \(notified.rawValue)")
     }
 
     // Functional tests — messages_search (requires chat.db access)
