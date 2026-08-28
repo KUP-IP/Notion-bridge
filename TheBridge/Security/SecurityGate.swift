@@ -271,8 +271,8 @@ public actor SecurityGate {
             // Learned command prefixes no longer bypass Request prompts — use Tool Registry
             // (tier override) or per-call approval. `neverAutoApprove` tools use notification
             // category NO_ALWAYS (no Always Allow action); alert fallback is Allow/Deny only.
-            // `messages_send` uses this same ladder: Open/Notify skip the prompt
-            // (including remote/tunnel); Request prompts. No send-only policy.
+            // `messages_send` is not special here: Open/Notify already returned
+            // `.allow` above, so a remote Open override never reaches this prompt.
             return await requestToolTierApproval(
                 toolName: toolName,
                 module: module,
@@ -505,12 +505,10 @@ public actor SecurityGate {
         neverAutoApprove: Bool
     ) async -> GateDecision {
         // Consequence tools marked neverAutoApprove must show the complete
-        // payload prepared by requestDetail. `messages_send` also shows the
-        // full recipient/body detail when it is still at Request; Open/Notify
-        // never reach this prompt. Other generic Request tools stay compact.
-        let approvalBody = (neverAutoApprove || toolName == "messages_send")
-            ? detail
-            : String(detail.prefix(120))
+        // payload prepared by requestDetail. Other Request tools — including
+        // `messages_send` and `mail_send` — keep the compact notification
+        // treatment. Do not re-special-case send into a forced NSAlert.
+        let approvalBody = neverAutoApprove ? detail : String(detail.prefix(120))
         let decision = await approvalProvider.requestApproval(
             title: "The Bridge wants to \(toolName)",
             body: approvalBody,

@@ -82,6 +82,12 @@ func runMessagesSendApprovalPolicyTests() async {
                    "SecurityGate must use resolveEffectiveTier only for messages_send")
         try expect(!source.contains("messagesSendSessionApprovals"),
                    "send-only session skip state must be gone")
+        try expect(!source.contains("forceModalReview: neverAutoApprove && toolName == \"messages_send\""),
+                   "Request must not force a send-only NSAlert lock")
+        try expect(!source.contains("neverAutoApprove || toolName == \"messages_send\""),
+                   "Request body must not special-case messages_send vs mail_send")
+        try expect(!source.contains("origin != .local"),
+                   "do not add a named remote origin floor")
     }
 
     await test("effective Open + confirm SEND + explicit service skips the on-device prompt for a remote session") {
@@ -129,6 +135,10 @@ func runMessagesSendApprovalPolicyTests() async {
         try expectAllow(decision, "Request remote send after prompt")
         try expect(provider.approvalRequestCount == 1,
                    "catalog/request effective tier must still show the on-device prompt")
+        try expect(!provider.lastForceModalReview,
+                   "Request messages_send must use the same prompt style as mail_send, not a forced NSAlert")
+        try expect(provider.lastAllowAlwaysAllowAction,
+                   "messages_send must offer Always Allow like other non-locked request tools")
     }
 
     await test("effective Request denial still rejects") {
@@ -228,10 +238,17 @@ func runMessagesSendApprovalPolicyTests() async {
         )
         await MailModule.register(on: router)
         await SnippetsModule.register(on: router)
+        await MessagesModule.register(on: router)
         let trash = await router.registrations(forModule: "mail").first { $0.name == "mail_trash" }
+        let sendMail = await router.registrations(forModule: "mail").first { $0.name == "mail_send" }
         let snippets = await router.registrations(forModule: "snippets").first { $0.name == "snippets_delete" }
+        let send = await router.registrations(forModule: "messages").first { $0.name == "messages_send" }
         try expect(trash?.neverAutoApprove == true, "mail_trash must stay locked")
         try expect(snippets?.neverAutoApprove == true, "snippets_delete must stay locked")
+        try expect(sendMail?.neverAutoApprove == false && sendMail?.tier == .request,
+                   "mail_send is the sibling pattern: request without neverAutoApprove")
+        try expect(send?.neverAutoApprove == false && send?.tier == .request,
+                   "messages_send must match mail_send: request without neverAutoApprove")
         try expect(trash?.tier == .request)
         try expect(snippets?.tier == .request)
     }

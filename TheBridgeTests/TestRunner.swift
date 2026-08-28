@@ -68,6 +68,8 @@ final class TestSecurityApprovalProvider: @unchecked Sendable, SecurityApprovalP
     private let decision: SecurityApprovalDecision
     private(set) var approvalRequestCount = 0
     private(set) var notificationCount = 0
+    private(set) var lastForceModalReview = false
+    private(set) var lastAllowAlwaysAllowAction = true
 
     init(decision: SecurityApprovalDecision = .allow) {
         self.decision = decision
@@ -81,7 +83,11 @@ final class TestSecurityApprovalProvider: @unchecked Sendable, SecurityApprovalP
         allowAlwaysAllowAction: Bool,
         forceModalReview: Bool
     ) async -> SecurityApprovalDecision {
-        lock.withLock { approvalRequestCount += 1 }
+        lock.withLock {
+            approvalRequestCount += 1
+            lastForceModalReview = forceModalReview
+            lastAllowAlwaysAllowAction = allowAlwaysAllowAction
+        }
         return decision
     }
 
