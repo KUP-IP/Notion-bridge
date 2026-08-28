@@ -4,7 +4,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-TheBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. The current source version is **4.0.5** (build **94**). It registers **224 static feature-module tools** (`BridgeConstants.staticFeatureModuleToolCount`) across **32 module families** (`BridgeConstants.staticFeatureModuleFamilyCount`) over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Conditional tools such as `bridge_status` are outside that static count, and client listings may be filtered by enabled feature groups. The former builtin `echo` and Stripe/payment surfaces are no longer registered.
+TheBridge is a native macOS menu bar app (Swift 6.2, macOS 26+, Apple Silicon) that runs an MCP (Model Context Protocol) server. The current source version is **4.0.6** (build **95**). It registers **224 static feature-module tools** (`BridgeConstants.staticFeatureModuleToolCount`) across **32 module families** (`BridgeConstants.staticFeatureModuleFamilyCount`) over Streamable HTTP, legacy SSE, and stdio, routing every call through a security gate with an append-only audit log. Conditional tools such as `bridge_status` are outside that static count, and client listings may be filtered by enabled feature groups. The former builtin `echo` and Stripe/payment surfaces are no longer registered.
 
 Bundle ID: `kup.solutions.the-bridge` (legacy: `kup.solutions.notion-bridge`, `solutions.kup.keepr`)
 
@@ -120,7 +120,7 @@ Trunk = `origin/main`. Branches are short-lived and **rebased onto current main 
 
 ### Release flow (the v3.7.x → 3.8.x pattern)
 
-**Versioning (operator rule, 2026-06-15):** each **published install (release)** bumps the marketing version **+1 patch** — NOT per branch merge; several task branches can merge to main and ship together as one install increment (bump only at release/ship-prep). Segments are **single-digit and roll at 9** — never double digits. Patch 9 → `X.(Y+1).0`; minor 9 → `(X+1).0.0` (so `4.0.9 → 4.1.0`, `4.9.9 → 5.0.0`). From the current `4.0.5`, **the next published version is `4.0.6`**. The `3.7.10`–`3.7.12` double-digit patches were pre-rule legacy. `CFBundleVersion` (build) is monotonic +1, independent of the marketing roll. Override only when Isaiah specifies.
+**Versioning (operator rule, 2026-06-15):** each **published install (release)** bumps the marketing version **+1 patch** — NOT per branch merge; several task branches can merge to main and ship together as one install increment (bump only at release/ship-prep). Segments are **single-digit and roll at 9** — never double digits. Patch 9 → `X.(Y+1).0`; minor 9 → `(X+1).0.0` (so `4.0.9 → 4.1.0`, `4.9.9 → 5.0.0`). From the current `4.0.6`, **the next published version is `4.0.7`**. The `3.7.10`–`3.7.12` double-digit patches were pre-rule legacy. `CFBundleVersion` (build) is monotonic +1, independent of the marketing roll. Override only when Isaiah specifies.
 
 1. `git switch -c release/vX.Y.Z origin/main` (off current main).
 2. One atomic version commit: `Version.swift` (marketing + build) **and** root `Info.plist` (`CFBundleShortVersionString` + `CFBundleVersion`) in the SAME commit (see `### Version surfaces`), plus the `CHANGELOG.md` entry.
