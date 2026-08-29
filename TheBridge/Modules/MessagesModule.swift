@@ -1305,7 +1305,7 @@ public enum MessagesModule {
             name: "messages_send",
             module: moduleName,
             tier: .request,
-            description: "Send one exact iMessage or SMS after confirm:'SEND'. Require an explicit service of exactly iMessage or SMS; never auto-detect or fall back. Catalog default is Request; Settings can lower the tool to Notify or Open (remote/tunnel sessions honor that effective tier). Raw chatNNN ids are rejected — resolve via messages_participants.",
+            description: "Send one exact iMessage or SMS after confirm:'SEND'. Require an explicit service of exactly iMessage or SMS; never auto-detect or fall back. Bounded THREAD M1 binds recipient/service/body, persists Intent/Result, and verifies one local outbound record—not provider delivery. Catalog default is Request; Settings can lower the tool to Notify or Open (remote/tunnel sessions honor that effective tier). Raw chatNNN ids are rejected — resolve via messages_participants.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
