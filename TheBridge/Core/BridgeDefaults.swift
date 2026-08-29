@@ -26,12 +26,13 @@ public enum BridgeDefaults {
     /// regardless of any override. ABSENT ⇒ no module overrides.
     public static let moduleTierOverrides = "com.notionbridge.moduleTierOverrides"
 
-    /// Operator-selected `messages_send` on-device approval mode.
-    /// Raw `MessagesSendApprovalMode` string. Missing/invalid ⇒ `alwaysAsk`.
+    /// Retired issue #126 send-only mode key. No longer read or written.
+    /// Do not migrate or clear operator prefs; Settings → Tools now owns the
+    /// ordinary open/notify/request override for `messages_send`.
     public static let messagesSendApprovalMode = "com.notionbridge.messagesSendApprovalMode"
 
-    /// Monotonic generation bumped on every `messages_send` approval-mode save
-    /// so SecurityGate can drop in-memory session skips after a revert.
+    /// Retired with `messagesSendApprovalMode`. Left defined so a future key
+    /// reuse cannot collide with leftover operator prefs.
     public static let messagesSendApprovalGeneration = "com.notionbridge.messagesSendApprovalGeneration"
 
     /// User-disabled tool names. Array<String>.

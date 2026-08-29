@@ -1296,13 +1296,16 @@ public enum MessagesModule {
             }
         ))
 
-        // MARK: 6. messages_send – request
+        // MARK: 6. messages_send – request (ordinary 3-tier ladder)
+        // Catalog default is .request; neverAutoApprove is false so Settings
+        // (tool or module override, Always Allow) can lower it to .notify or
+        // .open — including for remote/tunnel sessions. confirm:'SEND' and an
+        // explicit iMessage/SMS service remain handler-required in every mode.
         await router.register(ToolRegistration(
             name: "messages_send",
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
-            description: "Send one exact iMessage or SMS after confirm:'SEND'. Require an explicit service; never fall back. Bounded THREAD M1 binds recipient/service/body, persists Intent/Result, and verifies one local outbound record—not provider delivery. Default is Always ask; remote, group, THREAD, and job sends always prompt.",
+            description: "Send one exact iMessage or SMS after confirm:'SEND'. Require an explicit service of exactly iMessage or SMS; never auto-detect or fall back. Bounded THREAD M1 binds recipient/service/body, persists Intent/Result, and verifies one local outbound record—not provider delivery. Catalog default is Request; Settings can lower the tool to Notify or Open (remote/tunnel sessions honor that effective tier). Raw chatNNN ids are rejected — resolve via messages_participants.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

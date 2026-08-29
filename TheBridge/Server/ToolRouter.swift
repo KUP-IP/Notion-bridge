@@ -960,8 +960,13 @@ public actor ToolRouter {
         // server-issued receipt bound to the exact arguments and scopes it to
         // this handler invocation. Nested read-only dispatches inherit it; a
         // caller cannot manufacture it through MCP arguments.
+        //
+        // `messages_send` also mints after SecurityGate admits the call, even
+        // when the operator lowered the effective tier to Notify/Open. The
+        // handler still requires confirm:'SEND' and uses the receipt as
+        // exact-args evidence (not a second Mac modal).
         let exactApprovalReceipt: SecurityApprovalReceipt? =
-            effectiveTier == .request && neverAutoApprove
+            (effectiveTier == .request && neverAutoApprove) || toolName == "messages_send"
             ? SecurityApprovalReceipt.issue(toolName: toolName, arguments: executionArguments, context: context)
             : nil
         do {
@@ -1023,10 +1028,6 @@ public actor ToolRouter {
             }
             governanceNote = governanceNotes.isEmpty ? nil : governanceNotes.joined(separator: ";")
 
-            let diagnosedResult = toolName == "messages_send"
-                ? Self.withMessagesApprovalMode(returnedResult)
-                : returnedResult
-
             // F2 + PKT-552: Fire-and-forget Notify-tier notification with structured context.
             // Runs after successful execution — informational only.
             if effectiveTier == .notify {
@@ -1046,7 +1047,7 @@ public actor ToolRouter {
                 toolName: toolName,
                 tier: effectiveTier,
                 inputSummary: stringifySummary(executionArguments),
-                outputSummary: stringifySummary(diagnosedResult),
+                outputSummary: stringifySummary(returnedResult),
                 durationMs: ms,
                 approvalStatus: .approved,
                 governed: governed,
@@ -1054,7 +1055,7 @@ public actor ToolRouter {
                 transportSessionId: context.transportSessionId,
                 governanceNote: governanceNote
             ))
-            return diagnosedResult
+            return returnedResult
         } catch {
             let duration = ContinuousClock.now - start
             let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
@@ -1315,18 +1316,6 @@ public actor ToolRouter {
         return .object([
             "result": result,
             "governance": governance
-        ])
-    }
-
-    private static func withMessagesApprovalMode(_ result: Value) -> Value {
-        let mode = MessagesSendApprovalPolicy.load().rawValue
-        if case .object(var dict) = result {
-            dict["approvalMode"] = .string(mode)
-            return .object(dict)
-        }
-        return .object([
-            "result": result,
-            "approvalMode": .string(mode)
         ])
     }
 
