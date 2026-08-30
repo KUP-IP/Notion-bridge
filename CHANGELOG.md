@@ -1,5 +1,23 @@
 # Changelog
 
+## v4.0.6 (build 95) — Bridge v4.1 capability truth — 2026-08-28
+
+- **Identity** — Published install after `v4.0.5` / build `94`. Marketing
+  **4.0.6**, build **95**. Sparkle tag `v4.0.6` is this release. Do not reuse 94.
+  Local-only 4.0.8/97 on `feat/notion-view-delete` is residue, not this identity.
+- **Registry** — Preflight distinguishes configured bindings from consumer-contract
+  completeness (`bindingResult` / `consumerResult`). Packet mission/dependency
+  revisions apply as one transaction or return `partial_ambiguous`.
+- **LaunchReadiness** — `registry_entities(includePacketPreflight:true)` also
+  returns `launchReadiness`. Packet Runner dispatch wiring remains residual
+  (`runtime.browser` = TRANSPORT_UNKNOWN).
+- **Shell** — Background jobs never report terminal failure while the requested
+  workload still runs (`ProcessLifecycleTruth`).
+- **Connectors** — Tool discovery/invocation failures return a stable disposition
+  without disabling unrelated tools (`ConnectorContinuity`).
+- **Floor** — Isolated suite 3839 passed / 0 failed on the DoD-axes SHA that
+  this install contains. `feat/notion-view-delete` is deferred, not merged.
+
 ## v4.0.5 (build 94) — Command Bridge create sheet — 2026-08-18
 
 - **Identity** — Published install after `v4.0.4` / build `93`. Marketing
