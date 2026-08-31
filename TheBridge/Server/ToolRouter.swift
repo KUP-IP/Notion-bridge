@@ -954,6 +954,32 @@ public actor ToolRouter {
                 "warning": .string(warning),
                 "action_required": .string("Run this command manually in Terminal.app")
             ])
+
+        case .awaitingApproval(let id):
+            // Issue #184: do not hang past the MCP client timeout, and do not
+            // run the handler. The on-device prompt is still open.
+            let duration = ContinuousClock.now - start
+            let ms = Double(duration.components.attoseconds) / 1_000_000_000_000_000.0
+                + Double(duration.components.seconds) * 1000.0
+            await auditLog.append(AuditEntry(
+                timestamp: Date(),
+                toolName: toolName,
+                tier: effectiveTier,
+                inputSummary: stringifySummary(executionArguments),
+                outputSummary: "AWAITING_APPROVAL: \(id)",
+                durationMs: ms,
+                approvalStatus: .awaiting,
+                origin: context.origin,
+                transportSessionId: context.transportSessionId,
+                governanceNote: routeReceiptAuditNote
+            ))
+            return .object([
+                "approvalStatus": .string("awaiting_approval"),
+                "approvalId": .string(id),
+                "sent": .bool(false),
+                "consequencePossible": .bool(false),
+                "resume": .string("Retry this exact call after Allow on the Mac. The action did not run.")
+            ])
         }
 
         // Execute handler. A non-downgradable Request-tier approval mints a

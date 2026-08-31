@@ -298,6 +298,73 @@ func runMessagesSendApprovalPolicyTests() async {
         try expect(ui.contains("alwaysAllowCard"),
                    "ordinary Always-Allow grants card must remain")
     }
+
+    await test("Request pending maps to awaitingApproval and does not allow") {
+        let provider = TestSecurityApprovalProvider(decision: .pending)
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await enforceMessages(
+            gate: gate,
+            tier: .request,
+            arguments: ordinarySend(),
+            context: ToolDispatchContext(transportSessionId: "cloud-agent-1", origin: .remote)
+        )
+        guard case .awaitingApproval(let id) = decision else {
+            throw TestError.assertion("Request pending must be awaitingApproval, got \(String(describing: decision))")
+        }
+        try expect(!id.isEmpty, "awaitingApproval id must be a stable digest")
+        try expect(provider.approvalRequestCount == 1)
+    }
+
+    await test("router returns awaiting_approval without running messages_send") {
+        let provider = TestSecurityApprovalProvider(decision: .pending)
+        let gate = SecurityGate(approvalProvider: provider)
+        let log = AuditLog()
+        let router = ToolRouter(securityGate: gate, auditLog: log)
+        await MessagesModule.register(on: router)
+        let result = try await router.dispatch(
+            toolName: "messages_send",
+            arguments: ordinarySend()
+        )
+        guard case .object(let object) = result else {
+            throw TestError.assertion("awaiting_approval must be an object, got \(result)")
+        }
+        try expect(object["approvalStatus"] == .string("awaiting_approval"))
+        try expect(object["sent"] == .bool(false), "handler must not send")
+        try expect(object["consequencePossible"] == .bool(false))
+        try expect(object["resume"] != nil, "client must be told to retry after Allow")
+        try expect(provider.approvalRequestCount == 1)
+        let awaiting = await log.entries(withStatus: .awaiting)
+        try expect(awaiting.count == 1, "audit must record awaiting_approval")
+    }
+
+    await test("retry after pending Allow reaches the handler without a second hang") {
+        let provider = SequenceApprovalProvider([.pending, .allow])
+        let gate = SecurityGate(approvalProvider: provider)
+        let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+        await MessagesModule.register(on: router)
+        let first = try await router.dispatch(
+            toolName: "messages_send",
+            arguments: ordinarySend(service: "auto")
+        )
+        guard case .object(let pendingObject) = first else {
+            throw TestError.assertion("first call must be an object")
+        }
+        try expect(pendingObject["approvalStatus"] == .string("awaiting_approval"))
+        try expect(pendingObject["sent"] == .bool(false))
+
+        let second = try await router.dispatch(
+            toolName: "messages_send",
+            arguments: ordinarySend(service: "auto")
+        )
+        guard case .object(let allowedObject) = second else {
+            throw TestError.assertion("retry after Allow must reach the handler")
+        }
+        try expect(allowedObject["approvalStatus"] == nil,
+                   "handler result must not look like awaiting_approval")
+        try expect(allowedObject["sent"] == .bool(false),
+                   "auto service still fail-closes; proves handler ran")
+        try expect(provider.requestCount == 2)
+    }
 }
 
 // MARK: - Helpers
@@ -368,4 +435,32 @@ private func withToolOverride(
     }
     UserDefaults.standard.set([toolName: tier.rawValue], forKey: key)
     try await body()
+}
+
+/// Deterministic multi-call approval provider for pending → Allow retry tests.
+final class SequenceApprovalProvider: @unchecked Sendable, SecurityApprovalProviding {
+    private let lock = NSLock()
+    private var remaining: [SecurityApprovalDecision]
+    private(set) var requestCount = 0
+
+    init(_ decisions: [SecurityApprovalDecision]) {
+        remaining = decisions
+    }
+
+    func requestPermission() async {}
+
+    func requestApproval(
+        title: String,
+        body: String,
+        allowAlwaysAllowAction: Bool,
+        forceModalReview: Bool
+    ) async -> SecurityApprovalDecision {
+        lock.withLock {
+            requestCount += 1
+            if remaining.isEmpty { return .deny }
+            return remaining.removeFirst()
+        }
+    }
+
+    func sendFireAndForget(context: ExecutionNotificationContext) async {}
 }
