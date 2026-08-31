@@ -177,6 +177,87 @@ public enum MessagesService: String, Sendable, Equatable, CaseIterable {
     }
 }
 
+/// Ordinary `messages_send` service choice (#198): inherit live inbound
+/// iMessage/SMS, or fail closed. Never map RCS/unknown onto SMS, and never
+/// honor an explicit service that contradicts the live inbound channel.
+public enum MessagesServiceResolution: Equatable, Sendable {
+    case use(MessagesService)
+    case refuse(String)
+}
+
+extension MessagesModule {
+    /// chat.db `message.service` → sendable AppleScript service, or nil when
+    /// the raw value is missing / RCS / otherwise not iMessage or SMS.
+    public static func classifyChatDbService(_ raw: String?) -> MessagesService? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let parsed = MessagesService.parseStrict(trimmed) { return parsed }
+        switch trimmed.lowercased() {
+        case "imessage": return .iMessage
+        case "sms": return .sms
+        default: return nil
+        }
+    }
+
+    /// First inbound (`is_from_me = 0`) service in date-desc rows. Outbound
+    /// history is ignored — that was the Veronica guess (#198).
+    public static func latestInboundService(from rows: [[String: Any]]) -> String? {
+        for row in rows {
+            let fromMe: Int = {
+                if let value = row["is_from_me"] as? Int { return value }
+                if let value = row["is_from_me"] as? Bool { return value ? 1 : 0 }
+                return 1
+            }()
+            guard fromMe == 0 else { continue }
+            if let service = row["service"] as? String,
+               !service.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return service
+            }
+        }
+        return nil
+    }
+
+    public static func resolveSendService(
+        requested: String?,
+        liveInboundRaw: String?
+    ) -> MessagesServiceResolution {
+        let live = classifyChatDbService(liveInboundRaw)
+        let liveUnsupported: String? = {
+            guard let raw = liveInboundRaw?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !raw.isEmpty, live == nil else { return nil }
+            return raw
+        }()
+
+        if let requested {
+            if requested == "auto" {
+                return .refuse("service 'auto' is not allowed; inherit live inbound iMessage/SMS or pass exactly 'iMessage' or 'SMS'")
+            }
+            guard let explicit = MessagesService.parseStrict(requested) else {
+                if requested.lowercased() == "rcs" {
+                    return .refuse("RCS is not a sendable Messages.app service; do not map it to SMS")
+                }
+                return .refuse("unsupported Messages service '\(requested)'; expected exactly 'iMessage' or 'SMS', or omit service to inherit live inbound")
+            }
+            if let liveUnsupported {
+                return .refuse("live inbound service is '\(liveUnsupported)' (not iMessage/SMS); refusing \(explicit.rawValue) as a silent fallback")
+            }
+            if let live, live != explicit {
+                return .refuse("explicit service \(explicit.rawValue) does not match live inbound \(live.rawValue); refuse silent fallback")
+            }
+            return .use(explicit)
+        }
+
+        if let liveUnsupported {
+            return .refuse("live inbound service is '\(liveUnsupported)' (not iMessage/SMS); omit is inherit-only — fail closed rather than guess SMS")
+        }
+        if let live {
+            return .use(live)
+        }
+        return .refuse("messages_send cannot inherit a live inbound iMessage/SMS service for this recipient; pass explicit 'iMessage' or 'SMS'")
+    }
+}
+
 public struct MessagesAppleScriptInvocationResult: Sendable, Equatable {
     public var error: String?
     public var errorNumber: Int?
@@ -760,17 +841,38 @@ public enum MessagesModule {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
+    /// Latest inbound `message.service` for a one-to-one handle. Outbound
+    /// rows are ignored so prior SMS history cannot override a live iMessage
+    /// or RCS inbound (#198).
+    public static func lookupLiveInboundService(recipient: String) throws -> String? {
+        let sql = """
+            SELECT m.service, m.is_from_me
+            FROM message m
+            LEFT JOIN handle h ON m.handle_id = h.ROWID
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN chat c ON c.ROWID = cmj.chat_id
+            WHERE c.chat_identifier LIKE '%' || ?1 || '%'
+               OR h.id LIKE '%' || ?1 || '%'
+            ORDER BY m.date DESC
+            LIMIT 50
+            """
+        let rows = try performQuery(sql, params: [recipient])
+        return latestInboundService(from: rows)
+    }
+
     /// One-to-one delivery primitive for ordinary messages_send and the bounded
-    /// THREAD M1 receipt engine. It preserves the exact SEND token and explicit
-    /// service guards, invokes once with no fallback, and returns local-record
-    /// correlation evidence without mutating relationship state.
+    /// THREAD M1 receipt engine. It preserves the exact SEND token, inherits
+    /// live inbound iMessage/SMS or fails closed (#198), invokes once with no
+    /// fallback, and returns local-record correlation evidence without mutating
+    /// relationship state.
     public static func performOneToOneSend(
         recipient: String,
         body: String,
         confirm: String,
         serviceOverride: String?,
         afterId: Int,
-        preparedAt: Date
+        preparedAt: Date,
+        liveInboundRaw: String? = nil
     ) -> MessagesDeliveryAttempt {
         performOneToOneSend(
             recipient: recipient,
@@ -779,6 +881,7 @@ public enum MessagesModule {
             serviceOverride: serviceOverride,
             afterId: afterId,
             preparedAt: preparedAt,
+            liveInboundRaw: liveInboundRaw,
             invoke: invokeAppleScript,
             verify: { target, approvedBody, watermark, prepared in
                 verifyExactDelivery(
@@ -798,6 +901,7 @@ public enum MessagesModule {
         serviceOverride: String?,
         afterId: Int,
         preparedAt: Date,
+        liveInboundRaw: String? = nil,
         invoke: MessagesServiceInvoker,
         verify: MessagesLocalRecordVerifier
     ) -> MessagesDeliveryAttempt {
@@ -808,15 +912,16 @@ public enum MessagesModule {
                 error: "messages_send requires confirm: 'SEND'"
             )
         }
-        guard let service = MessagesService.parseStrict(serviceOverride) else {
-            let reason = serviceOverride == nil
-                ? "messages_send requires explicit service: 'iMessage' or 'SMS'"
-                : "unsupported Messages service '\(serviceOverride!)'; expected exactly 'iMessage' or 'SMS'"
+        let service: MessagesService
+        switch resolveSendService(requested: serviceOverride, liveInboundRaw: liveInboundRaw) {
+        case .refuse(let reason):
             return .init(
                 invoked: false,
                 verification: .init(status: .deliveryError, error: reason),
                 error: reason
             )
+        case .use(let resolved):
+            service = resolved
         }
         if service == .sms, !isPhoneRecipient(recipient) {
             let reason = "SMS requires a phone-number recipient"
@@ -1080,7 +1185,7 @@ public enum MessagesModule {
                 let limit: Int = { if case .int(let l) = args["limit"] { return l }; return 50 }()
                 // Search text column directly + attributedBody fallback via CAST for blob keyword match
                 let sql = """
-                    SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me,
+                    SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me, m.service,
                            h.id AS handle_id,
                            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS date_str
                     FROM message m
@@ -1126,7 +1231,7 @@ public enum MessagesModule {
                 let sql = """
                     SELECT c.ROWID, c.chat_identifier, c.display_name,
                            m.text AS last_message, m.attributedBody,
-                           m.is_from_me,
+                           m.is_from_me, m.service,
                            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS date_str
                     FROM chat c
                     JOIN chat_message_join cmj ON cmj.chat_id = c.ROWID
@@ -1150,7 +1255,7 @@ public enum MessagesModule {
             name: "messages_chat",
             module: moduleName,
             tier: .open,
-            description: "Read the message thread for one contact (phone or email) in chronological order.",
+            description: "Read the message thread for one contact (phone or email) in chronological order. Each row includes chat.db service (iMessage, SMS, RCS, …) so callers can bind messages_send without guessing from prior outbound.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1174,7 +1279,7 @@ public enum MessagesModule {
                 }
                 let limit: Int = { if case .int(let l) = args["limit"] { return l }; return 50 }()
                 let sql = """
-                    SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me,
+                    SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me, m.service,
                            h.id AS handle_id,
                            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS date_str
                     FROM message m
@@ -1299,13 +1404,15 @@ public enum MessagesModule {
         // MARK: 6. messages_send – request (ordinary 3-tier ladder)
         // Catalog default is .request; neverAutoApprove is false so Settings
         // (tool or module override, Always Allow) can lower it to .notify or
-        // .open — including for remote/tunnel sessions. confirm:'SEND' and an
-        // explicit iMessage/SMS service remain handler-required in every mode.
+        // .open — including for remote/tunnel sessions. confirm:'SEND' remains
+        // handler-required. Ordinary one-to-one inherits live inbound
+        // iMessage/SMS or fails closed (#198); THREAD M1 still binds explicit
+        // service. Jobs still require explicit service.
         await router.register(ToolRegistration(
             name: "messages_send",
             module: moduleName,
             tier: .request,
-            description: "Send one exact iMessage or SMS after confirm:'SEND'. Require an explicit service of exactly iMessage or SMS; never auto-detect or fall back. Bounded THREAD M1 binds recipient/service/body, persists Intent/Result, and verifies one local outbound record—not provider delivery. Catalog default is Request; Settings can lower the tool to Notify or Open (remote/tunnel sessions honor that effective tier). Raw chatNNN ids are rejected — resolve via messages_participants.",
+            description: "Send one exact iMessage or SMS after confirm:'SEND'. Omit service to inherit the latest inbound iMessage/SMS for that recipient, or pass exactly iMessage or SMS. Fail closed on RCS/unknown/mismatch — never silent iMessage→SMS fallback. Bounded THREAD M1 still binds recipient/service/body. Local chat.db correlation is not provider delivery. Catalog default is Request; Settings can lower the tool to Notify or Open (remote/tunnel sessions honor that effective tier). Raw chatNNN ids are rejected — resolve via messages_participants.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1313,7 +1420,7 @@ public enum MessagesModule {
                     "chatIdentifier": .object(["type": .string("string"), "description": .string("Existing Messages chat identifier/group id; targets an existing chat only")]),
                     "body": .object(["type": .string("string"), "description": .string("Message body text")]),
                     "confirm": .object(["type": .string("string"), "description": .string("Must be exactly 'SEND' to proceed")]),
-                    "service": .object(["type": .string("string"), "enum": .array([.string("iMessage"), .string("SMS")]), "description": .string("Required for ordinary one-to-one sends. Exact value only: 'iMessage' or 'SMS'. No auto-detection, RCS mapping, or fallback.")]),
+                    "service": .object(["type": .string("string"), "enum": .array([.string("iMessage"), .string("SMS")]), "description": .string("Optional for ordinary one-to-one sends. Omit to inherit the latest inbound iMessage/SMS. Exact value only when passed. RCS/unknown live inbound or an explicit mismatch fail closed — no SMS fallback.")]),
                     "threadPageId": .object(["type": .string("string"), "description": .string("Canonical THREAD page ID for the bounded one-to-one M1 transaction.")]),
                     "actionId": .object(["type": .string("string"), "description": .string("Stable idempotency action ID for the bounded M1 transaction.")]),
                     "approvalBasis": .object(["type": .string("string"), "description": .string("Fresh operator approval basis bound to exact recipient, service, and body.")]),
@@ -1584,29 +1691,42 @@ public enum MessagesModule {
                     if case .string(let value)? = args["service"] { return value }
                     return nil
                 }()
-                guard let explicitService = MessagesService.parseStrict(serviceOverride) else {
-                    let reason = serviceOverride == nil
-                        ? "messages_send requires explicit service: 'iMessage' or 'SMS'"
-                        : "unsupported Messages service '\(serviceOverride!)'; expected exactly 'iMessage' or 'SMS'"
+                let liveInboundRaw: String?
+                do {
+                    liveInboundRaw = try lookupLiveInboundService(recipient: recipient)
+                } catch {
                     return .object([
                         "sent": .bool(false),
                         "deliveryInvoked": .bool(false),
                         "consequencePossible": .bool(false),
                         "correlatedLocalRecord": .bool(false),
                         "providerDeliveryConfirmed": .bool(false),
-                        "error": .string(reason)
+                        "error": .string("Could not read live inbound service: \(error.localizedDescription)")
                     ])
                 }
-                if explicitService == .sms, !isPhoneRecipient(recipient) {
+                switch resolveSendService(requested: serviceOverride, liveInboundRaw: liveInboundRaw) {
+                case .refuse(let reason):
                     return .object([
                         "sent": .bool(false),
                         "deliveryInvoked": .bool(false),
                         "consequencePossible": .bool(false),
                         "correlatedLocalRecord": .bool(false),
                         "providerDeliveryConfirmed": .bool(false),
-                        "service": .string(explicitService.rawValue),
-                        "error": .string("SMS requires a phone-number recipient")
+                        "liveInboundService": liveInboundRaw.map(Value.string) ?? .null,
+                        "error": .string(reason)
                     ])
+                case .use(let resolved):
+                    if resolved == .sms, !isPhoneRecipient(recipient) {
+                        return .object([
+                            "sent": .bool(false),
+                            "deliveryInvoked": .bool(false),
+                            "consequencePossible": .bool(false),
+                            "correlatedLocalRecord": .bool(false),
+                            "providerDeliveryConfirmed": .bool(false),
+                            "service": .string(resolved.rawValue),
+                            "error": .string("SMS requires a phone-number recipient")
+                        ])
+                    }
                 }
                 let preSendMaxId: Int
                 let preparedAt = Date()
@@ -1630,7 +1750,8 @@ public enum MessagesModule {
                     confirm: confirm,
                     serviceOverride: serviceOverride,
                     afterId: preSendMaxId,
-                    preparedAt: preparedAt
+                    preparedAt: preparedAt,
+                    liveInboundRaw: liveInboundRaw
                 )
                 return .object(oneToOneSendMCPFields(
                     recipient: recipient,

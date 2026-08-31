@@ -90,7 +90,12 @@
 #   /tmp → /private/tmp alias before constructing Node permission paths.
 # 2026-08-23: 3789 → 3790 (+1) — coerce the text-bound Messages delivery
 #   verification timestamp to SQLite numeric affinity before comparison.
-FLOOR="${BRIDGE_TEST_FLOOR:-3790}"
+# 2026-08-31: 3790 → 3844 (+54) — issue #198: inherit live inbound
+#   iMessage/SMS or fail closed; RCS/mismatch refuse SMS fallback;
+#   messages_chat/recent/search expose chat.db service. Measured 3844
+#   passed, 0 failed on feat/issue-198-inherit-service. +5 hermetic on
+#   this branch; remaining already green on main 707b8f4 vs stale 3790.
+FLOOR="${BRIDGE_TEST_FLOOR:-3844}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

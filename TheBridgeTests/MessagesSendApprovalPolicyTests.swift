@@ -4,7 +4,8 @@
 // `messages_send` uses the ordinary SecurityGate ladder (open / notify /
 // request). Catalog default stays .request with neverAutoApprove false so
 // Settings can lower it, including for remote/tunnel sessions. confirm:SEND
-// and explicit iMessage/SMS remain handler-required. No live Messages.app send.
+// remains handler-required. Ordinary send inherits live inbound iMessage/SMS
+// or fails closed (#198). No live Messages.app send.
 
 import Foundation
 import MCP
@@ -204,12 +205,19 @@ func runMessagesSendApprovalPolicyTests() async {
 
             let missingService = try await router.dispatch(
                 toolName: "messages_send",
-                arguments: ordinarySend(omitService: true)
+                arguments: ordinarySend(recipient: "nobody-issue-198@example.invalid", omitService: true)
             )
             guard case .object(let noService) = missingService else {
                 throw TestError.assertion("missing service must return an object")
             }
-            try expect(noService["sent"] == .bool(false), "explicit service remains required at Open")
+            try expect(noService["sent"] == .bool(false), "omit service without live inbound must fail closed")
+            if case .string(let error) = noService["error"] {
+                try expect(error.localizedCaseInsensitiveContains("inherit")
+                           || error.localizedCaseInsensitiveContains("explicit"),
+                           "omit-without-inbound error must name inherit or explicit, got \(error)")
+            } else {
+                throw TestError.assertion("omit-without-inbound must return an error string")
+            }
         }
     }
 
