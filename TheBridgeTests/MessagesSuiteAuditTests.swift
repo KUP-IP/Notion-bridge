@@ -170,6 +170,8 @@ func runMessagesSuiteAuditTests() async {
             if case .object(let d) = r {
                 try expect(d["rows"] != nil || d["error"] != nil, "expected rows/error key")
             } else { throw TestError.assertion("expected object result") }
+        } catch is ToolRouterError {
+            // XOR: empty contact is not a selector
         } catch {
             try expect(error.localizedDescription.localizedCaseInsensitiveContains("authorization denied"),
                        "unexpected error: \(error.localizedDescription)")
@@ -244,8 +246,9 @@ func runMessagesSuiteAuditTests() async {
             if case .string(let string) = value { return string }
             return nil
         })
-        try expect(requiredStrings == Set(["body", "confirm"]),
-                   "messages_send should require body+confirm globally; target is recipient OR chatIdentifier")
+        try expect(requiredStrings == Set(["confirm"]),
+                   "messages_send should require confirm globally; payload is body XOR filePath; target is recipient OR chatIdentifier")
+        try expect(props["filePath"] != nil, "messages_send schema missing filePath")
     }
 
     // ============================================================
