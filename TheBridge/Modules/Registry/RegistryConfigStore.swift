@@ -58,16 +58,24 @@ public actor RegistryConfigStore {
     /// Load the persisted config. Missing file ⇒ the default seed (first run,
     /// not persisted until the first `save`). A present-but-undecodable file
     /// THROWS `RegistryConfigError.corrupt` so a real config is never silently
-    /// clobbered.
+    /// clobbered. PACKETS-shaped `session`/`packet` duplicates are collapsed
+    /// to one canonical `packet` on load (same rule as `upsert`) and rewritten
+    /// to disk when the file actually changed.
     public func load() throws -> RegistryConfig {
         guard let data = try? Data(contentsOf: storeURL) else {
             return .defaultSeed()
         }
+        let decoded: RegistryConfig
         do {
-            return try JSONDecoder().decode(RegistryConfig.self, from: data)
+            decoded = try JSONDecoder().decode(RegistryConfig.self, from: data)
         } catch {
             throw RegistryConfigError.corrupt("\(error)")
         }
+        var config = decoded
+        if config.canonicalizePacketAliases() {
+            try writeAtomic(config)
+        }
+        return config
     }
 
     /// Never-throwing load: seeds on a missing file AND on a corrupt one
@@ -88,8 +96,15 @@ public actor RegistryConfigStore {
 
     // MARK: - Save
 
-    /// Atomically persist `config` (temp file → replace).
+    /// Atomically persist `config` (temp file → replace). Canonicalizes
+    /// PACKETS aliases before encode so a dual-row write cannot recur.
     public func save(_ config: RegistryConfig) throws {
+        var config = config
+        config.canonicalizePacketAliases()
+        try writeAtomic(config)
+    }
+
+    private func writeAtomic(_ config: RegistryConfig) throws {
         let dir = storeURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let encoder = JSONEncoder()

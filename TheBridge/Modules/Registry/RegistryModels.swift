@@ -243,6 +243,24 @@ public struct RegistryConfig: Codable, Sendable, Equatable {
         }
     }
 
+    /// Collapse PACKETS-shaped `session`/`packet` rows to one persisted `packet`.
+    /// A genuine Sessions entity (`isPacketEntity` == false) is left in place.
+    /// Idempotent. Returns whether the entity list changed.
+    @discardableResult
+    public mutating func canonicalizePacketAliases() -> Bool {
+        let packetShaped = entities.filter(PacketRegistryContract.isPacketEntity)
+        guard !packetShaped.isEmpty else { return false }
+        let alreadyCanonical = packetShaped.count == 1 && packetShaped[0].key == "packet"
+        guard !alreadyCanonical else { return false }
+        guard let preferred = PacketRegistryContract.preferredStoredEntity(in: self) else {
+            return false
+        }
+        let canonical = PacketRegistryContract.canonicalized(preferred)
+        entities.removeAll(where: PacketRegistryContract.isPacketEntity)
+        entities.append(canonical)
+        return true
+    }
+
     /// Remove an entity by key. Returns true if one was present and removed
     /// (false ⇒ no-op, key wasn't configured).
     @discardableResult

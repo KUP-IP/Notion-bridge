@@ -95,7 +95,10 @@
 #   messages_chat/recent/search expose chat.db service. Measured 3844
 #   passed, 0 failed on feat/issue-198-inherit-service. +5 hermetic on
 #   this branch; remaining already green on main 707b8f4 vs stale 3790.
-FLOOR="${BRIDGE_TEST_FLOOR:-3844}"
+# 2026-09-02: 3844 → 3848 (+4) — load/save canonicalize PACKETS-shaped
+#   packet+session duplicates to one `packet` key. Measured 3848 passed,
+#   0 failed after rebase onto main (post-#200).
+FLOOR="${BRIDGE_TEST_FLOOR:-3848}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
