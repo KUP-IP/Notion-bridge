@@ -366,6 +366,83 @@ func runMessagesModuleTests() async {
         }
     }
 
+    await test("omit service inherits live inbound iMessage and never uses outbound SMS history") {
+        try expect(
+            MessagesModule.latestInboundService(from: [
+                ["is_from_me": 1, "service": "SMS"],
+                ["is_from_me": 0, "service": "iMessage"]
+            ]) == "iMessage",
+            "inbound iMessage must win over later-looking outbound SMS when inbound is first in date-desc order"
+        )
+        try expect(
+            MessagesModule.latestInboundService(from: [
+                ["is_from_me": 1, "service": "SMS"]
+            ]) == nil,
+            "outbound-only history must not inherit"
+        )
+        let probe = InvocationProbe()
+        let attempt = MessagesModule.performOneToOneSend(
+            recipient: "+16056013705", body: "test", confirm: "SEND",
+            serviceOverride: nil, afterId: 1, preparedAt: Date(),
+            liveInboundRaw: "iMessage",
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(attempt.invoked)
+        try expect(probe.services == [.iMessage])
+        try expect(attempt.service == "iMessage")
+    }
+
+    await test("explicit SMS on live iMessage inbound fails closed without invocation") {
+        let probe = InvocationProbe()
+        let attempt = MessagesModule.performOneToOneSend(
+            recipient: "+16056013705", body: "test", confirm: "SEND",
+            serviceOverride: "SMS", afterId: 1, preparedAt: Date(),
+            liveInboundRaw: "iMessage",
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(!attempt.invoked)
+        try expect(probe.services.isEmpty)
+        try expect(attempt.error?.contains("does not match live inbound") == true)
+    }
+
+    await test("RCS inbound refuses SMS fallback and omit-inherit") {
+        let probe = InvocationProbe()
+        let explicitSMS = MessagesModule.performOneToOneSend(
+            recipient: "+12537920959", body: "test", confirm: "SEND",
+            serviceOverride: "SMS", afterId: 1, preparedAt: Date(),
+            liveInboundRaw: "RCS",
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(!explicitSMS.invoked)
+        try expect(probe.services.isEmpty)
+        try expect(explicitSMS.error?.contains("RCS") == true || explicitSMS.error?.contains("silent fallback") == true)
+
+        let omit = MessagesModule.performOneToOneSend(
+            recipient: "+12537920959", body: "test", confirm: "SEND",
+            serviceOverride: nil, afterId: 1, preparedAt: Date(),
+            liveInboundRaw: "RCS",
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(!omit.invoked)
+        try expect(probe.services.isEmpty)
+    }
+
+    await test("messages_chat catalog mentions service for inherit binding") {
+        let router = ToolRouter(
+            securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
+            auditLog: AuditLog()
+        )
+        await MessagesModule.register(on: router)
+        let chat = await router.registrations(forModule: "messages").first { $0.name == "messages_chat" }!
+        try expect(chat.description.localizedCaseInsensitiveContains("service"),
+                   "messages_chat must advertise chat.db service so send can inherit")
+        let send = await router.registrations(forModule: "messages").first { $0.name == "messages_send" }!
+        try expect(send.description.localizedCaseInsensitiveContains("inherit"),
+                   "messages_send must document inherit-or-fail-closed")
+        try expect(send.description.localizedCaseInsensitiveContains("fallback"),
+                   "messages_send must still name the no-fallback rule")
+    }
+
     await test("SMS rejects an email recipient before invocation") {
         let probe = InvocationProbe()
         let attempt = MessagesModule.performOneToOneSend(
