@@ -227,4 +227,111 @@ func runGhModuleTests() async {
         try expect(GhModule.shellQuote("plain") == "'plain'")
         try expect(GhModule.shellQuote("") == "''")
     }
+
+    // ------------------------------------------------------------------
+    // Wave 6 — #219 list tools, #220 parent/duplicate, #221 pr review
+    // ------------------------------------------------------------------
+    await test("gh_issue_list and gh_pr_list are .open") {
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
+        let log = AuditLog()
+        let router = ToolRouter(securityGate: gate, auditLog: log)
+        await GhModule.register(on: router)
+        let regs = await router.registrations(forModule: "dev")
+        guard let issues = regs.first(where: { $0.name == "gh_issue_list" }) else {
+            throw TestError.assertion("gh_issue_list not registered")
+        }
+        guard let prs = regs.first(where: { $0.name == "gh_pr_list" }) else {
+            throw TestError.assertion("gh_pr_list not registered")
+        }
+        try expect(issues.tier == .open, "gh_issue_list tier=\(issues.tier.rawValue)")
+        try expect(prs.tier == .open, "gh_pr_list tier=\(prs.tier.rawValue)")
+    }
+
+    await test("list JSON fields omit body") {
+        try expect(!GhModule.issueListJSONFields.split(separator: ",").map(String.init).contains("body"),
+                   "issue list json must omit body: \(GhModule.issueListJSONFields)")
+        try expect(!GhModule.prListJSONFields.split(separator: ",").map(String.init).contains("body"),
+                   "pr list json must omit body: \(GhModule.prListJSONFields)")
+        for required in ["number", "title", "state", "labels", "url"] {
+            try expect(GhModule.issueListJSONFields.split(separator: ",").map(String.init).contains(required),
+                       "issue list missing \(required)")
+            try expect(GhModule.prListJSONFields.split(separator: ",").map(String.init).contains(required),
+                       "pr list missing \(required)")
+        }
+        for extra in ["isDraft", "headRefName", "baseRefName"] {
+            try expect(GhModule.prListJSONFields.split(separator: ",").map(String.init).contains(extra),
+                       "pr list missing \(extra)")
+        }
+    }
+
+    await test("gh_issue_create parent flag is appended") {
+        let withInt = GhModule.issueCreateGhArgs(
+            title: "Sub-issue",
+            from: ["parent": .int(219), "body": .string("n")]
+        )
+        try expect(withInt.contains("--parent"), "expected --parent in \(withInt)")
+        if let idx = withInt.firstIndex(of: "--parent") {
+            try expect(withInt.indices.contains(idx + 1) && withInt[idx + 1] == "219",
+                       "expected --parent 219, got \(withInt)")
+        }
+        let withURL = GhModule.issueCreateGhArgs(
+            title: "Sub-issue",
+            from: ["parent": .string("https://github.com/org/repo/issues/42")]
+        )
+        try expect(withURL.contains("--parent"), "expected --parent for URL parent")
+        let without = GhModule.issueCreateGhArgs(title: "Solo", from: [:])
+        try expect(!without.contains("--parent"), "parent flag must be omitted when unset")
+    }
+
+    await test("gh_issue_close duplicate requires duplicateOf") {
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
+        let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+        let runtime = GhRuntime(ghPath: "/nonexistent/gh-binary-xyz")
+        await GhModule.register(on: router, runtime: runtime)
+        let missing = try await router.dispatch(
+            toolName: "gh_issue_close",
+            arguments: .object([
+                "number": .int(1),
+                "reason": .string("duplicate")
+            ])
+        )
+        guard case .object(let dict) = missing,
+              case .string(let status) = dict["status"],
+              case .string(let error) = dict["error"] else {
+            throw TestError.assertion("expected invalid_argument envelope, got \(missing)")
+        }
+        try expect(status == "invalid_argument", "expected invalid_argument, got \(status)")
+        try expect(error.contains("duplicateOf"), "error should mention duplicateOf, got \(error)")
+    }
+
+    await test("gh_pr_review is neverAutoApprove") {
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
+        let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+        await GhModule.register(on: router)
+        let regs = await router.registrations(forModule: "dev")
+        guard let review = regs.first(where: { $0.name == "gh_pr_review" }) else {
+            throw TestError.assertion("gh_pr_review not registered")
+        }
+        try expect(review.tier == .request, "gh_pr_review tier=\(review.tier.rawValue)")
+        try expect(review.neverAutoApprove == true, "gh_pr_review must be neverAutoApprove")
+    }
+
+    await test("gh_pr_review refuses an invalid event") {
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
+        let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+        let runtime = GhRuntime(ghPath: "/nonexistent/gh-binary-xyz")
+        await GhModule.register(on: router, runtime: runtime)
+        let result = try await router.dispatch(
+            toolName: "gh_pr_review",
+            arguments: .object([
+                "number": .int(12),
+                "event": .string("lgtm")
+            ])
+        )
+        guard case .object(let dict) = result,
+              case .string(let status) = dict["status"] else {
+            throw TestError.assertion("expected status field, got \(result)")
+        }
+        try expect(status == "invalid_argument", "expected invalid_argument, got \(status)")
+    }
 }

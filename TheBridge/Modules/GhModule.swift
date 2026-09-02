@@ -1,10 +1,10 @@
 // GhModule.swift — PKT-742 (Bridge v2.2 · 2.2): gh_* CLI wrapper tools
 // TheBridge · Modules · dev/
 //
-// Nine thin wrappers around the `gh` CLI:
-//   - gh_pr_open / gh_pr_status / gh_pr_comment / gh_pr_merge
-//   - gh_actions_runs / gh_check_status
-//   - gh_issue_open / gh_issue_comment / gh_issue_close
+// GitHub CLI wrappers (`gh_*`):
+//   - gh_pr_create / gh_pr_status / gh_pr_comment / gh_pr_merge / gh_pr_list / gh_pr_review
+//   - gh_actions_runs_list / gh_check_status
+//   - gh_issue_create / gh_issue_comment / gh_issue_close / gh_issue_list
 //
 // All tools are tier `.request` (every wrapper can mutate github.com state
 // or read repo data on the user's behalf). Each handler:
@@ -38,6 +38,8 @@ public enum GhModule {
         await router.register(makePrStatus(runtime: runtime))
         await router.register(makePrComment(runtime: runtime))
         await router.register(makePrMerge(runtime: runtime, bgRuntime: bgRuntime))
+        await router.register(makePrList(runtime: runtime))
+        await router.register(makePrReview(runtime: runtime))
 
         let actionsRunsList = makeActionsRunsList(runtime: runtime)
         await router.register(actionsRunsList)
@@ -49,7 +51,13 @@ public enum GhModule {
 
         await router.register(makeIssueComment(runtime: runtime))
         await router.register(makeIssueClose(runtime: runtime))
+        await router.register(makeIssueList(runtime: runtime))
     }
+
+    /// Compact `--json` field lists for list tools. Intentionally omit `body`
+    /// so list payloads stay metadata-sized.
+    public static let issueListJSONFields = "number,title,state,labels,url"
+    public static let prListJSONFields = "number,title,state,labels,url,isDraft,headRefName,baseRefName"
 
     // ===========================================================
     // MARK: - Tool factories
@@ -206,6 +214,93 @@ public enum GhModule {
         )
     }
 
+    static func makePrList(runtime: GhRuntime) -> ToolRegistration {
+        ToolRegistration(
+            name: "gh_pr_list",
+            module: moduleName,
+            tier: .open,
+            description: "List pull requests via `gh pr list --json ...`. Returns number, title, state, labels, url, isDraft, headRefName, baseRefName (no body). Filter by state, labels, base/head, author. Default limit 20.",
+            inputSchema: schemaObj([
+                "repo":   strProp("Optional OWNER/REPO override."),
+                "state":  enumProp(["open", "closed", "merged", "all"], "Filter by state (default open)."),
+                "labels": arrStrProp("Filter by label names."),
+                "base":   strProp("Filter by base branch."),
+                "head":   strProp("Filter by head branch."),
+                "author": strProp("Filter by author login."),
+                "limit":  intProp("Max PRs to return (default 20).")
+            ], required: []),
+            handler: { arguments in
+                if let cap = await ensureCapability("gh_pr_list", runtime: runtime) { return cap }
+                guard case .object(let obj) = arguments else {
+                    return invalidArgsValue("gh_pr_list", "expected object arguments")
+                }
+                var args: [String] = ["pr", "list"]
+                appendStr(&args, obj, "repo", "--repo")
+                appendStr(&args, obj, "state", "--state")
+                appendStr(&args, obj, "base", "--base")
+                appendStr(&args, obj, "head", "--head")
+                appendStr(&args, obj, "author", "--author")
+                appendArr(&args, obj, "labels", "--label")
+                let limit: Int = {
+                    if case .int(let n) = obj["limit"] { return max(1, min(n, 200)) }
+                    return 20
+                }()
+                args.append(contentsOf: ["--limit", String(limit), "--json", prListJSONFields])
+                let result = await runSync("gh_pr_list", ghArgs: args, runtime: runtime,
+                                           parseURL: false, parseJSON: true)
+                if case .object(var dict) = result, case .array(let arr) = dict["json"] {
+                    dict["count"] = .int(arr.count)
+                    dict["prs"] = .array(arr)
+                    return .object(dict)
+                }
+                return result
+            }
+        )
+    }
+
+    static func makePrReview(runtime: GhRuntime) -> ToolRegistration {
+        ToolRegistration(
+            name: "gh_pr_review",
+            module: moduleName,
+            tier: .request,
+            neverAutoApprove: true,
+            description: "Submit a pull-request review via `gh pr review` (approve, request changes, or comment). Optional body. Does not create inline path/line comments — use gh_pr_comment for a top-level discussion comment.",
+            inputSchema: schemaObj([
+                "number": intProp("PR number (required)."),
+                "event":  enumProp(["approve", "request_changes", "comment"], "Review event (required)."),
+                "body":   strProp("Optional review body markdown."),
+                "repo":   strProp("Optional OWNER/REPO override.")
+            ], required: ["number", "event"]),
+            handler: { arguments in
+                guard case .object(let obj) = arguments,
+                      case .int(let number) = obj["number"] else {
+                    return invalidArgsValue("gh_pr_review", "required: number (int), event (approve|request_changes|comment)")
+                }
+                let event: String = {
+                    if case .string(let s) = obj["event"] { return s }
+                    return ""
+                }()
+                switch event {
+                case "approve", "request_changes", "comment":
+                    break
+                default:
+                    return invalidArgsValue("gh_pr_review", "event must be approve, request_changes, or comment")
+                }
+                if let cap = await ensureCapability("gh_pr_review", runtime: runtime) { return cap }
+                var args: [String] = ["pr", "review", String(number)]
+                switch event {
+                case "approve":          args.append("--approve")
+                case "request_changes":  args.append("--request-changes")
+                default:                 args.append("--comment")
+                }
+                appendStr(&args, obj, "body", "--body")
+                appendStr(&args, obj, "repo", "--repo")
+                return await runSync("gh_pr_review", ghArgs: args, runtime: runtime,
+                                     parseURL: false, parseJSON: false)
+            }
+        )
+    }
+
     static func makeActionsRunsList(runtime: GhRuntime) -> ToolRegistration {
         ToolRegistration(
             name: "gh_actions_runs_list",
@@ -324,7 +419,8 @@ public enum GhModule {
                 "repo":      strProp("Optional OWNER/REPO override."),
                 "labels":    arrStrProp("Labels to apply."),
                 "assignees": arrStrProp("Assignees by login."),
-                "milestone": strProp("Optional milestone name.")
+                "milestone": strProp("Optional milestone name."),
+                "parent":    strProp("Optional parent issue number or URL (`gh issue create --parent`).")
             ], required: ["title"]),
             handler: { arguments in
                 if let cap = await ensureCapability("gh_issue_create", runtime: runtime) { return cap }
@@ -332,16 +428,7 @@ public enum GhModule {
                       case .string(let title) = obj["title"], !title.isEmpty else {
                     return invalidArgsValue("gh_issue_create", "required: title (non-empty string)")
                 }
-                var args: [String] = ["issue", "create", "--title", title]
-                appendStr(&args, obj, "body", "--body")
-                appendStr(&args, obj, "repo", "--repo")
-                appendStr(&args, obj, "milestone", "--milestone")
-                appendArr(&args, obj, "labels", "--label")
-                appendArr(&args, obj, "assignees", "--assignee")
-                // Body is required by `gh issue create` non-interactively; default to empty if missing.
-                if !args.contains("--body") {
-                    args.append(contentsOf: ["--body", ""])
-                }
+                let args = issueCreateGhArgs(title: title, from: obj)
                 return await runSync("gh_issue_create", ghArgs: args, runtime: runtime,
                                      parseURL: true, parseJSON: false)
             }
@@ -379,25 +466,87 @@ public enum GhModule {
             name: "gh_issue_close",
             module: moduleName,
             tier: .request,
-            description: "Close a GitHub issue via `gh issue close <number>`. Optional closing comment and reason ('completed' | 'not planned').",
+            description: "Close a GitHub issue via `gh issue close <number>`. Optional closing comment and reason ('completed' | 'not planned' | 'duplicate'). When reason is duplicate, duplicateOf is required and is passed as `--duplicate-of`.",
             inputSchema: schemaObj([
-                "number":  intProp("Issue number (required)."),
-                "repo":    strProp("Optional OWNER/REPO override."),
-                "comment": strProp("Optional closing comment."),
-                "reason":  enumProp(["completed", "not planned"], "Close reason.")
+                "number":      intProp("Issue number (required)."),
+                "repo":        strProp("Optional OWNER/REPO override."),
+                "comment":     strProp("Optional closing comment."),
+                "reason":      enumProp(["completed", "not planned", "duplicate"], "Close reason."),
+                "duplicateOf": strProp("Canonical issue number or URL this duplicates. Required when reason is duplicate.")
             ], required: ["number"]),
             handler: { arguments in
-                if let cap = await ensureCapability("gh_issue_close", runtime: runtime) { return cap }
                 guard case .object(let obj) = arguments,
                       case .int(let number) = obj["number"] else {
                     return invalidArgsValue("gh_issue_close", "required: number (int)")
                 }
+                let reason: String? = {
+                    if case .string(let s) = obj["reason"], !s.isEmpty { return s }
+                    return nil
+                }()
+                if reason == "duplicate" {
+                    let hasDuplicateOf: Bool = {
+                        if case .int = obj["duplicateOf"] { return true }
+                        if case .string(let s) = obj["duplicateOf"], !s.isEmpty { return true }
+                        return false
+                    }()
+                    if !hasDuplicateOf {
+                        return invalidArgsValue("gh_issue_close", "duplicateOf is required when reason is duplicate")
+                    }
+                }
+                if let cap = await ensureCapability("gh_issue_close", runtime: runtime) { return cap }
                 var args: [String] = ["issue", "close", String(number)]
                 appendStr(&args, obj, "repo", "--repo")
                 appendStr(&args, obj, "comment", "--comment")
-                appendStr(&args, obj, "reason", "--reason")
+                if reason == "duplicate" {
+                    args.append(contentsOf: ["--reason", "duplicate"])
+                    appendIntOrStr(&args, obj, "duplicateOf", "--duplicate-of")
+                } else {
+                    appendStr(&args, obj, "reason", "--reason")
+                }
                 return await runSync("gh_issue_close", ghArgs: args, runtime: runtime,
                                      parseURL: false, parseJSON: false)
+            }
+        )
+    }
+
+    static func makeIssueList(runtime: GhRuntime) -> ToolRegistration {
+        ToolRegistration(
+            name: "gh_issue_list",
+            module: moduleName,
+            tier: .open,
+            description: "List GitHub issues via `gh issue list --json ...`. Returns number, title, state, labels, url (no body). Filter by state, labels, assignee, author. Default limit 20.",
+            inputSchema: schemaObj([
+                "repo":     strProp("Optional OWNER/REPO override."),
+                "state":    enumProp(["open", "closed", "all"], "Filter by state (default open)."),
+                "labels":   arrStrProp("Filter by label names."),
+                "assignee": strProp("Filter by assignee login."),
+                "author":   strProp("Filter by author login."),
+                "limit":    intProp("Max issues to return (default 20).")
+            ], required: []),
+            handler: { arguments in
+                if let cap = await ensureCapability("gh_issue_list", runtime: runtime) { return cap }
+                guard case .object(let obj) = arguments else {
+                    return invalidArgsValue("gh_issue_list", "expected object arguments")
+                }
+                var args: [String] = ["issue", "list"]
+                appendStr(&args, obj, "repo", "--repo")
+                appendStr(&args, obj, "state", "--state")
+                appendStr(&args, obj, "assignee", "--assignee")
+                appendStr(&args, obj, "author", "--author")
+                appendArr(&args, obj, "labels", "--label")
+                let limit: Int = {
+                    if case .int(let n) = obj["limit"] { return max(1, min(n, 200)) }
+                    return 20
+                }()
+                args.append(contentsOf: ["--limit", String(limit), "--json", issueListJSONFields])
+                let result = await runSync("gh_issue_list", ghArgs: args, runtime: runtime,
+                                           parseURL: false, parseJSON: true)
+                if case .object(var dict) = result, case .array(let arr) = dict["json"] {
+                    dict["count"] = .int(arr.count)
+                    dict["issues"] = .array(arr)
+                    return .object(dict)
+                }
+                return result
             }
         )
     }
@@ -591,6 +740,30 @@ public enum GhModule {
                 args.append(s)
             }
         }
+    }
+    /// Accept an integer (issue/PR number) or a non-empty string (URL).
+    static func appendIntOrStr(_ args: inout [String], _ obj: [String: Value], _ key: String, _ flag: String) {
+        if case .int(let n) = obj[key] {
+            args.append(flag)
+            args.append(String(n))
+            return
+        }
+        appendStr(&args, obj, key, flag)
+    }
+
+    /// Exposed for hermetic tests: `gh issue create` argv including optional `--parent`.
+    public static func issueCreateGhArgs(title: String, from obj: [String: Value]) -> [String] {
+        var args: [String] = ["issue", "create", "--title", title]
+        appendStr(&args, obj, "body", "--body")
+        appendStr(&args, obj, "repo", "--repo")
+        appendStr(&args, obj, "milestone", "--milestone")
+        appendIntOrStr(&args, obj, "parent", "--parent")
+        appendArr(&args, obj, "labels", "--label")
+        appendArr(&args, obj, "assignees", "--assignee")
+        if !args.contains("--body") {
+            args.append(contentsOf: ["--body", ""])
+        }
+        return args
     }
 
     // MARK: - JSON helpers
