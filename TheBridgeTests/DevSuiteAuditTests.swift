@@ -49,11 +49,11 @@ func runDevSuiteAuditTests() async {
     let expectedDevTools: Set<String> = [
         // gh_* (renames keep old name as deprecation alias):
         "gh_pr_create",
-        "gh_pr_status", "gh_pr_comment", "gh_pr_merge",
+        "gh_pr_status", "gh_pr_comment", "gh_pr_merge", "gh_pr_list", "gh_pr_review",
         "gh_actions_runs", "gh_actions_runs_list",
         "gh_check_status",
         "gh_issue_open", "gh_issue_create",
-        "gh_issue_comment", "gh_issue_close",
+        "gh_issue_comment", "gh_issue_close", "gh_issue_list",
         "git_status", "git_diff", "git_log", "git_show", "git_blame",
         "git_apply_patch",
         // git_worktree split (alias kept):
