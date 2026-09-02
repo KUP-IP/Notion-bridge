@@ -219,4 +219,37 @@ func runMCPHTTPValidationTests() async {
         try expect(!body.contains("Remote OAuth") && !body.contains("oauth_inactive"),
                    "tunnel body must not disclose the detailed readiness reason, got: \(body)")
     }
+
+    await test("MCPInboundAudit counts only recorded /mcp replies") {
+        let audit = MCPInboundAudit()
+        let empty = audit.snapshot()
+        try expect(empty.count == 0)
+        try expect(empty.lastStatus == nil)
+        try expect(empty.lastAt == nil)
+        let t1 = Date(timeIntervalSince1970: 1_700_000_000)
+        audit.record(status: 406, at: t1)
+        audit.record(status: 200, at: t1.addingTimeInterval(1))
+        let snap = audit.snapshot()
+        try expect(snap.count == 2)
+        try expect(snap.lastStatus == 200)
+        try expect(snap.lastAt == t1.addingTimeInterval(1))
+        audit.clear()
+        try expect(audit.snapshot().count == 0)
+    }
+
+    await test("health JSON names mcpInboundCount without Cf-Ray") {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("TheBridge/Server/SSETransport.swift"),
+            encoding: .utf8
+        )
+        try expect(source.contains("mcpInboundCount"),
+                   "/health must expose mcpInboundCount for the #189 discriminating test")
+        try expect(source.contains("MCPInboundAudit.shared.record(status:"),
+                   "/mcp replies that reach origin must increment the inbound audit")
+        try expect(!source.contains("mcpInboundCfRay"),
+                   "public /health must not expose Cf-Ray")
+    }
 }

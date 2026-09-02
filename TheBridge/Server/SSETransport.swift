@@ -597,8 +597,21 @@ public actor SSEServer {
             "worktreeOwnershipEnabled": worktreeOwnershipEnabled,
             "worktreeOwnershipMode": worktreeOwnershipEnabled ? "enforced" : "disabled"
         ]
+        // Issue #189: counts `/mcp` replies that reached this process. No
+        // Cf-Ray or path — public /health is tunnel-reachable without auth.
+        let inbound = MCPInboundAudit.shared.snapshot()
+        var healthWithInbound = health
+        healthWithInbound["mcpInboundCount"] = inbound.count
+        if let status = inbound.lastStatus {
+            healthWithInbound["mcpInboundLastStatus"] = status
+        }
+        if let lastAt = inbound.lastAt {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            healthWithInbound["mcpInboundLastAt"] = formatter.string(from: lastAt)
+        }
 
-        return (try? JSONSerialization.data(withJSONObject: health, options: [.sortedKeys])) ?? Data()
+        return (try? JSONSerialization.data(withJSONObject: healthWithInbound, options: [.sortedKeys])) ?? Data()
     }
 
     // MARK: - Request Routing (Streamable HTTP — POST /mcp)
@@ -2156,6 +2169,7 @@ private final class SSEHTTPHandler: ChannelInboundHandler, @unchecked Sendable {
         let httpRequest = HTTPRequest(method: head.method.rawValue, headers: headers, body: body)
         let response = await httpRequestHandler(httpRequest)
         logAccess(method: head.method.rawValue, path: path, sessionID: sessionID, status: response.statusCode, start: startTime)
+        MCPInboundAudit.shared.record(status: response.statusCode)
         await writeResponse(response, version: head.version, context: context)
     }
 
