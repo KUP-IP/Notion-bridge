@@ -25,6 +25,7 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
     private(set) var cals: [CalendarInfo]
     private(set) var items: [String: CalendarEvent] = [:]
     private var seq = 0
+    private(set) var lastSpan: CalendarEventSpan = .thisEvent
 
     init(authStatus: CalendarAuthStatus = .authorized, calendars: [CalendarInfo]? = nil) {
         self.authStatus = authStatus
@@ -97,14 +98,22 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
             calendarTitle: calTitle(calId),
             location: draft.location,
             notes: draft.notes,
-            timeZoneIdentifier: draft.timeZoneIdentifier
+            timeZoneIdentifier: draft.timeZoneIdentifier,
+            isRecurring: !(draft.recurrenceFreq ?? "").isEmpty,
+            recurrenceRule: Self.ruleString(draft),
+            alarms: Self.alarmItems(draft.alarms)
         )
         items[id] = event
         return event
     }
 
     func update(id: String, _ draft: CalendarEventDraft) async throws -> CalendarEvent {
+        try await update(id: id, draft, span: .thisEvent)
+    }
+
+    func update(id: String, _ draft: CalendarEventDraft, span: CalendarEventSpan) async throws -> CalendarEvent {
         try await ensureAccess()
+        lastSpan = span
         guard var event = items[id] else { throw CalendarModuleError.notFound(id) }
         if let t = draft.title { event.title = t }
         if let s = draft.start { event.start = s }
@@ -112,7 +121,17 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
         if let a = draft.allDay { event.allDay = a }
         if let loc = draft.location { event.location = loc }
         if let n = draft.notes { event.notes = n }
-        if let tz = draft.timeZoneIdentifier { event.timeZoneIdentifier = tz }
+        if let tz = draft.timeZoneIdentifier { event.timeZoneIdentifier = tz.isEmpty ? nil : tz }
+        if let freq = draft.recurrenceFreq {
+            if freq.isEmpty {
+                event.isRecurring = false
+                event.recurrenceRule = nil
+            } else {
+                event.isRecurring = true
+                event.recurrenceRule = Self.ruleString(draft)
+            }
+        }
+        if let alarms = draft.alarms { event.alarms = Self.alarmItems(alarms) }
         if let c = draft.calendarId {
             guard cals.contains(where: { $0.id == c }) else {
                 throw CalendarModuleError.calendarNotFound(c)
@@ -125,9 +144,31 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
     }
 
     func delete(id: String) async throws {
+        try await delete(id: id, span: .thisEvent)
+    }
+
+    func delete(id: String, span: CalendarEventSpan) async throws {
         try await ensureAccess()
+        lastSpan = span
         guard items[id] != nil else { throw CalendarModuleError.notFound(id) }
         items[id] = nil
+    }
+
+    private static func ruleString(_ draft: CalendarEventDraft) -> String? {
+        guard let freq = draft.recurrenceFreq, !freq.isEmpty else { return nil }
+        return "\(freq.lowercased());interval:\(draft.recurrenceInterval ?? 1)"
+    }
+
+    private static func alarmItems(_ drafts: [AlarmDraft]?) -> [AlarmItem] {
+        guard let drafts else { return [] }
+        return drafts.enumerated().map { idx, d in
+            AlarmItem(
+                id: "alarm-\(idx)",
+                type: d.type,
+                triggerMinutesBefore: d.triggerMinutesBefore,
+                triggerAbsoluteDate: d.triggerAbsoluteDate
+            )
+        }
     }
 }
 
@@ -466,5 +507,93 @@ func runCalendarModuleTests() async {
         } catch let e as CalendarModuleError {
             try expect(e == .accessDenied)
         }
+    }
+
+    await test("#206 calendar_create wires and validates timeZoneIdentifier") {
+        let router = await makeCalendarRouter(MockCalendarStore())
+        let ok = try await callCalendarHandler(router, "calendar_create", .object([
+            "title": .string("TZ"),
+            "start": .string("2026-06-05T09:00:00Z"),
+            "end": .string("2026-06-05T10:00:00Z"),
+            "timeZoneIdentifier": .string("America/Chicago")
+        ]))
+        let rec = calField(ok, "event")!
+        try expect(calField(rec, "timeZone") == .string("America/Chicago"))
+        do {
+            _ = try await callCalendarHandler(router, "calendar_create", .object([
+                "title": .string("Bad TZ"),
+                "start": .string("2026-06-05T09:00:00Z"),
+                "end": .string("2026-06-05T10:00:00Z"),
+                "timeZoneIdentifier": .string("Not/AZone")
+            ]))
+            throw TestError.assertion("expected invalidTimeZone")
+        } catch let e as CalendarModuleError {
+            try expect(e == .invalidTimeZone("Not/AZone"))
+        }
+    }
+
+    await test("#205 recurrence create and span default thisEvent") {
+        let store = MockCalendarStore()
+        let router = await makeCalendarRouter(store)
+        let created = try await callCalendarHandler(router, "calendar_create", .object([
+            "title": .string("Weekly"),
+            "start": .string("2026-06-05T09:00:00Z"),
+            "end": .string("2026-06-05T10:00:00Z"),
+            "recurrenceFreq": .string("weekly"),
+            "recurrenceInterval": .int(1)
+        ]))
+        let rec = calField(created, "event")!
+        try expect(calField(rec, "isRecurring") == .bool(true))
+        try expect(calField(rec, "recurrenceRule") == .string("weekly;interval:1"))
+        guard case .string(let id)? = calField(created, "id") else {
+            throw TestError.assertion("missing id")
+        }
+        let updated = try await callCalendarHandler(router, "calendar_update", .object([
+            "id": .string(id),
+            "title": .string("Weekly renamed"),
+            "span": .string("futureEvents")
+        ]))
+        try expect(calField(updated, "span") == .string("futureEvents"))
+        try expect(store.lastSpan == .futureEvents)
+        do {
+            _ = try await callCalendarHandler(router, "calendar_update", .object([
+                "id": .string(id),
+                "span": .string("all")
+            ]))
+            throw TestError.assertion("expected invalidSpan")
+        } catch let e as CalendarModuleError {
+            try expect(e == .invalidSpan("all"))
+        }
+        _ = try await callCalendarHandler(router, "calendar_delete", .object([
+            "id": .string(id)
+        ]))
+        try expect(store.lastSpan == .thisEvent)
+    }
+
+    await test("#207 alarms relative to start, empty array clears") {
+        let router = await makeCalendarRouter(MockCalendarStore())
+        let created = try await callCalendarHandler(router, "calendar_create", .object([
+            "title": .string("Alarm"),
+            "start": .string("2026-06-05T09:00:00Z"),
+            "end": .string("2026-06-05T10:00:00Z"),
+            "alarms": .array([.object([
+                "type": .string("relative"),
+                "triggerMinutesBefore": .int(15)
+            ])])
+        ]))
+        let rec = calField(created, "event")!
+        guard case .array(let alarms)? = calField(rec, "alarms"), alarms.count == 1 else {
+            throw TestError.assertion("expected one alarm")
+        }
+        try expect(calField(alarms[0], "type") == .string("relative"))
+        try expect(calField(alarms[0], "triggerMinutesBefore") == .int(15))
+        guard case .string(let id)? = calField(created, "id") else {
+            throw TestError.assertion("missing id")
+        }
+        let cleared = try await callCalendarHandler(router, "calendar_update", .object([
+            "id": .string(id),
+            "alarms": .array([])
+        ]))
+        try expect(calField(cleared, "event").flatMap { calField($0, "alarms") } == nil)
     }
 }

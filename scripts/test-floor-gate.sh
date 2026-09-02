@@ -113,7 +113,10 @@
 #   contact|chatIdentifier (no LIKE), is_read/date_read, filePath XOR body,
 #   group-create catalog honesty (#216 #215 #217 #218 #204). Measured
 #   3896 passed, 0 failed on wave3-messages.
-FLOOR="${BRIDGE_TEST_FLOOR:-3896}"
+# 2026-09-02: 3896 → 3899 (+3) — Calendar Wave 4: timeZoneIdentifier,
+#   recurrence create + span thisEvent|futureEvents, EventKit alarms
+#   (#206 #205 #207). Measured 3899 passed, 0 failed on wave4-calendar.
+FLOOR="${BRIDGE_TEST_FLOOR:-3899}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

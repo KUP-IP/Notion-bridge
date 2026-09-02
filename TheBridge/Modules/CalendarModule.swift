@@ -103,6 +103,8 @@ public struct CalendarEvent: Sendable, Equatable {
     public var lastModified: String?
     public var isRecurring: Bool
     public var isDetached: Bool
+    public var recurrenceRule: String?
+    public var alarms: [AlarmItem]
 
     public init(
         id: String,
@@ -121,7 +123,9 @@ public struct CalendarEvent: Sendable, Equatable {
         conferenceURL: String? = nil,
         lastModified: String? = nil,
         isRecurring: Bool = false,
-        isDetached: Bool = false
+        isDetached: Bool = false,
+        recurrenceRule: String? = nil,
+        alarms: [AlarmItem] = []
     ) {
         self.id = id
         self.title = title
@@ -140,6 +144,8 @@ public struct CalendarEvent: Sendable, Equatable {
         self.lastModified = lastModified
         self.isRecurring = isRecurring
         self.isDetached = isDetached
+        self.recurrenceRule = recurrenceRule
+        self.alarms = alarms
     }
 }
 
@@ -158,8 +164,8 @@ public struct CalendarEventQuery: Sendable {
 }
 
 /// Draft for `calendar_create` / `calendar_update`. Optional fields mean
-/// "leave unchanged" on update. Recurrence editing is intentionally out of
-/// scope (see packet Scope OUT) — these drafts model single events only.
+/// "leave unchanged" on update. RecurrenceFreq `""` clears a series rule;
+/// alarms `[]` clears alarms. `span` applies only to update/delete of a series.
 public struct CalendarEventDraft: Sendable {
     public var title: String?
     public var start: String?      // ISO-8601
@@ -169,6 +175,11 @@ public struct CalendarEventDraft: Sendable {
     public var location: String?
     public var notes: String?
     public var timeZoneIdentifier: String?
+    public var recurrenceFreq: String?
+    public var recurrenceInterval: Int?
+    public var recurrenceEndDate: String?
+    public var recurrenceCount: Int?
+    public var alarms: [AlarmDraft]?
 
     public init(
         title: String? = nil,
@@ -178,7 +189,12 @@ public struct CalendarEventDraft: Sendable {
         calendarId: String? = nil,
         location: String? = nil,
         notes: String? = nil,
-        timeZoneIdentifier: String? = nil
+        timeZoneIdentifier: String? = nil,
+        recurrenceFreq: String? = nil,
+        recurrenceInterval: Int? = nil,
+        recurrenceEndDate: String? = nil,
+        recurrenceCount: Int? = nil,
+        alarms: [AlarmDraft]? = nil
     ) {
         self.title = title
         self.start = start
@@ -188,6 +204,34 @@ public struct CalendarEventDraft: Sendable {
         self.location = location
         self.notes = notes
         self.timeZoneIdentifier = timeZoneIdentifier
+        self.recurrenceFreq = recurrenceFreq
+        self.recurrenceInterval = recurrenceInterval
+        self.recurrenceEndDate = recurrenceEndDate
+        self.recurrenceCount = recurrenceCount
+        self.alarms = alarms
+    }
+}
+
+/// EventKit span for series mutations. `thisEvent` is the default when omitted.
+public enum CalendarEventSpan: String, Sendable, Equatable {
+    case thisEvent
+    case futureEvents
+
+    public static func parse(_ raw: String?) throws -> CalendarEventSpan {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty { return .thisEvent }
+        switch trimmed {
+        case "thisEvent": return .thisEvent
+        case "futureEvents": return .futureEvents
+        default: throw CalendarModuleError.invalidSpan(trimmed)
+        }
+    }
+
+    public var ekSpan: EKSpan {
+        switch self {
+        case .thisEvent: return .thisEvent
+        case .futureEvents: return .futureEvents
+        }
     }
 }
 
@@ -207,6 +251,8 @@ public protocol CalendarStoring: Sendable {
     func create(_ draft: CalendarEventDraft) async throws -> CalendarEvent
     func update(id: String, _ draft: CalendarEventDraft) async throws -> CalendarEvent
     func delete(id: String) async throws
+    func update(id: String, _ draft: CalendarEventDraft, span: CalendarEventSpan) async throws -> CalendarEvent
+    func delete(id: String, span: CalendarEventSpan) async throws
 }
 
 
@@ -214,6 +260,14 @@ public extension CalendarStoring {
     /// Compatibility default for non-production test seams. Production EventKit
     /// overrides this with `EKEventStore.event(withIdentifier:)`.
     func event(id: String) async throws -> CalendarEvent? { nil }
+
+    func update(id: String, _ draft: CalendarEventDraft, span: CalendarEventSpan) async throws -> CalendarEvent {
+        try await update(id: id, draft)
+    }
+
+    func delete(id: String, span: CalendarEventSpan) async throws {
+        try await delete(id: id)
+    }
 }
 
 // MARK: - Errors
@@ -225,6 +279,8 @@ public enum CalendarModuleError: LocalizedError, Equatable {
     case immutableCalendar(String)
     case invalidDate(String)
     case missingRequired(String)
+    case invalidTimeZone(String)
+    case invalidSpan(String)
 
     public var errorDescription: String? {
         switch self {
@@ -240,6 +296,10 @@ public enum CalendarModuleError: LocalizedError, Equatable {
             return "Invalid ISO-8601 date: \(s)"
         case .missingRequired(let field):
             return "Missing required field: \(field)"
+        case .invalidTimeZone(let identifier):
+            return "Invalid IANA time zone identifier: \(identifier)"
+        case .invalidSpan(let raw):
+            return "span must be thisEvent or futureEvents, got: \(raw)"
         }
     }
 }
@@ -388,7 +448,9 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
             conferenceURL: e.url?.absoluteString,
             lastModified: dateToISO(e.lastModifiedDate),
             isRecurring: !(e.recurrenceRules ?? []).isEmpty,
-            isDetached: e.isDetached
+            isDetached: e.isDetached,
+            recurrenceRule: Self.serializeRule(e.recurrenceRules?.first),
+            alarms: Self.serializeAlarms(e.alarms)
         )
     }
 
@@ -485,7 +547,9 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
         if let allDay = draft.allDay { event.isAllDay = allDay }
         if let location = draft.location { event.location = location }
         if let notes = draft.notes { event.notes = notes }
-        if let identifier = draft.timeZoneIdentifier { event.timeZone = TimeZone(identifier: identifier) }
+        try applyTimeZone(draft.timeZoneIdentifier, to: event)
+        try applyRecurrence(draft, to: event, replacing: true)
+        try applyAlarms(draft.alarms, to: event, replacing: true)
         try store.save(event, span: .thisEvent, commit: true)
         return toEvent(event)
     }
@@ -498,6 +562,10 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
     }
 
     public func update(id: String, _ draft: CalendarEventDraft) async throws -> CalendarEvent {
+        try await update(id: id, draft, span: .thisEvent)
+    }
+
+    public func update(id: String, _ draft: CalendarEventDraft, span: CalendarEventSpan) async throws -> CalendarEvent {
         try await ensureAccess()
         let event = try fetchEvent(id: id)
         if let title = draft.title { event.title = title }
@@ -506,18 +574,134 @@ public final class EventKitCalendarStore: CalendarStoring, @unchecked Sendable {
         if let allDay = draft.allDay { event.isAllDay = allDay }
         if let location = draft.location { event.location = location }
         if let notes = draft.notes { event.notes = notes }
-        if let identifier = draft.timeZoneIdentifier { event.timeZone = TimeZone(identifier: identifier) }
+        try applyTimeZone(draft.timeZoneIdentifier, to: event)
+        try applyRecurrence(draft, to: event, replacing: false)
+        try applyAlarms(draft.alarms, to: event, replacing: false)
         if let calendarId = draft.calendarId {
             event.calendar = try resolveCalendar(calendarId)
         }
-        try store.save(event, span: .thisEvent, commit: true)
+        try store.save(event, span: span.ekSpan, commit: true)
         return toEvent(event)
     }
 
     public func delete(id: String) async throws {
+        try await delete(id: id, span: .thisEvent)
+    }
+
+    public func delete(id: String, span: CalendarEventSpan) async throws {
         try await ensureAccess()
         let event = try fetchEvent(id: id)
-        try store.remove(event, span: .thisEvent, commit: true)
+        try store.remove(event, span: span.ekSpan, commit: true)
+    }
+
+    private func applyTimeZone(_ identifier: String?, to event: EKEvent) throws {
+        guard let identifier else { return }
+        if identifier.isEmpty {
+            event.timeZone = nil
+            return
+        }
+        guard let zone = TimeZone(identifier: identifier) else {
+            throw CalendarModuleError.invalidTimeZone(identifier)
+        }
+        event.timeZone = zone
+    }
+
+    private func applyRecurrence(_ draft: CalendarEventDraft, to event: EKEvent, replacing: Bool) throws {
+        guard let freqRaw = draft.recurrenceFreq else {
+            if replacing { return }
+            return
+        }
+        if freqRaw.isEmpty {
+            event.recurrenceRules = nil
+            return
+        }
+        guard let rule = Self.buildRecurrenceRule(draft) else {
+            throw CalendarModuleError.missingRequired("recurrenceFreq")
+        }
+        event.recurrenceRules = [rule]
+    }
+
+    private func applyAlarms(_ drafts: [AlarmDraft]?, to event: EKEvent, replacing: Bool) throws {
+        guard let drafts else { return }
+        if drafts.isEmpty {
+            event.alarms = []
+            return
+        }
+        event.alarms = drafts.compactMap { d in
+            switch d.type.lowercased() {
+            case "relative":
+                let minutes = d.triggerMinutesBefore ?? 0
+                return EKAlarm(relativeOffset: TimeInterval(-60 * minutes))
+            case "absolute":
+                guard let iso = d.triggerAbsoluteDate, let date = try? CalendarISOParsing.parse(iso) else {
+                    return nil
+                }
+                return EKAlarm(absoluteDate: date)
+            default:
+                return nil
+            }
+        }
+        _ = replacing
+    }
+
+    static func buildRecurrenceRule(_ draft: CalendarEventDraft) -> EKRecurrenceRule? {
+        guard let freqRaw = draft.recurrenceFreq, !freqRaw.isEmpty else { return nil }
+        let frequency: EKRecurrenceFrequency
+        switch freqRaw.lowercased() {
+        case "daily": frequency = .daily
+        case "weekly": frequency = .weekly
+        case "monthly": frequency = .monthly
+        case "yearly": frequency = .yearly
+        default: return nil
+        }
+        let interval = max(1, draft.recurrenceInterval ?? 1)
+        var end: EKRecurrenceEnd?
+        if let count = draft.recurrenceCount, count > 0 {
+            end = EKRecurrenceEnd(occurrenceCount: count)
+        } else if let endRaw = draft.recurrenceEndDate, !endRaw.isEmpty,
+                  let endDate = try? CalendarISOParsing.parse(endRaw) {
+            end = EKRecurrenceEnd(end: endDate)
+        }
+        return EKRecurrenceRule(recurrenceWith: frequency, interval: interval, end: end)
+    }
+
+    static func serializeRule(_ rule: EKRecurrenceRule?) -> String? {
+        guard let rule else { return nil }
+        let freq: String
+        switch rule.frequency {
+        case .daily: freq = "daily"
+        case .weekly: freq = "weekly"
+        case .monthly: freq = "monthly"
+        case .yearly: freq = "yearly"
+        @unknown default: freq = "daily"
+        }
+        var parts = ["\(freq);interval:\(rule.interval)"]
+        if let end = rule.recurrenceEnd {
+            if end.occurrenceCount > 0 {
+                parts.append("count:\(end.occurrenceCount)")
+            } else if let until = end.endDate {
+                parts.append("until:\(makeISO().string(from: until))")
+            }
+        }
+        return parts.joined(separator: ";")
+    }
+
+    static func serializeAlarms(_ alarms: [EKAlarm]?) -> [AlarmItem] {
+        guard let alarms, !alarms.isEmpty else { return [] }
+        return alarms.enumerated().map { idx, alarm in
+            if let absolute = alarm.absoluteDate {
+                return AlarmItem(
+                    id: "alarm-\(idx)",
+                    type: "absolute",
+                    triggerAbsoluteDate: makeISO().string(from: absolute)
+                )
+            }
+            return AlarmItem(
+                id: "alarm-\(idx)",
+                type: "relative",
+                triggerMinutesBefore: Int((-alarm.relativeOffset) / 60.0)
+            )
+        }
     }
 }
 
@@ -614,7 +798,7 @@ public enum CalendarModule {
             name: "calendar_create",
             module: moduleName,
             tier: .notify,
-            description: "Create a calendar event. Requires title, start, end (ISO-8601); optional allDay, calendarId, location, notes. Returns the new event id + record.",
+            description: "Create a calendar event. Requires title, start, end (ISO-8601); optional allDay, calendarId, location, notes, timeZoneIdentifier (IANA), recurrence (freq/interval/end/count), alarms (relative minutes-before-start or absolute). Returns the new event id + record.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -624,7 +808,13 @@ public enum CalendarModule {
                     "allDay": .object(["type": .string("boolean"), "description": .string("All-day event (default: false)")]),
                     "calendarId": .object(["type": .string("string"), "description": .string("Target calendar identifier (default: the default Calendar for new events)")]),
                     "location": .object(["type": .string("string"), "description": .string("Location (optional)")]),
-                    "notes": .object(["type": .string("string"), "description": .string("Freeform notes (optional)")])
+                    "notes": .object(["type": .string("string"), "description": .string("Freeform notes (optional)")]),
+                    "timeZoneIdentifier": .object(["type": .string("string"), "description": .string("IANA time zone (e.g. America/Chicago). Invalid identifiers fail closed.")]),
+                    "recurrenceFreq": .object(["type": .string("string"), "description": .string("Repeat frequency: daily | weekly | monthly | yearly")]),
+                    "recurrenceInterval": .object(["type": .string("integer"), "description": .string("Repeat interval (default 1)")]),
+                    "recurrenceEndDate": .object(["type": .string("string"), "description": .string("Optional ISO-8601 end of series")]),
+                    "recurrenceCount": .object(["type": .string("integer"), "description": .string("Optional occurrence count")]),
+                    "alarms": .object(["type": .string("array"), "description": .string("Relative (minutes before start) or absolute alarms. Geofence omitted in v1.")])
                 ]),
                 "required": .array([.string("title"), .string("start"), .string("end")])
             ]),
@@ -639,6 +829,8 @@ public enum CalendarModule {
                 guard let end = stringArg(args, "end") else {
                     throw ToolRouterError.invalidArguments(toolName: "calendar_create", reason: "missing 'end'")
                 }
+                try validateTimeZone(stringArg(args, "timeZoneIdentifier"))
+                try validateRecurrenceFreq(stringArg(args, "recurrenceFreq"))
                 let draft = CalendarEventDraft(
                     title: title,
                     start: start,
@@ -646,7 +838,13 @@ public enum CalendarModule {
                     allDay: boolArg(args, "allDay"),
                     calendarId: stringArg(args, "calendarId"),
                     location: stringArg(args, "location"),
-                    notes: stringArg(args, "notes")
+                    notes: stringArg(args, "notes"),
+                    timeZoneIdentifier: stringArg(args, "timeZoneIdentifier"),
+                    recurrenceFreq: stringArg(args, "recurrenceFreq"),
+                    recurrenceInterval: intArg(args, "recurrenceInterval"),
+                    recurrenceEndDate: stringArg(args, "recurrenceEndDate"),
+                    recurrenceCount: intArg(args, "recurrenceCount"),
+                    alarms: parseAlarmArray(args, "alarms")
                 )
                 let event = try await store.create(draft)
                 return .object([
@@ -661,7 +859,7 @@ public enum CalendarModule {
             name: "calendar_update",
             module: moduleName,
             tier: .notify,
-            description: "Update a calendar event by id. Any of title, start, end, allDay, location, notes, calendarId. Returns the updated record.",
+            description: "Update a calendar event by id. Any of title, start, end, allDay, location, notes, calendarId, timeZoneIdentifier, recurrence, alarms. Optional span thisEvent (default) or futureEvents for a series. recurrenceFreq \"\" clears recurrence; alarms [] clears alarms. Returns the updated record.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -672,7 +870,14 @@ public enum CalendarModule {
                     "allDay": .object(["type": .string("boolean"), "description": .string("Set all-day flag")]),
                     "calendarId": .object(["type": .string("string"), "description": .string("Move to a different calendar")]),
                     "location": .object(["type": .string("string"), "description": .string("New location")]),
-                    "notes": .object(["type": .string("string"), "description": .string("New notes")])
+                    "notes": .object(["type": .string("string"), "description": .string("New notes")]),
+                    "timeZoneIdentifier": .object(["type": .string("string"), "description": .string("IANA time zone; empty string clears")]),
+                    "recurrenceFreq": .object(["type": .string("string"), "description": .string("daily | weekly | monthly | yearly; empty string clears")]),
+                    "recurrenceInterval": .object(["type": .string("integer"), "description": .string("Repeat interval")]),
+                    "recurrenceEndDate": .object(["type": .string("string"), "description": .string("ISO-8601 end of series")]),
+                    "recurrenceCount": .object(["type": .string("integer"), "description": .string("Occurrence count")]),
+                    "alarms": .object(["type": .string("array"), "description": .string("Replace alarms; [] clears. Relative offset is from event start.")]),
+                    "span": .object(["type": .string("string"), "description": .string("thisEvent (default) or futureEvents when the event is a series")])
                 ]),
                 "required": .array([.string("id")])
             ]),
@@ -681,6 +886,9 @@ public enum CalendarModule {
                 guard let id = stringArg(args, "id") else {
                     throw ToolRouterError.invalidArguments(toolName: "calendar_update", reason: "missing 'id'")
                 }
+                try validateTimeZone(stringArg(args, "timeZoneIdentifier"))
+                try validateRecurrenceFreq(stringArg(args, "recurrenceFreq"))
+                let span = try CalendarEventSpan.parse(stringArg(args, "span"))
                 let draft = CalendarEventDraft(
                     title: stringArg(args, "title"),
                     start: stringArg(args, "start"),
@@ -688,12 +896,19 @@ public enum CalendarModule {
                     allDay: boolArg(args, "allDay"),
                     calendarId: stringArg(args, "calendarId"),
                     location: stringArg(args, "location"),
-                    notes: stringArg(args, "notes")
+                    notes: stringArg(args, "notes"),
+                    timeZoneIdentifier: stringArg(args, "timeZoneIdentifier"),
+                    recurrenceFreq: stringArg(args, "recurrenceFreq"),
+                    recurrenceInterval: intArg(args, "recurrenceInterval"),
+                    recurrenceEndDate: stringArg(args, "recurrenceEndDate"),
+                    recurrenceCount: intArg(args, "recurrenceCount"),
+                    alarms: parseAlarmArray(args, "alarms")
                 )
-                let event = try await store.update(id: id, draft)
+                let event = try await store.update(id: id, draft, span: span)
                 return .object([
                     "id": .string(event.id),
-                    "event": formatEvent(event)
+                    "event": formatEvent(event),
+                    "span": .string(span.rawValue)
                 ])
             }
         ))
@@ -703,11 +918,12 @@ public enum CalendarModule {
             name: "calendar_delete",
             module: moduleName,
             tier: .request,
-            description: "Delete a calendar event by id. DESTRUCTIVE / irreversible — gated at tier .request (confirmation required). Returns the deleted id.",
+            description: "Delete a calendar event by id. DESTRUCTIVE / irreversible — gated at tier .request (confirmation required). Optional span thisEvent (default) or futureEvents for a series. Returns the deleted id.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "id": .object(["type": .string("string"), "description": .string("EKEvent.eventIdentifier (required)")])
+                    "id": .object(["type": .string("string"), "description": .string("EKEvent.eventIdentifier (required)")]),
+                    "span": .object(["type": .string("string"), "description": .string("thisEvent (default) or futureEvents")])
                 ]),
                 "required": .array([.string("id")])
             ]),
@@ -716,10 +932,12 @@ public enum CalendarModule {
                 guard let id = stringArg(args, "id") else {
                     throw ToolRouterError.invalidArguments(toolName: "calendar_delete", reason: "missing 'id'")
                 }
-                try await store.delete(id: id)
+                let span = try CalendarEventSpan.parse(stringArg(args, "span"))
+                try await store.delete(id: id, span: span)
                 return .object([
                     "id": .string(id),
-                    "deleted": .bool(true)
+                    "deleted": .bool(true),
+                    "span": .string(span.rawValue)
                 ])
             }
         ))
@@ -756,6 +974,18 @@ public enum CalendarModule {
         if let modified = event.lastModified { entry["lastModified"] = .string(modified) }
         entry["isRecurring"] = .bool(event.isRecurring)
         entry["isDetached"] = .bool(event.isDetached)
+        if let rule = event.recurrenceRule { entry["recurrenceRule"] = .string(rule) }
+        if !event.alarms.isEmpty {
+            entry["alarms"] = .array(event.alarms.map { alarm in
+                var item: [String: Value] = [
+                    "id": .string(alarm.id),
+                    "type": .string(alarm.type)
+                ]
+                if let minutes = alarm.triggerMinutesBefore { item["triggerMinutesBefore"] = .int(minutes) }
+                if let abs = alarm.triggerAbsoluteDate { item["triggerAbsoluteDate"] = .string(abs) }
+                return .object(item)
+            })
+        }
         return .object(entry)
     }
 
@@ -792,5 +1022,36 @@ public enum CalendarModule {
         if case .int(let n)? = args[key] { return n }
         if case .double(let d)? = args[key] { return Int(d) }
         return nil
+    }
+
+    static func validateTimeZone(_ identifier: String?) throws {
+        guard let identifier, !identifier.isEmpty else { return }
+        guard TimeZone(identifier: identifier) != nil else {
+            throw CalendarModuleError.invalidTimeZone(identifier)
+        }
+    }
+
+    static func validateRecurrenceFreq(_ freq: String?) throws {
+        guard let freq, !freq.isEmpty else { return }
+        switch freq.lowercased() {
+        case "daily", "weekly", "monthly", "yearly": return
+        default:
+            throw ToolRouterError.invalidArguments(
+                toolName: "calendar_create",
+                reason: "recurrenceFreq must be daily, weekly, monthly, or yearly"
+            )
+        }
+    }
+
+    static func parseAlarmArray(_ args: [String: Value], _ key: String) -> [AlarmDraft]? {
+        guard case .array(let arr)? = args[key] else { return nil }
+        return arr.compactMap { element in
+            guard case .object(let obj) = element, let type = stringArg(obj, "type") else { return nil }
+            return AlarmDraft(
+                type: type,
+                triggerMinutesBefore: intArg(obj, "triggerMinutesBefore"),
+                triggerAbsoluteDate: stringArg(obj, "triggerAbsoluteDate")
+            )
+        }
     }
 }
