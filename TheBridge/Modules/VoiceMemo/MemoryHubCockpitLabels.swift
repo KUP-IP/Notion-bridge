@@ -45,6 +45,7 @@ public enum MemoryHubCockpitLabels {
         guard hasTranscript else { return "No transcript" }
         switch source {
         case .apple:    return "Apple"
+        case .speechAnalyzer: return "Speech Analyzer"
         case .parakeet: return "On-device"
         case .sidecar:  return "Cached"
         case .none:     return "No transcript"

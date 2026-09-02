@@ -129,6 +129,11 @@ func runJobsModuleTests() async {
         }
     }
 
+    await test("LaunchAgentLifecycle: user-domain jobs are not SMAppService") {
+        try expect(!LaunchAgentLifecycle.isBundledForSMAppService(jobId: "wave7-not-bundled"))
+        try expect(LaunchAgentLifecycle.preferredRegistrationChannel(jobId: "wave7-not-bundled") == "launchagent")
+    }
+
     // --- JobStore (uses a temp SQLite file so the real DB is untouched) ---
 
     await test("JobStore: insert + fetch round-trip") {

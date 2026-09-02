@@ -24,6 +24,7 @@ public struct MemorySettingsTab: View {
     @AppStorage(BridgeDefaults.voiceMemoCuratorMode) private var curatorModeRaw: String = VoiceMemoCuratorMode.auto.rawValue
     @AppStorage(BridgeDefaults.voiceMemoOllamaRouting) private var ollamaRouting = true
     @AppStorage(BridgeDefaults.voiceMemoAppleTranscript) private var appleTranscript = true
+    @AppStorage(BridgeDefaults.voiceMemoSpeechAnalyzerTranscription) private var speechAnalyzerTranscription = false
     @AppStorage(BridgeDefaults.voiceMemoParakeetTranscription) private var parakeetTranscription = true
     @AppStorage(BridgeDefaults.memoryHandshakeAutoInject) private var globalInject = false
 
@@ -160,6 +161,7 @@ public struct MemorySettingsTab: View {
                     .foregroundStyle(BridgeTokens.fg3)
                     .fixedSize(horizontal: false, vertical: true)
                 ladderRow("Apple embedded transcript (tsrp)", isOn: $appleTranscript, axid: BridgeAXID.Memory.Settings.ladderApple)
+                ladderRow("SpeechAnalyzer (opt-in)", isOn: $speechAnalyzerTranscription, axid: BridgeAXID.Memory.Settings.ladderSpeechAnalyzer)
                 ladderRow("Parakeet fallback", isOn: $parakeetTranscription, axid: BridgeAXID.Memory.Settings.ladderParakeet)
                 ladderRow("Ollama routing + summarization", isOn: $ollamaRouting, axid: BridgeAXID.Memory.Settings.ladderOllama)
                 if let mode = VoiceMemoCuratorMode(rawValue: curatorModeRaw),

@@ -30,13 +30,17 @@ extension ScreenModule {
             name: "screen_record_start",
             module: moduleName,
             tier: .notify,
-            description: "Start a screen recording (60s default, 300s cap). Returns the target filePath immediately. Only one active at a time; end with screen_record_stop.",
+            description: "Start a screen recording (60s default, 300s cap). Returns the target filePath immediately. Only one active at a time; end with screen_record_stop. Optional displayIndex selects the display (display-only; no window/app/region).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "safetyCap": .object([
                         "type": .string("integer"),
                         "description": .string("Max recording duration in seconds (default: 60, max: 300). Recording auto-stops after this.")
+                    ]),
+                    "displayIndex": .object([
+                        "type": .string("integer"),
+                        "description": .string("Display index to record (default: 0 = main). Out of range or no displays fails closed.")
                     ])
                 ]),
                 "required": .array([])
@@ -50,9 +54,13 @@ extension ScreenModule {
                 var cap: TimeInterval = 60
                 if case .int(let c) = args["safetyCap"] { cap = min(TimeInterval(c), 300) }
                 else if case .double(let c) = args["safetyCap"] { cap = min(c, 300) }
+                let displayIndex: Int? = {
+                    if case .int(let d) = args["displayIndex"] { return d }
+                    return nil
+                }()
 
                 do {
-                    let result = try await RecordingManager.shared.start(safetyCap: cap)
+                    let result = try await RecordingManager.shared.start(safetyCap: cap, displayIndex: displayIndex)
                     var response: [String: Value] = [
                         "status":          .string("recording"),
                         "filePath":        .string(result.path),
@@ -113,6 +121,7 @@ extension ScreenModule {
 private enum RecordingError: Error {
     case screenRecordingDenied
     case noDisplays
+    case displayIndexOutOfRange(Int)
     case recordingAlreadyActive
     case noActiveRecording
     case writerSetupFailed(String)
@@ -130,6 +139,11 @@ private enum RecordingError: Error {
             return .object([
                 "error":   .string("no_displays"),
                 "message": .string("No capturable displays found.")
+            ])
+        case .displayIndexOutOfRange(let index):
+            return .object([
+                "error":   .string("display_index_out_of_range"),
+                "message": .string("displayIndex \(index) is out of range or no displays are available.")
             ])
         case .recordingAlreadyActive:
             return .object([
@@ -293,7 +307,7 @@ private actor RecordingManager {
     var isRecording: Bool { recording != nil }
 
     /// Start a new screen recording. Returns (filePath, width, height).
-    func start(safetyCap: TimeInterval) async throws -> (path: String, width: Int, height: Int, isFallback: Bool) {
+    func start(safetyCap: TimeInterval, displayIndex: Int? = nil) async throws -> (path: String, width: Int, height: Int, isFallback: Bool) {
         guard recording == nil else {
             throw RecordingError.recordingAlreadyActive
         }
@@ -308,9 +322,13 @@ private actor RecordingManager {
         // the continuation and hangs forever. Route through the main-actor
         // boundary (see ScreenCaptureKitBoundary.swift).
         let content = try await SCKBoundary.fetchShareableContent()
-        guard let display = content.displays.first else {
+        guard !content.displays.isEmpty else {
             throw RecordingError.noDisplays
         }
+        guard let index = ScreenModule.resolveDisplayIndex(displayIndex, displayCount: content.displays.count) else {
+            throw RecordingError.displayIndexOutOfRange(displayIndex ?? 0)
+        }
+        let display = content.displays[index]
 
         let width = display.width
         let height = display.height

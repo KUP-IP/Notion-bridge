@@ -172,9 +172,41 @@ func runNotesModuleTests() async {
         try expect(found == true, "should be found")
         try expect(body == "plain body text", "body \(body)")
         try expect(html == "<div>plain body text</div>", "html \(html)")
+        guard case .array(let atts) = dict["attachments"] else {
+            throw TestError.assertion("expected attachments[]")
+        }
+        try expect(atts.isEmpty, "no attachment records in payload")
         // Reading by id must emit a `note id "…"` resolve clause.
         try expect(runner.lastScript.contains("note id \"id://x\""),
                    "id resolve clause missing: \(runner.lastScript)")
+        try expect(runner.lastScript.contains("attachments of theNote"),
+                   "read script must enumerate attachments")
+        try expect(runner.lastScript.contains("if attName is \"Shortcuts\""),
+                   "read script must skip Shortcuts pin wrapper")
+    }
+
+    await test("notes_read parses attachment metadata and skips empty records") {
+        let fs = NotesModule.fieldSep
+        let rs = NotesModule.recordSep
+        let payload = "id://x\(fs)My Note\(fs)Notes\(fs)body\(fs)<div>html</div>\(rs)att-1\(fs)photo.png\(fs)https://example.com/p.png\(fs)cid-1"
+        let parsed = NotesModule.parseReadPayload(payload)
+        try expect(parsed?.attachments.count == 1, "one attachment")
+        try expect(parsed?.attachments.first?.name == "photo.png")
+        try expect(parsed?.attachments.first?.url == "https://example.com/p.png")
+        try expect(parsed?.attachments.first?.contentIdentifier == "cid-1")
+        let runner = MockNotesRunner(.ok(payload))
+        let router = await makeRouter(runner)
+        let result = try await router.dispatch(
+            toolName: "notes_read", arguments: .object(["noteId": .string("id://x")]))
+        guard case .object(let dict) = result,
+              case .array(let atts)? = dict["attachments"],
+              case .object(let first) = atts.first else {
+            throw TestError.assertion("expected attachments, got \(result)")
+        }
+        try expect(first["id"] == .string("att-1"))
+        try expect(first["name"] == .string("photo.png"))
+        try expect(first["url"] == .string("https://example.com/p.png"))
+        try expect(first["contentIdentifier"] == .string("cid-1"))
     }
 
     await test("notes_read by name emits case-insensitive name resolve clause") {

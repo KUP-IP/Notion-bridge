@@ -122,7 +122,11 @@
 # 2026-09-02: 3906 → 3912 (+6) — GitHub Wave 6: open-tier issue/PR lists
 #   (no body), parent + duplicateOf, gh_pr_review neverAutoApprove
 #   (#219 #220 #221). Measured 3912 passed, 0 failed on wave6-github.
-FLOOR="${BRIDGE_TEST_FLOOR:-3912}"
+# 2026-09-02: 3912 → 3920 (+8) — Mac/UI Wave 7: limited contacts, notes
+#   attachments, shortcut identifiers, SpeechAnalyzer opt-in off,
+#   registrationChannel, displayIndex, Cmd+V web paste (#214 #211 #213
+#   #212 #223 #224 #238). Measured 3920 passed, 0 failed on wave7-mac-ui.
+FLOOR="${BRIDGE_TEST_FLOOR:-3920}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

@@ -665,6 +665,14 @@ extension ScreenModuleRuntime {
 }
 
 extension ScreenModule {
+    /// Resolve a 0-based display index. Empty display list or out-of-range → nil (fail closed).
+    public static func resolveDisplayIndex(_ requested: Int?, displayCount: Int) -> Int? {
+        guard displayCount > 0 else { return nil }
+        let index = requested ?? 0
+        guard index >= 0, index < displayCount else { return nil }
+        return index
+    }
+
     /// Explicit opt-in bridge for the non-canonical live OCR probe. Canonical
     /// tests cannot accidentally register live dependencies because this path
     /// refuses to run unless the dedicated environment switch is present.
@@ -784,13 +792,12 @@ private enum ScreenModuleLive {
             guard !content.displays.isEmpty else {
                 throw ScreenModuleError.noDisplays
             }
-            let index = request.displayIndex ?? 0
-            guard index >= 0, index < content.displays.count else {
+            guard let index = ScreenModule.resolveDisplayIndex(request.displayIndex, displayCount: content.displays.count) else {
                 let available = content.displays.enumerated()
                     .map { "\($0.offset): \($0.element.width)x\($0.element.height)" }
                     .joined(separator: ", ")
                 throw ScreenModuleError.missingParameter(
-                    "displayIndex \(index) out of range. Available: [\(available)]"
+                    "displayIndex \(request.displayIndex ?? 0) out of range. Available: [\(available)]"
                 )
             }
             let display = content.displays[index]
@@ -864,13 +871,12 @@ private enum ScreenModuleLive {
             guard !content.displays.isEmpty else {
                 throw ScreenModuleError.noDisplays
             }
-            let index = request.displayIndex ?? 0
-            guard index >= 0, index < content.displays.count else {
+            guard let index = ScreenModule.resolveDisplayIndex(request.displayIndex, displayCount: content.displays.count) else {
                 let available = content.displays.enumerated()
                     .map { "\($0.offset): \($0.element.width)x\($0.element.height)" }
                     .joined(separator: ", ")
                 throw ScreenModuleError.missingParameter(
-                    "displayIndex \(index) out of range. Available: [\(available)]"
+                    "displayIndex \(request.displayIndex ?? 0) out of range. Available: [\(available)]"
                 )
             }
             let display = content.displays[index]

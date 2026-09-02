@@ -6,6 +6,7 @@ import Foundation
 public enum VoiceMemoTranscriptSource: String, Sendable, Codable, Equatable {
     case sidecar
     case apple
+    case speechAnalyzer
     case parakeet
     case none
 }
@@ -106,7 +107,7 @@ public enum VoiceMemoDiscovery {
     /// environment-dependent).
     nonisolated(unsafe) public static var resolveTranscriptOverride: (@Sendable (URL) async throws -> VoiceMemoTranscriptResolution)?
 
-    /// Transcription ladder: sidecar cache → Apple tsrp → Parakeet fallback.
+    /// Transcription ladder: sidecar cache → Apple tsrp → SpeechAnalyzer (opt-in) → Parakeet.
     public static func resolveTranscript(
         for audioURL: URL,
         forceParakeet: Bool = false
@@ -128,6 +129,16 @@ public enum VoiceMemoDiscovery {
                 if !suspicious {
                     try writeTranscriptSidecar(for: audioURL, text: appleText, source: .apple)
                     return VoiceMemoTranscriptResolution(text: appleText, source: .apple)
+                }
+            }
+        }
+
+        if !forceParakeet, BridgeDefaults.voiceMemoSpeechAnalyzerTranscriptionEffective {
+            if let analyzerText = try? await VoiceMemoSpeechAnalyzer.transcribeFile(audioURL) {
+                let trimmed = analyzerText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    try writeTranscriptSidecar(for: audioURL, text: trimmed, source: .speechAnalyzer)
+                    return VoiceMemoTranscriptResolution(text: trimmed, source: .speechAnalyzer)
                 }
             }
         }

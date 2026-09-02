@@ -49,8 +49,9 @@ func runVoiceMemoSettingsToolsTests() async {
             throw TestError.assertion("settings_set schema missing")
         }
         try expect(Set(properties.keys) == Set([
-            "curatorMode", "ollamaRouting", "appleTranscript", "parakeetTranscription",
-        ]), "settings_set must expose exactly four optional keys")
+            "curatorMode", "ollamaRouting", "appleTranscript", "speechAnalyzerTranscription",
+            "parakeetTranscription",
+        ]), "settings_set must expose five optional keys")
         let getAnnotation = ToolAnnotationCatalog.annotations(for: get.name)
         let setAnnotation = ToolAnnotationCatalog.annotations(for: set.name)
         try expect(getAnnotation?.readOnlyHint == true && getAnnotation?.idempotentHint == true,
@@ -59,7 +60,7 @@ func runVoiceMemoSettingsToolsTests() async {
                    "settings_set annotation")
     }
 
-    await test("voice_memo_settings_get returns all four effective defaults") {
+    await test("voice_memo_settings_get returns all five effective defaults") {
         fixture.reset()
         let result = try await router.dispatch(
             toolName: "voice_memo_settings_get",
@@ -70,8 +71,9 @@ func runVoiceMemoSettingsToolsTests() async {
         try expect(snapshot["curatorMode"] == .string("auto"), "default curatorMode")
         try expect(snapshot["ollamaRouting"] == .bool(false), "default ollamaRouting")
         try expect(snapshot["appleTranscript"] == .bool(true), "default appleTranscript")
+        try expect(snapshot["speechAnalyzerTranscription"] == .bool(false), "default speechAnalyzer off")
         try expect(snapshot["parakeetTranscription"] == .bool(true), "default parakeetTranscription")
-        try expect(snapshot.count == 4, "snapshot must contain exactly four values")
+        try expect(snapshot.count == 5, "snapshot must contain exactly five values")
     }
 
     await test("voice_memo_settings_set partially updates mode and preserves ladder toggles") {

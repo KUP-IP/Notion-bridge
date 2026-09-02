@@ -933,24 +933,44 @@ public enum LaunchAgentPlist {
 // MARK: - LaunchAgentLifecycle
 
 public enum LaunchAgentLifecycle {
-    /// Register (load) an agent. Tries `SMAppService.agent(plistName:)` first,
-    /// falls back to `launchctl bootstrap` for environments where
-    /// `SMAppService` isn't yet accepted (e.g. unsigned dev builds).
-    public static func register(jobId: String) throws {
+    /// Register (load) an agent. Uses `SMAppService` only when the plist is
+    /// actually bundled under `Contents/Library/LaunchAgents`. User-domain
+    /// job plists (`~/Library/LaunchAgents`) always use `launchctl bootstrap`.
+    @discardableResult
+    public static func register(jobId: String) throws -> String {
         let label = JobsPaths.launchLabel(jobId: jobId)
-        #if canImport(ServiceManagement)
-        if #available(macOS 13.0, *) {
-            let svc = SMAppService.agent(plistName: "\(label).plist")
-            do {
-                try svc.register()
-                return
-            } catch {
-                // Fall through to launchctl fallback — SMAppService can reject
-                // plists that live outside the app bundle on some macOS versions.
+        if isBundledForSMAppService(jobId: jobId) {
+            #if canImport(ServiceManagement)
+            if #available(macOS 13.0, *) {
+                let svc = SMAppService.agent(plistName: "\(label).plist")
+                do {
+                    try svc.register()
+                    return "smappservice"
+                } catch {
+                    // Fall through to launchctl fallback — SMAppService can reject
+                    // plists that live outside the app bundle on some macOS versions.
+                }
             }
+            #endif
         }
-        #endif
         try launchctlBootstrap(jobId: jobId)
+        return "launchagent"
+    }
+
+    /// True only when the LaunchAgent plist is inside this app bundle.
+    public static func isBundledForSMAppService(jobId: String) -> Bool {
+        FileManager.default.fileExists(atPath: bundledLaunchAgentPlistURL(jobId: jobId).path)
+    }
+
+    public static func bundledLaunchAgentPlistURL(jobId: String) -> URL {
+        let label = JobsPaths.launchLabel(jobId: jobId)
+        return Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Library/LaunchAgents", isDirectory: true)
+            .appendingPathComponent("\(label).plist")
+    }
+
+    public static func preferredRegistrationChannel(jobId: String) -> String {
+        isBundledForSMAppService(jobId: jobId) ? "smappservice" : "launchagent"
     }
 
     public static func unregister(jobId: String) throws {
@@ -1179,9 +1199,10 @@ public actor JobsManager {
         try await JobStore.shared.insert(job)
 
         let plist = LaunchAgentPlist.build(jobId: job.id, intervals: intervals, ssePort: Self.ssePort)
+        let channel: String
         do {
             try LaunchAgentPlist.write(jobId: job.id, plist: plist)
-            try LaunchAgentLifecycle.register(jobId: job.id)
+            channel = try LaunchAgentLifecycle.register(jobId: job.id)
         } catch {
             // Roll back DB insert if plist install fails.
             try? await JobStore.shared.delete(id: job.id)
@@ -1196,7 +1217,8 @@ public actor JobsManager {
             "schedule": .string(job.schedule),
             "intervals": .int(intervals.count),
             "status": .string(job.status.rawValue),
-            "plist": .string(JobsPaths.plistURL(jobId: job.id).path)
+            "plist": .string(JobsPaths.plistURL(jobId: job.id).path),
+            "registrationChannel": .string(channel)
         ])
     }
 

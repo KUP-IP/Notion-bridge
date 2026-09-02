@@ -218,6 +218,7 @@ public enum BridgeAXID {
             public static let curatorBanner = id("settings.curator.banner")
             /// Transcription ladder toggles.
             public static let ladderApple = id("settings.ladder.apple")
+            public static let ladderSpeechAnalyzer = id("settings.ladder.speechAnalyzer")
             public static let ladderParakeet = id("settings.ladder.parakeet")
             public static let ladderOllama = id("settings.ladder.ollama")
             /// Cloud enhancement card.

@@ -169,6 +169,7 @@ public enum SettingsUIValidationHarness {
                     BridgeAXID.Memory.Settings.curatorMode,
                     BridgeAXID.Memory.Settings.curatorBanner,
                     BridgeAXID.Memory.Settings.ladderApple,
+                    BridgeAXID.Memory.Settings.ladderSpeechAnalyzer,
                     BridgeAXID.Memory.Settings.ladderParakeet,
                     BridgeAXID.Memory.Settings.ladderOllama,
                     BridgeAXID.Memory.Settings.cloudBaseURL,
