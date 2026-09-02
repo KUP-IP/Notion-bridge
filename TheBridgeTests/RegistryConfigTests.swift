@@ -154,6 +154,38 @@ func runRegistryConfigTests() async {
         try expect(legacyOnly.entities.isEmpty)
     }
 
+    await test("Config.canonicalizePacketAliases: packet+session same DS becomes one packet") {
+        let packet = RegistryEntity(
+            key: "packet", displayName: "PACKETS", dataSourceId: "packets-ds",
+            properties: [RegistryProperty(key: "name", notionName: "Packet Name", type: "title")],
+            cacheTTLSeconds: 300, hasBody: true)
+        let session = RegistryEntity(
+            key: "session", displayName: "PACKETS", dataSourceId: "packets-ds",
+            properties: packet.properties, cacheTTLSeconds: 300, hasBody: true)
+        var cfg = RegistryConfig(entities: [session, packet])
+        try expect(cfg.canonicalizePacketAliases(), "dual PACKETS rows must change")
+        try expect(cfg.entities.filter(PacketRegistryContract.isPacketEntity).count == 1)
+        try expect(cfg.entities.contains(where: { $0.key == "packet" }))
+        try expect(!cfg.entities.contains(where: { $0.key == "session" }))
+        try expect(cfg.entity("session")?.key == "packet")
+        try expect(!cfg.canonicalizePacketAliases(), "second pass is a no-op")
+    }
+
+    await test("Config.canonicalizePacketAliases: genuine Sessions entity is left beside packet") {
+        let packet = RegistryEntity(
+            key: "packet", displayName: "PACKETS", dataSourceId: "packets-ds",
+            properties: [RegistryProperty(key: "name", notionName: "Packet Name", type: "title")],
+            cacheTTLSeconds: 300, hasBody: true)
+        let sessions = RegistryEntity(
+            key: "session", displayName: "Sessions", dataSourceId: "sessions-ds",
+            properties: [RegistryProperty(key: "name", notionName: "Session Name", type: "title")],
+            cacheTTLSeconds: 300)
+        var cfg = RegistryConfig(entities: [sessions, packet])
+        try expect(!cfg.canonicalizePacketAliases(), "genuine Sessions is not packet-shaped")
+        try expect(cfg.entity("session")?.dataSourceId == "sessions-ds")
+        try expect(cfg.entity("packet")?.dataSourceId == "packets-ds")
+    }
+
     // MARK: - Store
 
     await test("Store: missing file → seed (not persisted yet)") {
@@ -220,6 +252,47 @@ func runRegistryConfigTests() async {
             let cfg = try await store2.load()
             try expect(cfg.entity("contact") != nil, "upsert persisted to disk")
             try expect(cfg.entity("skill") != nil, "seed entity still present")
+        }
+    }
+
+    await test("Store: load heals packet+session duplicate into one canonical packet and rewrites disk") {
+        try await withTempRegistryStore { store, url in
+            let packet = RegistryEntity(
+                key: "packet", displayName: "PACKETS", dataSourceId: "packets-ds",
+                properties: [RegistryProperty(key: "name", notionName: "Packet Name", type: "title")],
+                cacheTTLSeconds: 300, hasBody: true)
+            let session = RegistryEntity(
+                key: "session", displayName: "PACKETS", dataSourceId: "packets-ds",
+                properties: packet.properties, cacheTTLSeconds: 300, hasBody: true)
+            let dual = RegistryConfig(entities: [session, packet])
+            try JSONEncoder().encode(dual).write(to: url)
+            let loaded = try await store.load()
+            try expect(loaded.entities.filter(PacketRegistryContract.isPacketEntity).count == 1)
+            try expect(loaded.entities.contains(where: { $0.key == "packet" }))
+            try expect(!loaded.entities.contains(where: { $0.key == "session" }))
+            try expect(loaded.entity("session")?.key == "packet")
+            let onDisk = try JSONDecoder().decode(RegistryConfig.self, from: Data(contentsOf: url))
+            try expect(onDisk.entities.filter(PacketRegistryContract.isPacketEntity).count == 1,
+                       "load must persist the healed config")
+            try expect(onDisk.entities.contains(where: { $0.key == "packet" }))
+        }
+    }
+
+    await test("Store: load keeps a genuine Sessions entity beside packet") {
+        try await withTempRegistryStore { store, url in
+            let packet = RegistryEntity(
+                key: "packet", displayName: "PACKETS", dataSourceId: "packets-ds",
+                properties: [RegistryProperty(key: "name", notionName: "Packet Name", type: "title")],
+                cacheTTLSeconds: 300, hasBody: true)
+            let sessions = RegistryEntity(
+                key: "session", displayName: "Sessions", dataSourceId: "sessions-ds",
+                properties: [RegistryProperty(key: "name", notionName: "Session Name", type: "title")],
+                cacheTTLSeconds: 300)
+            try await store.save(RegistryConfig(entities: [sessions, packet]))
+            let loaded = try await store.load()
+            try expect(loaded.entity("session")?.dataSourceId == "sessions-ds")
+            try expect(loaded.entity("packet")?.dataSourceId == "packets-ds")
+            try expect(loaded.entities.count == 2)
         }
     }
 
