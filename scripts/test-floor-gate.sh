@@ -101,7 +101,10 @@
 # 2026-09-02: 3848 → 3852 (+4) — awaiting_approval before MCP client
 #   timeout (#184). Measured 3852 passed, 0 failed on
 #   feat/issue-184-awaiting-approval after rebase onto main (post-#239).
-FLOOR="${BRIDGE_TEST_FLOOR:-3852}"
+# 2026-09-02: 3852 → 3854 (+2) — /mcp inbound count on /health (#189).
+#   Measured 3854 passed, 0 failed on feat/issue-189-inbound-health
+#   after rebase onto main (post-#201).
+FLOOR="${BRIDGE_TEST_FLOOR:-3854}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
