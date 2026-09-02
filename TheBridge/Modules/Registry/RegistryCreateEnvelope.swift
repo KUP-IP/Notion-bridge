@@ -60,6 +60,20 @@ public struct RegistryCreateEnvelope: Sendable, Equatable {
         if let projectedRow { out["row"] = projectedRow }
         return .object(out)
     }
+
+    /// Same receipt as create, with `updated` instead of `created` (#233).
+    public func asUpdateValue(projectedRow: Value?) -> Value {
+        var out: [String: Value] = [
+            "state": .string(state.rawValue),
+            "applied": .array(applied.map { .string($0) }),
+            "failed": .array(failed.map(\.asValue)),
+            "updated": .bool(state == .complete),
+            "partialFailure": .bool(state == .partial),
+        ]
+        if let entityUrl { out["entityUrl"] = .string(entityUrl) }
+        if let projectedRow { out["row"] = projectedRow }
+        return .object(out)
+    }
 }
 
 /// Whether a requested write matches the value Notion actually stored.

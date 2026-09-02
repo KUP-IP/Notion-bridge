@@ -274,6 +274,20 @@ func runRegistryPropertyCodecTests() async {
             ["relation": [["id": "p1"], ["id": "p2"]]])
     }
 
+    await test("encode relation unwraps Notion URL and rejects foreign URL (#235)") {
+        let url = "https://www.notion.so/a1b2c3d4e5f67890abcdef1234567890"
+        let payload = RegistryPropertyCodec.encode(type: "relation", value: .array([.string(url)]))
+        let ids = (payload?["relation"] as? [[String: String]])?.compactMap { $0["id"] } ?? []
+        try expect(ids.count == 1, "one relation id")
+        try expect(ids[0].replacingOccurrences(of: "-", with: "") == "a1b2c3d4e5f67890abcdef1234567890",
+                   "URL unwrapped to UUID")
+        let dropped = RegistryPropertyCodec.encode(
+            type: "relation",
+            value: .array([.string("https://example.com/a1b2c3d4e5f67890abcdef1234567890")]))
+        let droppedIds = (dropped?["relation"] as? [[String: String]]) ?? []
+        try expect(droppedIds.isEmpty, "non-Notion URL fail-closed")
+    }
+
     await test("encode people → id objects") {
         try samePayload(
             RegistryPropertyCodec.encode(type: "people",

@@ -71,6 +71,23 @@ public enum RegistryModule {
         return e
     }
 
+    static func requireNotionId(_ raw: String, tool: String) throws -> String {
+        switch NotionPageRef.normalizedPageId(from: raw) {
+        case .success(let dashed):
+            return dashed
+        case .failure(let err):
+            throw ToolRouterError.invalidArguments(toolName: tool, reason: err.message)
+        }
+    }
+
+    static func dataSourceAlreadyBound(to key: String, dataSourceId: String, in config: RegistryConfig) -> String? {
+        let want = CachedRow.normalize(dataSourceId)
+        guard !want.isEmpty else { return nil }
+        return config.entities.first {
+            $0.key != key && CachedRow.normalize($0.dataSourceId) == want
+        }?.key
+    }
+
     static func string(_ args: [String: Value], _ key: String) -> String? {
         if case .string(let s)? = args[key], !s.isEmpty { return s }
         return nil
@@ -342,9 +359,21 @@ public enum RegistryModule {
                 if case .int(let n)? = a["cacheTTLSeconds"] { ttl = max(0, n) }
                 var hasBody = false
                 if case .bool(let b)? = a["hasBody"] { hasBody = b }
+                let resolvedDS: String
+                if dsId.lowercased().hasPrefix("http://") || dsId.lowercased().hasPrefix("https://") {
+                    resolvedDS = try requireNotionId(dsId, tool: "registry_add_entity")
+                } else {
+                    resolvedDS = dsId
+                }
+                let config = await loadConfig()
+                if let owner = dataSourceAlreadyBound(to: key, dataSourceId: resolvedDS, in: config) {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "registry_add_entity",
+                        reason: "data source already bound to entity ‘\(owner)’ — refuse a second mapping")
+                }
                 let entity = RegistryEntity(
                     key: key, displayName: string(a, "displayName") ?? key,
-                    dataSourceId: dsId, workspace: string(a, "workspace"),
+                    dataSourceId: resolvedDS, workspace: string(a, "workspace"),
                     properties: props, cacheTTLSeconds: ttl, hasBody: hasBody)
                 // Atomic upsert on the shared actor (serialized).
                 let saved = try await configStore().upsertEntity(entity)
@@ -524,9 +553,10 @@ public enum RegistryModule {
                 "required": .array([.string("entity"), .string("id")]),
             ]),
             handler: { args in
-                guard case .object(let a) = args, let key = string(a, "entity"), let id = string(a, "id") else {
+                guard case .object(let a) = args, let key = string(a, "entity"), let rawId = string(a, "id") else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_get", reason: "missing ‘entity’ or ‘id’")
                 }
+                let id = try requireNotionId(rawId, tool: "registry_get")
                 let requestedFields = try resultFields(a, toolName: "registry_get")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_get")
@@ -742,9 +772,10 @@ public enum RegistryModule {
                 "required": .array([.string("entity"), .string("id"), .string("fields")]),
             ]),
             handler: { args in
-                guard case .object(let a) = args, let key = string(a, "entity"), let id = string(a, "id") else {
+                guard case .object(let a) = args, let key = string(a, "entity"), let rawId = string(a, "id") else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_update", reason: "missing ‘entity’ or ‘id’")
                 }
+                let id = try requireNotionId(rawId, tool: "registry_update")
                 let requestedFields = try resultFieldsOnWriteTool(a, toolName: "registry_update")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_update")
@@ -754,14 +785,15 @@ public enum RegistryModule {
                     guard case .array(let arr)? = a["appendKeys"] else { return nil }
                     return Set(arr.compactMap { v -> String? in if case .string(let s) = v { return s } else { return nil } })
                 }()
-                let row: CachedRow
+                let env: RegistryCreateEnvelope
                 if let appendKeys {
                     let reader = RegistryReader(gateway: gw)
-                    row = try await writer.update(entity: entity, pageId: id, fields: fields(a), reader: reader, appendKeys: appendKeys)
+                    let row = try await writer.update(entity: entity, pageId: id, fields: fields(a), reader: reader, appendKeys: appendKeys)
+                    env = RegistryCreateEnvelope(state: .complete, row: row, applied: Array(fields(a).keys), failed: [])
                 } else {
-                    row = try await writer.update(entity: entity, pageId: id, fields: fields(a))
+                    env = try await writer.updateReporting(entity: entity, pageId: id, fields: fields(a))
                 }
-                return .object(["updated": .bool(true), "row": FieldsFilter.project(rowValue(row, stale: false), fields: requestedFields)])
+                return env.asUpdateValue(projectedRow: env.row.map { FieldsFilter.project(rowValue($0, stale: false), fields: requestedFields) })
             })
     }
 
@@ -852,9 +884,10 @@ public enum RegistryModule {
                 "required": .array([.string("entity"), .string("id")]),
             ]),
             handler: { args in
-                guard case .object(let a) = args, let key = string(a, "entity"), let id = string(a, "id") else {
+                guard case .object(let a) = args, let key = string(a, "entity"), let rawId = string(a, "id") else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_delete", reason: "missing ‘entity’ or ‘id’")
                 }
+                let id = try requireNotionId(rawId, tool: "registry_delete")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_delete")
                 let writer = RegistryWriter(gateway: gateway())
@@ -878,9 +911,10 @@ public enum RegistryModule {
                 "required": .array([.string("entity"), .string("id")]),
             ]),
             handler: { args in
-                guard case .object(let a) = args, let key = string(a, "entity"), let id = string(a, "id") else {
+                guard case .object(let a) = args, let key = string(a, "entity"), let rawId = string(a, "id") else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_possess", reason: "missing ‘entity’ or ‘id’")
                 }
+                let id = try requireNotionId(rawId, tool: "registry_possess")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_possess")
                 guard entity.hasBody else {
@@ -908,9 +942,10 @@ public enum RegistryModule {
                 "required": .array([.string("entity"), .string("id")]),
             ]),
             handler: { args in
-                guard case .object(let a) = args, let key = string(a, "entity"), let id = string(a, "id") else {
+                guard case .object(let a) = args, let key = string(a, "entity"), let rawId = string(a, "id") else {
                     throw ToolRouterError.invalidArguments(toolName: "registry_hydrate", reason: "missing ‘entity’ or ‘id’")
                 }
+                let id = try requireNotionId(rawId, tool: "registry_hydrate")
                 let config = await loadConfig()
                 let entity = try requireEntity(key, in: config, tool: "registry_hydrate")
                 var force = false

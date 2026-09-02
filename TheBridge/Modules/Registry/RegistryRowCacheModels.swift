@@ -112,11 +112,14 @@ public struct CachedRow: Codable, Sendable, Equatable {
         )
     }
 
-    /// True iff past TTL. Non-positive `ttlSeconds` ⇒ never expires
-    /// (defensive — a hand-corrupted file should not flap to stale). A stale
-    /// row is still returned (offline-first); it is just labelled stale so a
-    /// background revalidation can be kicked.
-    public func isExpired(now: Date = Date()) -> Bool {
+    /// True iff past TTL, or a live Notion `last_edited_time` differs from the
+    /// cached anchor (#232 — UI edits must not wait for wall-clock TTL).
+    /// Non-positive `ttlSeconds` never expires on the clock axis; a different
+    /// live last-edited time still counts as stale.
+    public func isExpired(now: Date = Date(), liveLastEditedTime: String? = nil) -> Bool {
+        if let live = liveLastEditedTime, !live.isEmpty, live != lastEditedTime {
+            return true
+        }
         guard ttlSeconds > 0 else { return false }
         return now.timeIntervalSince(writtenAt) > TimeInterval(ttlSeconds)
     }

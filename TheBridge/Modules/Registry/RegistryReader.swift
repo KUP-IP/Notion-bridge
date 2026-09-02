@@ -73,18 +73,22 @@ public struct RegistryReader: Sendable {
     public func get(entity: RegistryEntity, pageId: String, forceRefresh: Bool = false) async throws -> CachedRow {
         let norm = CachedRow.normalize(pageId)
         if !forceRefresh, let cached = await cache.read(entity: entity.key, pageId: norm) {
-            if !cached.isExpired() {
-                // Fresh: serve the cache hit directly (tick the usage counter).
-                // No background revalidation kick: an unstructured detached Task
-                // resolves the cache path lazily and could, if it outlived a
-                // test's `overrideHomeForTesting`, write to the wrong home; a
-                // stale entry is refreshed inline on its next read anyway.
-                _ = await cache.incrementCallCount(entity: entity.key, pageId: norm)
+            do {
+                let live = try await gateway.page(pageId: norm, workspace: entity.workspace)
+                if live.archived || live.id.isEmpty {
+                    await cache.evict(entity: entity.key, pageId: pageId)
+                    throw RegistryReadError.deleted(pageId)
+                }
+                if live.lastEditedTime == cached.lastEditedTime && !cached.isExpired() {
+                    _ = await cache.incrementCallCount(entity: entity.key, pageId: norm)
+                    return cached
+                }
+                return await Self.store(live, entity: entity, into: cache)
+            } catch let e as RegistryReadError {
+                throw e
+            } catch {
                 return cached
             }
-            // Stale: try a live refresh; on failure serve the stale copy (offline).
-            do { return try await Self.fetchAndStore(entity: entity, pageId: norm, gateway: gateway, cache: cache) }
-            catch { return cached }
         }
         return try await Self.fetchAndStore(entity: entity, pageId: norm, gateway: gateway, cache: cache)
     }

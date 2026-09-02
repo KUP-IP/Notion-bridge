@@ -250,11 +250,19 @@ public enum RegistryPropertyCodec {
 
         case "relation":
             guard let ids = listOrNil(value) else { return nil }
-            return ["relation": ids.map { ["id": $0] }]
+            let payload: [[String: String]] = ids.compactMap { raw in
+                guard let dashed = hyphenatedNotionId(raw) else { return nil }
+                return ["id": dashed]
+            }
+            return ["relation": payload]
 
         case "people":
             guard let ids = listOrNil(value) else { return nil }
-            return ["people": ids.map { ["id": $0] }]
+            let payload: [[String: String]] = ids.compactMap { raw in
+                guard let dashed = hyphenatedNotionId(raw) else { return nil }
+                return ["id": dashed]
+            }
+            return ["people": payload]
 
         default:
             return nil
@@ -422,11 +430,28 @@ public enum RegistryPropertyCodec {
 
     // MARK: - Write classification (issue #138)
 
-    /// Relation / people page ids, dash-stripped and lowercased.
+    /// Relation / people page ids, dash-stripped and lowercased. Notion URLs
+    /// are unwrapped (#235); non-Notion URLs are dropped.
     public static func pageIds(from value: Value) -> [String] {
         (listOrNil(value) ?? [])
-            .map { CachedRow.normalize($0) }
+            .compactMap { hyphenatedNotionId($0).map { CachedRow.normalize($0) } }
             .filter { !$0.isEmpty }
+    }
+
+    /// Dashed UUID for relation/people write payloads; nil if not a Notion id/URL.
+    static func hyphenatedNotionId(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
+            if case .success(let dashed) = NotionPageRef.normalizedPageId(from: trimmed) {
+                return dashed
+            }
+            return nil
+        }
+        if case .success(let dashed) = NotionPageRef.normalizedPageId(from: trimmed) {
+            return dashed
+        }
+        return trimmed
     }
 
     /// Compare a requested write to the value present on the returned page.

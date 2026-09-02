@@ -265,20 +265,20 @@ func runRegistryEdgeCaseTests() async {
             _ = try await RegistryWriter(gateway: gw).update(entity: edgeEntity(), pageId: "dd00000000000000000000000000001",
                 fields: ["notes": .string(String(repeating: "z", count: 4500))])
             let env = LiveRegistryGateway.encodeEnvelope(await gw.lastUpdate)
-            let runs = (env["Notes"] as? [String: Any])?["rich_text"] as? [[String: Any]]
+            let notesKey = LiveRegistryGateway.writePropertyKey(
+                BoundField(propertyId: "p_notes", notionName: "Notes", type: "rich_text", value: .string(""), isTitle: false))!
+            let runs = (env[notesKey] as? [String: Any])?["rich_text"] as? [[String: Any]]
             try expect((runs?.count ?? 0) >= 3, "long notes split into ≥3 runs, got \(runs?.count ?? 0)")
         }
     }
 
-    await test("Edge/writer: envelope keys by NAME (percent-encoded ids don't write)") {
-        // A real Notion property whose id is `AH\`N` is returned as `AH%60N`;
-        // that encoded id silently no-ops as a WRITE key, so the envelope must
-        // key by the property NAME instead.
+    await test("Edge/writer: envelope keys by decoded property ID (#234)") {
+        // Percent-encoded ids silently no-op; decoded id is the write key.
         let fields = [BoundField(propertyId: "AH%60N", notionName: "Description", type: "rich_text", value: .string("hi"), isTitle: false)]
         let env = LiveRegistryGateway.encodeEnvelope(fields)
-        try expect(env["Description"] != nil, "keyed by name")
+        try expect(env["AH`N"] != nil, "keyed by decoded property id")
         try expect(env["AH%60N"] == nil, "NOT keyed by the percent-encoded id")
-        // An unbound field (no id) is skipped even if it has a name.
+        try expect(env["Description"] == nil, "NOT keyed by display name")
         let unbound = [BoundField(propertyId: "", notionName: "X", type: "rich_text", value: .string("y"), isTitle: false)]
         try expect(LiveRegistryGateway.encodeEnvelope(unbound).isEmpty, "unbound field skipped")
     }
@@ -287,10 +287,10 @@ func runRegistryEdgeCaseTests() async {
         let fields = [BoundField(propertyId: "p1", notionName: "Description", type: "rich_text", value: .string("hi"), isTitle: false)]
         let upd = (try? JSONSerialization.jsonObject(with: LiveRegistryGateway.updateBody(fields))) as? [String: Any] ?? [:]
         try expect(upd["properties"] != nil, "updateBody wraps under ‘properties’ (updatePage sends the body unwrapped)")
-        try expect((upd["properties"] as? [String: Any])?["Description"] != nil, "the field sits under properties")
+        try expect((upd["properties"] as? [String: Any])?["p1"] != nil, "the field sits under properties keyed by id")
         let cre = (try? JSONSerialization.jsonObject(with: LiveRegistryGateway.createBody(fields))) as? [String: Any] ?? [:]
         try expect(cre["properties"] == nil, "createBody is RAW (createPage wraps internally)")
-        try expect(cre["Description"] != nil, "the field is top-level for create")
+        try expect(cre["p1"] != nil, "the field is top-level for create, keyed by id")
     }
 
     await test("Edge/writer: clearing a field to null emits the Notion clear payload") {
@@ -300,8 +300,12 @@ func runRegistryEdgeCaseTests() async {
             _ = try await RegistryWriter(gateway: gw).update(entity: edgeEntity(), pageId: "ee00000000000000000000000000001",
                 fields: ["notes": .null, "tags": .null])
             let env = LiveRegistryGateway.encodeEnvelope(await gw.lastUpdate)
-            try expect(jsonCanon(env["Notes"] as Any) == jsonCanon(["rich_text": []]), "notes cleared")
-            try expect(jsonCanon(env["Tags"] as Any) == jsonCanon(["multi_select": []]), "tags cleared")
+            let notesKey = LiveRegistryGateway.writePropertyKey(
+                BoundField(propertyId: "p_notes", notionName: "Notes", type: "rich_text", value: .null, isTitle: false))!
+            let tagsKey = LiveRegistryGateway.writePropertyKey(
+                BoundField(propertyId: "p_tags", notionName: "Tags", type: "multi_select", value: .null, isTitle: false))!
+            try expect(jsonCanon(env[notesKey] as Any) == jsonCanon(["rich_text": []]), "notes cleared")
+            try expect(jsonCanon(env[tagsKey] as Any) == jsonCanon(["multi_select": []]), "tags cleared")
         }
     }
 
@@ -432,6 +436,20 @@ func runRegistryEdgeCaseTests() async {
         }
     }
 
+    await test("Edge/writer: mixed encodable + non-encodable reports failed without dropping the write (#233)") {
+        try await withTempHomeEdge {
+            let gw = EdgeGateway()
+            await gw.putPage(edgeRow(id: "ae00000000000000000000000000001", name: "x"))
+            let env = try await RegistryWriter(gateway: gw).updateReporting(
+                entity: edgeEntity(), pageId: "ae00000000000000000000000000001",
+                fields: ["notes": .string("kept"), "links": .bool(true)])
+            try expect(env.applied.contains("notes"), "notes applied")
+            try expect(env.failed.contains(where: { $0.field == "links" }), "links listed as failed, not silent-drop")
+            try expect(env.state == .partial, "partial receipt")
+            try expect(!(await gw.lastUpdate).isEmpty, "encodable fields still PATCHed")
+        }
+    }
+
     await test("Edge/cache: complex Value (relation arrays + nested) round-trips through JSON") {
         try await withTempHomeEdge {
             let props: Value = .object([
@@ -463,6 +481,25 @@ func runRegistryEdgeCaseTests() async {
             let dups = arr.filter { if case .object(let e) = $0, e["key"] == .string("dup") { return true } else { return false } }
             try expect(dups.count == 1, "exactly one ‘dup’ entity (upsert, not append), got \(dups.count)")
             if case .object(let e) = dups[0] { try expect(e["displayName"] == .string("Second"), "latest displayName wins") }
+        }
+    }
+
+    await test("Edge/module: registry_add_entity refuses a second key on the same dataSourceId (#234)") {
+        try await withTempHomeEdge {
+            let prior = RegistryModule.gatewayProvider
+            RegistryModule.gatewayProvider = { EdgeGateway() }
+            defer { RegistryModule.gatewayProvider = prior }
+            let props: Value = .array([.object(["key": .string("t"), "notionName": .string("T"), "type": .string("title"), "role": .string("title")])])
+            _ = try await RegistryModule.makeAddEntity().handler(.object([
+                "key": .string("alpha"), "dataSourceId": .string("ds_shared"), "properties": props,
+            ]))
+            var threw = false
+            do {
+                _ = try await RegistryModule.makeAddEntity().handler(.object([
+                    "key": .string("beta"), "dataSourceId": .string("ds_shared"), "properties": props,
+                ]))
+            } catch { threw = true }
+            try expect(threw, "second entity on the same data source is refused")
         }
     }
 

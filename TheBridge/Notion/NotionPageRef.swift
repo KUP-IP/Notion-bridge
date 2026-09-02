@@ -26,8 +26,8 @@ public enum NotionPageRef: Sendable {
         if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
             guard let url = URL(string: trimmed),
                   let host = url.host?.lowercased(),
-                  host.contains("notion.so") || host.contains("notion.site") else {
-                return .failure(NotionPageRefParseError("URL must use a Notion host (notion.so or notion.site)."))
+                  isNotionHost(host) else {
+                return .failure(NotionPageRefParseError("URL must use a Notion host (notion.so, notion.site, or app.notion.com)."))
             }
             // trimmed already contains the full URL including any fragment —
             // no need to re-append url.fragment (that was a double-append bug).
@@ -51,6 +51,23 @@ public enum NotionPageRef: Sendable {
     public static func isValidStoredPageId(_ raw: String) -> Bool {
         let hex = raw.replacingOccurrences(of: "-", with: "").lowercased()
         return hex.count == 32 && hex.allSatisfy(\.isHexDigit)
+    }
+
+    /// Compact 32-hex form for API paths; fails closed on non-Notion URLs.
+    public static func compactPageId(from raw: String) -> Result<String, NotionPageRefParseError> {
+        switch normalizedPageId(from: raw) {
+        case .success(let dashed):
+            return .success(dashed.replacingOccurrences(of: "-", with: ""))
+        case .failure(let err):
+            return .failure(err)
+        }
+    }
+
+    static func isNotionHost(_ host: String) -> Bool {
+        host == "app.notion.com"
+            || host.hasSuffix(".notion.com")
+            || host.contains("notion.so")
+            || host.contains("notion.site")
     }
 
     private static func extract32HexDigits(from s: String) -> String? {

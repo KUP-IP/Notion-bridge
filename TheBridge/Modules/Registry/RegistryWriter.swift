@@ -236,12 +236,44 @@ public struct RegistryWriter: Sendable {
 
     @discardableResult
     public func update(entity: RegistryEntity, pageId: String, fields input: [String: Value]) async throws -> CachedRow {
+        let env = try await updateReporting(entity: entity, pageId: pageId, fields: input)
+        guard let row = env.row else {
+            throw RegistryWriteError.noWritableFields(entity: entity.key)
+        }
+        return row
+    }
+
+    /// Update with the same applied/failed envelope as create (#233). Non-encodable
+    /// fields (files/verification/place) are listed in `failed` instead of dropped.
+    public func updateReporting(
+        entity: RegistryEntity, pageId: String, fields input: [String: Value]
+    ) async throws -> RegistryCreateEnvelope {
         let r = Self.resolve(input, entity: entity)
         if !r.unknown.isEmpty { throw RegistryWriteError.unknownFields(entity: entity.key, keys: r.unknown) }
         if !r.unbound.isEmpty { throw RegistryWriteError.notFullyBound(entity: entity.key, unbound: r.unbound) }
-        if r.fields.isEmpty || !Self.hasEncodable(r.fields) { throw RegistryWriteError.noWritableFields(entity: entity.key) }
-        let row = try await gateway.update(pageId: pageId, workspace: entity.workspace, fields: r.fields)
-        return await RegistryReader.store(row, entity: entity, into: cache)
+        if r.fields.isEmpty { throw RegistryWriteError.noWritableFields(entity: entity.key) }
+
+        var failed: [RegistryFieldFailure] = []
+        var encodable: [BoundField] = []
+        for field in r.fields {
+            let key = Self.canonicalKey(for: field, entity: entity)
+            if RegistryPropertyCodec.encode(type: field.type, value: field.value) == nil {
+                failed.append(RegistryFieldFailure(
+                    field: key,
+                    reason: "non_encodable_type:\(field.type)"))
+            } else {
+                encodable.append(field)
+            }
+        }
+        if encodable.isEmpty { throw RegistryWriteError.noWritableFields(entity: entity.key) }
+
+        let live = try await gateway.update(pageId: pageId, workspace: entity.workspace, fields: encodable)
+        let classified = Self.classifyFields(encodable, on: live, entity: entity)
+        failed.append(contentsOf: classified.failed)
+        let cached = await RegistryReader.store(live, entity: entity, into: cache)
+        let state: RegistryCreateEnvelope.State = failed.isEmpty ? .complete : .partial
+        return RegistryCreateEnvelope(
+            state: state, row: cached, applied: classified.applied, failed: failed)
     }
 
     // MARK: - Delete (soft archive + cache evict)

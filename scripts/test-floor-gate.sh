@@ -104,7 +104,10 @@
 # 2026-09-02: 3852 → 3854 (+2) — /mcp inbound count on /health (#189).
 #   Measured 3854 passed, 0 failed on feat/issue-189-inbound-health
 #   after rebase onto main (post-#201).
-FLOOR="${BRIDGE_TEST_FLOOR:-3854}"
+# 2026-09-02: 3854 → 3859 (+5) — registry rename-follow-id, id-keyed
+#   writes, lastEditedTime revalidate, URL-or-UUID (#232–#235).
+#   Measured 3859 passed, 0 failed on wave1-registry-234.
+FLOOR="${BRIDGE_TEST_FLOOR:-3859}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
