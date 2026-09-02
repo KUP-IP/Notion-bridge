@@ -184,27 +184,29 @@ public struct LiveRegistryGateway: RegistryNotionGateway {
         }
     }
 
-    /// Build the `{"PROPERTY_NAME": <payload>}` envelope from bound fields,
-    /// skipping read-only/unsupported types and anything not yet bound.
+    /// Build the property envelope from bound fields.
     ///
-    /// Keyed by property NAME, NOT id. Notion returns property ids in
-    /// percent-encoded form for ids containing special characters (e.g. a
-    /// property whose id is `AH\`N` comes back as `AH%60N`), and that encoded id
-    /// does NOT round-trip as a WRITE key — Notion silently ignores it (no
-    /// error, no write). Property NAMES are accepted reliably for writes. The
-    /// bound id is still required here (proves the field was introspected) and
-    /// still drives read-projection + rename detection; only the write KEY uses
-    /// the current name. `f.propertyId` empty ⇒ unbound ⇒ skipped (the writer
-    /// already fails such writes fast).
+    /// Keyed by **decoded property ID** (#234). Notion's percent-encoded id form
+    /// (e.g. `AH%60N`) silently no-ops as a write key; `removingPercentEncoding`
+    /// recovers the round-trippable id. Unbound (empty id) and non-encodable
+    /// types are omitted here — the writer classifies those as `failed` (#233)
+    /// instead of dropping them without a receipt.
     public static func encodeEnvelope(_ fields: [BoundField]) -> [String: Any] {
         var out: [String: Any] = [:]
         for f in fields {
-            guard !f.propertyId.isEmpty, !f.notionName.isEmpty,
+            guard let key = writePropertyKey(f),
                   let payload = RegistryPropertyCodec.encode(type: f.type, value: f.value)
             else { continue }
-            out[f.notionName] = payload
+            out[key] = payload
         }
         return out
+    }
+
+    /// Percent-decode a Notion property id so special-character ids write.
+    public static func writePropertyKey(_ field: BoundField) -> String? {
+        guard !field.propertyId.isEmpty else { return nil }
+        let decoded = field.propertyId.removingPercentEncoding ?? field.propertyId
+        return decoded.isEmpty ? nil : decoded
     }
 
     /// The body for `NotionClient.createPage(properties:)`, which WRAPS the

@@ -418,6 +418,23 @@ await test("NotionPageRef rejects non-Notion URL") {
     }
 }
 
+await test("NotionPageRef accepts app.notion.com URL (#235)") {
+    let url = "https://app.notion.com/workspace/Test-a1b2c3d4e5f67890abcdef1234567890"
+    switch NotionPageRef.normalizedPageId(from: url) {
+    case .success(let n):
+        try expect(n.replacingOccurrences(of: "-", with: "").contains("a1b2c3d4e5f67890abcdef1234567890"),
+                   "Expected id from app.notion.com URL")
+    case .failure(let err):
+        throw TestError.assertion("Expected app.notion.com parse: \(err.message)")
+    }
+    switch NotionPageRef.normalizedPageId(from: "https://evil.example.com/a1b2c3d4e5f67890abcdef1234567890") {
+    case .success:
+        throw TestError.assertion("non-Notion host must fail closed")
+    case .failure:
+        break
+    }
+}
+
 await test("Permanent access can be granted and revoked") {
     // Test isolation (flake fix): grant/revokePermanentAccess mutate
     // process-global UserDefaults.standard under a key derived purely from

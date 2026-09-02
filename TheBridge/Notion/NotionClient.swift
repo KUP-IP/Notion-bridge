@@ -465,12 +465,23 @@ public actor NotionClient {
     }
 
 
-    /// v1.9.0 B3/E5: Normalize a pageId that may be a raw UUID, a dashed UUID,
-    /// a full Notion URL (".../Title-<32hex>"), or a compressed placeholder.
-    /// Returns the last 32-hex-char run if found; otherwise the dash-stripped input.
+    /// Normalize a pageId that may be a raw UUID, a dashed UUID, or a Notion
+    /// URL. HTTP(S) URLs fail closed unless the host is Notion (#235) — do not
+    /// scrape 32-hex from google.com. Returns compact 32-hex; empty string when
+    /// a URL was rejected.
     internal static func normalizePageId(_ raw: String) -> String {
-        let stripped = raw.replacingOccurrences(of: "-", with: "")
-        // Find the last run of >=32 hex chars
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("http://") || lower.hasPrefix("https://") {
+            switch NotionPageRef.compactPageId(from: trimmed) {
+            case .success(let hex): return hex
+            case .failure: return ""
+            }
+        }
+        if case .success(let hex) = NotionPageRef.compactPageId(from: trimmed) {
+            return hex
+        }
+        let stripped = trimmed.replacingOccurrences(of: "-", with: "")
         let chars = Array(stripped)
         var endIdx = chars.count
         while endIdx > 0 {
@@ -482,7 +493,6 @@ public actor NotionClient {
             if runLen >= 32 {
                 return String(chars[(endIdx - 32)..<endIdx])
             }
-            // Skip the non-hex char (or stop if we hit the beginning)
             if startIdx == 0 { break }
             endIdx = startIdx - 1
         }

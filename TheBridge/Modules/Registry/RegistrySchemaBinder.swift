@@ -62,22 +62,23 @@ public struct RegistryBindResult: Sendable, Equatable {
 }
 
 public enum RegistrySchemaBinder {
-    /// Bind `entity`'s properties against `schema`, matching by display name.
-    /// AUTHORITATIVE rebind: a matched property takes the live column's id; an
-    /// UNMATCHED property is CLEARED (id → nil), not left on a stale id. So
-    /// re-introspecting after a Notion column is renamed/dropped makes the
-    /// entity's `isFullyBound` reflect reality and a write to the missing field
-    /// fail fast (`notFullyBound`) instead of sending a dead id to Notion.
+    /// Bind `entity`'s properties against `schema`. Name match first (fresh
+    /// id). If the display name moved, follow the stored property **id** and
+    /// update `notionName` from the live column (#234). Clear the id only when
+    /// neither name nor id is in the schema (column dropped). Type drift
+    /// updates the declared type to the live type so writes use the current
+    /// codec, and is still reported.
     public static func bind(_ entity: RegistryEntity, to schema: DataSourceSchema) -> RegistryBindResult {
         var drift: [RegistryDrift] = []
         var rebound = entity
         rebound.properties = entity.properties.map { prop in
             var p = prop
             if let col = schema.column(named: prop.notionName) {
-                p.notionPropertyId = col.id
-                if !prop.type.isEmpty, prop.type != col.type {
-                    drift.append(.typeMismatch(key: prop.key, expected: prop.type, actual: col.type))
-                }
+                applyLiveColumn(&p, prop: prop, column: col, drift: &drift)
+            } else if let id = prop.notionPropertyId, !id.isEmpty,
+                      let found = schema.column(withID: id) {
+                p.notionName = found.name
+                applyLiveColumn(&p, prop: prop, column: found.column, drift: &drift)
             } else {
                 p.notionPropertyId = nil
                 drift.append(.unmatched(key: prop.key, notionName: prop.notionName))
@@ -85,6 +86,19 @@ public enum RegistrySchemaBinder {
             return p
         }
         return RegistryBindResult(entity: rebound, drift: drift)
+    }
+
+    private static func applyLiveColumn(
+        _ p: inout RegistryProperty,
+        prop: RegistryProperty,
+        column: DataSourceSchema.Column,
+        drift: inout [RegistryDrift]
+    ) {
+        p.notionPropertyId = column.id
+        if !prop.type.isEmpty, prop.type != column.type {
+            drift.append(.typeMismatch(key: prop.key, expected: prop.type, actual: column.type))
+            p.type = column.type
+        }
     }
 
     /// Re-validate an ALREADY-bound entity against a fresh schema (Decision 9

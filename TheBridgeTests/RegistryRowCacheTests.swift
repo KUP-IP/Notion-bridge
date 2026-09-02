@@ -106,6 +106,10 @@ func runRegistryRowCacheTests() async {
         try expect(fresh.isExpired(now: written.addingTimeInterval(5400)), "90m > 1h TTL → stale")
         let immortal = sampleRow(writtenAt: written, ttlSeconds: 0)
         try expect(!immortal.isExpired(now: written.addingTimeInterval(86_400)), "TTL 0 → never expires")
+        try expect(fresh.isExpired(now: written.addingTimeInterval(60), liveLastEditedTime: "2026-09-02T00:00:00.000Z"),
+                   "different live lastEditedTime is stale even inside TTL")
+        try expect(!fresh.isExpired(now: written.addingTimeInterval(60), liveLastEditedTime: fresh.lastEditedTime),
+                   "matching live lastEditedTime stays fresh inside TTL")
     }
 
     await test("RowCache: readAll returns empty for a missing entity dir") {

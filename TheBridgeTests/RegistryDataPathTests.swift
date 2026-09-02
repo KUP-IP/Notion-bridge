@@ -183,6 +183,20 @@ func runRegistryDataPathTests() async {
         try expect(r.hasDrift, "but type drift surfaced")
         try expect(r.drift.contains(.typeMismatch(key: "status", expected: "status", actual: "select")),
                    "status type drift")
+        try expect(r.entity.property("status")?.type == "select", "declared type follows live schema")
+    }
+
+    await test("Binder: rename keeps property id and updates notionName (#234)") {
+        let entity = widgetEntity()
+        let renamed = DataSourceSchema(columnsByName: [
+            "Name": .init(id: "p_name", type: "title"),
+            "State": .init(id: "p_status", type: "status"),
+            "Count": .init(id: "p_count", type: "number"),
+        ])
+        let r = RegistrySchemaBinder.bind(entity, to: renamed)
+        try expect(r.isClean, "id still in schema → clean")
+        try expect(r.entity.property("status")?.notionPropertyId == "p_status", "id kept")
+        try expect(r.entity.property("status")?.notionName == "State", "name follows live column")
     }
 
     // MARK: - Reader
@@ -198,7 +212,11 @@ func runRegistryDataPathTests() async {
                        "projected by canonical keys")
             try expect(await gw.pageCalls == 1, "one fetch on miss")
             _ = try await reader.get(entity: widgetEntity(), pageId: "aaaa0000000000000000000000000001")
-            try expect(await gw.pageCalls == 1, "fresh hit → no second fetch")
+            try expect(await gw.pageCalls == 2, "TTL-fresh hit still revalidates lastEditedTime (#232)")
+            await gw.putPage(widgetRow(id: "aaaa0000000000000000000000000001", name: "W1-edited", status: "Active", count: 3, edited: "2026-06-17T11:00:00.000Z"))
+            let afterEdit = try await reader.get(entity: widgetEntity(), pageId: "aaaa0000000000000000000000000001")
+            try expect(afterEdit.title == "W1-edited", "live lastEditedTime change evicts cache")
+            try expect(await gw.pageCalls == 3, "third get saw the UI edit")
         }
     }
 
