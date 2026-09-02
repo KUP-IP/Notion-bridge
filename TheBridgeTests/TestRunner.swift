@@ -734,6 +734,7 @@ await runCalendarRegistrySyncEngineTests() // Calendar–Registry Sync fail-clos
 await runCalendarRegistryModuleTests() // env-filtered calendar_registry_pair MCP seam
 await runPermissionsModuleTests() // fb-permissions: unified permissions_status TCC probe (pure assembler — no live TCC)
 await runNotionModuleTests()
+await runNotionWave2RESTTests()
 await runAccessibilityModuleTests()
 await runScreenModuleTests()
 await runAppleScriptModuleTests()

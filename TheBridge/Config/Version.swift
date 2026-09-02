@@ -486,7 +486,11 @@ public enum BridgeConstants {
     ///   mail_trash). 217 + 6 = 223.
     /// Governed Node tests (2026-08-21): +1 tool on existing dev family
     ///   (node_test). 223 + 1 = 224.
-    public static let staticFeatureModuleToolCount = 224
+    /// Wave 2 Notion REST (2026-09-02): +8
+    ///   (notion_view_query, notion_view_delete, notion_page_trash,
+    ///   notion_comment_update, notion_comment_delete, notion_async_task_get,
+    ///   notion_templates_list, notion_meeting_notes_query). 224 + 8 = 232.
+    public static let staticFeatureModuleToolCount = 232
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.

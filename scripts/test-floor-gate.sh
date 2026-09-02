@@ -107,7 +107,9 @@
 # 2026-09-02: 3854 → 3859 (+5) — registry rename-follow-id, id-keyed
 #   writes, lastEditedTime revalidate, URL-or-UUID (#232–#235).
 #   Measured 3859 passed, 0 failed on wave1-registry-234.
-FLOOR="${BRIDGE_TEST_FLOOR:-3859}"
+# 2026-09-02: 3859 → 3890 (+31) — Notion REST Wave 2 (#225–#231, #236–#237).
+#   Measured 3890 passed, 0 failed on wave2-notion-rest.
+FLOOR="${BRIDGE_TEST_FLOOR:-3890}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
