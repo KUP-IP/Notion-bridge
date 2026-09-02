@@ -116,7 +116,10 @@
 # 2026-09-02: 3896 → 3899 (+3) — Calendar Wave 4: timeZoneIdentifier,
 #   recurrence create + span thisEvent|futureEvents, EventKit alarms
 #   (#206 #205 #207). Measured 3899 passed, 0 failed on wave4-calendar.
-FLOOR="${BRIDGE_TEST_FLOOR:-3899}"
+# 2026-09-02: 3899 → 3906 (+7) — Mail Wave 5: mail_read headers/attachments,
+#   mail_reply/mail_forward + bcc, junk flag (#210 #208 #209). Measured
+#   3906 passed, 0 failed on wave5-mail.
+FLOOR="${BRIDGE_TEST_FLOOR:-3906}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

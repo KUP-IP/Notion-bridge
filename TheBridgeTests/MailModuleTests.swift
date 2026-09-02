@@ -70,15 +70,16 @@ func runMailModuleTests() async {
         return router
     }
 
-    // 1. Registration — 11 mail_* tools.
-    await test("MailModule registers 11 tools") {
+    // 1. Registration — 13 mail_* tools.
+    await test("MailModule registers 13 tools") {
         let router = await makeRouter()
         let tools = await router.registrations(forModule: "mail")
-        try expect(tools.count == 11, "Expected 11 mail tools, got \(tools.count)")
+        try expect(tools.count == 13, "Expected 13 mail tools, got \(tools.count)")
         let names = Set(tools.map(\.name))
         for n in [
             "mail_list", "mail_read", "mail_search", "mail_mailboxes", "mail_triage",
-            "mail_draft", "mail_move", "mail_archive", "mail_mark", "mail_trash", "mail_send"
+            "mail_draft", "mail_reply", "mail_forward", "mail_move", "mail_archive",
+            "mail_mark", "mail_trash", "mail_send"
         ] {
             try expect(names.contains(n), "Missing \(n)")
         }
@@ -106,6 +107,8 @@ func runMailModuleTests() async {
         try expect(try tier("mail_mailboxes") == .open, "mail_mailboxes must be .open")
         try expect(try tier("mail_triage") == .open, "mail_triage must be .open")
         try expect(try tier("mail_draft") == .notify, "mail_draft must be .notify")
+        try expect(try tier("mail_reply") == .notify, "mail_reply must be .notify")
+        try expect(try tier("mail_forward") == .notify, "mail_forward must be .notify")
         try expect(try tier("mail_move") == .notify, "mail_move must be .notify")
         try expect(try tier("mail_archive") == .notify, "mail_archive must be .notify")
         try expect(try tier("mail_mark") == .notify, "mail_mark must be .notify")
@@ -114,9 +117,9 @@ func runMailModuleTests() async {
         try expect(try tier("mail_send") == .request, "mail_send must be .request")
     }
 
-    // 3. mail_list — parses rows + mailbox echo
+    // 3. mail_list — parses rows + mailbox echo + junk when present
     await test("mail_list returns parsed rows with mailbox echo") {
-        let fixture = "101\ttrue\tMon\talice@example.com\tHello\n102\tfalse\tTue\tbob@example.com\tRe: Hello"
+        let fixture = "101\ttrue\tMon\talice@example.com\tHello\tfalse\n102\tfalse\tTue\tbob@example.com\tRe: Hello\ttrue"
         let mock = MockMailScriptRunner(result: .success(fixture))
         try await withMock(mock) {
             let router = await makeRouter()
@@ -129,12 +132,18 @@ func runMailModuleTests() async {
             try expect(count == 2, "Expected 2 rows, got \(count)")
             guard case .object(let r0) = rows[0], case .string(let id0) = r0["id"],
                   case .string(let subj0) = r0["subject"],
-                  case .string(let mb) = r0["mailbox"] else {
-                throw TestError.assertion("row0 missing id/subject/mailbox")
+                  case .string(let mb) = r0["mailbox"],
+                  case .bool(let junk0) = r0["junk"] else {
+                throw TestError.assertion("row0 missing id/subject/mailbox/junk")
             }
             try expect(id0 == "101", "Expected id 101, got \(id0)")
             try expect(subj0 == "Hello", "Expected subject 'Hello', got \(subj0)")
             try expect(mb == "Inbox", "Expected mailbox Inbox echo, got \(mb)")
+            try expect(junk0 == false, "Expected junk=false on row0")
+            guard case .object(let r1) = rows[1], case .bool(let junk1) = r1["junk"] else {
+                throw TestError.assertion("row1 missing junk")
+            }
+            try expect(junk1 == true, "Expected junk=true on row1")
         }
     }
 
@@ -159,6 +168,69 @@ func runMailModuleTests() async {
             try expect(mailbox == "Archive", "Expected mailbox Archive, got \(mailbox)")
             try expect(mock.scripts.first?.contains("mailbox \"Archive\"") == true,
                        "read script should scope to Archive mailbox")
+        }
+    }
+
+    await test("mail_read parses recipients, attachments, junk, and optional headers") {
+        let fixture = """
+            <<<BRIDGE_MAIL_META>>>
+            Project Update
+            alice@example.com
+            Mon Jun 2
+            Inbox
+            false
+            alice@example.com, bob@example.com
+            carol@example.com
+            hidden@example.com
+            <msg-1@example.com>
+            <<<BRIDGE_MAIL_ATTACH>>>
+            invoice.pdf\tatt-9
+            notes.txt
+            <<<BRIDGE_MAIL_HEADERS>>>
+            Message-ID: <msg-1@example.com>
+            List-Unsubscribe: <mailto:unsub@news.example.com>
+            Subject: Project Update
+            <<<BRIDGE_MAIL_BODY>>>
+            The body line one.
+            """
+        let mock = MockMailScriptRunner(result: .success(fixture))
+        try await withMock(mock) {
+            let router = await makeRouter()
+            let result = try await router.dispatch(toolName: "mail_read", arguments: .object([
+                "messageId": .string("101")
+            ]))
+            guard case .object(let dict) = result,
+                  case .object(let recipients) = dict["recipients"],
+                  case .array(let to) = recipients["to"],
+                  case .array(let cc) = recipients["cc"],
+                  case .array(let bcc) = recipients["bcc"],
+                  case .array(let attachments) = dict["attachments"],
+                  case .bool(let junk) = dict["junk"],
+                  case .string(let listUnsub) = dict["listUnsubscribe"],
+                  case .string(let msgid) = dict["messageIdHeader"] else {
+                throw TestError.assertion("Expected mail_read extra fields, got \(result)")
+            }
+            try expect(to.count == 2, "expected two To recipients")
+            try expect(cc.count == 1, "expected one Cc")
+            try expect(bcc.count == 1, "expected one Bcc")
+            try expect(junk == false, "junk should echo from script")
+            try expect(attachments.count == 2, "expected two attachments")
+            guard case .object(let a0) = attachments[0],
+                  case .string(let name0) = a0["name"],
+                  case .string(let id0) = a0["id"] else {
+                throw TestError.assertion("attachment 0 missing name/id")
+            }
+            try expect(name0 == "invoice.pdf" && id0 == "att-9", "named attachment with id")
+            guard case .object(let a1) = attachments[1],
+                  case .string(let name1) = a1["name"] else {
+                throw TestError.assertion("attachment 1 missing name")
+            }
+            try expect(name1 == "notes.txt", "nameless-id attachment still has name")
+            try expect(a1["id"] == nil, "id omitted when empty")
+            try expect(listUnsub.contains("mailto:unsub@news.example.com"), "listUnsubscribe from headers")
+            try expect(msgid.contains("msg-1@example.com"), "messageIdHeader present")
+            let script = mock.scripts.first ?? ""
+            try expect(!script.lowercased().contains("unsubscribe"), "mail_read must not click List-Unsubscribe")
         }
     }
 
@@ -327,6 +399,87 @@ func runMailModuleTests() async {
             let script = mock.scripts.first ?? ""
             try expect(!script.contains("send newMsg"), "draft script must NOT send")
             try expect(script.contains("save newMsg"), "draft script must save the message")
+        }
+    }
+
+    await test("mail_draft optional bcc is present in script and receipt") {
+        let mock = MockMailScriptRunner(result: .success("draft-bcc"))
+        try await withMock(mock) {
+            let router = await makeRouter()
+            let result = try await router.dispatch(toolName: "mail_draft", arguments: .object([
+                "to": .string("alice@example.com"),
+                "subject": .string("Hi"),
+                "body": .string("Body text"),
+                "bcc": .string("hidden@example.com")
+            ]))
+            guard case .object(let dict) = result,
+                  case .string(let bcc) = dict["bcc"] else {
+                throw TestError.assertion("Expected bcc on draft receipt, got \(result)")
+            }
+            try expect(bcc == "hidden@example.com", "bcc echoed")
+            let script = mock.scripts.first ?? ""
+            try expect(script.contains("bcc recipient"), "draft script must add bcc recipient")
+            try expect(script.contains("hidden@example.com"), "bcc address escaped into script")
+            try expect(!script.contains("send newMsg"), "bcc draft still must not send")
+        }
+    }
+
+    await test("mail_reply is draft-only (Mail.sdef reply, never send)") {
+        let mock = MockMailScriptRunner(result: .success("reply-draft-1"))
+        try await withMock(mock) {
+            let router = await makeRouter()
+            let reply = await router.registrations(forModule: "mail").first { $0.name == "mail_reply" }
+            guard case .object(let schema) = reply?.inputSchema,
+                  case .object(let props) = schema["properties"] else {
+                throw TestError.assertion("mail_reply missing schema")
+            }
+            try expect(props["replyAll"] != nil, "mail_reply schema includes optional replyAll")
+            try expect(props["to"] != nil, "mail_reply schema includes optional to")
+            let result = try await router.dispatch(toolName: "mail_reply", arguments: .object([
+                "messageId": .string("101"),
+                "replyAll": .bool(true),
+                "to": .string("extra@example.com")
+            ]))
+            guard case .object(let dict) = result,
+                  case .bool(let drafted) = dict["drafted"],
+                  case .bool(let sent) = dict["sent"],
+                  case .bool(let replyAll) = dict["replyAll"] else {
+                throw TestError.assertion("Expected reply draft flags, got \(result)")
+            }
+            try expect(drafted == true && sent == false, "reply is draft-only")
+            try expect(replyAll == true, "replyAll echoed")
+            let script = mock.scripts.first ?? ""
+            try expect(script.contains("reply theMsg opening window false"), "uses Mail.sdef reply opening window false")
+            try expect(script.contains("reply to all true"), "replyAll maps to reply to all")
+            try expect(script.contains("save draftMsg"), "reply must save")
+            try expect(!script.contains("send "), "reply must never send")
+        }
+    }
+
+    await test("mail_forward is draft-only (Mail.sdef forward, never send)") {
+        let mock = MockMailScriptRunner(result: .success("fwd-draft-1"))
+        try await withMock(mock) {
+            let router = await makeRouter()
+            let fwd = await router.registrations(forModule: "mail").first { $0.name == "mail_forward" }
+            guard case .object(let schema) = fwd?.inputSchema,
+                  case .object(let props) = schema["properties"] else {
+                throw TestError.assertion("mail_forward missing schema")
+            }
+            try expect(props["to"] != nil, "mail_forward schema includes optional to")
+            try expect(props["replyAll"] == nil, "mail_forward must not overload replyAll")
+            let result = try await router.dispatch(toolName: "mail_forward", arguments: .object([
+                "messageId": .string("101"),
+                "to": .string("bob@example.com")
+            ]))
+            guard case .object(let dict) = result,
+                  case .bool(let sent) = dict["sent"] else {
+                throw TestError.assertion("Expected forward draft flags, got \(result)")
+            }
+            try expect(sent == false, "forward never auto-sends")
+            let script = mock.scripts.first ?? ""
+            try expect(script.contains("forward theMsg opening window false"), "uses Mail.sdef forward opening window false")
+            try expect(script.contains("bob@example.com"), "optional to is escaped")
+            try expect(!script.contains("send "), "forward must never send")
         }
     }
 
@@ -647,6 +800,74 @@ func runMailModuleTests() async {
         }
     }
 
+    await test("mail_send optional bcc is present in script") {
+        let mock = MockMailScriptRunner(result: .success("sent"))
+        try await withMock(mock) {
+            let router = await makeRouter()
+            let result = try await router.dispatch(toolName: "mail_send", arguments: .object([
+                "to": .string("alice@example.com"),
+                "subject": .string("Approved"),
+                "body": .string("Go ahead"),
+                "bcc": .string("hidden@example.com"),
+                "confirm": .string("SEND")
+            ]))
+            guard case .object(let dict) = result,
+                  case .bool(let sent) = dict["sent"],
+                  case .string(let bcc) = dict["bcc"] else {
+                throw TestError.assertion("Expected sent+bcc, got \(result)")
+            }
+            try expect(sent == true, "send with confirm still sends")
+            try expect(bcc == "hidden@example.com", "bcc echoed")
+            try expect(mock.scripts.first?.contains("bcc recipient") == true, "send script includes bcc")
+        }
+    }
+
+    // Junk mark — local AppleScript only. Live IMAP Junk-folder sync is NOT asserted
+    // here (no network). Operator smoke can confirm Mail.app / IMAP after junk:true.
+    await test("mail_mark junk flag sets junk mail status and echoes on verify") {
+        let mock = MockMailScriptRunner(results: [
+            .success("OK\t101\tInbox\tInbox\ttrue\tfalse\ttrue"),
+            .success("101\tInbox\ttrue\tfalse\ttrue")
+        ])
+        try await withMock(mock) {
+            let router = await makeRouter()
+            let result = try await router.dispatch(toolName: "mail_mark", arguments: .object([
+                "messageIds": .array([.string("101")]),
+                "account": .string("iCloud"),
+                "junk": .bool(true)
+            ]))
+            guard case .object(let dict) = result,
+                  case .bool(let ok) = dict["ok"],
+                  case .array(let verified) = dict["verified"] else {
+                throw TestError.assertion("Expected mark receipt, got \(result)")
+            }
+            try expect(ok == true, "junk mark should verify")
+            guard case .object(let v0) = verified[0], case .bool(let junk) = v0["junk"] else {
+                throw TestError.assertion("verify should echo junk bool")
+            }
+            try expect(junk == true, "verify junk true")
+            try expect(mock.scripts[0].contains("set junk mail status of theMsg to true"),
+                       "mark script must set junk mail status")
+        }
+    }
+
+    await test("mail_mark refuses when none of read/flagged/junk are provided") {
+        let mock = MockMailScriptRunner(result: .success("OK"))
+        try await withMock(mock) {
+            let router = await makeRouter()
+            do {
+                _ = try await router.dispatch(toolName: "mail_mark", arguments: .object([
+                    "messageIds": .array([.string("101")]),
+                    "account": .string("iCloud")
+                ]))
+                throw TestError.assertion("Expected error when mark has no read/flagged/junk")
+            } catch is ToolRouterError {
+                // expected
+            }
+            try expect(mock.runCount == 0, "invalid mark must not touch the seam")
+        }
+    }
+
     // 15. TCC error path
     await test("mail_list surfaces a seam failure as a structured error (TCC -1743)") {
         let mock = MockMailScriptRunner(result: .failure(message: "Not authorized to send Apple events to Mail.", number: -1743))
@@ -671,7 +892,9 @@ func runMailModuleTests() async {
             for (tool, args) in [
                 ("mail_read", Value.object([:])),
                 ("mail_search", Value.object([:])),
-                ("mail_draft", Value.object(["to": .string("a@b.com")]))
+                ("mail_draft", Value.object(["to": .string("a@b.com")])),
+                ("mail_reply", Value.object([:])),
+                ("mail_forward", Value.object([:]))
             ] {
                 do {
                     _ = try await router.dispatch(toolName: tool, arguments: args)
@@ -700,5 +923,9 @@ func runMailModuleTests() async {
         try expect(archive?.destructiveHint == true, "mail_archive relocates (destructiveHint)")
         let draft = ToolAnnotationCatalog.annotations(for: "mail_draft")
         try expect(draft?.requiresConfirmation == false, "mail_draft (.notify) must not require confirmation")
+        let reply = ToolAnnotationCatalog.annotations(for: "mail_reply")
+        try expect(reply?.requiresConfirmation == false, "mail_reply (.notify) must not require confirmation")
+        let forward = ToolAnnotationCatalog.annotations(for: "mail_forward")
+        try expect(forward?.requiresConfirmation == false, "mail_forward (.notify) must not require confirmation")
     }
 }
