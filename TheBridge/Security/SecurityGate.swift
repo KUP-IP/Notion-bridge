@@ -68,12 +68,16 @@ public enum GateDecision: Sendable {
     case allow
     case reject(reason: String)
     case handoff(command: String, explanation: String, warning: String)
+    /// Prompt is still on-device. The tool did not run. Retry the same call after Allow.
+    case awaitingApproval(id: String)
 }
 
 public enum SecurityApprovalDecision: Sendable {
     case allow
     case deny
     case alwaysAllow
+    /// MCP-safe: the caller should return without running the tool; Allow may still arrive.
+    case pending
 }
 
 public protocol SecurityApprovalProviding: Sendable {
@@ -420,6 +424,9 @@ public actor SecurityGate {
                     return nil
                 case .deny:
                     return .reject(reason: "Sensitive path access denied (\(sensitive)): user declined or timed out")
+                case .pending:
+                    let id = SecurityApprovalReceipt.digest(.string("\(toolName)\n\(sensitive)"))
+                    return .awaitingApproval(id: id)
                 }
             }
         }
@@ -524,6 +531,9 @@ public actor SecurityGate {
             return .allow
         case .deny:
             return .reject(reason: "User denied via notification (or approval timeout)")
+        case .pending:
+            let id = SecurityApprovalReceipt.digest(.string("\(toolName)\n\(detail)"))
+            return .awaitingApproval(id: id)
         }
     }
 
@@ -703,6 +713,17 @@ public struct ApprovalCoalescer: Sendable {
         return keyToWaiters.removeValue(forKey: key) ?? []
     }
 
+    public func coalesceKey(forIdentifier identifier: String) -> String? {
+        identifierToKey[identifier]
+    }
+
+    /// Take parked waiters but keep the prompt marked in-flight so a retry
+    /// coalesces instead of posting a second notification (issue #184).
+    public mutating func takeWaitersKeepingInFlight(forIdentifier identifier: String) -> [String] {
+        guard let key = identifierToKey[identifier] else { return [] }
+        return keyToWaiters.removeValue(forKey: key) ?? []
+    }
+
     /// Number of distinct prompts currently in flight (test introspection).
     public var inFlightPromptCount: Int { keyToIdentifier.count }
 }
@@ -718,10 +739,12 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
     private let center: UNUserNotificationCenter?
     private var hasPermission: Bool = false
-    /// fb-securitygate (point 3): the silent 30s auto-deny was too easy to miss.
-    /// Default raised to 90s so the prompt does not vanish out from under a user
-    /// who steps away briefly. Injectable for deterministic tests.
+    /// How long an MCP caller waits before receiving `awaiting_approval`.
+    /// Must stay under typical MCP client timeouts (~60s). The on-device
+    /// prompt remains until Allow/Deny — this is not an auto-deny.
+    /// Injectable for deterministic tests.
     private let approvalTimeout: TimeInterval
+    private let lateDecisionTTL: TimeInterval = 120
 
     private let lock = NSLock()
     private var pendingApprovals: [String: CheckedContinuation<ApprovalDecision, Never>] = [:]
@@ -737,6 +760,10 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
     // resolves the opaque waiter tokens back to their parked continuations.
     private var coalescer = ApprovalCoalescer()
     private var waiterContinuations: [String: CheckedContinuation<ApprovalDecision, Never>] = [:]
+    /// Coalesce keys whose owner already returned `.pending` while the prompt is still on-device.
+    private var timedOutPendingKeys: Set<String> = []
+    /// Allow/Always Allow clicked after the MCP caller already got `.pending`.
+    private var lateDecisions: [String: (decision: ApprovalDecision, expires: Date)] = [:]
     /// fb-securitygate (race fix): decisions for waiter tokens that were drained
     /// by the owner BEFORE they parked their continuation. `parkCoalescedWaiter`
     /// consumes this and resumes immediately, so a lost wakeup can't hang a waiter.
@@ -763,11 +790,12 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
     }
 
     public override convenience init() {
-        self.init(approvalTimeout: 90)
+        self.init(approvalTimeout: 25)
     }
 
-    /// fb-securitygate: timeout-injecting designated initializer (test seam).
-    /// Production uses the 90s default via the convenience `init()`.
+    /// Timeout-injecting designated initializer (test seam).
+    /// Production waits 25s then returns `.pending` so MCP clients (~60s)
+    /// receive `awaiting_approval` instead of JSON-RPC -32001. The prompt stays.
     public init(approvalTimeout: TimeInterval) {
         self.approvalTimeout = approvalTimeout
         if Self.canUseUserNotifications {
@@ -834,6 +862,46 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         lock.lock()
         defer { lock.unlock() }
         return pendingApprovals.removeValue(forKey: key)
+    }
+
+    private nonisolated func consumeLateDecision(coalesceKey: String) -> ApprovalDecision? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = lateDecisions.removeValue(forKey: coalesceKey) else { return nil }
+        return entry.expires > Date() ? entry.decision : nil
+    }
+
+    private nonisolated func recordLateDecision(coalesceKey: String, decision: ApprovalDecision) {
+        lock.lock()
+        defer { lock.unlock() }
+        lateDecisions[coalesceKey] = (decision, Date().addingTimeInterval(lateDecisionTTL))
+        timedOutPendingKeys.remove(coalesceKey)
+    }
+
+    private nonisolated func isTimedOutPending(coalesceKey: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return timedOutPendingKeys.contains(coalesceKey)
+    }
+
+    private nonisolated func markTimedOutPending(identifier: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let key = coalescer.coalesceKey(forIdentifier: identifier) {
+            timedOutPendingKeys.insert(key)
+        }
+    }
+
+    private nonisolated func clearTimedOutPending(coalesceKey: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        timedOutPendingKeys.remove(coalesceKey)
+    }
+
+    private nonisolated func peekCoalesceKey(identifier: String) -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return coalescer.coalesceKey(forIdentifier: identifier)
     }
 
     // MARK: Coalescing Helpers (fb-securitygate point 2)
@@ -903,6 +971,26 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             } else {
                 // fb-securitygate (race fix): owner resolved before this waiter
                 // parked — buffer the decision so parkCoalescedWaiter resumes it.
+                resolvedWaiters[token] = decision
+            }
+        }
+        return parked
+    }
+
+    /// Resume parked waiters with `decision` but keep the prompt in-flight so a
+    /// later retry coalesces instead of posting a second notification.
+    public nonisolated func takeWaitersKeepingInFlight(
+        forIdentifier identifier: String,
+        decision: ApprovalDecision
+    ) -> [CheckedContinuation<ApprovalDecision, Never>] {
+        lock.lock()
+        defer { lock.unlock() }
+        let tokens = coalescer.takeWaitersKeepingInFlight(forIdentifier: identifier)
+        var parked: [CheckedContinuation<ApprovalDecision, Never>] = []
+        for token in tokens {
+            if let continuation = waiterContinuations.removeValue(forKey: token) {
+                parked.append(continuation)
+            } else {
                 resolvedWaiters[token] = decision
             }
         }
@@ -1111,6 +1199,15 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         // prompt never silently inherits an Always-Allow-capable one's answer.
         let coalesceKey = "\(allowAlwaysAllowAction ? "1" : "0")\u{1}\(title)\u{1}\(body)"
 
+        if let late = consumeLateDecision(coalesceKey: coalesceKey) {
+            print("[SecurityGate] Consumed late Allow for \(title)")
+            return late
+        }
+        // Owner already returned `.pending`; do not hang a retry until Allow.
+        if isTimedOutPending(coalesceKey: coalesceKey) {
+            return .pending
+        }
+
         // Phase 1 (synchronous): claim or join the prompt BEFORE any await so a
         // concurrent burst deterministically elects exactly one owner.
         let reservation = reserveCoalesced(coalesceKey: coalesceKey, identifier: identifier)
@@ -1153,9 +1250,12 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             return decision
         }
 
-        // Phase 3 (owner): await the user's answer, with a timeout that denies
-        // the whole coalesced group. `self` is the only capture in the timeout
-        // Task — `center`/`request` are not — so it is concurrency-clean.
+        // Phase 3 (owner): await the user's answer. After `approvalTimeout` the
+        // MCP caller receives `.pending` (awaiting_approval) instead of deny, so
+        // clients under ~60s do not hit JSON-RPC -32001. The prompt stays up;
+        // a later Allow is stored as a one-shot ticket for the retry.
+        // `self` is the only capture in the timeout Task — `center`/`request`
+        // are not — so it is concurrency-clean.
         return await withCheckedContinuation { continuation in
             storePending(forKey: identifier, continuation: continuation)
             Task { [weak self] in
@@ -1163,10 +1263,14 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
                 try? await Task.sleep(for: .seconds(self.approvalTimeout))
                 // Only acts if still pending — a user answer already removed it.
                 if let owner = self.removePending(forKey: identifier) {
-                    let waiters = self.drainCoalescedWaiters(forIdentifier: identifier, decision: .deny)
-                    owner.resume(returning: .deny)
-                    for w in waiters { w.resume(returning: .deny) }
-                    print("[SecurityGate] Approval timed out (\(Int(self.approvalTimeout))s) — denied by default (\(waiters.count + 1) caller(s))")
+                    self.markTimedOutPending(identifier: identifier)
+                    let waiters = self.takeWaitersKeepingInFlight(
+                        forIdentifier: identifier,
+                        decision: .pending
+                    )
+                    owner.resume(returning: .pending)
+                    for w in waiters { w.resume(returning: .pending) }
+                    print("[SecurityGate] Approval wait \(Int(self.approvalTimeout))s elapsed — awaiting_approval (\(waiters.count + 1) caller(s)); prompt still open")
                 }
             }
         }
@@ -1272,9 +1376,23 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
         // fb-securitygate (point 2): a single user answer resolves the first
         // caller AND every coalesced waiter parked behind the same prompt.
-        let waiters = drainCoalescedWaiters(forIdentifier: identifier, decision: decision)
+        // If the MCP caller already received `.pending`, store a one-shot
+        // Allow ticket keyed by the prompt so the retry can send.
+        let promptKey = peekCoalesceKey(identifier: identifier)
+        let waiters: [CheckedContinuation<ApprovalDecision, Never>]
         if let continuation = removePending(forKey: identifier) {
+            waiters = drainCoalescedWaiters(forIdentifier: identifier, decision: decision)
             continuation.resume(returning: decision)
+        } else {
+            waiters = drainCoalescedWaiters(forIdentifier: identifier, decision: decision)
+            if let promptKey {
+                switch decision {
+                case .allow, .alwaysAllow:
+                    recordLateDecision(coalesceKey: promptKey, decision: decision)
+                case .deny, .pending:
+                    clearTimedOutPending(coalesceKey: promptKey)
+                }
+            }
         }
         for w in waiters { w.resume(returning: decision) }
 

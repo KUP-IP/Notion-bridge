@@ -13,8 +13,8 @@
 //         · ToolRouter.resolveEffectiveTier: per-tool > per-module > default
 //           precedence, with neverAutoApprove forcing .request.
 //   (3) make the approval UX less easy to miss than the silent 30s timeout —
-//       the default approval timeout was raised (90s) and prompts are posted
-//       time-sensitive; the timeout is injectable so behavior stays testable.
+//       MCP callers wait 25s then receive awaiting_approval (not auto-deny);
+//       prompts are posted time-sensitive; the wait is injectable so tests stay fast.
 //
 // Harness: standalone executable runner (no XCTest). Entry point
 // `runSecurityGateUXTests()` is invoked from TestRunner.swift.
@@ -143,6 +143,18 @@ func runSecurityGateUXTests() async {
         // Same key again — must be treated as a fresh first caller.
         let firstAgain = c.begin(coalesceKey: "k1", identifier: "id2", waiterToken: "w2")
         try expect(firstAgain, "after resolution the same key starts a fresh prompt")
+    }
+
+    await test("Coalescer: takeWaitersKeepingInFlight leaves the prompt in flight") {
+        var c = ApprovalCoalescer()
+        _ = c.begin(coalesceKey: "k1", identifier: "id1", waiterToken: "owner")
+        _ = c.begin(coalesceKey: "k1", identifier: "id1", waiterToken: "w1")
+        let taken = c.takeWaitersKeepingInFlight(forIdentifier: "id1")
+        try expect(taken == ["w1"], "parked waiters must be returned")
+        try expect(c.inFlightPromptCount == 1, "pending MCP return must keep the prompt in flight")
+        try expect(c.coalesceKey(forIdentifier: "id1") == "k1")
+        let retryIsFirst = c.begin(coalesceKey: "k1", identifier: "id2", waiterToken: "retry")
+        try expect(!retryIsFirst, "retry must coalesce into the still-open prompt")
     }
 
     // ============================================================

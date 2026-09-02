@@ -11,6 +11,7 @@ public enum ApprovalStatus: String, Sendable, Codable, CaseIterable {
     case rejected = "rejected"
     case escalated = "escalated"
     case error = "error"
+    case awaiting = "awaiting_approval"
 }
 
 // MARK: - Audit Entry
