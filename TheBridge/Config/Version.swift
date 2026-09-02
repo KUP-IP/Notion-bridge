@@ -490,7 +490,9 @@ public enum BridgeConstants {
     ///   (notion_view_query, notion_view_delete, notion_page_trash,
     ///   notion_comment_update, notion_comment_delete, notion_async_task_get,
     ///   notion_templates_list, notion_meeting_notes_query). 224 + 8 = 232.
-    public static let staticFeatureModuleToolCount = 232
+    /// Wave 5 Mail (2026-09-02): +2
+    ///   (mail_reply + mail_forward; existing mail family). 232 + 2 = 234.
+    public static let staticFeatureModuleToolCount = 234
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.

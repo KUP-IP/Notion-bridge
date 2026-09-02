@@ -1,14 +1,16 @@
 // MailModule.swift – Apple Mail Tools (PKT-961 + inbox management)
 // TheBridge · Modules
 //
-// Read/compose: mail_list, mail_read, mail_search, mail_draft, mail_send.
-// Organize: mail_mailboxes, mail_triage, mail_move, mail_archive, mail_mark, mail_trash.
+// Read/compose: mail_list, mail_read, mail_search, mail_draft, mail_reply,
+// mail_forward, mail_send. Organize: mail_mailboxes, mail_triage, mail_move,
+// mail_archive, mail_mark, mail_trash.
 // All Mail access flows through an INJECTABLE AppleScript seam
 // (`MailModule.scriptRunner`) so paths are unit-testable against a mock.
 //
 // SAFETY POSTURE:
 //   - list/read/search/mailboxes/triage → .open
-//   - draft / move / archive / mark      → .notify (reversible organize)
+//   - draft / reply / forward / move / archive / mark → .notify
+//     (reply/forward are draft-only; never auto-send)
 //   - send                               → .request + confirm:'SEND'
 //   - trash                              → .request + confirm:'DELETE' + neverAutoApprove
 // Mutations require messageIds (Mail AS id). Never target by subject/sender alone.
@@ -121,6 +123,56 @@ public enum MailModule {
         return nil
     }
 
+    static func optionalBool(_ args: [String: Value], _ key: String) -> Bool? {
+        if case .bool(let b) = args[key] { return b }
+        return nil
+    }
+
+    static func parseAppleScriptBool(_ raw: String) -> Bool? {
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "true", "yes": return true
+        case "false", "no": return false
+        default: return nil
+        }
+    }
+
+    /// RFC 5322 header lookup (case-insensitive name, folded-value unfold).
+    static func extractMailHeader(_ allHeaders: String, name: String) -> String? {
+        let target = name.lowercased() + ":"
+        let lines = allHeaders
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n")
+        var i = 0
+        while i < lines.count {
+            let line = lines[i]
+            if line.lowercased().hasPrefix(target) {
+                var value = String(line.dropFirst(name.count + 1))
+                i += 1
+                while i < lines.count {
+                    let next = lines[i]
+                    guard let first = next.first, first == " " || first == "\t" else { break }
+                    value += " " + next.trimmingCharacters(in: .whitespaces)
+                    i += 1
+                }
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            i += 1
+        }
+        return nil
+    }
+
+    static func splitAddressList(_ raw: String) -> [String] {
+        raw.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    static func appleScriptBoolLiteral(_ value: Bool) -> String {
+        value ? "true" : "false"
+    }
+
     /// planOnly (preferred) or dryRun alias — plan only, does not resolve Mail.
     static func planOnlyFlag(_ args: [String: Value]) -> Bool {
         if case .bool(let b) = args["planOnly"] { return b }
@@ -214,13 +266,13 @@ public enum MailModule {
         ])
     }
 
-    /// Script that returns `id\\tmailboxName\\tread\\tflagged` for a message.
+    /// Script that returns `id\\tmailboxName\\tread\\tflagged\\tjunk` for a message.
     static func verifyScript(messageId: String, mailbox: String?, account: String?) -> String {
         """
         tell application "Mail"
         \(resolveMessageLocator(messageId: messageId, mailbox: mailbox, account: account))
             set mbName to name of mailbox of theMsg
-            return (id of theMsg as string) & tab & mbName & tab & (read status of theMsg as string) & tab & (flagged status of theMsg as string)
+            return (id of theMsg as string) & tab & mbName & tab & (read status of theMsg as string) & tab & (flagged status of theMsg as string) & tab & (junk mail status of theMsg as string)
         end tell
         """
     }
@@ -234,7 +286,7 @@ public enum MailModule {
             name: "mail_list",
             module: moduleName,
             tier: .open,
-            description: "List recent messages from a Mail mailbox (default: Inbox). Read-only. Returns id, subject, sender, date, read state, and mailbox per message. Use ids for organize tools — never mutate by subject alone.",
+            description: "List recent messages from a Mail mailbox (default: Inbox). Read-only. Returns id, subject, sender, date, read state, junk flag, and mailbox per message. Use ids for organize tools — never mutate by subject alone.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -270,7 +322,7 @@ public enum MailModule {
                         if n > \(limit) then set n to \(limit)
                         repeat with i from 1 to n
                             set m to item i of msgs
-                            set theLine to (id of m as string) & tab & (read status of m as string) & tab & (date received of m as string) & tab & (sender of m) & tab & (subject of m)
+                            set theLine to (id of m as string) & tab & (read status of m as string) & tab & (date received of m as string) & tab & (sender of m) & tab & (subject of m) & tab & (junk mail status of m as string)
                             set end of outLines to theLine
                         end repeat
                         set AppleScript's text item delimiters to linefeed
@@ -288,7 +340,7 @@ public enum MailModule {
             name: "mail_read",
             module: moduleName,
             tier: .open,
-            description: "Read a single Mail message by its AppleScript id (subject, sender, date, plain-text body). Optional mailbox/account scopes resolution outside bare Inbox. Read-only.",
+            description: "Read a single Mail message by its AppleScript id (subject, sender, date, recipients, attachment metadata, optional List-Unsubscribe/Message-ID headers, junk flag, plain-text body). Optional mailbox/account scopes resolution outside bare Inbox. Read-only. Does not unsubscribe or follow List-Unsubscribe links.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -303,7 +355,7 @@ public enum MailModule {
                 whenToUse: ["pulling the full body for a message id before archive/trash decisions"],
                 whenNotToUse: ["browsing a mailbox (use mail_list)",
                                "bulk advisory triage (use mail_triage)"],
-                relatedTools: ["mail_list", "mail_search", "mail_triage"]
+                relatedTools: ["mail_list", "mail_search", "mail_triage", "mail_reply", "mail_forward"]
             ),
             handler: { arguments in
                 guard case .object(let args) = arguments,
@@ -317,23 +369,40 @@ public enum MailModule {
                     \(resolveMessageLocator(messageId: messageId, mailbox: mailbox, account: account))
                         set theBody to content of theMsg
                         set mbName to name of mailbox of theMsg
-                        return (subject of theMsg) & linefeed & (sender of theMsg) & linefeed & (date received of theMsg as string) & linefeed & mbName & linefeed & "---" & linefeed & theBody
+                        set junkFlag to junk mail status of theMsg as string
+                        set msgidHdr to message id of theMsg
+                        set hdrs to all headers of theMsg
+                        set toText to ""
+                        repeat with r in to recipients of theMsg
+                            if toText is not "" then set toText to toText & ", "
+                            set toText to toText & (address of r)
+                        end repeat
+                        set ccText to ""
+                        repeat with r in cc recipients of theMsg
+                            if ccText is not "" then set ccText to ccText & ", "
+                            set ccText to ccText & (address of r)
+                        end repeat
+                        set bccText to ""
+                        repeat with r in bcc recipients of theMsg
+                            if bccText is not "" then set bccText to bccText & ", "
+                            set bccText to bccText & (address of r)
+                        end repeat
+                        set attText to ""
+                        repeat with a in mail attachments of theMsg
+                            set attName to name of a
+                            set attId to ""
+                            try
+                                set attId to id of a as string
+                            end try
+                            if attText is not "" then set attText to attText & linefeed
+                            set attText to attText & attName & tab & attId
+                        end repeat
+                        return "<<<BRIDGE_MAIL_META>>>" & linefeed & (subject of theMsg) & linefeed & (sender of theMsg) & linefeed & (date received of theMsg as string) & linefeed & mbName & linefeed & junkFlag & linefeed & toText & linefeed & ccText & linefeed & bccText & linefeed & msgidHdr & linefeed & "<<<BRIDGE_MAIL_ATTACH>>>" & linefeed & attText & linefeed & "<<<BRIDGE_MAIL_HEADERS>>>" & linefeed & hdrs & linefeed & "<<<BRIDGE_MAIL_BODY>>>" & linefeed & theBody
                     end tell
                     """
                 switch scriptRunner.run(script) {
                 case .success(let raw):
-                    let parts = raw.components(separatedBy: "\n---\n")
-                    let header = parts.first ?? raw
-                    let body = parts.count > 1 ? parts[1] : ""
-                    let headerLines = header.components(separatedBy: "\n")
-                    return .object([
-                        "messageId": .string(messageId),
-                        "subject": .string(headerLines.indices.contains(0) ? headerLines[0] : ""),
-                        "sender": .string(headerLines.indices.contains(1) ? headerLines[1] : ""),
-                        "date": .string(headerLines.indices.contains(2) ? headerLines[2] : ""),
-                        "mailbox": .string(headerLines.indices.contains(3) ? headerLines[3] : (mailbox ?? "Inbox")),
-                        "body": .string(body)
-                    ])
+                    return parseMailReadPayload(raw, messageId: messageId, mailbox: mailbox)
                 case .failure(let message, let number):
                     return scriptError(message: message, number: number)
                 }
@@ -382,7 +451,7 @@ public enum MailModule {
                         if n > \(limit) then set n to \(limit)
                         repeat with i from 1 to n
                             set m to item i of hits
-                            set theLine to (id of m as string) & tab & (read status of m as string) & tab & (date received of m as string) & tab & (sender of m) & tab & (subject of m)
+                            set theLine to (id of m as string) & tab & (read status of m as string) & tab & (date received of m as string) & tab & (sender of m) & tab & (subject of m) & tab & (junk mail status of m as string)
                             set end of outLines to theLine
                         end repeat
                         set AppleScript's text item delimiters to linefeed
@@ -484,7 +553,7 @@ public enum MailModule {
                         if n > \(limit) then set n to \(limit)
                         repeat with i from 1 to n
                             set m to item i of msgs
-                            set theLine to (id of m as string) & tab & (read status of m as string) & tab & (date received of m as string) & tab & (sender of m) & tab & (subject of m)
+                            set theLine to (id of m as string) & tab & (read status of m as string) & tab & (date received of m as string) & tab & (sender of m) & tab & (subject of m) & tab & (junk mail status of m as string)
                             set end of outLines to theLine
                         end repeat
                         set AppleScript's text item delimiters to linefeed
@@ -533,14 +602,15 @@ public enum MailModule {
             name: "mail_draft",
             module: moduleName,
             tier: .notify,
-            description: "Create an UNSENT Mail draft (to / subject / body; optional cc). The draft is saved in Mail for the operator to review and send manually — this tool NEVER sends. Drafting is the safe default; sending requires the separate, confirm-gated mail_send.",
+            description: "Create an UNSENT Mail draft (to / subject / body; optional cc, bcc). The draft is saved in Mail for the operator to review and send manually — this tool NEVER sends. Drafting is the safe default; sending requires the separate, confirm-gated mail_send. For replies/forwards use mail_reply / mail_forward — do not overload this tool.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "to": .object(["type": .string("string"), "description": .string("Recipient email address")]),
                     "subject": .object(["type": .string("string"), "description": .string("Subject line")]),
                     "body": .object(["type": .string("string"), "description": .string("Message body (plain text)")]),
-                    "cc": .object(["type": .string("string"), "description": .string("Optional cc email address")])
+                    "cc": .object(["type": .string("string"), "description": .string("Optional cc email address")]),
+                    "bcc": .object(["type": .string("string"), "description": .string("Optional bcc email address")])
                 ]),
                 "required": .array([.string("to"), .string("subject"), .string("body")])
             ]),
@@ -549,8 +619,10 @@ public enum MailModule {
                 whenToUse: ["composing an email for the operator to review and send manually",
                             "the default, safe way to write mail — produces an unsent draft, never sends"],
                 whenNotToUse: ["actually sending an already-approved message (use mail_send with confirm:'SEND')",
+                               "replying to an existing message (use mail_reply)",
+                               "forwarding an existing message (use mail_forward)",
                                "organizing the inbox (use mail_archive / mail_move)"],
-                relatedTools: ["mail_send"]
+                relatedTools: ["mail_send", "mail_reply", "mail_forward"]
             ),
             handler: { arguments in
                 guard case .object(let args) = arguments,
@@ -559,7 +631,8 @@ public enum MailModule {
                       case .string(let body) = args["body"] else {
                     throw ToolRouterError.invalidArguments(toolName: "mail_draft", reason: "missing required parameters (to, subject, body)")
                 }
-                let cc: String? = { if case .string(let c) = args["cc"], !c.isEmpty { return c }; return nil }()
+                let cc = optionalString(args, "cc")
+                let bcc = optionalString(args, "bcc")
 
                 var script = """
                     tell application "Mail"
@@ -567,12 +640,7 @@ public enum MailModule {
                         tell newMsg
                             make new to recipient at end of to recipients with properties {address:"\(escape(to))"}
                     """
-                if let cc = cc {
-                    script += """
-
-                            make new cc recipient at end of cc recipients with properties {address:"\(escape(cc))"}
-                    """
-                }
+                script += composeCcBccLines(cc: cc, bcc: bcc)
                 script += """
 
                         end tell
@@ -582,17 +650,78 @@ public enum MailModule {
                     """
                 switch scriptRunner.run(script) {
                 case .success(let draftId):
-                    return .object([
+                    var obj: [String: Value] = [
                         "drafted": .bool(true),
                         "sent": .bool(false),
                         "draftId": .string(draftId),
                         "to": .string(to),
                         "subject": .string(subject),
                         "note": .string("Draft saved unsent. mail_draft never sends; use mail_send with confirm:'SEND' to deliver.")
-                    ])
+                    ]
+                    if let cc { obj["cc"] = .string(cc) }
+                    if let bcc { obj["bcc"] = .string(bcc) }
+                    return .object(obj)
                 case .failure(let message, let number):
                     return scriptError(message: message, number: number, extra: ["drafted": .bool(false), "sent": .bool(false)])
                 }
+            }
+        ))
+
+        // MARK: 6b. mail_reply – notify (draft-only)
+        await router.register(ToolRegistration(
+            name: "mail_reply",
+            module: moduleName,
+            tier: .notify,
+            description: "Create an UNSENT Mail reply draft for a message id via Mail.sdef `reply` with opening window false. NEVER sends. Optional replyAll (Mail `reply to all`) and extra to recipient. Review and send in Mail or via confirm-gated mail_send.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "messageId": .object(["type": .string("string"), "description": .string("Mail message id to reply to")]),
+                    "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox to scope id lookup")]),
+                    "account": .object(["type": .string("string"), "description": .string("Optional account name")]),
+                    "replyAll": .object(["type": .string("boolean"), "description": .string("If true, reply to all recipients (Mail `reply to all`)")]),
+                    "to": .object(["type": .string("string"), "description": .string("Optional extra To address added on the reply draft")])
+                ]),
+                "required": .array([.string("messageId")])
+            ]),
+            metadata: ToolMetadata(
+                title: "Mail: Reply Draft",
+                whenToUse: ["opening an unsent reply to a known message id for operator review"],
+                whenNotToUse: ["composing a new message (use mail_draft)",
+                               "sending immediately (this tool never sends)",
+                               "one-click unsubscribe (not supported)"],
+                relatedTools: ["mail_read", "mail_forward", "mail_draft", "mail_send"]
+            ),
+            handler: { arguments in
+                try performReplyOrForward(kind: .reply, arguments: arguments)
+            }
+        ))
+
+        // MARK: 6c. mail_forward – notify (draft-only)
+        await router.register(ToolRegistration(
+            name: "mail_forward",
+            module: moduleName,
+            tier: .notify,
+            description: "Create an UNSENT Mail forward draft for a message id via Mail.sdef `forward` with opening window false. NEVER sends. Optional to recipient on the draft.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "messageId": .object(["type": .string("string"), "description": .string("Mail message id to forward")]),
+                    "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox to scope id lookup")]),
+                    "account": .object(["type": .string("string"), "description": .string("Optional account name")]),
+                    "to": .object(["type": .string("string"), "description": .string("Optional To address on the forward draft")])
+                ]),
+                "required": .array([.string("messageId")])
+            ]),
+            metadata: ToolMetadata(
+                title: "Mail: Forward Draft",
+                whenToUse: ["opening an unsent forward of a known message id for operator review"],
+                whenNotToUse: ["composing a new message (use mail_draft)",
+                               "sending immediately (this tool never sends)"],
+                relatedTools: ["mail_read", "mail_reply", "mail_draft", "mail_send"]
+            ),
+            handler: { arguments in
+                try performReplyOrForward(kind: .forward, arguments: arguments)
             }
         ))
 
@@ -714,7 +843,7 @@ public enum MailModule {
             name: "mail_mark",
             module: moduleName,
             tier: .notify,
-            description: "Set read and/or flagged status on Mail messages by id. Requires account + messageIds (max 25) and at least one of read/flagged. planOnly/dryRun is plan-only.",
+            description: "Set read, flagged, and/or junk mail status on Mail messages by id. Requires account + messageIds (max 25) and at least one of read/flagged/junk. Uses AppleScript `set junk mail status` when junk is provided. planOnly/dryRun is plan-only. Live IMAP Junk-folder sync is not verified by unit tests.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -726,6 +855,7 @@ public enum MailModule {
                     "account": .object(["type": .string("string"), "description": .string("Mail account name (required)")]),
                     "read": .object(["type": .string("boolean"), "description": .string("Set read status")]),
                     "flagged": .object(["type": .string("boolean"), "description": .string("Set flagged status")]),
+                    "junk": .object(["type": .string("boolean"), "description": .string("Set junk mail status (Mail `junk mail status`)")]),
                     "sourceMailbox": .object(["type": .string("string"), "description": .string("Mailbox to scope id lookup (default: Inbox)")]),
                     "planOnly": .object(["type": .string("boolean"), "description": .string("If true, plan only — no AppleScript side effects")]),
                     "dryRun": .object(["type": .string("boolean"), "description": .string("Alias of planOnly")])
@@ -733,11 +863,13 @@ public enum MailModule {
                 "required": .array([.string("messageIds"), .string("account")])
             ]),
             metadata: ToolMetadata(
-                title: "Mail: Mark Read/Flagged",
+                title: "Mail: Mark Read/Flagged/Junk",
                 whenToUse: ["marking a batch read after triage",
-                            "flagging messages that need follow-up"],
+                            "flagging messages that need follow-up",
+                            "toggling Mail junk mail status by id"],
                 whenNotToUse: ["moving/archiving (use mail_move / mail_archive)",
-                               "trashing (use mail_trash)"],
+                               "trashing (use mail_trash)",
+                               "one-click unsubscribe (not supported)"],
                 relatedTools: ["mail_list", "mail_triage", "mail_archive"]
             ),
             handler: { arguments in
@@ -746,10 +878,11 @@ public enum MailModule {
                     throw ToolRouterError.invalidArguments(toolName: "mail_mark", reason: "invalid arguments")
                 }
                 let account = try requireAccount(args, toolName: "mail_mark")
-                let read: Bool? = { if case .bool(let b) = args["read"] { return b }; return nil }()
-                let flagged: Bool? = { if case .bool(let b) = args["flagged"] { return b }; return nil }()
-                guard read != nil || flagged != nil else {
-                    throw ToolRouterError.invalidArguments(toolName: "mail_mark", reason: "provide at least one of 'read' or 'flagged'")
+                let read = optionalBool(args, "read")
+                let flagged = optionalBool(args, "flagged")
+                let junk = optionalBool(args, "junk")
+                guard read != nil || flagged != nil || junk != nil else {
+                    throw ToolRouterError.invalidArguments(toolName: "mail_mark", reason: "provide at least one of 'read', 'flagged', or 'junk'")
                 }
                 return performOrganize(
                     action: "mark",
@@ -758,7 +891,7 @@ public enum MailModule {
                     sourceMailbox: optionalString(args, "sourceMailbox") ?? "Inbox",
                     account: account,
                     planOnly: planOnlyFlag(args),
-                    mode: .mark(read: read, flagged: flagged)
+                    mode: .mark(read: read, flagged: flagged, junk: junk)
                 )
             }
         ))
@@ -843,6 +976,7 @@ public enum MailModule {
                     "subject": .object(["type": .string("string"), "description": .string("Subject line")]),
                     "body": .object(["type": .string("string"), "description": .string("Message body (plain text)")]),
                     "cc": .object(["type": .string("string"), "description": .string("Optional cc email address")]),
+                    "bcc": .object(["type": .string("string"), "description": .string("Optional bcc email address")]),
                     "confirm": .object(["type": .string("string"), "description": .string("Must be exactly 'SEND' to proceed. Absent/wrong → refused, nothing sent.")])
                 ]),
                 "required": .array([.string("to"), .string("subject"), .string("body"), .string("confirm")])
@@ -872,7 +1006,8 @@ public enum MailModule {
                     ])
                 }
 
-                let cc: String? = { if case .string(let c) = args["cc"], !c.isEmpty { return c }; return nil }()
+                let cc = optionalString(args, "cc")
+                let bcc = optionalString(args, "bcc")
 
                 var script = """
                     tell application "Mail"
@@ -880,12 +1015,7 @@ public enum MailModule {
                         tell newMsg
                             make new to recipient at end of to recipients with properties {address:"\(escape(to))"}
                     """
-                if let cc = cc {
-                    script += """
-
-                            make new cc recipient at end of cc recipients with properties {address:"\(escape(cc))"}
-                    """
-                }
+                script += composeCcBccLines(cc: cc, bcc: bcc)
                 script += """
 
                         end tell
@@ -895,12 +1025,15 @@ public enum MailModule {
                     """
                 switch scriptRunner.run(script) {
                 case .success:
-                    return .object([
+                    var obj: [String: Value] = [
                         "sent": .bool(true),
                         "to": .string(to),
                         "subject": .string(subject),
                         "bodyLength": .int(body.utf8.count)
-                    ])
+                    ]
+                    if let cc { obj["cc"] = .string(cc) }
+                    if let bcc { obj["bcc"] = .string(bcc) }
+                    return .object(obj)
                 case .failure(let message, let number):
                     return scriptError(message: message, number: number, extra: ["sent": .bool(false)])
                 }
@@ -908,12 +1041,109 @@ public enum MailModule {
         ))
     }
 
+    // MARK: - Compose helpers
+
+    private static func composeCcBccLines(cc: String?, bcc: String?) -> String {
+        var script = ""
+        if let cc {
+            script += """
+
+                            make new cc recipient at end of cc recipients with properties {address:"\(escape(cc))"}
+            """
+        }
+        if let bcc {
+            script += """
+
+                            make new bcc recipient at end of bcc recipients with properties {address:"\(escape(bcc))"}
+            """
+        }
+        return script
+    }
+
+    private enum ReplyForwardKind {
+        case reply
+        case forward
+
+        var toolName: String {
+            switch self {
+            case .reply: return "mail_reply"
+            case .forward: return "mail_forward"
+            }
+        }
+
+        var action: String {
+            switch self {
+            case .reply: return "reply"
+            case .forward: return "forward"
+            }
+        }
+    }
+
+    /// Draft-only reply/forward. Mail.sdef `reply`/`forward` with `opening window false`. Never sends.
+    private static func performReplyOrForward(kind: ReplyForwardKind, arguments: Value) throws -> Value {
+        guard case .object(let args) = arguments,
+              case .string(let messageId) = args["messageId"], !messageId.isEmpty else {
+            throw ToolRouterError.invalidArguments(toolName: kind.toolName, reason: "missing 'messageId'")
+        }
+        let mailbox = optionalString(args, "mailbox")
+        let account = optionalString(args, "account")
+        let extraTo = optionalString(args, "to")
+        let replyAll = optionalBool(args, "replyAll") ?? false
+
+        var command: String
+        switch kind {
+        case .reply:
+            command = "set draftMsg to reply theMsg opening window false reply to all \(appleScriptBoolLiteral(replyAll))"
+        case .forward:
+            command = "set draftMsg to forward theMsg opening window false"
+        }
+
+        var extraRecipient = ""
+        if let extraTo {
+            extraRecipient = """
+
+                        tell draftMsg
+                            make new to recipient at end of to recipients with properties {address:"\(escape(extraTo))"}
+                        end tell
+            """
+        }
+
+        let script = """
+            tell application "Mail"
+            \(resolveMessageLocator(messageId: messageId, mailbox: mailbox, account: account))
+                \(command)
+            \(extraRecipient)
+                save draftMsg
+                return (id of draftMsg as string)
+            end tell
+            """
+        switch scriptRunner.run(script) {
+        case .success(let draftId):
+            var obj: [String: Value] = [
+                "drafted": .bool(true),
+                "sent": .bool(false),
+                "draftId": .string(draftId),
+                "action": .string(kind.action),
+                "sourceMessageId": .string(messageId),
+                "note": .string("\(kind.toolName) creates an unsent draft only — it never sends. Review in Mail or use mail_send with confirm:'SEND' for a new message.")
+            ]
+            if case .reply = kind { obj["replyAll"] = .bool(replyAll) }
+            if let extraTo { obj["to"] = .string(extraTo) }
+            return .object(obj)
+        case .failure(let message, let number):
+            return scriptError(message: message, number: number, extra: [
+                "drafted": .bool(false),
+                "sent": .bool(false)
+            ])
+        }
+    }
+
     // MARK: - Organize engine
 
     private enum OrganizeMode {
         case move
         case trash
-        case mark(read: Bool?, flagged: Bool?)
+        case mark(read: Bool?, flagged: Bool?, junk: Bool?)
     }
 
     private static func performOrganize(
@@ -935,9 +1165,10 @@ public enum MailModule {
             switch mode {
             case .move, .trash:
                 obj["to"] = .string(dest)
-            case .mark(let read, let flagged):
+            case .mark(let read, let flagged, let junk):
                 if let read { obj["read"] = .bool(read) }
                 if let flagged { obj["flagged"] = .bool(flagged) }
+                if let junk { obj["junk"] = .bool(junk) }
             }
             return .object(obj)
         }
@@ -1003,19 +1234,22 @@ public enum MailModule {
                         return "OK" & tab & "\(escape(id))" & tab & srcName & tab & "Trash"
                     end tell
                     """
-            case .mark(let read, let flagged):
+            case .mark(let read, let flagged, let junk):
                 var sets = ""
                 if let read {
-                    sets += "\n                        set read status of theMsg to \(read ? "true" : "false")"
+                    sets += "\n                        set read status of theMsg to \(appleScriptBoolLiteral(read))"
                 }
                 if let flagged {
-                    sets += "\n                        set flagged status of theMsg to \(flagged ? "true" : "false")"
+                    sets += "\n                        set flagged status of theMsg to \(appleScriptBoolLiteral(flagged))"
+                }
+                if let junk {
+                    sets += "\n                        set junk mail status of theMsg to \(appleScriptBoolLiteral(junk))"
                 }
                 mutateScript = """
                     tell application "Mail"
                     \(resolveMessageLocator(messageId: id, mailbox: sourceMailbox, account: account))
                         set srcName to name of mailbox of theMsg\(sets)
-                        return "OK" & tab & "\(escape(id))" & tab & srcName & tab & srcName & tab & (read status of theMsg as string) & tab & (flagged status of theMsg as string)
+                        return "OK" & tab & "\(escape(id))" & tab & srcName & tab & srcName & tab & (read status of theMsg as string) & tab & (flagged status of theMsg as string) & tab & (junk mail status of theMsg as string)
                     end tell
                     """
             }
@@ -1052,6 +1286,7 @@ public enum MailModule {
                         let foundIn = vf.indices.contains(1) ? vf[1] : ""
                         let readStatus = vf.indices.contains(2) ? vf[2] : ""
                         let flaggedStatus = vf.indices.contains(3) ? vf[3] : ""
+                        let junkStatus = vf.indices.contains(4) ? vf[4] : ""
                         let verifyOk: Bool
                         switch mode {
                         case .move:
@@ -1059,23 +1294,32 @@ public enum MailModule {
                         case .trash:
                             let lower = foundIn.lowercased()
                             verifyOk = lower.contains("trash") || lower.contains("deleted")
-                        case .mark(let wantRead, let wantFlagged):
+                        case .mark(let wantRead, let wantFlagged, let wantJunk):
                             var markOk = true
                             if let wantRead {
-                                markOk = markOk && ((readStatus.lowercased() == "true") == wantRead)
+                                markOk = markOk && ((parseAppleScriptBool(readStatus) ?? (readStatus.lowercased() == "true")) == wantRead)
                             }
                             if let wantFlagged {
-                                markOk = markOk && ((flaggedStatus.lowercased() == "true") == wantFlagged)
+                                markOk = markOk && ((parseAppleScriptBool(flaggedStatus) ?? (flaggedStatus.lowercased() == "true")) == wantFlagged)
+                            }
+                            if let wantJunk {
+                                markOk = markOk && ((parseAppleScriptBool(junkStatus) ?? (junkStatus.lowercased() == "true")) == wantJunk)
                             }
                             verifyOk = markOk
                         }
-                        verified.append(.object([
+                        var verifyObj: [String: Value] = [
                             "messageId": .string(id),
                             "foundIn": .string(foundIn),
                             "read": .string(readStatus),
                             "flagged": .string(flaggedStatus),
                             "status": .string(verifyOk ? "verified" : "partial_or_unverified")
-                        ]))
+                        ]
+                        if let junkBool = parseAppleScriptBool(junkStatus) {
+                            verifyObj["junk"] = .bool(junkBool)
+                        } else if !junkStatus.isEmpty {
+                            verifyObj["junk"] = .string(junkStatus)
+                        }
+                        verified.append(.object(verifyObj))
                         if verifyOk {
                             succeeded.append(mutateRow)
                         } else {
@@ -1156,7 +1400,7 @@ public enum MailModule {
         }
     }
 
-    /// Parse `id<tab>isRead<tab>date<tab>sender<tab>subject` rows into MCP objects.
+    /// Parse `id<tab>isRead<tab>date<tab>sender<tab>subject[<tab>junk]` rows into MCP objects.
     static func parseRows(_ raw: String, mailbox: String? = nil) -> [Value] {
         parseRowFields(raw).map { f in
             var obj: [String: Value] = [
@@ -1168,6 +1412,9 @@ public enum MailModule {
             ]
             if let mailbox {
                 obj["mailbox"] = .string(mailbox)
+            }
+            if let junk = parseAppleScriptBool(f["junk"] ?? "") {
+                obj["junk"] = .bool(junk)
             }
             return .object(obj)
         }
@@ -1185,9 +1432,99 @@ public enum MailModule {
                 "read": f.indices.contains(1) ? f[1] : "",
                 "date": f.indices.contains(2) ? f[2] : "",
                 "sender": f.indices.contains(3) ? f[3] : "",
-                "subject": f.indices.contains(4) ? f[4] : ""
+                "subject": f.indices.contains(4) ? f[4] : "",
+                "junk": f.indices.contains(5) ? f[5] : ""
             ]
         }
+    }
+
+    /// Parse mail_read AppleScript payload (new delimited format or legacy `--- ` body split).
+    static func parseMailReadPayload(_ raw: String, messageId: String, mailbox: String?) -> Value {
+        if let metaRange = raw.range(of: "<<<BRIDGE_MAIL_META>>>\n") {
+            let afterMeta = String(raw[metaRange.upperBound...])
+            let attachSplit = afterMeta.components(separatedBy: "\n<<<BRIDGE_MAIL_ATTACH>>>\n")
+            let metaBlock = attachSplit.first ?? ""
+            let restAfterAttach = attachSplit.count > 1 ? attachSplit[1] : ""
+            let headerSplit = restAfterAttach.components(separatedBy: "\n<<<BRIDGE_MAIL_HEADERS>>>\n")
+            let attachBlock = headerSplit.first ?? ""
+            let restAfterHeaders = headerSplit.count > 1 ? headerSplit[1] : ""
+            let bodySplit = restAfterHeaders.components(separatedBy: "\n<<<BRIDGE_MAIL_BODY>>>\n")
+            let headersBlock = headerSplit.count > 1 ? (bodySplit.first ?? "") : ""
+            let body = bodySplit.count > 1 ? bodySplit[1] : ""
+
+            let metaLines = metaBlock.components(separatedBy: "\n")
+            let subject = metaLines.indices.contains(0) ? metaLines[0] : ""
+            let sender = metaLines.indices.contains(1) ? metaLines[1] : ""
+            let date = metaLines.indices.contains(2) ? metaLines[2] : ""
+            let mb = metaLines.indices.contains(3) ? metaLines[3] : (mailbox ?? "Inbox")
+            let junkRaw = metaLines.indices.contains(4) ? metaLines[4] : ""
+            let toText = metaLines.indices.contains(5) ? metaLines[5] : ""
+            let ccText = metaLines.indices.contains(6) ? metaLines[6] : ""
+            let bccText = metaLines.indices.contains(7) ? metaLines[7] : ""
+            let messageIdProp = metaLines.indices.contains(8) ? metaLines[8] : ""
+
+            let attachments: [Value] = attachBlock
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty ? [] : attachBlock
+                .components(separatedBy: "\n")
+                .compactMap { line -> Value? in
+                    let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
+                    guard !trimmed.isEmpty else { return nil }
+                    let parts = trimmed.components(separatedBy: "\t")
+                    let name = parts.indices.contains(0) ? parts[0] : ""
+                    guard !name.isEmpty else { return nil }
+                    var obj: [String: Value] = ["name": .string(name)]
+                    let attId = parts.indices.contains(1) ? parts[1] : ""
+                    if !attId.isEmpty { obj["id"] = .string(attId) }
+                    return .object(obj)
+                }
+
+            let listUnsubscribe = extractMailHeader(headersBlock, name: "List-Unsubscribe")
+            let headerMessageId = extractMailHeader(headersBlock, name: "Message-ID")
+            let messageIdHeader = messageIdProp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? headerMessageId
+                : messageIdProp.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            var obj: [String: Value] = [
+                "messageId": .string(messageId),
+                "subject": .string(subject),
+                "sender": .string(sender),
+                "date": .string(date),
+                "mailbox": .string(mb),
+                "body": .string(body),
+                "recipients": .object([
+                    "to": .array(splitAddressList(toText).map { .string($0) }),
+                    "cc": .array(splitAddressList(ccText).map { .string($0) }),
+                    "bcc": .array(splitAddressList(bccText).map { .string($0) })
+                ]),
+                "attachments": .array(attachments)
+            ]
+            if let junk = parseAppleScriptBool(junkRaw) {
+                obj["junk"] = .bool(junk)
+            }
+            if let listUnsubscribe { obj["listUnsubscribe"] = .string(listUnsubscribe) }
+            if let messageIdHeader, !messageIdHeader.isEmpty {
+                obj["messageIdHeader"] = .string(messageIdHeader)
+            }
+            return .object(obj)
+        }
+
+        let parts = raw.components(separatedBy: "\n---\n")
+        let header = parts.first ?? raw
+        let body = parts.count > 1 ? parts[1] : ""
+        let headerLines = header.components(separatedBy: "\n")
+        var obj: [String: Value] = [
+            "messageId": .string(messageId),
+            "subject": .string(headerLines.indices.contains(0) ? headerLines[0] : ""),
+            "sender": .string(headerLines.indices.contains(1) ? headerLines[1] : ""),
+            "date": .string(headerLines.indices.contains(2) ? headerLines[2] : ""),
+            "mailbox": .string(headerLines.indices.contains(3) ? headerLines[3] : (mailbox ?? "Inbox")),
+            "body": .string(body)
+        ]
+        if headerLines.indices.contains(4), let junk = parseAppleScriptBool(headerLines[4]) {
+            obj["junk"] = .bool(junk)
+        }
+        return .object(obj)
     }
 
     static func parseMailboxes(_ raw: String) -> Value {

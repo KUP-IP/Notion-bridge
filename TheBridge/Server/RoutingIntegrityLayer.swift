@@ -144,6 +144,22 @@ public enum ToolSkillBindingRegistry {
             reason: "Email drafting belongs to relationship routing even though it is unsent."
         ),
         ToolSkillBinding(
+            toolName: "mail_reply",
+            governingSkills: [
+                RoutingGovernanceSkill(slug: "people-keepr", role: "relationship drafting"),
+                RoutingGovernanceSkill(slug: "mac-keepr", role: "Mail reply draft mechanics"),
+            ],
+            reason: "Reply drafts are unsent Mail compose actions under relationship routing."
+        ),
+        ToolSkillBinding(
+            toolName: "mail_forward",
+            governingSkills: [
+                RoutingGovernanceSkill(slug: "people-keepr", role: "relationship drafting"),
+                RoutingGovernanceSkill(slug: "mac-keepr", role: "Mail forward draft mechanics"),
+            ],
+            reason: "Forward drafts are unsent Mail compose actions under relationship routing."
+        ),
+        ToolSkillBinding(
             toolName: "mail_move",
             governingSkills: [
                 RoutingGovernanceSkill(slug: "mac-keepr", role: "Mail mailbox relocate mechanics"),
