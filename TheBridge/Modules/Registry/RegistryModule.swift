@@ -485,6 +485,7 @@ public enum RegistryModule {
                     "entity": .string(key),
                     "count": .int(rows.count),
                     "has_more": .bool(hasMore),
+                    "truncated": .bool(hasMore),
                     "rows": .array(rows.map { FieldsFilter.project(rowValue($0, stale: $0.isExpired()), fields: requestedFields) }),
                 ])
             })
@@ -531,6 +532,8 @@ public enum RegistryModule {
                 return .object([
                     "entity": .string(key),
                     "count": .int(rows.count),
+                    "truncated": .bool(rows.count >= limit),
+                    "has_more": .bool(rows.count >= limit),
                     "rows": .array(rows.map { FieldsFilter.project(rowValue($0, stale: $0.isExpired()), fields: requestedFields) }),
                 ])
             })

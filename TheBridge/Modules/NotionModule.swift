@@ -106,6 +106,32 @@ public enum NotionModule {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    public static func mimeType(forExtension ext: String) -> String {
+        switch ext.lowercased() {
+        case "pdf": return "application/pdf"
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "txt": return "text/plain"
+        case "json": return "application/json"
+        case "csv": return "text/csv"
+        case "mp4": return "video/mp4"
+        case "mov": return "video/quicktime"
+        case "mp3": return "audio/mpeg"
+        case "wav": return "audio/wav"
+        case "m4a": return "audio/mp4"
+        case "ogg": return "audio/ogg"
+        case "webm": return "video/webm"
+        case "webp": return "image/webp"
+        case "svg": return "image/svg+xml"
+        case "html", "htm": return "text/html"
+        case "xml": return "text/xml"
+        case "zip": return "application/zip"
+        case "md": return "text/markdown"
+        default: return "application/octet-stream"
+        }
+    }
+
     /// Block-level write responses include their parent when the touched block
     /// is directly under a page. Evict both the explicit target (which may be a
     /// page id for top-level appends) and any returned page/block parent; the
@@ -159,25 +185,41 @@ public enum NotionModule {
             name: "notion_search",
             module: moduleName,
             tier: .open,
-            description: "Keyword-search a Notion workspace for pages and data sources. Returns IDs + titles; no semantic ranking. Under Notion-Version 2026-03-11 the search filter object type (not exposed here) accepts only page or data_source — not database.",
+            description: "Keyword-search a Notion workspace for pages and data sources. Unique vs hosted MCP: in_trash listing. REST filter/sort/cursor supported. Do not invent connector (Slack/Drive) search.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "query": .object(["type": .string("string"), "description": .string("Search query text")]),
+                    "query": .object(["type": .string("string"), "description": .string("Search query text. Optional when inTrash is true.")]),
                     "pageSize": .object(["type": .string("integer"), "description": .string("Max results to return (default: 10, max: 100)")]),
+                    "startCursor": .object(["type": .string("string"), "description": .string("Pagination cursor from a prior search.")]),
+                    "objectFilter": .object(["type": .string("string"), "description": .string("REST object filter: 'page' or 'data_source' only.")]),
+                    "inTrash": .object(["type": .string("boolean"), "description": .string("When true, list trashed pages/data sources (unique vs official MCP search).")]),
+                    "sort": .object(["type": .string("string"), "description": .string("Optional JSON string of the REST search sort object.")]),
                     "workspace": workspaceParam
                 ]),
-                "required": .array([.string("query")])
+                "required": .array([])
             ]),
             handler: { arguments in
-                guard case .object(let args) = arguments,
-                      case .string(let query) = args["query"] else {
-                    throw ToolRouterError.invalidArguments(toolName: "notion_search", reason: "missing 'query'")
+                guard case .object(let args) = arguments else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_search", reason: "missing arguments")
+                }
+                let query: String? = { if case .string(let q) = args["query"] { return q }; return nil }()
+                let inTrash: Bool? = { if case .bool(let b) = args["inTrash"] { return b }; return nil }()
+                let objectFilter: String? = { if case .string(let s) = args["objectFilter"] { return s }; return nil }()
+                let hasQuery = !(query?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                if !hasQuery && inTrash != true && (objectFilter?.isEmpty ?? true) {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_search", reason: "missing 'query' (or pass inTrash:true to list trash)")
                 }
                 let pageSize: Int = { if case .int(let ps) = args["pageSize"] { return min(ps, 100) }; return 10 }()
+                let startCursor: String? = { if case .string(let c) = args["startCursor"] { return c }; return nil }()
+                let sortJSON: String? = { if case .string(let s) = args["sort"] { return s }; return nil }()
 
+                let body = try NotionRESTContracts.buildSearchBody(
+                    query: query, pageSize: pageSize, startCursor: startCursor,
+                    objectFilter: objectFilter, inTrash: inTrash, sortJSON: sortJSON
+                )
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                let data = try await client.search(query: query, pageSize: pageSize)
+                let data = try await client.search(body: body)
 
                 guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let results = json["results"] as? [[String: Any]] else {
@@ -205,11 +247,13 @@ public enum NotionModule {
                     ]))
                 }
 
-                return .object([
-                    "query": .string(query),
+                var out: [String: Value] = [
+                    "query": .string(query ?? ""),
                     "count": .int(items.count),
                     "results": .array(items)
-                ])
+                ]
+                NotionRESTContracts.mergeQueryStatus(from: json, into: &out)
+                return .object(out)
             }
         ))
 
@@ -338,6 +382,9 @@ public enum NotionModule {
                     "pageId": .object(["type": .string("string"), "description": .string("Notion page ID (with or without dashes)")]),
                     "properties": .object(["type": .string("string"), "description": .string("JSON string of properties to update (Notion API format)")]),
                     "icon": .object(["type": .string("string"), "description": .string("Optional single emoji to set as the page icon (e.g. \"🎯\"). Emoji only — omit to leave the icon unchanged.")]),
+                    "templateId": .object(["type": .string("string"), "description": .string("Apply a data-source template to this existing page (XOR with a children payload; erase_content is refused).")]),
+                    "templateType": .object(["type": .string("string"), "description": .string("'template_id' or 'default'.")]),
+                    "timezone": .object(["type": .string("string"), "description": .string("Timezone for template variable resolution.")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("pageId"), .string("properties")])
@@ -370,8 +417,31 @@ public enum NotionModule {
                 let envelope: [String: Any] = ["properties": propsObj]
                 let envelopeData = try JSONSerialization.data(withJSONObject: envelope)
 
+                let templateId: String? = { if case .string(let s) = args["templateId"] { return s }; return nil }()
+                let templateType: String? = { if case .string(let s) = args["templateType"] { return s }; return nil }()
+                let timezone: String? = { if case .string(let s) = args["timezone"] { return s }; return nil }()
+                let erase: Bool? = { if case .bool(let b) = args["eraseContent"] { return b }; return nil }()
+                let resolved: (template: [String: Any]?, children: Data?)
+                do {
+                    resolved = try NotionRESTContracts.resolveTemplateXORChildren(
+                        templateId: templateId, templateType: templateType, timezone: timezone,
+                        childrenJSON: nil, eraseContent: erase
+                    )
+                } catch {
+                    return .object(["error": .string(error.localizedDescription)])
+                }
+
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
                 let resultData = try await client.updatePage(pageId: pageId, properties: envelopeData, icon: icon)
+                if let template = resolved.template {
+                    let taskData = try await client.applyPageTemplate(pageId: pageId, template: template, allowAsync: true)
+                    guard let taskJSON = try? JSONSerialization.jsonObject(with: taskData) as? [String: Any] else {
+                        return .object(["error": .string("Failed to parse template apply response")])
+                    }
+                    if NotionRESTContracts.isAsyncTaskEnvelope(taskJSON) {
+                        return NotionRESTContracts.asyncTaskValue(taskJSON)
+                    }
+                }
 
                 guard let resultJSON = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any] else {
                     return .object(["error": .string("Failed to parse update response")])
@@ -408,6 +478,10 @@ public enum NotionModule {
                     "properties": .object(["type": .string("string"), "description": .string("JSON string of page properties")]),
                     "children": .object(["type": .string("string"), "description": .string("Optional JSON string of child blocks")]),
                     "icon": .object(["type": .string("string"), "description": .string("Optional single emoji to set as the page icon (e.g. \"🎯\"). Emoji only.")]),
+                    "templateId": .object(["type": .string("string"), "description": .string("Data-source template id. XOR with children. Apply is async — poll notion_async_task_get.")]),
+                    "templateType": .object(["type": .string("string"), "description": .string("Template type: 'template_id' (with templateId) or 'default'. XOR with children.")]),
+                    "timezone": .object(["type": .string("string"), "description": .string("Timezone for template variable resolution (IANA).")]),
+                    "allowAsync": .object(["type": .string("boolean"), "description": .string("When true, large markdown/template creates may return an async_task instead of a completed page.")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("parentId"), .string("properties")])
@@ -433,6 +507,28 @@ public enum NotionModule {
                 if case .string(let childrenJSON) = args["children"] {
                     childrenData = childrenJSON.data(using: .utf8)
                 }
+                let templateId: String? = { if case .string(let s) = args["templateId"] { return s }; return nil }()
+                let templateType: String? = { if case .string(let s) = args["templateType"] { return s }; return nil }()
+                let timezone: String? = { if case .string(let s) = args["timezone"] { return s }; return nil }()
+                let erase: Bool? = { if case .bool(let b) = args["eraseContent"] { return b }; return nil }()
+                let resolved: (template: [String: Any]?, children: Data?)
+                do {
+                    resolved = try NotionRESTContracts.resolveTemplateXORChildren(
+                        templateId: templateId, templateType: templateType, timezone: timezone,
+                        childrenJSON: {
+                            if case .string(let s) = args["children"] { return s }
+                            return nil
+                        }(),
+                        eraseContent: erase
+                    )
+                } catch {
+                    return .object(["error": .string(error.localizedDescription)])
+                }
+                childrenData = resolved.children
+                let allowAsync: Bool = {
+                    if case .bool(let b) = args["allowAsync"] { return b }
+                    return resolved.template != nil
+                }()
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
                 let resultData = try await client.createPage(
@@ -440,11 +536,16 @@ public enum NotionModule {
                     parentType: parentType,
                     properties: propsData,
                     children: childrenData,
-                    icon: icon
+                    icon: icon,
+                    template: resolved.template,
+                    allowAsync: allowAsync
                 )
 
                 guard let resultJSON = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any] else {
                     return .object(["error": .string("Failed to parse create response")])
+                }
+                if NotionRESTContracts.isAsyncTaskEnvelope(resultJSON) {
+                    return NotionRESTContracts.asyncTaskValue(resultJSON)
                 }
 
                 let newPageId = resultJSON["id"] as? String ?? ""
@@ -657,12 +758,7 @@ public enum NotionModule {
                     "count": .int(items.count),
                     "results": .array(items)
                 ]
-                if let hasMore = json["has_more"] as? Bool {
-                    resultObj["has_more"] = .bool(hasMore)
-                }
-                if let nextCursor = json["next_cursor"] as? String {
-                    resultObj["next_cursor"] = .string(nextCursor)
-                }
+                NotionRESTContracts.mergeQueryStatus(from: json, into: &resultObj)
                 return .object(resultObj)
             }
         ))
@@ -900,6 +996,7 @@ public enum NotionModule {
                 "properties": .object([
                     "pageId": .object(["type": .string("string"), "description": .string("Notion page ID")]),
                     "section": .object(["type": .string("string"), "description": .string("Optional markdown heading to return, case-insensitive and without # markers. Exact match first; else unique prefix (e.g. 'Thread Handoff' → 'Thread Handoff — A · Bridge…').")]),
+                    "includeTranscript": .object(["type": .string("boolean"), "description": .string("When true, include meeting-notes transcript in the markdown (GET ?include_transcript=true).")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("pageId")])
@@ -910,8 +1007,9 @@ public enum NotionModule {
                     throw ToolRouterError.invalidArguments(toolName: "notion_page_markdown_read", reason: "missing 'pageId'")
                 }
 
+                let includeTranscript: Bool = { if case .bool(let b) = args["includeTranscript"] { return b }; return false }()
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
-                let data = try await client.getPageMarkdown(pageId: pageId)
+                let data = try await client.getPageMarkdown(pageId: pageId, includeTranscript: includeTranscript)
 
                 let markdown = SkillsModule.skillMarkdownString(fromMarkdownJSON: data)
                 if case .string(let section)? = args["section"] {
@@ -1105,17 +1203,19 @@ public enum NotionModule {
             name: "notion_comment_create",
             module: moduleName,
             tier: .notify,
-            description: "Post an inline-only comment on a Notion page (pageId) OR reply in an existing discussion thread (discussionId). Exactly one of pageId/discussionId. Text over Notion's 2000-character per-run limit is auto-chunked into sequential comments preserving order (replies re-use the same discussionId).",
+            description: "Post a comment on a Notion page (pageId), block (blockId), OR reply in an existing discussion (discussionId). Exactly one parent. Markdown XOR text/rich_text per call. Rich-text over Notion's 2000-character per-run limit is auto-chunked. Own-comment mutate is notion_comment_update / notion_comment_delete.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "pageId": .object(["type": .string("string"), "description": .string("Page ID for a new top-level page comment. Mutually exclusive with discussionId.")]),
-                    "discussionId": .object(["type": .string("string"), "description": .string("Existing discussion thread ID for a reply. Mutually exclusive with pageId. Obtain from notion_comments_list or a prior create's discussionId.")]),
-                    "text": .object(["type": .string("string"), "description": .string("Comment text content")]),
-                    "content": .object(["type": .string("string"), "description": .string("Alias for 'text' — comment text content. If both are supplied, 'text' wins.")]),
+                    "pageId": .object(["type": .string("string"), "description": .string("Page ID for a new top-level page comment. Mutually exclusive with discussionId and blockId.")]),
+                    "blockId": .object(["type": .string("string"), "description": .string("Block ID parent for an inline comment. Mutually exclusive with pageId/discussionId.")]),
+                    "discussionId": .object(["type": .string("string"), "description": .string("Existing discussion thread ID for a reply. Mutually exclusive with pageId/blockId.")]),
+                    "text": .object(["type": .string("string"), "description": .string("Rich-text comment content (XOR with markdown).")]),
+                    "content": .object(["type": .string("string"), "description": .string("Alias for 'text'. If both are supplied, 'text' wins.")]),
+                    "markdown": .object(["type": .string("string"), "description": .string("Markdown body (XOR with text/rich_text).")]),
                     "workspace": workspaceParam
                 ]),
-                "required": .array([.string("text")])
+                "required": .array([])
             ]),
             metadata: ToolMetadata(
                 title: "Notion: Create Comment",
@@ -1130,45 +1230,73 @@ public enum NotionModule {
                     throw ToolRouterError.invalidArguments(toolName: "notion_comment_create", reason: "missing arguments")
                 }
                 let pageId: String? = { if case .string(let p) = args["pageId"] { return p }; return nil }()
+                let blockId: String? = { if case .string(let b) = args["blockId"] { return b }; return nil }()
                 let discussionIdArg: String? = {
                     if case .string(let d) = args["discussionId"] { return d }
                     return nil
                 }()
                 let hasPage = !(pageId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
                 let hasDiscussion = !(discussionIdArg?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                guard hasPage != hasDiscussion else {
+                let hasBlock = !(blockId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                guard [hasPage, hasDiscussion, hasBlock].filter({ $0 }).count == 1 else {
                     throw ToolRouterError.invalidArguments(
                         toolName: "notion_comment_create",
-                        reason: "exactly one of 'pageId' or 'discussionId' is required"
+                        reason: "exactly one of 'pageId', 'discussionId', or 'blockId' is required"
                     )
                 }
-                // 'content' is an alias for 'text' — agents reach for 'content'
-                // as the generic term first. 'text' wins if both are supplied.
-                let text: String
-                if case .string(let t) = args["text"] {
-                    text = t
-                } else if case .string(let c) = args["content"] {
-                    text = c
-                } else {
-                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_create", reason: "missing 'text'")
+                let markdown: String? = { if case .string(let m) = args["markdown"] { return m }; return nil }()
+                let text: String? = {
+                    if case .string(let t) = args["text"] { return t }
+                    if case .string(let c) = args["content"] { return c }
+                    return nil
+                }()
+                let content: NotionRESTContracts.CommentContentMode
+                do {
+                    content = try NotionRESTContracts.CommentContentMode.parse(markdown: markdown, text: text)
+                } catch {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_create", reason: error.localizedDescription)
                 }
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
 
+                if case .markdown(let md) = content {
+                    let data = try await client.createComment(
+                        pageId: hasPage ? pageId : nil,
+                        discussionId: hasDiscussion ? discussionIdArg : nil,
+                        blockId: hasBlock ? blockId : nil,
+                        markdown: md,
+                        text: nil
+                    )
+                    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        return .object(["success": .bool(false), "error": .string("Failed to parse comment response")])
+                    }
+                    return .object([
+                        "success": .bool(true),
+                        "id": .string(json["id"] as? String ?? ""),
+                        "discussionId": .string(json["discussion_id"] as? String ?? discussionIdArg ?? "")
+                    ])
+                }
+
+                guard case .richText(let textBody) = content else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_create", reason: "missing 'text'")
+                }
+
                 // FB-3: Auto-chunk into sequential <=2000-char comments preserving order.
                 // For replies, every chunk uses the same discussionId so they stay in-thread.
-                let chunks = NotionModule.chunkCommentText(text, maxChars: 2000)
+                let chunks = NotionModule.chunkCommentText(textBody, maxChars: 2000)
 
                 var ids: [Value] = []
                 // PKT-MEM-136: surface discussion_id so VoiceMemoProcessor can ledger it.
                 var discussionIdOut = discussionIdArg ?? ""
                 for chunk in chunks {
                     let data: Data
-                    if hasDiscussion {
-                        data = try await client.createComment(pageId: nil, discussionId: discussionIdArg, text: chunk)
-                    } else {
-                        data = try await client.createComment(pageId: pageId, discussionId: nil, text: chunk)
-                    }
+                    data = try await client.createComment(
+                        pageId: hasPage ? pageId : nil,
+                        discussionId: hasDiscussion ? discussionIdArg : nil,
+                        blockId: hasBlock ? blockId : nil,
+                        markdown: nil,
+                        text: chunk
+                    )
                     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                         return .object([
                             "success": .bool(false),
@@ -1300,15 +1428,49 @@ public enum NotionModule {
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "filePath": .object(["type": .string("string"), "description": .string("Absolute path to the local file")]),
+                    "filePath": .object(["type": .string("string"), "description": .string("Absolute path to the local file (required unless mode is external_url).")]),
+                    "mode": .object(["type": .string("string"), "description": .string("single_part (default, 20MB reject), multi_part (opt-in ≤5GB), or external_url (opt-in import).")]),
+                    "externalUrl": .object(["type": .string("string"), "description": .string("HTTPS URL to import when mode is external_url.")]),
                     "trace": .object(["type": .string("boolean"), "description": .string("If true, include safe phase diagnostics for create_upload and send_content failures/success.")]),
                     "workspace": workspaceParam
                 ]),
-                "required": .array([.string("filePath")])
+                "required": .array([])
             ]),
             handler: { arguments in
-                guard case .object(let args) = arguments,
-                      case .string(let filePath) = args["filePath"] else {
+                guard case .object(let args) = arguments else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_file_upload", reason: "missing arguments")
+                }
+                let mode = NotionRESTContracts.parseFileUploadMode({
+                    if case .string(let m) = args["mode"] { return m }
+                    return nil
+                }())
+                if mode == .externalURL {
+                    guard case .string(let url) = args["externalUrl"], !url.isEmpty else {
+                        throw ToolRouterError.invalidArguments(toolName: "notion_file_upload", reason: "external_url mode requires 'externalUrl'")
+                    }
+                    let fileName: String = {
+                        if case .string(let n) = args["fileName"], !n.isEmpty { return n }
+                        return URL(string: url)?.lastPathComponent ?? "import"
+                    }()
+                    let ext = (fileName as NSString).pathExtension.lowercased()
+                    let contentType = NotionModule.mimeType(forExtension: ext)
+                    if contentType == "application/octet-stream" {
+                        return .object(["error": .string("Unsupported file extension for external_url import.")])
+                    }
+                    let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                    let data = try await client.importFileFromExternalURL(fileName: fileName, externalURL: url, contentType: contentType)
+                    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        return .object(["error": .string("Failed to parse upload response")])
+                    }
+                    return .object([
+                        "success": .bool(true),
+                        "id": .string(json["id"] as? String ?? ""),
+                        "status": .string(json["status"] as? String ?? "unknown"),
+                        "mode": .string("external_url")
+                    ])
+                }
+
+                guard case .string(let filePath) = args["filePath"] else {
                     throw ToolRouterError.invalidArguments(toolName: "notion_file_upload", reason: "missing 'filePath'")
                 }
 
@@ -1316,37 +1478,13 @@ public enum NotionModule {
                     return .object(["error": .string("File not found or unreadable: \(filePath)")])
                 }
 
-                guard fileData.count <= 20 * 1024 * 1024 else {
-                    return .object(["error": .string("File exceeds 20MB limit (\(fileData.count) bytes)")])
+                if let reject = NotionRESTContracts.rejectSinglePartIfOversized(byteCount: fileData.count, mode: mode) {
+                    return .object(["error": .string(reject)])
                 }
 
                 let fileName = (filePath as NSString).lastPathComponent
                 let ext = (fileName as NSString).pathExtension.lowercased()
-                let contentType: String = {
-                    switch ext {
-                    case "pdf": return "application/pdf"
-                    case "png": return "image/png"
-                    case "jpg", "jpeg": return "image/jpeg"
-                    case "gif": return "image/gif"
-                    case "txt": return "text/plain"
-                    case "json": return "application/json"
-                    case "csv": return "text/csv"
-                    case "mp4": return "video/mp4"
-                    case "mov": return "video/quicktime"
-                    case "mp3": return "audio/mpeg"
-                    case "wav": return "audio/wav"
-                    case "m4a": return "audio/mp4"
-                    case "ogg": return "audio/ogg"
-                    case "webm": return "video/webm"
-                    case "webp": return "image/webp"
-                    case "svg": return "image/svg+xml"
-                    case "html", "htm": return "text/html"
-                    case "xml": return "text/xml"
-                    case "zip": return "application/zip"
-                    case "md": return "text/markdown"
-                    default: return "application/octet-stream"
-                    }
-                }()
+                let contentType = NotionModule.mimeType(forExtension: ext)
 
                 // PKT-739 (v2.2 · 0.2): Reject unsupported MIME early. Notion's File Upload API
                 // rejects application/octet-stream with a 400 validation_error at create_upload phase;
@@ -1357,6 +1495,18 @@ public enum NotionModule {
                 }
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
                 let includeTrace: Bool = { if case .bool(let b) = args["trace"] { return b }; return false }()
+                if mode == .multiPart {
+                    let data = try await client.uploadFileMultiPart(fileName: fileName, fileData: fileData, contentType: contentType)
+                    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                        return .object(["error": .string("Failed to parse upload response")])
+                    }
+                    return .object([
+                        "success": .bool(true),
+                        "id": .string(json["id"] as? String ?? ""),
+                        "status": .string(json["status"] as? String ?? "unknown"),
+                        "mode": .string("multi_part")
+                    ])
+                }
                 let upload = try await client.uploadFileWithTrace(fileName: fileName, fileData: fileData, contentType: contentType)
 
                 guard let json = try? JSONSerialization.jsonObject(with: upload.data) as? [String: Any] else {
@@ -1962,6 +2112,9 @@ public enum NotionModule {
                     "configuration": .object(["type": .string("string"), "description": .string("JSON string of view configuration (must include type + properties with property_id / visible / width / wrap_cells / frozen_column_index as needed).")]),
                     "filter": .object(["type": .string("string"), "description": .string("Optional JSON string filter object.")]),
                     "sorts": .object(["type": .string("string"), "description": .string("Optional JSON string sorts array.")]),
+                    "quickFilters": .object(["type": .string("string"), "description": .string("Optional JSON object of quick_filters for the view filter bar.")]),
+                    "position": .object(["type": .string("string"), "description": .string("Optional JSON position union (start/end/after_view) for the database tab bar.")]),
+                    "viewId": .object(["type": .string("string"), "description": .string("Dashboard-widget PARENT view id — not a duplicate-from source. Mutually exclusive with databaseId.")]),
                     "workspace": workspaceParam
                 ]),
                 "required": .array([.string("name"), .string("type")])
@@ -1985,24 +2138,28 @@ public enum NotionModule {
                 }
                 let databaseId: String? = { if case .string(let d) = args["databaseId"] { return d }; return nil }()
                 let dataSourceId: String? = { if case .string(let d) = args["dataSourceId"] { return d }; return nil }()
-                let hasDB = !(databaseId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                let hasDS = !(dataSourceId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-                guard hasDB || hasDS else {
-                    throw ToolRouterError.invalidArguments(
-                        toolName: "notion_view_create",
-                        reason: "at least one of 'databaseId' or 'dataSourceId' is required"
+                let dashboardViewId: String? = { if case .string(let d) = args["viewId"] { return d }; return nil }()
+                let parentKind: (hasDB: Bool, hasDS: Bool, hasView: Bool)
+                do {
+                    parentKind = try NotionRESTContracts.viewCreateParentKind(
+                        databaseId: databaseId, dataSourceId: dataSourceId, viewId: dashboardViewId
                     )
+                } catch {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_view_create", reason: error.localizedDescription)
                 }
 
                 var body: [String: Any] = [
                     "name": name,
                     "type": viewType
                 ]
-                if hasDB, let databaseId {
+                if parentKind.hasDB, let databaseId {
                     body["database_id"] = databaseId.replacingOccurrences(of: "-", with: "")
                 }
-                if hasDS, let dataSourceId {
+                if parentKind.hasDS, let dataSourceId {
                     body["data_source_id"] = dataSourceId.replacingOccurrences(of: "-", with: "")
+                }
+                if parentKind.hasView, let dashboardViewId {
+                    body["view_id"] = dashboardViewId.replacingOccurrences(of: "-", with: "")
                 }
                 if case .string(let cfgJSON) = args["configuration"], !cfgJSON.isEmpty {
                     guard let cfgData = cfgJSON.data(using: .utf8),
@@ -2024,6 +2181,20 @@ public enum NotionModule {
                         throw ToolRouterError.invalidArguments(toolName: "notion_view_create", reason: "sorts must be valid JSON")
                     }
                     body["sorts"] = sortsObj
+                }
+                if case .string(let qfJSON) = args["quickFilters"], !qfJSON.isEmpty {
+                    guard let qfData = qfJSON.data(using: .utf8),
+                          let qfObj = try? JSONSerialization.jsonObject(with: qfData) else {
+                        throw ToolRouterError.invalidArguments(toolName: "notion_view_create", reason: "quickFilters must be valid JSON")
+                    }
+                    body["quick_filters"] = qfObj
+                }
+                if case .string(let posJSON) = args["position"], !posJSON.isEmpty {
+                    guard let posData = posJSON.data(using: .utf8),
+                          let posObj = try? JSONSerialization.jsonObject(with: posData) else {
+                        throw ToolRouterError.invalidArguments(toolName: "notion_view_create", reason: "position must be valid JSON")
+                    }
+                    body["position"] = posObj
                 }
 
                 let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
@@ -2123,6 +2294,310 @@ public enum NotionModule {
                     "url": .string(json["url"] as? String ?? ""),
                     "view": .string(raw)
                 ])
+            }
+        ))
+
+        // MARK: 28. notion_view_query – open (#225)
+        await router.register(ToolRegistration(
+            name: "notion_view_query",
+            module: moduleName,
+            tier: .open,
+            description: "Query rows through a saved Notion database view (POST /v1/views/{id}/queries). Reproduces the view's filter/sort. Paginate with queryId + startCursor. Echoes request_status/truncated; a capped page is still success.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "viewId": .object(["type": .string("string"), "description": .string("View ID to query.")]),
+                    "queryId": .object(["type": .string("string"), "description": .string("Existing query id for pagination (GET). Omit to create a new query.")]),
+                    "pageSize": .object(["type": .string("integer"), "description": .string("Max results (default 50, max 100).")]),
+                    "startCursor": .object(["type": .string("string"), "description": .string("Pagination cursor for an existing queryId.")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("viewId")])
+            ]),
+            metadata: ToolMetadata(
+                title: "Notion: Query View",
+                whenToUse: ["reading rows as a saved view shows them"],
+                whenNotToUse: ["ad-hoc filters (use notion_query)", "SQL / multi-source query (not built)"],
+                relatedTools: ["notion_view_get", "notion_query", "notion_views_list"]
+            ),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let viewId) = args["viewId"], !viewId.isEmpty else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_view_query", reason: "missing 'viewId'")
+                }
+                let pageSize: Int = { if case .int(let n) = args["pageSize"] { return n }; return 50 }()
+                let queryId: String? = { if case .string(let s) = args["queryId"] { return s }; return nil }()
+                let startCursor: String? = { if case .string(let s) = args["startCursor"] { return s }; return nil }()
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data: Data
+                if let queryId, !queryId.isEmpty {
+                    data = try await client.getViewQuery(viewId: viewId, queryId: queryId, startCursor: startCursor, pageSize: pageSize)
+                } else {
+                    data = try await client.createViewQuery(viewId: viewId, pageSize: pageSize)
+                }
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse view query response")])
+                }
+                var out: [String: Value] = [:]
+                if let results = json["results"] as? [[String: Any]] {
+                    out["count"] = .int(results.count)
+                    out["results"] = NotionRESTContracts.mcpValue(fromJSON: results)
+                }
+                if let qid = json["query_id"] as? String { out["query_id"] = .string(qid) }
+                NotionRESTContracts.mergeQueryStatus(from: json, into: &out)
+                return .object(out)
+            }
+        ))
+
+        // MARK: 29. notion_view_delete – request (#225)
+        await router.register(ToolRegistration(
+            name: "notion_view_delete",
+            module: moduleName,
+            tier: .request,
+            neverAutoApprove: true,
+            description: "Permanently delete a Notion database view (DELETE /v1/views/{id}). Irreversible. Last remaining view returns REST validation_error. Requires confirm:true.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "viewId": .object(["type": .string("string"), "description": .string("View ID to delete.")]),
+                    "confirm": .object(["type": .string("boolean"), "description": .string("Must be true.")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("viewId"), .string("confirm")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let viewId) = args["viewId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_view_delete", reason: "missing 'viewId'")
+                }
+                guard case .bool(true)? = args["confirm"] else {
+                    return .object(["error": .string("Refused: pass confirm:true to delete a view")])
+                }
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.deleteView(viewId: viewId)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse delete view response")])
+                }
+                return .object([
+                    "success": .bool(true),
+                    "id": .string(json["id"] as? String ?? viewId)
+                ])
+            }
+        ))
+
+        // MARK: 30. notion_page_trash – request (#228)
+        await router.register(ToolRegistration(
+            name: "notion_page_trash",
+            module: moduleName,
+            tier: .request,
+            neverAutoApprove: true,
+            description: "Trash or restore a Notion page via PATCH in_trash. No hard delete. No is_locked. Requires confirm:true.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "pageId": .object(["type": .string("string"), "description": .string("Page ID (UUID or Notion URL).")]),
+                    "mode": .object(["type": .string("string"), "description": .string("'trash' (default) or 'restore'.")]),
+                    "confirm": .object(["type": .string("boolean"), "description": .string("Must be true.")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("pageId"), .string("confirm")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let pageId) = args["pageId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_page_trash", reason: "missing 'pageId'")
+                }
+                guard case .bool(true)? = args["confirm"] else {
+                    return .object(["error": .string("Refused: pass confirm:true to trash or restore a page")])
+                }
+                let mode: String = { if case .string(let m) = args["mode"] { return m }; return "trash" }()
+                let inTrash = (mode != "restore")
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.setPageTrash(pageId: pageId, inTrash: inTrash)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse trash response")])
+                }
+                return .object([
+                    "success": .bool(true),
+                    "id": .string(json["id"] as? String ?? pageId),
+                    "in_trash": .bool(json["in_trash"] as? Bool ?? inTrash)
+                ])
+            }
+        ))
+
+        // MARK: 31. notion_comment_update – notify (#229)
+        await router.register(ToolRegistration(
+            name: "notion_comment_update",
+            module: moduleName,
+            tier: .notify,
+            description: "PATCH an existing comment you created (own-comments only; otherwise 404). Markdown XOR text/rich_text.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "commentId": .object(["type": .string("string"), "description": .string("Comment ID.")]),
+                    "text": .object(["type": .string("string"), "description": .string("Rich-text replacement (XOR with markdown).")]),
+                    "markdown": .object(["type": .string("string"), "description": .string("Markdown replacement (XOR with text).")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("commentId")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let commentId) = args["commentId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_update", reason: "missing 'commentId'")
+                }
+                let markdown: String? = { if case .string(let m) = args["markdown"] { return m }; return nil }()
+                let text: String? = { if case .string(let t) = args["text"] { return t }; return nil }()
+                let content: NotionRESTContracts.CommentContentMode
+                do {
+                    content = try NotionRESTContracts.CommentContentMode.parse(markdown: markdown, text: text)
+                } catch {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_update", reason: error.localizedDescription)
+                }
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let md: String? = { if case .markdown(let s) = content { return s }; return nil }()
+                let tx: String? = { if case .richText(let s) = content { return s }; return nil }()
+                let data = try await client.updateComment(commentId: commentId, markdown: md, text: tx)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse comment update")])
+                }
+                return .object([
+                    "success": .bool(true),
+                    "id": .string(json["id"] as? String ?? commentId)
+                ])
+            }
+        ))
+
+        // MARK: 32. notion_comment_delete – request (#229)
+        await router.register(ToolRegistration(
+            name: "notion_comment_delete",
+            module: moduleName,
+            tier: .request,
+            neverAutoApprove: true,
+            description: "DELETE a comment you created (own-comments only; otherwise 404). Requires confirm:true.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "commentId": .object(["type": .string("string"), "description": .string("Comment ID.")]),
+                    "confirm": .object(["type": .string("boolean"), "description": .string("Must be true.")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("commentId"), .string("confirm")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let commentId) = args["commentId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_comment_delete", reason: "missing 'commentId'")
+                }
+                guard case .bool(true)? = args["confirm"] else {
+                    return .object(["error": .string("Refused: pass confirm:true to delete a comment")])
+                }
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                _ = try await client.deleteComment(commentId: commentId)
+                return .object(["success": .bool(true), "id": .string(commentId)])
+            }
+        ))
+
+        // MARK: 33. notion_async_task_get – open (#237)
+        await router.register(ToolRegistration(
+            name: "notion_async_task_get",
+            module: moduleName,
+            tier: .open,
+            description: "GET /v1/async_tasks/{id}. Poll after allow_async page create/markdown/template apply. Not Custom Agent sessions.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "taskId": .object(["type": .string("string"), "description": .string("Async task id from a queued write.")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("taskId")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let taskId) = args["taskId"], !taskId.isEmpty else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_async_task_get", reason: "missing 'taskId'")
+                }
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.getAsyncTask(taskId: taskId)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse async task")])
+                }
+                return NotionRESTContracts.mcpValue(fromJSON: json)
+            }
+        ))
+
+        // MARK: 34. notion_templates_list – open (#230)
+        await router.register(ToolRegistration(
+            name: "notion_templates_list",
+            module: moduleName,
+            tier: .open,
+            description: "List data-source templates (GET /v1/data_sources/{id}/templates). Use templateId on create/update; template XOR children; erase_content is refused.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "dataSourceId": .object(["type": .string("string"), "description": .string("Data source ID.")]),
+                    "pageSize": .object(["type": .string("integer"), "description": .string("Max templates (default 100).")]),
+                    "startCursor": .object(["type": .string("string"), "description": .string("Pagination cursor.")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([.string("dataSourceId")])
+            ]),
+            handler: { arguments in
+                guard case .object(let args) = arguments,
+                      case .string(let dsId) = args["dataSourceId"] else {
+                    throw ToolRouterError.invalidArguments(toolName: "notion_templates_list", reason: "missing 'dataSourceId'")
+                }
+                let pageSize: Int = { if case .int(let n) = args["pageSize"] { return n }; return 100 }()
+                let startCursor: String? = { if case .string(let s) = args["startCursor"] { return s }; return nil }()
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.listTemplates(dataSourceId: dsId, startCursor: startCursor, pageSize: pageSize)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse templates list")])
+                }
+                return NotionRESTContracts.mcpValue(fromJSON: json)
+            }
+        ))
+
+        // MARK: 35. notion_meeting_notes_query – open (#236)
+        await router.register(ToolRegistration(
+            name: "notion_meeting_notes_query",
+            module: moduleName,
+            tier: .open,
+            description: "Query meeting-notes blocks (POST /v1/blocks/meeting_notes/query). Pass filter JSON. Pair with notion_page_markdown_read includeTranscript=true.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "filter": .object(["type": .string("string"), "description": .string("Optional JSON filter object for meeting-note properties.")]),
+                    "pageSize": .object(["type": .string("integer"), "description": .string("Max results (default 25, max 100).")]),
+                    "startCursor": .object(["type": .string("string"), "description": .string("Pagination cursor.")]),
+                    "workspace": workspaceParam
+                ]),
+                "required": .array([])
+            ]),
+            handler: { arguments in
+                let args: [String: Value] = { if case .object(let a) = arguments { return a }; return [:] }()
+                var body: [String: Any] = [:]
+                let pageSize: Int = { if case .int(let n) = args["pageSize"] { return max(1, min(n, 100)) }; return 25 }()
+                body["page_size"] = pageSize
+                if case .string(let c) = args["startCursor"], !c.isEmpty { body["start_cursor"] = c }
+                if case .string(let f) = args["filter"], !f.isEmpty {
+                    guard let d = f.data(using: .utf8),
+                          let obj = try? JSONSerialization.jsonObject(with: d) else {
+                        throw ToolRouterError.invalidArguments(toolName: "notion_meeting_notes_query", reason: "filter must be valid JSON")
+                    }
+                    body["filter"] = obj
+                }
+                let client = try await registryHolder.getClient(workspace: extractWorkspace(args))
+                let data = try await client.queryMeetingNotes(body: body)
+                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    return .object(["error": .string("Failed to parse meeting notes query")])
+                }
+                var out: [String: Value] = [:]
+                if let results = json["results"] {
+                    out["results"] = NotionRESTContracts.mcpValue(fromJSON: results)
+                }
+                NotionRESTContracts.mergeQueryStatus(from: json, into: &out)
+                return .object(out)
             }
         ))
 

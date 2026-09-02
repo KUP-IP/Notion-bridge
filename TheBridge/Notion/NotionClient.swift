@@ -357,7 +357,14 @@ public actor NotionClient {
 
     /// Search Notion workspace.
     public func search(query: String, pageSize: Int = 10) async throws -> Data {
-        let body: [String: Any] = ["query": query, "page_size": pageSize]
+        try await search(body: try NotionRESTContracts.buildSearchBody(
+            query: query, pageSize: pageSize, startCursor: nil,
+            objectFilter: nil, inTrash: nil, sortJSON: nil
+        ))
+    }
+
+    /// POST /v1/search with an explicit body (filter/sort/cursor/`in_trash`).
+    public func search(body: [String: Any]) async throws -> Data {
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await request(method: "POST", path: "/search", body: bodyData)
         guard (200...299).contains(response.statusCode) else {
@@ -530,7 +537,15 @@ public actor NotionClient {
     /// optional single emoji (Notion's `{"type":"emoji","emoji":"…"}` icon
     /// shape); omitted ⇒ byte-identical to the pre-icon-support body.
     /// POST /v1/pages
-    public func createPage(parentId: String, parentType: String = "page_id", properties: Data, children: Data? = nil, icon: String? = nil) async throws -> Data {
+    public func createPage(
+        parentId: String,
+        parentType: String = "page_id",
+        properties: Data,
+        children: Data? = nil,
+        icon: String? = nil,
+        template: [String: Any]? = nil,
+        allowAsync: Bool = false
+    ) async throws -> Data {
         let cleanId = parentId.replacingOccurrences(of: "-", with: "")
         var body: [String: Any] = ["parent": [parentType: cleanId]]
 
@@ -539,10 +554,16 @@ public actor NotionClient {
             body["properties"] = propsObj
         }
 
-        // Optional children blocks
+        // Optional children blocks — XOR with template (enforced by caller).
         if let childrenData = children,
            let childrenObj = try? JSONSerialization.jsonObject(with: childrenData) {
             body["children"] = childrenObj
+        }
+        if let template {
+            body["template"] = template
+        }
+        if allowAsync {
+            body["allow_async"] = true
         }
 
         if let icon {
@@ -656,9 +677,11 @@ public actor NotionClient {
 
     /// A7: Get page content as markdown.
     /// GET /v1/pages/{id}/markdown
-    public func getPageMarkdown(pageId: String) async throws -> Data {
+    public func getPageMarkdown(pageId: String, includeTranscript: Bool = false) async throws -> Data {
         let cleanId = pageId.replacingOccurrences(of: "-", with: "")
-        let (data, response) = try await request(method: "GET", path: "/pages/\(cleanId)/markdown")
+        var path = "/pages/\(cleanId)/markdown"
+        if includeTranscript { path += "?include_transcript=true" }
+        let (data, response) = try await request(method: "GET", path: path)
         guard (200...299).contains(response.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? ""
             throw NotionClientError.httpError(response.statusCode, msg)
@@ -673,12 +696,13 @@ public actor NotionClient {
     /// reads markdown, applies old_str/new_str edits in-process, then writes the
     /// already-edited result back here — so the wire payload is always the full,
     /// intentionally-edited body, never a blind overwrite.
-    public func replacePageMarkdown(pageId: String, markdown: String) async throws -> Data {
+    public func replacePageMarkdown(pageId: String, markdown: String, allowAsync: Bool = false) async throws -> Data {
         let cleanId = pageId.replacingOccurrences(of: "-", with: "")
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "type": "replace_content",
             "replace_content": ["new_str": markdown]
         ]
+        if allowAsync { body["allow_async"] = true }
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await request(method: "PATCH", path: "/pages/\(cleanId)/markdown", body: bodyData)
         guard (200...299).contains(response.statusCode) else {
@@ -735,10 +759,53 @@ public actor NotionClient {
     /// POST /v1/comments — exactly one of `pageId` (parent.page_id) or `discussionId`.
     /// When `discussionId` is set, the body is a thread reply (no parent).
     public func createComment(pageId: String? = nil, discussionId: String? = nil, text: String) async throws -> Data {
-        try Self.validateSingleRichTextRun(text, context: "notion_comment_create")
-        let body = try Self.buildCreateCommentRequestBody(pageId: pageId, discussionId: discussionId, text: text)
+        try await createComment(pageId: pageId, discussionId: discussionId, blockId: nil, markdown: nil, text: text)
+    }
+
+    public func createComment(
+        pageId: String? = nil,
+        discussionId: String? = nil,
+        blockId: String? = nil,
+        markdown: String? = nil,
+        text: String? = nil
+    ) async throws -> Data {
+        let content = try NotionRESTContracts.CommentContentMode.parse(markdown: markdown, text: text)
+        if case .richText(let run) = content {
+            try Self.validateSingleRichTextRun(run, context: "notion_comment_create")
+        }
+        let body = try NotionRESTContracts.buildCreateCommentBody(
+            pageId: pageId, discussionId: discussionId, blockId: blockId, content: content
+        )
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await request(method: "POST", path: "/comments", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// PATCH /v1/comments/{id} — own comments only (404 otherwise).
+    public func updateComment(commentId: String, markdown: String? = nil, text: String? = nil) async throws -> Data {
+        let content = try NotionRESTContracts.CommentContentMode.parse(markdown: markdown, text: text)
+        if case .richText(let run) = content {
+            try Self.validateSingleRichTextRun(run, context: "notion_comment_update")
+        }
+        let body = NotionRESTContracts.buildUpdateCommentBody(content: content)
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let cleanId = commentId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(method: "PATCH", path: "/comments/\(cleanId)", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// DELETE /v1/comments/{id} — own comments only (404 otherwise).
+    public func deleteComment(commentId: String) async throws -> Data {
+        let cleanId = commentId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(method: "DELETE", path: "/comments/\(cleanId)")
         guard (200...299).contains(response.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? ""
             throw NotionClientError.httpError(response.statusCode, msg)
@@ -753,26 +820,12 @@ public actor NotionClient {
         discussionId: String?,
         text: String
     ) throws -> [String: Any] {
-        let hasPage = !(pageId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        let hasDiscussion = !(discussionId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        guard hasPage != hasDiscussion else {
-            throw NotionClientError.decodingError(
-                "createComment requires exactly one of pageId or discussionId (got page=\(hasPage) discussion=\(hasDiscussion))"
-            )
-        }
-        let richText: [[String: Any]] = [["type": "text", "text": ["content": text]]]
-        if hasDiscussion, let discussionId {
-            let clean = discussionId.replacingOccurrences(of: "-", with: "")
-            return [
-                "discussion_id": clean,
-                "rich_text": richText
-            ]
-        }
-        let cleanId = Self.normalizePageId(pageId!)
-        return [
-            "parent": ["page_id": cleanId],
-            "rich_text": richText
-        ]
+        try NotionRESTContracts.buildCreateCommentBody(
+            pageId: pageId,
+            discussionId: discussionId,
+            blockId: nil,
+            content: .richText(text)
+        )
     }
 
     /// A10a: List all users in the workspace.
@@ -1072,6 +1125,181 @@ public actor NotionClient {
         let cleanId = viewId.replacingOccurrences(of: "-", with: "")
         let bodyData = try JSONSerialization.data(withJSONObject: body)
         let (data, response) = try await request(method: "PATCH", path: "/views/\(cleanId)", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// Query a view: POST /v1/views/{id}/queries (creates a query + first page).
+    public func createViewQuery(viewId: String, pageSize: Int = 50) async throws -> Data {
+        let cleanId = viewId.replacingOccurrences(of: "-", with: "")
+        let size = min(max(pageSize, 1), 100)
+        let body = try JSONSerialization.data(withJSONObject: ["page_size": size])
+        let (data, response) = try await request(method: "POST", path: "/views/\(cleanId)/queries", body: body)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// Paginate a view query: GET /v1/views/{id}/queries/{query_id}
+    public func getViewQuery(viewId: String, queryId: String, startCursor: String?, pageSize: Int = 50) async throws -> Data {
+        let cleanView = viewId.replacingOccurrences(of: "-", with: "")
+        let cleanQuery = queryId.replacingOccurrences(of: "-", with: "")
+        let size = min(max(pageSize, 1), 100)
+        var path = "/views/\(cleanView)/queries/\(cleanQuery)?page_size=\(size)"
+        if let startCursor, !startCursor.isEmpty {
+            let encoded = startCursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? startCursor
+            path += "&start_cursor=\(encoded)"
+        }
+        let (data, response) = try await request(method: "GET", path: path)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// DELETE /v1/views/{id} — irreversible. Last remaining view → validation_error.
+    public func deleteView(viewId: String) async throws -> Data {
+        let cleanId = viewId.replacingOccurrences(of: "-", with: "")
+        let (data, response) = try await request(method: "DELETE", path: "/views/\(cleanId)")
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// PATCH /v1/pages/{id} with {in_trash: true|false}. No hard delete. No is_locked.
+    public func setPageTrash(pageId: String, inTrash: Bool) async throws -> Data {
+        let cleanId = Self.normalizePageId(pageId)
+        let bodyData = try JSONSerialization.data(withJSONObject: NotionRESTContracts.buildPageTrashBody(inTrash: inTrash))
+        let (data, response) = try await request(method: "PATCH", path: "/pages/\(cleanId)", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// PATCH /v1/pages/{id} applying a template (no erase_content).
+    public func applyPageTemplate(pageId: String, template: [String: Any], allowAsync: Bool = true) async throws -> Data {
+        let cleanId = Self.normalizePageId(pageId)
+        var body: [String: Any] = ["template": template]
+        if allowAsync { body["allow_async"] = true }
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "PATCH", path: "/pages/\(cleanId)", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// GET /v1/async_tasks/{id}
+    public func getAsyncTask(taskId: String) async throws -> Data {
+        let (data, response) = try await request(method: "GET", path: "/async_tasks/\(taskId)")
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// GET /v1/data_sources/{id}/templates
+    public func listTemplates(dataSourceId: String, startCursor: String? = nil, pageSize: Int = 100) async throws -> Data {
+        let cleanId = dataSourceId.replacingOccurrences(of: "-", with: "")
+        let size = min(max(pageSize, 1), 100)
+        var path = "/data_sources/\(cleanId)/templates?page_size=\(size)"
+        if let startCursor, !startCursor.isEmpty {
+            let encoded = startCursor.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? startCursor
+            path += "&start_cursor=\(encoded)"
+        }
+        let (data, response) = try await request(method: "GET", path: path)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// POST /v1/blocks/meeting_notes/query
+    public func queryMeetingNotes(body: [String: Any]) async throws -> Data {
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await request(method: "POST", path: "/blocks/meeting_notes/query", body: bodyData)
+        guard (200...299).contains(response.statusCode) else {
+            let msg = String(data: data, encoding: .utf8) ?? ""
+            throw NotionClientError.httpError(response.statusCode, msg)
+        }
+        return data
+    }
+
+    /// Opt-in multi_part upload (chunks of 10MB). Completes via POST .../complete.
+    public func uploadFileMultiPart(fileName: String, fileData: Data, contentType: String) async throws -> Data {
+        let parts = NotionRESTContracts.numberOfParts(byteCount: fileData.count)
+        let createBody: [String: Any] = [
+            "file_name": fileName,
+            "content_type": contentType,
+            "mode": "multi_part",
+            "number_of_parts": parts
+        ]
+        let createData = try JSONSerialization.data(withJSONObject: createBody)
+        let (createResponseData, createHttp) = try await request(method: "POST", path: "/file_uploads", body: createData)
+        guard (200...299).contains(createHttp.statusCode) else {
+            let msg = String(data: createResponseData, encoding: .utf8) ?? ""
+            throw NotionClientError.decodingError("multi_part create_upload httpStatus=\(createHttp.statusCode) body=\(String(msg.prefix(500)))")
+        }
+        guard let createJSON = try? JSONSerialization.jsonObject(with: createResponseData) as? [String: Any],
+              let uploadId = createJSON["id"] as? String else {
+            throw NotionClientError.decodingError("multi_part create_upload missing file_upload id")
+        }
+        let chunk = NotionRESTContracts.multiPartChunkBytes
+        for part in 1...parts {
+            let start = (part - 1) * chunk
+            let end = min(start + chunk, fileData.count)
+            let slice = fileData.subdata(in: start..<end)
+            let boundary = "TheBridge-\(UUID().uuidString)"
+            var bodyData = Data()
+            bodyData.append("--\(boundary)\r\n".data(using: .utf8)!)
+            bodyData.append("Content-Disposition: form-data; name=\"part_number\"\r\n\r\n\(part)\r\n".data(using: .utf8)!)
+            bodyData.append("--\(boundary)\r\n".data(using: .utf8)!)
+            bodyData.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(fileName)\"\r\n".data(using: .utf8)!)
+            bodyData.append("Content-Type: \(contentType)\r\n\r\n".data(using: .utf8)!)
+            bodyData.append(slice)
+            bodyData.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+            let (sendData, sendResp) = try await request(
+                method: "POST",
+                path: "/file_uploads/\(uploadId)/send",
+                body: bodyData,
+                contentType: "multipart/form-data; boundary=\(boundary)"
+            )
+            guard (200...299).contains(sendResp.statusCode) else {
+                let msg = String(data: sendData, encoding: .utf8) ?? ""
+                throw NotionClientError.decodingError("multi_part send part=\(part) httpStatus=\(sendResp.statusCode) body=\(String(msg.prefix(500)))")
+            }
+        }
+        let (completeData, completeResp) = try await request(method: "POST", path: "/file_uploads/\(uploadId)/complete")
+        guard (200...299).contains(completeResp.statusCode) else {
+            let msg = String(data: completeData, encoding: .utf8) ?? ""
+            throw NotionClientError.decodingError("multi_part complete httpStatus=\(completeResp.statusCode) body=\(String(msg.prefix(500)))")
+        }
+        return completeData
+    }
+
+    /// Opt-in external_url import. POST /v1/file_uploads mode=external_url.
+    public func importFileFromExternalURL(fileName: String, externalURL: String, contentType: String) async throws -> Data {
+        let createBody: [String: Any] = [
+            "file_name": fileName,
+            "content_type": contentType,
+            "mode": "external_url",
+            "external_url": externalURL
+        ]
+        let createData = try JSONSerialization.data(withJSONObject: createBody)
+        let (data, response) = try await request(method: "POST", path: "/file_uploads", body: createData)
         guard (200...299).contains(response.statusCode) else {
             let msg = String(data: data, encoding: .utf8) ?? ""
             throw NotionClientError.httpError(response.statusCode, msg)

@@ -22,9 +22,9 @@ func runNotionModuleTests() async {
     // MARK: - Tool Registration (23 tools)
     // ============================================================
 
-    await test("NotionModule registers 26 tools (views list/get/create/update + prior surface)") {
+    await test("NotionModule registers 34 tools (Wave 2 REST + prior surface)") {
         let tools = await router.registrations(forModule: "notion")
-        try expect(tools.count == 26, "Expected 26 notion tools, got \(tools.count)")
+        try expect(tools.count == 34, "Expected 34 notion tools, got \(tools.count)")
     }
 
     let expectedTools: [String] = [
@@ -39,7 +39,10 @@ func runNotionModuleTests() async {
         "notion_datasource_delete",
         "notion_discussion_create",
         "notion_views_list", "notion_view_get",
-        "notion_view_create", "notion_view_update"
+        "notion_view_create", "notion_view_update",
+        "notion_view_query", "notion_view_delete", "notion_page_trash",
+        "notion_comment_update", "notion_comment_delete",
+        "notion_async_task_get", "notion_templates_list", "notion_meeting_notes_query"
     ]
 
     for toolName in expectedTools {
@@ -59,7 +62,9 @@ func runNotionModuleTests() async {
         "notion_page_markdown_read", "notion_comments_list",
         "notion_users_list", "notion_token_introspect",
         "notion_database_get", "notion_datasource_get",
-        "notion_views_list", "notion_view_get"
+        "notion_views_list", "notion_view_get",
+        "notion_view_query", "notion_async_task_get", "notion_templates_list",
+        "notion_meeting_notes_query"
     ]
     for toolName in openTools {
         await test("\(toolName) tier is open") {
@@ -75,7 +80,7 @@ func runNotionModuleTests() async {
         "notion_comment_create", "notion_page_move", "notion_file_upload",
         "notion_datasource_update", "notion_datasource_create",
         "notion_block_update",
-        "notion_view_create", "notion_view_update"
+        "notion_view_create", "notion_view_update", "notion_comment_update"
     ]
     for toolName in notifyTools {
         await test("\(toolName) tier is notify") {
