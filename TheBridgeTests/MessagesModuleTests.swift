@@ -567,4 +567,122 @@ func runMessagesModuleTests() async {
             // Expected
         }
     }
+
+    await test("#215 chat selector is XOR exact contact or chatIdentifier") {
+        do {
+            _ = try MessagesQueryContracts.ChatSelector.parse(contact: nil, chatIdentifier: nil)
+            throw TestError.assertion("expected XOR failure")
+        } catch is ToolRouterError {}
+        do {
+            _ = try MessagesQueryContracts.ChatSelector.parse(contact: "+1555", chatIdentifier: "chat123")
+            throw TestError.assertion("expected both-set XOR failure")
+        } catch is ToolRouterError {}
+        let handle = try MessagesQueryContracts.ChatSelector.parse(contact: "+15551212", chatIdentifier: nil)
+        try expect(handle == .contact("+15551212"))
+        try expect(handle.whereClause == "h.id = ?1")
+        let group = try MessagesQueryContracts.ChatSelector.parse(contact: "  ", chatIdentifier: "chatABCDEF")
+        try expect(group == .chatIdentifier("chatABCDEF"))
+        try expect(group.whereClause == "c.chat_identifier = ?1")
+    }
+
+    await test("#216 default lists filter tapbacks via associated_message_type and item_type") {
+        try expect(MessagesQueryContracts.normalRowPredicate.contains("associated_message_type"))
+        try expect(MessagesQueryContracts.normalRowPredicate.contains("item_type"))
+        try expect(MessagesQueryContracts.normalRowPredicateM2.contains("m2.associated_message_type"))
+        let testsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let source = try String(contentsOf: testsURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("TheBridge/Modules/MessagesModule.swift"), encoding: .utf8)
+        try expect(!source.contains("c.chat_identifier LIKE '%'"),
+                   "messages_chat/participants must not LIKE chat_identifier")
+        try expect(!source.contains("h.id LIKE '%'"),
+                   "lookupLiveInboundService/messages_chat must not LIKE handle id")
+        try expect(source.contains("MessagesQueryContracts.normalRowPredicate"),
+                   "default search/chat SQL must apply the tapback filter")
+        try expect(source.contains("MessagesQueryContracts.normalRowPredicateM2"),
+                   "messages_recent last-message subquery must skip tapbacks")
+    }
+
+    await test("#217 date_read zero is null and is_read is bool") {
+        try expect(MessagesQueryContracts.dateReadValue(0) == .null)
+        try expect(MessagesQueryContracts.dateReadValue(0.0) == .null)
+        try expect(MessagesQueryContracts.dateReadValue(NSNull()) == .null)
+        try expect(MessagesQueryContracts.dateReadValue("2001-01-01 00:00:00") == .null)
+        try expect(MessagesQueryContracts.dateReadValue("2026-09-02 12:00:00") == .string("2026-09-02 12:00:00"))
+        try expect(MessagesQueryContracts.isReadValue(0) == .bool(false))
+        try expect(MessagesQueryContracts.isReadValue(1) == .bool(true))
+    }
+
+    await test("#218 filePath XOR body and 1:1 iMessage-only policy") {
+        try expect(MessagesQueryContracts.payloadXORError(body: "hi", filePath: "/tmp/x")?.contains("XOR") == true)
+        try expect(MessagesQueryContracts.payloadXORError(body: nil, filePath: nil)?.contains("missing") == true)
+        try expect(MessagesQueryContracts.payloadXORError(body: "hi", filePath: nil) == nil)
+        try expect(MessagesQueryContracts.fileSendPolicyError(
+            filePath: "/tmp/x.png",
+            chatIdentifier: "chat123",
+            resolvedService: "iMessage",
+            checkFilesystem: false
+        )?.contains("chatIdentifier") == true)
+        try expect(MessagesQueryContracts.fileSendPolicyError(
+            filePath: "/tmp/x.png",
+            chatIdentifier: nil,
+            resolvedService: "SMS",
+            checkFilesystem: false
+        )?.contains("SMS") == true)
+        try expect(MessagesQueryContracts.fileSendPolicyError(
+            filePath: "~/Library/Messages/chat.db",
+            chatIdentifier: nil,
+            resolvedService: "iMessage",
+            checkFilesystem: true
+        )?.contains("Library/Messages") == true)
+        try expect(MessagesQueryContracts.fileSendPolicyError(
+            filePath: "/no/such/file.png",
+            chatIdentifier: nil,
+            resolvedService: "iMessage",
+            checkFilesystem: true
+        )?.contains("not found") == true)
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("bridge-wave3-attach.txt")
+        try Data("ok".utf8).write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try expect(MessagesQueryContracts.fileSendPolicyError(
+            filePath: tmp.path,
+            chatIdentifier: nil,
+            resolvedService: "iMessage",
+            checkFilesystem: true
+        ) == nil)
+    }
+
+    await test("#204 catalog refuses group create and documents existing chatIdentifier send") {
+        let send = await router.registrations(forModule: "messages").first { $0.name == "messages_send" }!
+        try expect(send.description.localizedCaseInsensitiveContains("group create is not built"))
+        try expect(send.description.localizedCaseInsensitiveContains("chatIdentifier"))
+        try expect(send.metadata?.whenNotToUse.contains(where: { $0.localizedCaseInsensitiveContains("group create") }) == true)
+        try expect(send.description.localizedCaseInsensitiveContains("providerDeliveryConfirmed")
+                   || send.description.localizedCaseInsensitiveContains("not provider delivery"))
+    }
+
+    await test("#199 send envelopes never claim provider delivery from local correlation") {
+        let fields = MessagesModule.oneToOneSendMCPFields(
+            recipient: "+15551234567",
+            body: "hi",
+            attempt: .init(
+                invoked: true,
+                verification: .init(status: .verified, messageRowId: 9),
+                service: "iMessage"
+            )
+        )
+        guard case .bool(let claimed) = fields["providerDeliveryConfirmed"] else {
+            throw TestError.assertion("providerDeliveryConfirmed missing")
+        }
+        try expect(!claimed)
+        let group = MessagesModule.chatIdentifierSendMCPFields(
+            chatIdentifier: "iMessage;-;+1555",
+            body: "hi",
+            verification: .init(status: .verified, messageRowId: 9)
+        )
+        guard case .bool(let groupClaimed) = group["providerDeliveryConfirmed"] else {
+            throw TestError.assertion("group providerDeliveryConfirmed missing")
+        }
+        try expect(!groupClaimed)
+    }
 }

@@ -109,7 +109,11 @@
 #   Measured 3859 passed, 0 failed on wave1-registry-234.
 # 2026-09-02: 3859 → 3890 (+31) — Notion REST Wave 2 (#225–#231, #236–#237).
 #   Measured 3890 passed, 0 failed on wave2-notion-rest.
-FLOOR="${BRIDGE_TEST_FLOOR:-3890}"
+# 2026-09-02: 3890 → 3896 (+6) — Messages Wave 3: tapback filter, exact
+#   contact|chatIdentifier (no LIKE), is_read/date_read, filePath XOR body,
+#   group-create catalog honesty (#216 #215 #217 #218 #204). Measured
+#   3896 passed, 0 failed on wave3-messages.
+FLOOR="${BRIDGE_TEST_FLOOR:-3896}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

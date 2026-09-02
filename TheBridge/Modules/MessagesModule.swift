@@ -583,6 +583,10 @@ public enum MessagesModule {
             if key == textKey {
                 let extracted = extractText(row: row, textKey: textKey)
                 result[key] = extracted.map { .string($0) } ?? .null
+            } else if key == "is_read" {
+                result[key] = MessagesQueryContracts.isReadValue(val)
+            } else if key == "date_read" {
+                result[key] = MessagesQueryContracts.dateReadValue(val)
             } else if let s = val as? String {
                 result[key] = .string(s)
             } else if let i = val as? Int {
@@ -851,8 +855,7 @@ public enum MessagesModule {
             LEFT JOIN handle h ON m.handle_id = h.ROWID
             JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
             JOIN chat c ON c.ROWID = cmj.chat_id
-            WHERE c.chat_identifier LIKE '%' || ?1 || '%'
-               OR h.id LIKE '%' || ?1 || '%'
+            WHERE h.id = ?1
             ORDER BY m.date DESC
             LIMIT 50
             """
@@ -1040,6 +1043,81 @@ public enum MessagesModule {
         )
     }
 
+    /// 1:1 iMessage file send. Separate bubble from body text (#218).
+    private static func invokeAppleScriptFile(
+        recipient: String,
+        filePath: String
+    ) -> MessagesAppleScriptInvocationResult {
+        let safeRecipient = escapeAppleScriptString(recipient)
+        let expanded = (filePath as NSString).expandingTildeInPath
+        let safePath = escapeAppleScriptString(expanded)
+        let script = """
+            tell application "Messages"
+                set targetService to 1st service whose service type is iMessage
+                set targetBuddy to buddy "\(safeRecipient)" of targetService
+                send POSIX file "\(safePath)" to targetBuddy
+            end tell
+            """
+        let appleScript = NSAppleScript(source: script)
+        var errorInfo: NSDictionary?
+        _ = appleScript?.executeAndReturnError(&errorInfo)
+        guard let errorInfo else { return .init() }
+        return .init(
+            error: errorInfo[NSAppleScript.errorMessage] as? String ?? "AppleScript execution failed",
+            errorNumber: errorInfo[NSAppleScript.errorNumber] as? Int ?? -1
+        )
+    }
+
+    /// Local correlation for an attachment send via `message_attachment_join`.
+    public static func verifyFileDelivery(
+        recipient: String,
+        afterId: Int,
+        preparedAt: Date
+    ) -> MessagesDeliveryVerification {
+        let sql = """
+            SELECT m.ROWID, m.guid AS message_guid, m.is_from_me, m.service,
+                   (CAST(m.date AS REAL) / 1000000000.0 + 978307200.0) AS message_unix_seconds,
+                   h.id AS handle_id, c.guid AS chat_guid
+            FROM message m
+            JOIN message_attachment_join maj ON maj.message_id = m.ROWID
+            LEFT JOIN handle h ON m.handle_id = h.ROWID
+            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+            JOIN chat c ON c.ROWID = cmj.chat_id
+            WHERE m.ROWID > ?1
+              AND m.is_from_me = 1
+              AND h.id = ?2
+              AND (CAST(m.date AS REAL) / 1000000000.0 + 978307200.0) >= CAST(?3 AS REAL)
+            ORDER BY m.ROWID DESC
+            LIMIT 2
+            """
+        do {
+            let lowerBound = preparedAt.addingTimeInterval(-5).timeIntervalSince1970
+            let rows = try performQuery(sql, params: [String(afterId), recipient, String(lowerBound)])
+            if rows.isEmpty { return .init(status: .notFound) }
+            if rows.count > 1 {
+                return .init(status: .ambiguous, candidateRowIds: rows.compactMap { $0["ROWID"] as? Int })
+            }
+            let row = rows[0]
+            let unixSeconds: Double? = {
+                if let value = row["message_unix_seconds"] as? Double { return value }
+                if let value = row["message_unix_seconds"] as? Int { return Double(value) }
+                return nil
+            }()
+            return .init(
+                status: .verified,
+                messageRowId: row["ROWID"] as? Int,
+                messageGuid: row["message_guid"] as? String,
+                chatGuid: row["chat_guid"] as? String,
+                messageDate: unixSeconds.map(Date.init(timeIntervalSince1970:)),
+                service: row["service"] as? String,
+                verifiedAt: Date(),
+                candidateRowIds: (row["ROWID"] as? Int).map { [$0] } ?? []
+            )
+        } catch {
+            return .init(status: .deliveryError, error: error.localizedDescription)
+        }
+    }
+
     /// Parse the Notion page + markdown tool results into the narrow snapshot
     /// the THREAD receipt engine is allowed to inspect.
     public static func threadSnapshot(
@@ -1190,9 +1268,10 @@ public enum MessagesModule {
                            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS date_str
                     FROM message m
                     LEFT JOIN handle h ON m.handle_id = h.ROWID
-                    WHERE m.text LIKE '%' || ?1 || '%'
+                    WHERE (m.text LIKE '%' || ?1 || '%'
                        OR (m.text IS NULL AND m.attributedBody IS NOT NULL
-                           AND CAST(m.attributedBody AS TEXT) LIKE '%' || ?1 || '%')
+                           AND CAST(m.attributedBody AS TEXT) LIKE '%' || ?1 || '%'))
+                      AND \(MessagesQueryContracts.normalRowPredicate)
                     ORDER BY m.date DESC
                     LIMIT ?2
                     """
@@ -1240,6 +1319,7 @@ public enum MessagesModule {
                         SELECT cmj2.message_id FROM chat_message_join cmj2
                         JOIN message m2 ON m2.ROWID = cmj2.message_id
                         WHERE cmj2.chat_id = c.ROWID
+                          AND \(MessagesQueryContracts.normalRowPredicateM2)
                         ORDER BY m2.date DESC LIMIT 1
                     )
                     ORDER BY m.date DESC
@@ -1255,43 +1335,59 @@ public enum MessagesModule {
             name: "messages_chat",
             module: moduleName,
             tier: .open,
-            description: "Read the message thread for one contact (phone or email) in chronological order. Each row includes chat.db service (iMessage, SMS, RCS, …) so callers can bind messages_send without guessing from prior outbound.",
+            description: "Read one Messages transcript by exact handle (`contact`) or exact group/chat id (`chatIdentifier`) — XOR, no LIKE. Each row includes chat.db service (iMessage, SMS, RCS, …), is_read, and date_read (0 → null). Default rows are normal messages only (associated_message_type=0 and item_type=0). Inbound is_read means this Mac displayed it; outbound is a recipient read receipt when enabled. No mark-as-read.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
-                    "contact": .object(["type": .string("string"), "description": .string("Contact phone number or email")]),
+                    "contact": .object(["type": .string("string"), "description": .string("Exact handle (phone/email). XOR with chatIdentifier. No substring match.")]),
+                    "chatIdentifier": .object(["type": .string("string"), "description": .string("Exact chat.chat_identifier from messages_recent/participants. XOR with contact.")]),
                     "limit": .object(["type": .string("integer"), "description": .string("Max messages to return (default: 50)")])
                 ]),
-                "required": .array([.string("contact")])
+                "required": .array([])
             ]),
             metadata: ToolMetadata(
                 title: "Messages: Read Thread",
-                whenToUse: ["reading the back-and-forth history with one person by phone/email",
-                            "after messages_recent surfaced the contact you want to drill into"],
+                whenToUse: ["reading the back-and-forth history with one person by exact phone/email",
+                            "reading an existing group via exact chatIdentifier from messages_recent"],
                 whenNotToUse: ["keyword search across all chats (use messages_search)",
                                "listing who is in a group chat (use messages_participants)"],
                 relatedTools: ["messages_recent", "messages_search", "messages_participants", "contacts_resolve_handle"]
             ),
             handler: { arguments in
-                guard case .object(let args) = arguments,
-                      case .string(let contact) = args["contact"] else {
-                    throw ToolRouterError.invalidArguments(toolName: "messages_chat", reason: "missing 'contact'")
+                guard case .object(let args) = arguments else {
+                    throw ToolRouterError.invalidArguments(toolName: "messages_chat", reason: "arguments must be an object")
                 }
+                let contact: String? = {
+                    if case .string(let value) = args["contact"] { return value }
+                    return nil
+                }()
+                let chatIdentifier: String? = {
+                    if case .string(let value) = args["chatIdentifier"] { return value }
+                    return nil
+                }()
+                let selector = try MessagesQueryContracts.ChatSelector.parse(
+                    contact: contact,
+                    chatIdentifier: chatIdentifier
+                )
                 let limit: Int = { if case .int(let l) = args["limit"] { return l }; return 50 }()
                 let sql = """
                     SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me, m.service,
+                           m.is_read,
+                           CASE WHEN m.date_read IS NULL OR m.date_read = 0 THEN NULL
+                                ELSE datetime(m.date_read/1000000000 + 978307200, 'unixepoch', 'localtime')
+                           END AS date_read,
                            h.id AS handle_id,
                            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS date_str
                     FROM message m
                     LEFT JOIN handle h ON m.handle_id = h.ROWID
                     JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
                     JOIN chat c ON c.ROWID = cmj.chat_id
-                    WHERE c.chat_identifier LIKE '%' || ?1 || '%'
-                       OR h.id LIKE '%' || ?1 || '%'
+                    WHERE \(selector.whereClause)
+                      AND \(MessagesQueryContracts.normalRowPredicate)
                     ORDER BY m.date DESC
                     LIMIT ?2
                     """
-                let rows = try performQuery(sql, params: [contact, String(limit)])
+                let rows = try performQuery(sql, params: [selector.sqlParam, String(limit)])
                 return rowsToValue(rows)
             }
         ))
@@ -1324,6 +1420,10 @@ public enum MessagesModule {
                 let sql = """
                     SELECT m.ROWID, m.text, m.attributedBody, m.is_from_me, m.service,
                            m.cache_has_attachments,
+                           m.is_read,
+                           CASE WHEN m.date_read IS NULL OR m.date_read = 0 THEN NULL
+                                ELSE datetime(m.date_read/1000000000 + 978307200, 'unixepoch', 'localtime')
+                           END AS date_read,
                            h.id AS handle_id,
                            datetime(m.date/1000000000 + 978307200, 'unixepoch', 'localtime') AS date_str
                     FROM message m
@@ -1394,7 +1494,7 @@ public enum MessagesModule {
                     FROM handle h
                     JOIN chat_handle_join chj ON chj.handle_id = h.ROWID
                     JOIN chat c ON c.ROWID = chj.chat_id
-                    WHERE c.chat_identifier LIKE '%' || ?1 || '%'
+                    WHERE c.chat_identifier = ?1
                     """
                 let rows = try performQuery(sql, params: [chatId])
                 return rawRowsToValue(rows)
@@ -1412,13 +1512,14 @@ public enum MessagesModule {
             name: "messages_send",
             module: moduleName,
             tier: .request,
-            description: "Send one exact iMessage or SMS after confirm:'SEND'. Omit service to inherit the latest inbound iMessage/SMS for that recipient, or pass exactly iMessage or SMS. Fail closed on RCS/unknown/mismatch — never silent iMessage→SMS fallback. Bounded THREAD M1 still binds recipient/service/body. Local chat.db correlation is not provider delivery. Catalog default is Request; Settings can lower the tool to Notify or Open (remote/tunnel sessions honor that effective tier). Raw chatNNN ids are rejected — resolve via messages_participants.",
+            description: "Send one exact iMessage or SMS after confirm:'SEND'. Resolve raw chatNNN via messages_participants; names via contacts_resolve_handle. Omit service to inherit the latest inbound iMessage/SMS for that recipient, or pass exactly iMessage or SMS. Fail closed on RCS/unknown/mismatch — never silent iMessage→SMS fallback. Optional filePath XOR non-empty body: attachments are 1:1 iMessage only (no SMS/RCS, no chatIdentifier/groups). Existing-group text send uses chatIdentifier; group create is not built. Bounded THREAD M1 still binds recipient/service/body. Local chat.db correlation is not provider delivery (never providerDeliveryConfirmed). Catalog default is Request; Settings can lower the tool to Notify or Open.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "recipient": .object(["type": .string("string"), "description": .string("Recipient phone number or email (NOT a raw chatNNN id — resolve those with messages_participants first)")]),
-                    "chatIdentifier": .object(["type": .string("string"), "description": .string("Existing Messages chat identifier/group id; targets an existing chat only")]),
-                    "body": .object(["type": .string("string"), "description": .string("Message body text")]),
+                    "chatIdentifier": .object(["type": .string("string"), "description": .string("Existing Messages chat identifier for an already-created group/chat. Group create is not built.")]),
+                    "body": .object(["type": .string("string"), "description": .string("Message body text. XOR with filePath — do not send caption+file as one bubble.")]),
+                    "filePath": .object(["type": .string("string"), "description": .string("Optional local file to send as a separate 1:1 iMessage. XOR with body. Same confirm:'SEND'.")]),
                     "confirm": .object(["type": .string("string"), "description": .string("Must be exactly 'SEND' to proceed")]),
                     "service": .object(["type": .string("string"), "enum": .array([.string("iMessage"), .string("SMS")]), "description": .string("Optional for ordinary one-to-one sends. Omit to inherit the latest inbound iMessage/SMS. Exact value only when passed. RCS/unknown live inbound or an explicit mismatch fail closed — no SMS fallback.")]),
                     "threadPageId": .object(["type": .string("string"), "description": .string("Canonical THREAD page ID for the bounded one-to-one M1 transaction.")]),
@@ -1427,24 +1528,34 @@ public enum MessagesModule {
                     "actor": .object(["type": .string("string"), "description": .string("Actor recorded in THREAD M1 receipts.")]),
                     "workspace": .object(["type": .string("string"), "description": .string("Optional Notion workspace connection for THREAD receipt reads and writes.")])
                 ]),
-                "required": .array([.string("body"), .string("confirm")])
+                "required": .array([.string("confirm")])
             ]),
             metadata: ToolMetadata(
                 title: "Messages: Send",
                 whenToUse: ["send to a known phone/email with confirm:'SEND'",
-                            "send to an existing group via chatIdentifier"],
+                            "send text to an existing group via chatIdentifier",
+                            "send one 1:1 iMessage file via filePath XOR body"],
                 whenNotToUse: ["raw chatNNN: resolve with messages_participants",
-                               "contact name only: use contacts_resolve_handle"],
+                               "contact name only: use contacts_resolve_handle",
+                               "creating a new Messages group — group create is not built",
+                               "treating imessage:open?addresses=… plus UI Return as a successful group create"],
                 relatedTools: ["messages_participants", "contacts_resolve_handle", "messages_chat"]
             ),
             handler: { arguments in
                 guard case .object(let args) = arguments else {
                     throw ToolRouterError.invalidArguments(toolName: "messages_send", reason: "arguments must be an object")
                 }
-                guard case .string(let body) = args["body"],
-                      case .string(let confirm) = args["confirm"] else {
+                guard case .string(let confirm) = args["confirm"] else {
                     throw ToolRouterError.invalidArguments(toolName: "messages_send", reason: "missing required parameters")
                 }
+                let body: String? = {
+                    if case .string(let value) = args["body"] { return value }
+                    return nil
+                }()
+                let filePath: String? = {
+                    if case .string(let value) = args["filePath"] { return value }
+                    return nil
+                }()
                 let recipient: String? = {
                     if case .string(let value) = args["recipient"], !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         return value
@@ -1459,6 +1570,31 @@ public enum MessagesModule {
                 }()
                 guard recipient != nil || chatIdentifier != nil else {
                     throw ToolRouterError.invalidArguments(toolName: "messages_send", reason: "missing recipient or chatIdentifier")
+                }
+                if let xorError = MessagesQueryContracts.payloadXORError(body: body, filePath: filePath) {
+                    return .object([
+                        "error": .string(xorError),
+                        "sent": .bool(false),
+                        "deliveryInvoked": .bool(false),
+                        "consequencePossible": .bool(false),
+                        "correlatedLocalRecord": .bool(false),
+                        "providerDeliveryConfirmed": .bool(false)
+                    ])
+                }
+                if let filePath, let policyError = MessagesQueryContracts.fileSendPolicyError(
+                    filePath: filePath,
+                    chatIdentifier: chatIdentifier,
+                    resolvedService: nil,
+                    checkFilesystem: false
+                ) {
+                    return .object([
+                        "error": .string(policyError),
+                        "sent": .bool(false),
+                        "deliveryInvoked": .bool(false),
+                        "consequencePossible": .bool(false),
+                        "correlatedLocalRecord": .bool(false),
+                        "providerDeliveryConfirmed": .bool(false)
+                    ])
                 }
 
                 guard confirm == "SEND" else {
@@ -1480,6 +1616,20 @@ public enum MessagesModule {
                 }
 
                 if case .string(let threadPageId)? = args["threadPageId"] {
+                    if filePath != nil {
+                        return ThreadMessagesReceiptResult(
+                            outcome: .blocked,
+                            actionId: "",
+                            error: "THREAD M1 is text-only; filePath is out of scope"
+                        ).mcpValue()
+                    }
+                    guard let body, !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        return ThreadMessagesReceiptResult(
+                            outcome: .blocked,
+                            actionId: "",
+                            error: "THREAD M1 requires a non-empty body"
+                        ).mcpValue()
+                    }
                     guard chatIdentifier == nil, let recipient else {
                         return ThreadMessagesReceiptResult(
                             outcome: .blocked,
@@ -1614,6 +1764,9 @@ public enum MessagesModule {
                 }
 
                 if let chatIdentifier {
+                    guard let body else {
+                        throw ToolRouterError.invalidArguments(toolName: "messages_send", reason: "missing body or filePath")
+                    }
                     let preRows = (try? performQuery(
                         "SELECT MAX(ROWID) as max_id FROM message", params: []
                     )) ?? []
@@ -1727,6 +1880,33 @@ public enum MessagesModule {
                             "error": .string("SMS requires a phone-number recipient")
                         ])
                     }
+                    if let filePath, let policyError = MessagesQueryContracts.fileSendPolicyError(
+                        filePath: filePath,
+                        chatIdentifier: nil,
+                        resolvedService: resolved.rawValue,
+                        checkFilesystem: true
+                    ) {
+                        return .object([
+                            "sent": .bool(false),
+                            "deliveryInvoked": .bool(false),
+                            "consequencePossible": .bool(false),
+                            "correlatedLocalRecord": .bool(false),
+                            "providerDeliveryConfirmed": .bool(false),
+                            "service": .string(resolved.rawValue),
+                            "error": .string(policyError)
+                        ])
+                    }
+                    if resolved != .iMessage, filePath != nil {
+                        return .object([
+                            "sent": .bool(false),
+                            "deliveryInvoked": .bool(false),
+                            "consequencePossible": .bool(false),
+                            "correlatedLocalRecord": .bool(false),
+                            "providerDeliveryConfirmed": .bool(false),
+                            "service": .string(resolved.rawValue),
+                            "error": .string("file attachments are 1:1 iMessage only")
+                        ])
+                    }
                 }
                 let preSendMaxId: Int
                 let preparedAt = Date()
@@ -1743,6 +1923,40 @@ public enum MessagesModule {
                         "verificationStatus": .string(MessagesDeliveryVerificationStatus.deliveryError.rawValue),
                         "error": .string("Could not capture pre-send ROWID watermark: \(error.localizedDescription)")
                     ])
+                }
+                if let filePath {
+                    let invocation = invokeAppleScriptFile(recipient: recipient, filePath: filePath)
+                    if !invocation.succeeded {
+                        return .object([
+                            "sent": .bool(false),
+                            "deliveryInvoked": .bool(true),
+                            "consequencePossible": .bool(true),
+                            "correlatedLocalRecord": .bool(false),
+                            "providerDeliveryConfirmed": .bool(false),
+                            "error": .string(invocation.error ?? "AppleScript file send failed"),
+                            "errorNumber": invocation.errorNumber.map(Value.int) ?? .null
+                        ])
+                    }
+                    let verification = verifyFileDelivery(
+                        recipient: recipient,
+                        afterId: preSendMaxId,
+                        preparedAt: preparedAt
+                    )
+                    return .object([
+                        "sent": .bool(true),
+                        "deliveryInvoked": .bool(true),
+                        "consequencePossible": .bool(true),
+                        "correlatedLocalRecord": .bool(verification.verified),
+                        "providerDeliveryConfirmed": .bool(false),
+                        "recipient": .string(recipient),
+                        "filePath": .string((filePath as NSString).expandingTildeInPath),
+                        "verified": .bool(verification.verified),
+                        "verificationStatus": .string(verification.status.rawValue),
+                        "messageRowId": verification.messageRowId.map(Value.int) ?? .null
+                    ])
+                }
+                guard let body else {
+                    throw ToolRouterError.invalidArguments(toolName: "messages_send", reason: "missing body or filePath")
                 }
                 let attempt = performOneToOneSend(
                     recipient: recipient,
