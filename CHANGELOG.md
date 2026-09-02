@@ -1,5 +1,28 @@
 # Changelog
 
+## v4.0.7 (build 96) — issue-close install — 2026-09-02
+
+- **Identity** — Published local install after `v4.0.6` / build `95`. Marketing
+  **4.0.7**, build **96**. Sparkle tag / appcast is **not** this DoD (Workflow G
+  needs a separate GO). Do not reuse 95.
+- **Registry** — Rename follows property id; writes keyed by id; cache expiry
+  honors `lastEditedTime`; shared Notion URL-or-UUID helper (#234 #233 #232 #235).
+- **Notion REST** — View query/delete, page trash/restore, comment PATCH/DELETE,
+  async tasks, templates XOR children, meeting notes, opt-in >20MB uploads
+  (#225–#231 #236 #237). `staticFeatureModuleToolCount` **224 → 237**.
+- **Messages** — Default lists exclude tapbacks; contact XOR chatIdentifier with
+  LIKE killed; `is_read`/`date_read`; file XOR body; catalog honesty that group
+  **create is not built** (#216 #215 #217 #218 #204).
+- **Calendar / Mail / GitHub / Mac** — Time zone, recurrence+span, alarms;
+  mail headers/reply/forward/junk; gh list/parent/duplicate/review; limited
+  contacts, notes attachments, shortcut ids, SpeechAnalyzer opt-in off,
+  registrationChannel, displayIndex, Cmd+V web paste.
+- **Delivery honesty (#199)** — There is no Apple API to clear Continuity
+  “Not Delivered” on the Mac. Bridge never sets `providerDeliveryConfirmed=true`
+  from local `chat.db` correlation. See
+  `docs/operator/messages-continuity-delivery.md`.
+- **Floor** — 3920 passed / 0 failed. `FLOOR=3920`.
+
 ## v4.0.6 (build 95) — Bridge v4.1 capability truth — 2026-08-28
 
 - **Identity** — Published install after `v4.0.5` / build `94`. Marketing

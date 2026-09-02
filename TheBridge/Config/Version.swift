@@ -8,8 +8,8 @@
 // VERSIONING (operator rule, 2026-06-15): +1 patch per PUBLISHED INSTALL
 // (release), NOT per branch — several task branches can merge to main and ship
 // together as one install increment. Single-digit segments roll at 9 (4.0.9→
-// 4.1.0, 4.9.9→5.0.0), never double digits. This source is 4.0.6; the next
-// published install is 4.0.7. The 3.7.10–3.7.12 releases were pre-rule legacy. Build
+// 4.1.0, 4.9.9→5.0.0), never double digits. This source is 4.0.7; the next
+// published install is 4.0.8. The 3.7.10–3.7.12 releases were pre-rule legacy. Build
 // (CFBundleVersion) monotonic +1. See AGENTS.md "Release flow" + versioning memory.
 
 import Foundation
@@ -18,7 +18,7 @@ import Foundation
 public enum AppVersion {
     /// Marketing version (CFBundleShortVersionString equivalent).
     /// Format: MAJOR.MINOR.PATCH (Semantic Versioning).
-    public static let marketing = "4.0.6"
+    public static let marketing = "4.0.7"
 
     /// Build number (CFBundleVersion equivalent).
     /// Monotonically increasing integer per release.
@@ -324,7 +324,11 @@ public enum AppVersion {
     /// v4.0.6: 94 -> 95 -- PJT-2770 capability-truth install: binding vs consumer
     /// preflight, mission revision transaction, LaunchReadiness attach. Local-only
     /// 4.0.8/97 residue is not this identity. Next published install is 4.0.7.
-    public static let build = "95"
+    /// v4.0.7: 95 -> 96 -- issue-close install: registry Wave 1, Notion REST Wave 2,
+    /// Messages Wave 3, Calendar Wave 4, Mail Wave 5, GitHub Wave 6, Mac/UI Wave 7.
+    /// staticFeatureModuleToolCount 224 → 237. Floor 3839 → 3920. Sparkle tag
+    /// is out of this install's DoD unless a later Workflow G GO.
+    public static let build = "96"
 
     /// Combined display string for UI and logs.
     public static var display: String { "\(marketing) (\(build))" }
