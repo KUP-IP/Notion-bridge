@@ -98,7 +98,10 @@
 # 2026-09-02: 3844 → 3848 (+4) — load/save canonicalize PACKETS-shaped
 #   packet+session duplicates to one `packet` key. Measured 3848 passed,
 #   0 failed after rebase onto main (post-#200).
-FLOOR="${BRIDGE_TEST_FLOOR:-3848}"
+# 2026-09-02: 3848 → 3852 (+4) — awaiting_approval before MCP client
+#   timeout (#184). Measured 3852 passed, 0 failed on
+#   feat/issue-184-awaiting-approval after rebase onto main (post-#239).
+FLOOR="${BRIDGE_TEST_FLOOR:-3852}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
