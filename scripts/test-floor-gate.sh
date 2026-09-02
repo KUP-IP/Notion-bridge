@@ -119,7 +119,10 @@
 # 2026-09-02: 3899 → 3906 (+7) — Mail Wave 5: mail_read headers/attachments,
 #   mail_reply/mail_forward + bcc, junk flag (#210 #208 #209). Measured
 #   3906 passed, 0 failed on wave5-mail.
-FLOOR="${BRIDGE_TEST_FLOOR:-3906}"
+# 2026-09-02: 3906 → 3912 (+6) — GitHub Wave 6: open-tier issue/PR lists
+#   (no body), parent + duplicateOf, gh_pr_review neverAutoApprove
+#   (#219 #220 #221). Measured 3912 passed, 0 failed on wave6-github.
+FLOOR="${BRIDGE_TEST_FLOOR:-3912}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
