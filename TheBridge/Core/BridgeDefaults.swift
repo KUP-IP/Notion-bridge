@@ -273,6 +273,9 @@ public enum BridgeDefaults {
     /// When true, extract Apple embedded `tsrp` transcript before Parakeet fallback.
     public static let voiceMemoAppleTranscript = "com.notionbridge.voiceMemo.appleTranscript"
 
+    /// When true, use SpeechAnalyzer between Apple tsrp and Parakeet. DEFAULT OFF.
+    public static let voiceMemoSpeechAnalyzerTranscription = "com.notionbridge.voiceMemo.speechAnalyzerTranscription"
+
     /// Ollama model for one-sentence Memory summaries (Relevant:). Falls back to its quality default.
     public static let ollamaSummarizationModel = "com.notionbridge.ollama.summarizationModel"
 
@@ -341,6 +344,11 @@ public enum BridgeDefaults {
     public static var voiceMemoAppleTranscriptEffective: Bool {
         if UserDefaults.standard.object(forKey: voiceMemoAppleTranscript) == nil { return true }
         return UserDefaults.standard.bool(forKey: voiceMemoAppleTranscript)
+    }
+
+    /// SpeechAnalyzer transcription defaults OFF when unset (Wave 7).
+    public static var voiceMemoSpeechAnalyzerTranscriptionEffective: Bool {
+        UserDefaults.standard.bool(forKey: voiceMemoSpeechAnalyzerTranscription)
     }
 
     public static var ollamaSummarizationModelEffective: String? {

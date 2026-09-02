@@ -1,9 +1,11 @@
-// CommandCursorInsert.swift — issue #129 (cursor insert, never clipboard)
+// CommandCursorInsert.swift — issue #129 / #238
 // TheBridge · Modules · Commands
 //
-// Command activation delivers the resolved body into the focused editable
-// control of the previously-frontmost app. The clipboard is not read,
-// written, cleared, or used as a paste vehicle — even temporarily.
+// Native AppKit: AX splice, clipboard untouched.
+// Web-like hosts (Chromium / ProseMirror / ChatGPT composers): Cmd+V paste
+// with pasteboard save → write → delay → layout-resolved Cmd+V (~100ms
+// modifier hold) → restore. Never leave the command body on the pasteboard.
+// Those hosts must not use unicode CGEvent typing.
 //
 // Two layers:
 //   • CommandTextSplicer — pure UTF-16 splice (caret insert / selection
@@ -19,6 +21,7 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Darwin
+import Carbon.HIToolbox
 
 // ============================================================
 // MARK: - Outcome
@@ -237,8 +240,8 @@ public final class RecordingTextInserter: CommandTextInserting, @unchecked Senda
 // ============================================================
 
 /// Inserts via the focused AX element of the destination process.
-/// Never reads or writes `NSPasteboard`. Fail-closed: missing grant or
-/// missing editable target returns a status outcome, not a clipboard copy.
+/// Native AppKit never reads or writes `NSPasteboard`. Web-like Chromium /
+/// ChatGPT composers use a restore-guaranteed Cmd+V paste path.
 public final class AccessibilityCommandInserter: CommandTextInserting, @unchecked Sendable {
     /// Focused element of the destination app, captured before the
     /// palette becomes key. AXUIElement is not Sendable; this class is
@@ -387,52 +390,70 @@ public final class AccessibilityCommandInserter: CommandTextInserting, @unchecke
             chromium: chromium,
             bundleIdentifier: app?.bundleIdentifier
         )
+        let pastePreferred = CommandInsertPointerFocus.prefersCommandVPaste(
+            chromium: chromium,
+            bundleIdentifier: app?.bundleIdentifier,
+            role: role,
+            frame: frame
+        )
 
-        if !valueIsPlaceholder, trustAX, isSettable(focused, kAXSelectedTextAttribute as String) {
-            let setErr = AXUIElementSetAttributeValue(
-                focused, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
-            if setErr == .success,
-                axVerifyLanded(
-                focused,
-                before: before,
-                insertion: text,
-                loc: loc,
-                len: len,
-                electron: chromium
-               ) {
-                placeCaret(focused, afterUTF16: loc + text.utf16.count)
-                return .inserted(replacedSelection: replaced, characters: text.count)
+        if !pastePreferred {
+            if !valueIsPlaceholder, trustAX, isSettable(focused, kAXSelectedTextAttribute as String) {
+                let setErr = AXUIElementSetAttributeValue(
+                    focused, kAXSelectedTextAttribute as CFString, text as CFTypeRef)
+                if setErr == .success,
+                    axVerifyLanded(
+                    focused,
+                    before: before,
+                    insertion: text,
+                    loc: loc,
+                    len: len,
+                    electron: chromium
+                   ) {
+                    placeCaret(focused, afterUTF16: loc + text.utf16.count)
+                    return .inserted(replacedSelection: replaced, characters: text.count)
+                }
             }
-        }
 
-        if trustAX, isSettable(focused, kAXValueAttribute as String),
-           let current = before ?? liveValue {
-            let spliced = CommandTextSplicer.splice(
-                value: current,
-                selectedLocationUTF16: loc,
-                selectedLengthUTF16: len,
-                insertion: text
-            )
-            let setErr = AXUIElementSetAttributeValue(
-                focused, kAXValueAttribute as CFString, spliced.newValue as CFTypeRef)
-            if setErr == .success,
-               axVerifyLanded(
-                focused,
-                before: before,
-                insertion: text,
-                loc: loc,
-                len: len,
-                electron: chromium
-               ) {
-                placeCaret(focused, afterUTF16: spliced.newCaretUTF16)
-                return .inserted(replacedSelection: spliced.replacedSelection, characters: text.count)
+            if trustAX, isSettable(focused, kAXValueAttribute as String),
+               let current = before ?? liveValue {
+                let spliced = CommandTextSplicer.splice(
+                    value: current,
+                    selectedLocationUTF16: loc,
+                    selectedLengthUTF16: len,
+                    insertion: text
+                )
+                let setErr = AXUIElementSetAttributeValue(
+                    focused, kAXValueAttribute as CFString, spliced.newValue as CFTypeRef)
+                if setErr == .success,
+                   axVerifyLanded(
+                    focused,
+                    before: before,
+                    insertion: text,
+                    loc: loc,
+                    len: len,
+                    electron: chromium
+                   ) {
+                    placeCaret(focused, afterUTF16: spliced.newCaretUTF16)
+                    return .inserted(replacedSelection: spliced.replacedSelection, characters: text.count)
+                }
             }
         }
 
         // Native AX fields that actually changed are done above. Chromium
-        // AXValue can lag; only type after delayed verify still fails.
-        // Do not type into a captured page-sized AXGroup — that claims
-        // success while the compact composer stays empty (Cursor).
+        // AX-liar / ProseMirror / ChatGPT composers use Cmd+V — never unicode
+        // CGEvent. Cursor compact AXTextArea still lands via AX set.
+        if pastePreferred {
+            restoreFocus(focused, pid: pid)
+            clickForPointerFocus(focused, role: role, electron: chromium, pointer: pointer)
+            do {
+                try CommandInsertPasteboard.pasteViaCommandV(text)
+                return .inserted(replacedSelection: replaced, characters: text.count)
+            } catch {
+                return .insertFailed(reason: "clipboard paste failed")
+            }
+        }
+
         let mayType = looksEditable(role: role, element: focused)
             && !(CommandInsertPointerFocus.isWebLike(role)
                  && (frame?.height ?? 0) >= CommandInsertPointerFocus.tallWebAreaThreshold)
@@ -1124,6 +1145,22 @@ public enum CommandInsertPointerFocus {
         }
     }
 
+    /// Chromium browsers, ProseMirror page composers, and ChatGPT apps get
+    /// Cmd+V paste — not unicode CGEvent. Cursor compact AXTextArea stays AX.
+    public static func prefersCommandVPaste(
+        chromium: Bool,
+        bundleIdentifier: String?,
+        role: String,
+        frame: CGRect? = nil
+    ) -> Bool {
+        if !chromium { return false }
+        if chromiumAXValueIsALie(bundleIdentifier: bundleIdentifier) { return true }
+        let id = bundleIdentifier ?? ""
+        if id == "com.openai.codex" || id == "com.openai.chat" { return true }
+        if isWebLike(role), let frame, frame.height >= tallWebAreaThreshold { return true }
+        return false
+    }
+
     /// Stale AX focus (other Chrome tab, Playwright remap) vs the field
     /// the operator actually clicked. Prefer the control under the pointer.
     /// Tall AXGroup/AXWebArea also retargets: the pointer can sit in a
@@ -1267,3 +1304,126 @@ public enum CommandInsertUnicodeTyping {
         u >= 0xD800 && u <= 0xDBFF
     }
 }
+
+/// Transient pasteboard write with guaranteed restore (never leave the body).
+public enum CommandInsertPasteboard {
+    public static let prePasteDelay: TimeInterval = 0.03
+    public static let modifierHold: TimeInterval = 0.1
+    public static let postPasteDelay: TimeInterval = 0.03
+
+    public static func snapshot(_ pasteboard: NSPasteboard) -> [[String: Data]] {
+        guard let items = pasteboard.pasteboardItems else { return [] }
+        return items.map { item in
+            var map: [String: Data] = [:]
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    map[type.rawValue] = data
+                }
+            }
+            return map
+        }
+    }
+
+    public static func restore(_ snapshot: [[String: Data]], onto pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        let objects: [NSPasteboardItem] = snapshot.map { map in
+            let item = NSPasteboardItem()
+            for (raw, data) in map {
+                item.setData(data, forType: NSPasteboard.PasteboardType(rawValue: raw))
+            }
+            return item
+        }
+        if !objects.isEmpty {
+            pasteboard.writeObjects(objects)
+        }
+    }
+
+    public static func withTransientString(
+        _ body: String,
+        on pasteboard: NSPasteboard,
+        preDelay: TimeInterval = 0,
+        postDelay: TimeInterval = 0,
+        perform: () throws -> Void
+    ) rethrows {
+        let prior = snapshot(pasteboard)
+        defer {
+            if postDelay > 0 { Thread.sleep(forTimeInterval: postDelay) }
+            restore(prior, onto: pasteboard)
+        }
+        pasteboard.clearContents()
+        pasteboard.setString(body, forType: .string)
+        if preDelay > 0 { Thread.sleep(forTimeInterval: preDelay) }
+        try perform()
+    }
+
+    @MainActor
+    public static func pasteViaCommandV(_ text: String, pasteboard: NSPasteboard = .general) throws {
+        try withTransientString(
+            text,
+            on: pasteboard,
+            preDelay: prePasteDelay,
+            postDelay: postPasteDelay
+        ) {
+            try CommandInsertKeyLayout.postCommandV()
+        }
+    }
+}
+
+/// Layout-resolved Cmd+V (virtual key for `v` on the current keyboard).
+public enum CommandInsertKeyLayout {
+    public static func keyCode(forCharacter ch: UniChar, fallback: CGKeyCode) -> CGKeyCode {
+        guard let inputSource = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let raw = TISGetInputSourceProperty(inputSource, kTISPropertyUnicodeKeyLayoutData) else {
+            return fallback
+        }
+        let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data
+        return data.withUnsafeBytes { rawBuf -> CGKeyCode in
+            guard let layoutPtr = rawBuf.baseAddress?.assumingMemoryBound(to: UCKeyboardLayout.self) else {
+                return fallback
+            }
+            var deadKeyState: UInt32 = 0
+            for code in 0..<128 {
+                var chars: [UniChar] = [0, 0, 0, 0]
+                var length = 0
+                let status = UCKeyTranslate(
+                    layoutPtr,
+                    UInt16(code),
+                    UInt16(kUCKeyActionDisplay),
+                    0,
+                    UInt32(LMGetKbdType()),
+                    OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                    &deadKeyState,
+                    4,
+                    &length,
+                    &chars
+                )
+                if status == noErr, length > 0, chars[0] == ch {
+                    return CGKeyCode(code)
+                }
+            }
+            return fallback
+        }
+    }
+
+    public static func postCommandV() throws {
+        guard let source = CGEventSource(stateID: .hidSystemState) else {
+            throw CommandInsertSynthError.source
+        }
+        let vChar = UniChar(UnicodeScalar("v").value)
+        let vKey = keyCode(forCharacter: vChar, fallback: CGKeyCode(kVK_ANSI_V))
+        let cmd = CGKeyCode(kVK_Command)
+        func post(_ key: CGKeyCode, down: Bool, flags: CGEventFlags) throws {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else {
+                throw CommandInsertSynthError.event
+            }
+            event.flags = flags
+            event.post(tap: .cghidEventTap)
+        }
+        try post(cmd, down: true, flags: .maskCommand)
+        Thread.sleep(forTimeInterval: CommandInsertPasteboard.modifierHold)
+        try post(vKey, down: true, flags: .maskCommand)
+        try post(vKey, down: false, flags: .maskCommand)
+        try post(cmd, down: false, flags: [])
+    }
+}
+

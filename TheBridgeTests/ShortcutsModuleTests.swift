@@ -247,4 +247,61 @@ func runShortcutsModuleTests() async {
         try expect(ShortcutsModule.parseLines("").isEmpty, "empty stdout → no names")
         try expect(ShortcutsModule.parseLines("\n  \n").isEmpty, "whitespace-only → no names")
     }
+
+    await test("shortcuts_list showIdentifiers:true adds --show-identifiers and objects") {
+        let runner = MockShortcutsRunner(result: ShortcutsInvocationResult(
+            exitCode: 0,
+            stdout: "Send iMessage (AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE)\n",
+            stderr: ""
+        ))
+        let router = await makeRouter(runner)
+        let result = try await router.dispatch(
+            toolName: "shortcuts_list",
+            arguments: .object(["showIdentifiers": .bool(true)])
+        )
+        try expect(runner.lastArgs == ["list", "--show-identifiers"], "argv \(runner.lastArgs)")
+        guard case .object(let dict) = result,
+              case .array(let items)? = dict["shortcuts"],
+              case .object(let first) = items.first else {
+            throw TestError.assertion("expected shortcut objects, got \(result)")
+        }
+        try expect(first["name"] == .string("Send iMessage"))
+        try expect(first["identifier"] == .string("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"))
+    }
+
+    await test("shortcuts_run binary outputType without file path fails closed") {
+        let runner = MockShortcutsRunner()
+        let router = await makeRouter(runner)
+        let result = try await router.dispatch(
+            toolName: "shortcuts_run",
+            arguments: .object(["name": .string("Shot"), "outputType": .string("public.png")])
+        )
+        guard case .object(let dict) = result, case .string(let status) = dict["status"] else {
+            throw TestError.assertion("expected status")
+        }
+        try expect(status == "invalid_argument", "got \(status)")
+        try expect(runner.callCount == 0, "must not invoke CLI")
+        try expect(ShortcutsModule.isBinaryOutputType("public.png"))
+        try expect(!ShortcutsModule.isBinaryOutputType("public.utf8-plain-text"))
+        try expect(!ShortcutsModule.isBinaryOutputType(nil))
+    }
+
+    await test("shortcuts_run binary outputType with file outputPath reaches CLI") {
+        let runner = MockShortcutsRunner(result: ShortcutsInvocationResult(exitCode: 0, stdout: "", stderr: ""))
+        let router = await makeRouter(runner)
+        let path = "/tmp/bridge-shortcut-out.png"
+        let result = try await router.dispatch(
+            toolName: "shortcuts_run",
+            arguments: .object([
+                "name": .string("Shot"),
+                "outputType": .string("public.png"),
+                "outputPath": .string(path)
+            ])
+        )
+        guard case .object(let dict) = result else { throw TestError.assertion("expected object") }
+        try expect(runner.lastArgs == ["run", "Shot", "--output-type", "public.png", "--output-path", path],
+                   "argv \(runner.lastArgs)")
+        try expect(dict["outputPath"] == .string(path))
+        try expect(dict["output"] == .string(""))
+    }
 }

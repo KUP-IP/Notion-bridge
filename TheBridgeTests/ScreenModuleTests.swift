@@ -213,6 +213,24 @@ func runScreenModuleTests() async {
         let tool = await router.registrations(forModule: "screen")
             .first(where: { $0.name == "screen_record_start" })!
         try expect(tool.tier == .notify, "Expected notify, got \(tool.tier.rawValue)")
+        guard case .object(let schema) = tool.inputSchema,
+              case .object(let properties)? = schema["properties"] else {
+            throw TestError.assertion("missing screen_record_start schema")
+        }
+        try expect(properties["displayIndex"] != nil, "displayIndex must be on screen_record_start")
+        try expect(properties["windowId"] == nil, "window recording is out of scope")
+        try expect(properties["appName"] == nil, "app recording is out of scope")
+        try expect(properties["region"] == nil, "region recording is out of scope")
+    }
+
+    await test("resolveDisplayIndex fails closed on empty and out-of-range") {
+        try expect(ScreenModule.resolveDisplayIndex(nil, displayCount: 0) == nil)
+        try expect(ScreenModule.resolveDisplayIndex(0, displayCount: 0) == nil)
+        try expect(ScreenModule.resolveDisplayIndex(0, displayCount: 2) == 0)
+        try expect(ScreenModule.resolveDisplayIndex(1, displayCount: 2) == 1)
+        try expect(ScreenModule.resolveDisplayIndex(2, displayCount: 2) == nil)
+        try expect(ScreenModule.resolveDisplayIndex(-1, displayCount: 2) == nil)
+        try expect(ScreenModule.resolveDisplayIndex(nil, displayCount: 2) == 0)
     }
 
     await test("screen_record_stop is notify tier") {

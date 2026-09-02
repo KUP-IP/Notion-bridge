@@ -35,7 +35,8 @@ public enum ContactsModule {
     /// Best-effort exact-handle lookup for Messages attribution. It never
     /// prompts for Contacts access: messages_recent remains a passive read.
     public static func exactHandleAttributionIfAuthorized(_ handle: String) -> HandleAttribution {
-        guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else {
+        let status = CNContactStore.authorizationStatus(for: .contacts)
+        guard PermissionManager.isContactsAuthorizationSufficient(status) else {
             return HandleAttribution(
                 resolvedName: nil,
                 source: "contacts",
@@ -94,8 +95,11 @@ public enum ContactsModule {
     /// Throws with remediation message if denied or restricted.
     private static func requireContactsAccess() async throws {
         let status = CNContactStore.authorizationStatus(for: .contacts)
+        if PermissionManager.isContactsAuthorizationSufficient(status) {
+            return
+        }
         switch status {
-        case .authorized:
+        case .authorized, .limited:
             return
         case .notDetermined:
             await MainActor.run {
@@ -195,6 +199,7 @@ public enum ContactsModule {
                 let statusString: String
                 switch status {
                 case .authorized: statusString = "authorized"
+                case .limited: statusString = "limited"
                 case .denied: statusString = "denied"
                 case .restricted: statusString = "restricted"
                 case .notDetermined: statusString = "notDetermined"
@@ -206,7 +211,7 @@ public enum ContactsModule {
                     "settings_url": .string("x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts")
                 ]
 
-                if status == .authorized {
+                if PermissionManager.isContactsAuthorizationSufficient(status) {
                     result["contacts_available"] = .bool(true)
                     // Count contacts with minimal fetch
                     let store = CNContactStore()

@@ -144,7 +144,7 @@ public enum NotesModule {
             name: "notes_read",
             module: moduleName,
             tier: .open,
-            description: "Read one Apple Note's full content. Address it by `noteId` (stable AppleScript id) OR `noteName` (title; first case-insensitive match wins). Returns id, name, folder, plain-text body, and the note's HTML body.",
+            description: "Read one Apple Note's full content. Address it by `noteId` (stable AppleScript id) OR `noteName` (title; first case-insensitive match wins). Returns id, name, folder, plain-text body, HTML body, and attachment metadata {id,name,url?,contentIdentifier?}.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -178,8 +178,7 @@ public enum NotesModule {
                 case .failure(let message, let code):
                     return failureValue(message: message, code: code)
                 case .ok(let raw):
-                    let fields = raw.components(separatedBy: fieldSep)
-                    guard fields.count >= 5, !raw.isEmpty else {
+                    guard let parsed = parseReadPayload(raw) else {
                         return .object([
                             "found": .bool(false),
                             "error": .string("No note matched the given \(selector.kindLabel).")
@@ -187,11 +186,12 @@ public enum NotesModule {
                     }
                     return .object([
                         "found": .bool(true),
-                        "id": .string(fields[0]),
-                        "name": .string(fields[1]),
-                        "folder": .string(fields[2]),
-                        "body": .string(fields[3]),
-                        "html": .string(fields[4])
+                        "id": .string(parsed.fields[0]),
+                        "name": .string(parsed.fields[1]),
+                        "folder": .string(parsed.fields[2]),
+                        "body": .string(parsed.fields[3]),
+                        "html": .string(parsed.fields[4]),
+                        "attachments": .array(parsed.attachments.map { attachmentValue($0) })
                     ])
                 }
             }
@@ -509,6 +509,50 @@ public enum NotesModule {
         }
     }
 
+    public struct NoteAttachment: Sendable, Equatable {
+        public let id: String
+        public let name: String
+        public let url: String?
+        public let contentIdentifier: String?
+        public init(id: String, name: String, url: String?, contentIdentifier: String?) {
+            self.id = id
+            self.name = name
+            self.url = url
+            self.contentIdentifier = contentIdentifier
+        }
+    }
+
+    /// Parse `notes_read` script output: first RS-record is id/name/folder/body/html;
+    /// subsequent records are attachments (id/name/url/contentIdentifier).
+    public static func parseReadPayload(_ raw: String) -> (fields: [String], attachments: [NoteAttachment])? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let records = raw.components(separatedBy: recordSep)
+        guard let head = records.first else { return nil }
+        let fields = head.components(separatedBy: fieldSep)
+        guard fields.count >= 5 else { return nil }
+        let attachments: [NoteAttachment] = records.dropFirst().compactMap { chunk in
+            let piece = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !piece.isEmpty else { return nil }
+            let f = chunk.components(separatedBy: fieldSep)
+            guard f.count >= 2, !f[0].isEmpty else { return nil }
+            let url = f.count > 2 && !f[2].isEmpty ? f[2] : nil
+            let cid = f.count > 3 && !f[3].isEmpty ? f[3] : nil
+            return NoteAttachment(id: f[0], name: f[1], url: url, contentIdentifier: cid)
+        }
+        return (fields, attachments)
+    }
+
+    static func attachmentValue(_ attachment: NoteAttachment) -> Value {
+        var obj: [String: Value] = [
+            "id": .string(attachment.id),
+            "name": .string(attachment.name)
+        ]
+        if let url = attachment.url { obj["url"] = .string(url) }
+        if let cid = attachment.contentIdentifier { obj["contentIdentifier"] = .string(cid) }
+        return .object(obj)
+    }
+
     /// Parse `recordSep`-delimited records of `fieldSep`-delimited fields
     /// (id, name, folder, modified) emitted by the list/search scripts.
     /// Tolerant: short/blank records are skipped. `public` for unit testing.
@@ -586,10 +630,13 @@ public enum NotesModule {
         }
 
         /// Read one note (by id or name): emit
-        /// id‹US›name‹US›folder‹US›plaintext‹US›html. Empty string if no match.
+        /// id‹US›name‹US›folder‹US›plaintext‹US›html, then RS-delimited
+        /// attachment records {id,name,url,contentIdentifier}. Skips the
+        /// Shortcuts folder/pin wrapper attachment.
         public static func read(selector: NoteSelector) -> String {
             return """
             set fs to \(fieldSepLiteral)
+            set rs to \(recordSepLiteral)
             set out to ""
             tell application "Notes"
                 \(resolveNoteClause(selector))
@@ -599,6 +646,26 @@ public enum NotesModule {
                     set noteFolder to name of container of theNote
                 end try
                 set out to (id of theNote) & fs & (name of theNote) & fs & noteFolder & fs & (plaintext of theNote) & fs & (body of theNote)
+                try
+                    repeat with a in attachments of theNote
+                        set attName to ""
+                        try
+                            set attName to name of a
+                        end try
+                        if attName is "Shortcuts" then
+                        else
+                            set attURL to ""
+                            set attCID to ""
+                            try
+                                set attURL to (url of a as string)
+                            end try
+                            try
+                                set attCID to (content identifier of a as string)
+                            end try
+                            set out to out & rs & (id of a) & fs & attName & fs & attURL & fs & attCID
+                        end if
+                    end repeat
+                end try
             end tell
             return out
             """

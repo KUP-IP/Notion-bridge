@@ -180,7 +180,8 @@ public enum ShortcutsModule {
                 + "Read-only enumeration — returns { count, shortcuts:[names] } (or { count, folders:[names] }).",
             inputSchema: schemaObj([
                 "folders":    boolProp("List folders instead of shortcuts (default false)."),
-                "folderName": strProp("Scope to one folder by name/identifier, or \"none\" for shortcuts not in a folder.")
+                "folderName": strProp("Scope to one folder by name/identifier, or \"none\" for shortcuts not in a folder."),
+                "showIdentifiers": boolProp("Include shortcut identifiers via --show-identifiers (default false).")
             ], required: []),
             handler: { arguments in
                 let obj = objectArgs(arguments)
@@ -191,11 +192,25 @@ public enum ShortcutsModule {
                 if case .string(let folder) = obj["folderName"], !folder.isEmpty {
                     args.append(contentsOf: ["--folder-name", folder])
                 }
+                let showIdentifiers: Bool = {
+                    if case .bool(true) = obj["showIdentifiers"] { return true }
+                    return false
+                }()
+                if showIdentifiers { args.append("--show-identifiers") }
                 do {
                     let r = try await runner.run(args)
                     if r.exitCode != 0 { return failedValue("shortcuts_list", r) }
-                    let names = parseLines(r.stdout)
                     let key = (args.contains("--folders")) ? "folders" : "shortcuts"
+                    if showIdentifiers {
+                        let items = parseIdentifiedLines(r.stdout)
+                        return .object([
+                            "ok":     .bool(true),
+                            "tool":   .string("shortcuts_list"),
+                            "count":  .int(items.count),
+                            key:      .array(items.map { .object(["name": .string($0.name), "identifier": .string($0.identifier)]) })
+                        ])
+                    }
+                    let names = parseLines(r.stdout)
                     return .object([
                         "ok":     .bool(true),
                         "tool":   .string("shortcuts_list"),
@@ -216,14 +231,18 @@ public enum ShortcutsModule {
             name: "shortcuts_run",
             module: moduleName,
             tier: .notify,
-            description: "Run an Apple Shortcut by name via `shortcuts run <name>` and capture its text output. "
+            description: "Run an Apple Shortcut by name via `shortcuts run <name>` and capture its output. "
                 + "Optional `input` is written to a temp file and passed with --input-path. "
-                + "Output is streamed to stdout (--output-path -) and returned as `output`. "
-                + "SAFETY: a Shortcut can do anything (write files, hit the network, drive apps), so this is a "
+                + "Optional `outputType` is forwarded as --output-type (UTI). Optional `outputPath` is "
+                + "--output-path; default is stdout (`-`) for text. Binary UTIs fail closed unless "
+                + "outputPath is a real file (never `-`). "
+                + "SAFETY: a Shortcut can do anything, so this is a "
                 + ".notify-tier action — never auto-executed silently. Returns { ok, output, exitCode }.",
             inputSchema: schemaObj([
                 "name":  strProp("Shortcut name or identifier to run (required)."),
-                "input": strProp("Optional text input passed to the shortcut via a temp file (--input-path).")
+                "input": strProp("Optional text input passed to the shortcut via a temp file (--input-path)."),
+                "outputType": strProp("Optional UTI for --output-type (e.g. public.plain-text, public.png)."),
+                "outputPath": strProp("Optional file path for --output-path. Default `-` (stdout). Required for binary UTIs.")
             ], required: ["name"]),
             handler: { arguments in
                 let obj = objectArgs(arguments)
@@ -250,8 +269,24 @@ public enum ShortcutsModule {
 
                 var args: [String] = ["run", name]
                 if let inputPath { args.append(contentsOf: ["--input-path", inputPath]) }
-                // `-` streams the shortcut output to stdout so we can capture it.
-                args.append(contentsOf: ["--output-path", "-"])
+                let outputType: String? = {
+                    if case .string(let t) = obj["outputType"], !t.isEmpty { return t }
+                    return nil
+                }()
+                let outputPath: String? = {
+                    if case .string(let p) = obj["outputPath"], !p.isEmpty { return p }
+                    return nil
+                }()
+                if isBinaryOutputType(outputType), outputPath == nil || outputPath == "-" {
+                    return invalidArgsValue(
+                        "shortcuts_run",
+                        "binary outputType '\(outputType ?? "")' requires outputPath (a real file, not stdout '-')")
+                }
+                if let outputType {
+                    args.append(contentsOf: ["--output-type", outputType])
+                }
+                let resolvedOutput = outputPath ?? "-"
+                args.append(contentsOf: ["--output-path", resolvedOutput])
 
                 do {
                     let r = try await runner.run(args)
@@ -261,8 +296,10 @@ public enum ShortcutsModule {
                         "tool":     .string("shortcuts_run"),
                         "name":     .string(name),
                         "exitCode": .int(Int(r.exitCode)),
-                        "output":   .string(r.stdout)
+                        "output":   .string(resolvedOutput == "-" ? r.stdout : "")
                     ]
+                    if resolvedOutput != "-" { dict["outputPath"] = .string(resolvedOutput) }
+                    if let outputType { dict["outputType"] = .string(outputType) }
                     if !r.stderr.isEmpty { dict["stderr"] = .string(r.stderr) }
                     return .object(dict)
                 } catch let e as ShortcutsError {
@@ -292,6 +329,35 @@ public enum ShortcutsModule {
         raw.split(separator: "\n", omittingEmptySubsequences: true)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    /// Parse `shortcuts list --show-identifiers` lines: `Name (UUID)`.
+    public static func parseIdentifiedLines(_ raw: String) -> [(name: String, identifier: String)] {
+        parseLines(raw).map { line in
+            if let open = line.lastIndex(of: "("), line.hasSuffix(")"), open > line.startIndex {
+                let name = String(line[..<open]).trimmingCharacters(in: .whitespaces)
+                let idStart = line.index(after: open)
+                let idEnd = line.index(before: line.endIndex)
+                let identifier = String(line[idStart..<idEnd]).trimmingCharacters(in: .whitespaces)
+                if !name.isEmpty { return (name, identifier) }
+            }
+            return (line, "")
+        }
+    }
+
+    /// True when a Shortcuts `--output-type` UTI would garble stdout as binary.
+    public static func isBinaryOutputType(_ uti: String?) -> Bool {
+        guard let raw = uti?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return false
+        }
+        let uti = raw.lowercased()
+        let textPrefixes = [
+            "public.text", "public.plain-text", "public.utf8-plain-text", "public.utf16-plain-text",
+            "public.json", "public.xml", "public.html", "public.source-code", "public.yaml"
+        ]
+        if textPrefixes.contains(where: { uti == $0 || uti.hasPrefix($0 + ".") }) { return false }
+        if uti.hasPrefix("public.text") { return false }
+        return true
     }
 
     // MARK: - Envelope builders

@@ -64,6 +64,7 @@ func runMemoryHubCockpitLabelsTests() async {
 
     await test("label_transcriptSource_mappings") {
         try expect(MemoryHubCockpitLabels.transcriptSource(.apple, hasTranscript: true) == "Apple", "apple")
+        try expect(MemoryHubCockpitLabels.transcriptSource(.speechAnalyzer, hasTranscript: true) == "Speech Analyzer", "speechAnalyzer")
         try expect(MemoryHubCockpitLabels.transcriptSource(.parakeet, hasTranscript: true) == "On-device", "parakeet → On-device")
         try expect(MemoryHubCockpitLabels.transcriptSource(.sidecar, hasTranscript: true) == "Cached", "sidecar → Cached")
         try expect(MemoryHubCockpitLabels.transcriptSource(.none, hasTranscript: true) == "No transcript", "none → No transcript")

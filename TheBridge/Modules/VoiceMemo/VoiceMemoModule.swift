@@ -164,7 +164,7 @@ public enum VoiceMemoModule {
             module: moduleName,
             tier: .notify,
             description: """
-            Registry-centric Voice Memos curator: discover recordings → resolve transcript (sidecar → Apple tsrp → Parakeet) → parse → route intents. \
+            Registry-centric Voice Memos curator: discover recordings → resolve transcript (sidecar → Apple tsrp → SpeechAnalyzer opt-in → Parakeet) → parse → route intents. \
             Lanes: reminder (Apple Reminders), memory_keep (Notion Memory registry entity), agent_memory (memory_remember), \
             registry_update (contact/project/packet). Skips memory_keep when the memo says not to create a memory. \
             Idempotent via processed manifest. Use dryRun:true to preview without writes.
@@ -205,7 +205,7 @@ public enum VoiceMemoModule {
                     "route a memo to reminders, memory_keep, or entity updates without storing full transcripts"
                 ],
                 whenNotToUse: [
-                    "live speech-to-text without the transcription ladder (use voice_memo_process which resolves sidecar → Apple → Parakeet)",
+                    "live speech-to-text without the transcription ladder (use voice_memo_process which resolves sidecar → Apple → SpeechAnalyzer → Parakeet)",
                     "Notion Meeting Notes AI (not API-automatable)"
                 ],
                 relatedTools: ["voice_memo_list", "voice_memo_review_list", "reminders_create", "registry_create", "registry_update", "memory_remember"]
@@ -236,11 +236,15 @@ public enum VoiceMemoModule {
             : (defaults.object(forKey: BridgeDefaults.voiceMemoParakeetTranscription) == nil
                 ? true
                 : defaults.bool(forKey: BridgeDefaults.voiceMemoParakeetTranscription))
+        let speechAnalyzerTranscription = useProductionEffectiveAccessors
+            ? BridgeDefaults.voiceMemoSpeechAnalyzerTranscriptionEffective
+            : defaults.bool(forKey: BridgeDefaults.voiceMemoSpeechAnalyzerTranscription)
 
         return .object([
             "curatorMode": .string(curatorMode.rawValue),
             "ollamaRouting": .bool(ollamaRouting),
             "appleTranscript": .bool(appleTranscript),
+            "speechAnalyzerTranscription": .bool(speechAnalyzerTranscription),
             "parakeetTranscription": .bool(parakeetTranscription),
         ])
     }
@@ -257,7 +261,7 @@ public enum VoiceMemoModule {
             name: "voice_memo_settings_get",
             module: moduleName,
             tier: .open,
-            description: "Read the effective Voice Memo curator mode and transcription/routing toggles. Returns curatorMode, ollamaRouting, appleTranscript, and parakeetTranscription.",
+            description: "Read the effective Voice Memo curator mode and transcription/routing toggles. Returns curatorMode, ollamaRouting, appleTranscript, speechAnalyzerTranscription, and parakeetTranscription.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([:]),
@@ -297,6 +301,10 @@ public enum VoiceMemoModule {
                     "appleTranscript": .object([
                         "type": .string("boolean"),
                         "description": .string("Use Apple embedded transcript before fallback transcription."),
+                    ]),
+                    "speechAnalyzerTranscription": .object([
+                        "type": .string("boolean"),
+                        "description": .string("Use SpeechAnalyzer between Apple tsrp and Parakeet (default false)."),
                     ]),
                     "parakeetTranscription": .object([
                         "type": .string("boolean"),
@@ -343,6 +351,7 @@ public enum VoiceMemoModule {
                 for (key, defaultsKey) in [
                     ("ollamaRouting", BridgeDefaults.voiceMemoOllamaRouting),
                     ("appleTranscript", BridgeDefaults.voiceMemoAppleTranscript),
+                    ("speechAnalyzerTranscription", BridgeDefaults.voiceMemoSpeechAnalyzerTranscription),
                     ("parakeetTranscription", BridgeDefaults.voiceMemoParakeetTranscription),
                 ] {
                     guard let value = args[key] else { continue }
@@ -518,7 +527,7 @@ public enum VoiceMemoModule {
             name: "voice_memo_transcript_refresh",
             module: moduleName,
             tier: .notify,
-            description: "Force the transcription ladder for one memo (sidecar cache → Apple tsrp → Parakeet). Use forceParakeet:true to overwrite with Parakeet.",
+            description: "Force the transcription ladder for one memo (sidecar cache → Apple tsrp → SpeechAnalyzer → Parakeet). Use forceParakeet:true to overwrite with Parakeet. Returns the resolved transcript `source`.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

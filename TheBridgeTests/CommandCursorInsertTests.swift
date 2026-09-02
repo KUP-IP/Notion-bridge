@@ -585,4 +585,37 @@ func runCommandCursorInsertTests() async {
         try expect(cb.readString() == "user-prior-clip")
         try expect(cb.writeCount == 0)
     }
+
+    await test("prefersCommandVPaste: native AppKit false; Chromium/ChatGPT/tall web true; Cursor compact false") {
+        try expect(!CommandInsertPointerFocus.prefersCommandVPaste(
+            chromium: false, bundleIdentifier: "com.apple.TextEdit", role: "AXTextArea"))
+        try expect(CommandInsertPointerFocus.prefersCommandVPaste(
+            chromium: true, bundleIdentifier: "com.google.Chrome", role: "AXTextArea",
+            frame: CGRect(x: 0, y: 0, width: 100, height: 40)))
+        try expect(CommandInsertPointerFocus.prefersCommandVPaste(
+            chromium: true, bundleIdentifier: "com.openai.chat", role: "AXTextArea",
+            frame: CGRect(x: 0, y: 0, width: 500, height: 43)))
+        try expect(CommandInsertPointerFocus.prefersCommandVPaste(
+            chromium: true, bundleIdentifier: "com.todesktop.230313mzl4w4u92", role: "AXWebArea",
+            frame: CGRect(x: 0, y: 0, width: 400, height: 800)))
+        try expect(!CommandInsertPointerFocus.prefersCommandVPaste(
+            chromium: true, bundleIdentifier: "com.todesktop.230313mzl4w4u92", role: "AXTextArea",
+            frame: CGRect(x: 0, y: 0, width: 261, height: 24)))
+    }
+
+    await test("web paste path restores prior pasteboard contents") {
+        let name = NSPasteboard.Name("bridge.wave7.command-insert.\(UUID().uuidString)")
+        let pb = NSPasteboard(name: name)
+        pb.clearContents()
+        pb.setString("PRIOR-CLIP", forType: .string)
+        var sawBody = false
+        try CommandInsertPasteboard.withTransientString("BODY-ONLY", on: pb) {
+            try expect(pb.string(forType: .string) == "BODY-ONLY")
+            sawBody = true
+        }
+        try expect(sawBody)
+        try expect(pb.string(forType: .string) == "PRIOR-CLIP",
+                   "must restore prior pasteboard, got \(pb.string(forType: .string) ?? "nil")")
+        pb.releaseGlobally()
+    }
 }
