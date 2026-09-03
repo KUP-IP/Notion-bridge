@@ -9,6 +9,7 @@
 // that detection methods don't crash or block the main thread.
 
 import Foundation
+import Contacts
 import TheBridgeLib
 
 // MARK: - PermissionManager Tests
@@ -65,6 +66,15 @@ func runPermissionManagerTests() async {
         try expect(PermissionManager.Grant.fullDiskAccess.isAutoGrantable == false)
         try expect(PermissionManager.Grant.reminders.isAutoGrantable == false)
         try expect(PermissionManager.Grant.calendar.isAutoGrantable == false)
+    }
+
+    await test("Contacts .limited authorization is sufficient") {
+        try expect(PermissionManager.isContactsAuthorizationSufficient(.limited),
+                   "Selected Contacts (.limited) must be enough for contacts_* tools")
+        try expect(PermissionManager.isContactsAuthorizationSufficient(.authorized))
+        try expect(!PermissionManager.isContactsAuthorizationSufficient(.denied))
+        try expect(!PermissionManager.isContactsAuthorizationSufficient(.restricted))
+        try expect(!PermissionManager.isContactsAuthorizationSufficient(.notDetermined))
     }
 
     await test("GrantStatus equality works correctly") {

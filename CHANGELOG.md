@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
+
+- **Command insert (#238 follow-up)** — Safari/WebKit prefers Cmd+V paste.
+  Before paste, leftover Control/Option/Shift from ⌃⌘B are keyed-up via HID
+  (`CGEventSourceStateID.hidSystemState`); Command stays held. V is resolved
+  with Command-held `UCKeyTranslate` (`cmdKey >> 8`), not modifier 0.
+  Pasteboard restore-on-throw is covered. Not vendored from Handy.
+- **gh_pr_review** — `event` is `approve` | `request_changes` only (`comment`
+  removed; use `gh_pr_comment`). `neverAutoApprove` unchanged.
+- **keyboard_type** — copy no longer claims Input Monitoring is required
+  (Accessibility remains the gate; no IM grant, #222 not reopened).
+- **Contacts** — unit coverage that `.limited` is sufficient.
+- **Jobs LaunchAgent** — `AssociatedBundleIdentifiers` names
+  `kup.solutions.the-bridge`.
+- **Not** Installed or Released. Marketing version stays **4.0.7** / build **96**.
+
 ## v4.0.7 (build 96) — issue-close install — 2026-09-02
 
 - **Identity** — Published local install after `v4.0.6` / build `95`. Marketing

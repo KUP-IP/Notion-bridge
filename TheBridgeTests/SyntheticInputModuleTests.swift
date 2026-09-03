@@ -2,8 +2,8 @@
 // TheBridge · Tests
 //
 // Tests for SyntheticInputModule (1 tool: keyboard_type).
-// CGEvent posting requires AX + Input Monitoring grants. In test/CI environments
-// these are typically denied, so tests focus on:
+// CGEvent posting requires Accessibility. In test/CI environments
+// this is typically denied, so tests focus on:
 //   - registration + tier classification
 //   - input validation
 //   - graceful capability_missing surfacing on permission denial
@@ -82,6 +82,13 @@ func runSyntheticInputModuleTests() async {
         } else {
             throw TestError.assertion("Response missing both code and success: \(dict.keys)")
         }
+    }
+
+    await test("keyboard_type copy does not claim Input Monitoring is required") {
+        let tools = await router.registrations(forModule: "computer")
+        let tool = tools.first(where: { $0.name == "keyboard_type" })!
+        try expect(!tool.description.localizedCaseInsensitiveContains("Input Monitoring"),
+                   "keyboard_type must not claim Input Monitoring is required: \(tool.description)")
     }
 
     await test("keyboard_type capability_missing surfaces settings deep-link") {

@@ -264,34 +264,35 @@ public enum GhModule {
             module: moduleName,
             tier: .request,
             neverAutoApprove: true,
-            description: "Submit a pull-request review via `gh pr review` (approve, request changes, or comment). Optional body. Does not create inline path/line comments — use gh_pr_comment for a top-level discussion comment.",
+            description: "Submit a pull-request review via `gh pr review` (approve or request changes). Optional body. Does not create inline path/line comments — use gh_pr_comment for a top-level discussion comment.",
             inputSchema: schemaObj([
                 "number": intProp("PR number (required)."),
-                "event":  enumProp(["approve", "request_changes", "comment"], "Review event (required)."),
+                "event":  enumProp(["approve", "request_changes"], "Review event (required)."),
                 "body":   strProp("Optional review body markdown."),
                 "repo":   strProp("Optional OWNER/REPO override.")
             ], required: ["number", "event"]),
             handler: { arguments in
                 guard case .object(let obj) = arguments,
                       case .int(let number) = obj["number"] else {
-                    return invalidArgsValue("gh_pr_review", "required: number (int), event (approve|request_changes|comment)")
+                    return invalidArgsValue("gh_pr_review", "required: number (int), event (approve|request_changes)")
                 }
                 let event: String = {
                     if case .string(let s) = obj["event"] { return s }
                     return ""
                 }()
                 switch event {
-                case "approve", "request_changes", "comment":
+                case "approve", "request_changes":
                     break
                 default:
-                    return invalidArgsValue("gh_pr_review", "event must be approve, request_changes, or comment")
+                    return invalidArgsValue("gh_pr_review", "event must be approve or request_changes")
                 }
                 if let cap = await ensureCapability("gh_pr_review", runtime: runtime) { return cap }
                 var args: [String] = ["pr", "review", String(number)]
                 switch event {
                 case "approve":          args.append("--approve")
                 case "request_changes":  args.append("--request-changes")
-                default:                 args.append("--comment")
+                default:
+                    return invalidArgsValue("gh_pr_review", "event must be approve or request_changes")
                 }
                 appendStr(&args, obj, "body", "--body")
                 appendStr(&args, obj, "repo", "--repo")

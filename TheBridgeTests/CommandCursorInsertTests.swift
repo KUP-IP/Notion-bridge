@@ -13,6 +13,7 @@
 
 import Foundation
 import AppKit
+import Carbon.HIToolbox
 import TheBridgeLib
 
 func runCommandCursorInsertTests() async {
@@ -603,6 +604,59 @@ func runCommandCursorInsertTests() async {
             frame: CGRect(x: 0, y: 0, width: 261, height: 24)))
     }
 
+    await test("prefersCommandVPaste: Safari/WebKit prefers paste") {
+        try expect(CommandInsertPointerFocus.hostsWebKit(bundleIdentifier: "com.apple.Safari"))
+        try expect(CommandInsertPointerFocus.hostsWebKit(bundleIdentifier: "com.apple.Safari.WebApp"))
+        try expect(CommandInsertPointerFocus.hostsWebKit(bundleIdentifier: "com.apple.SafariTechnologyPreview"))
+        try expect(CommandInsertPointerFocus.hostsWebKit(bundleIdentifier: "com.apple.WebKit.WebContent"))
+        try expect(!CommandInsertPointerFocus.hostsWebKit(bundleIdentifier: "com.apple.TextEdit"))
+        try expect(CommandInsertPointerFocus.hostsChromium(
+            bundleIdentifier: "com.apple.Safari", bundleURL: nil),
+                   "Safari must take the web paste path, not unicode")
+        try expect(CommandInsertPointerFocus.prefersCommandVPaste(
+            chromium: false, bundleIdentifier: "com.apple.Safari", role: "AXTextArea",
+            frame: CGRect(x: 0, y: 0, width: 100, height: 40)),
+                   "Safari must prefer Cmd+V even when the chromium flag is false")
+        try expect(CommandInsertPointerFocus.prefersCommandVPaste(
+            chromium: true, bundleIdentifier: "com.apple.Safari", role: "AXWebArea",
+            frame: CGRect(x: 0, y: 0, width: 400, height: 40)))
+    }
+
+    await test("leftover Control/Option/Shift key-up before paste; Command stays held") {
+        let control = CGKeyCode(kVK_Control)
+        let option = CGKeyCode(kVK_Option)
+        let shift = CGKeyCode(kVK_Shift)
+        let command = CGKeyCode(kVK_Command)
+        try expect(CommandInsertKeyLayout.leftoverHotkeyModifierKeyCodes.contains(control))
+        try expect(!CommandInsertKeyLayout.leftoverHotkeyModifierKeyCodes.contains(command),
+                   "Command must stay held for Cmd+V")
+        let fromHotkey = CommandInsertKeyLayout.leftoverModifierKeyUps { key in
+            key == control
+        }
+        try expect(fromHotkey == [control], "⌃⌘B leftover Control must key-up, got \(fromHotkey)")
+        try expect(!fromHotkey.contains(command))
+        let allLeftover = CommandInsertKeyLayout.leftoverModifierKeyUps { _ in true }
+        try expect(allLeftover.contains(control) && allLeftover.contains(option) && allLeftover.contains(shift))
+        try expect(!allLeftover.contains(command))
+        let none = CommandInsertKeyLayout.leftoverModifierKeyUps { _ in false }
+        try expect(none.isEmpty)
+    }
+
+    await test("Command-held V uses UCKeyTranslate command modifier state") {
+        try expect(CommandInsertKeyLayout.commandModifierKeyState == (UInt32(cmdKey) >> 8),
+                   "UCKeyTranslate Command state must be cmdKey >> 8")
+        try expect(CommandInsertKeyLayout.commandModifierKeyState == 1)
+        let vChar = UniChar(UnicodeScalar("v").value)
+        let commandHeld = CommandInsertKeyLayout.keyCode(
+            forCharacter: vChar,
+            fallback: CGKeyCode(kVK_ANSI_V),
+            modifierKeyState: CommandInsertKeyLayout.commandModifierKeyState
+        )
+        try expect(commandHeld == CommandInsertKeyLayout.commandVKeyCode(),
+                   "postCommandV must resolve V with Command held, not modifier 0")
+        try expect(CommandInsertKeyLayout.commandVKeyCode() == commandHeld)
+    }
+
     await test("web paste path restores prior pasteboard contents") {
         let name = NSPasteboard.Name("bridge.wave7.command-insert.\(UUID().uuidString)")
         let pb = NSPasteboard(name: name)
@@ -616,6 +670,25 @@ func runCommandCursorInsertTests() async {
         try expect(sawBody)
         try expect(pb.string(forType: .string) == "PRIOR-CLIP",
                    "must restore prior pasteboard, got \(pb.string(forType: .string) ?? "nil")")
+        pb.releaseGlobally()
+    }
+
+    await test("web paste path restores prior pasteboard contents on throw") {
+        enum PasteBoom: Error { case exploded }
+        let name = NSPasteboard.Name("bridge.wave7.command-insert.throw.\(UUID().uuidString)")
+        let pb = NSPasteboard(name: name)
+        pb.clearContents()
+        pb.setString("PRIOR-CLIP", forType: .string)
+        do {
+            try CommandInsertPasteboard.withTransientString("BODY-ONLY", on: pb) {
+                try expect(pb.string(forType: .string) == "BODY-ONLY")
+                throw PasteBoom.exploded
+            }
+            throw TestError.assertion("perform must propagate the throw")
+        } catch is PasteBoom {
+            try expect(pb.string(forType: .string) == "PRIOR-CLIP",
+                       "must restore prior pasteboard on throw, got \(pb.string(forType: .string) ?? "nil")")
+        }
         pb.releaseGlobally()
     }
 }

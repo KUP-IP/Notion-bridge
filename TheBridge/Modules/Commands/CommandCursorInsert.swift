@@ -2,9 +2,10 @@
 // TheBridge · Modules · Commands
 //
 // Native AppKit: AX splice, clipboard untouched.
-// Web-like hosts (Chromium / ProseMirror / ChatGPT composers): Cmd+V paste
-// with pasteboard save → write → delay → layout-resolved Cmd+V (~100ms
-// modifier hold) → restore. Never leave the command body on the pasteboard.
+// Web-like hosts (Chromium / Safari WebKit / ProseMirror / ChatGPT composers):
+// Cmd+V paste with pasteboard save → write → delay → leftover ⌃⌥⇧ key-up
+// (HID, Command held) → layout-resolved Cmd+V with Command-held UCKeyTranslate
+// → restore. Never leave the command body on the pasteboard.
 // Those hosts must not use unicode CGEvent typing.
 //
 // Two layers:
@@ -1006,6 +1007,7 @@ public enum CommandInsertPointerFocus {
             }
         }
         let id = bundleIdentifier ?? ""
+        if hostsWebKit(bundleIdentifier: id) { return true }
         if id.hasPrefix("com.google.Chrome") { return true }
         switch id {
         case "com.brave.Browser",
@@ -1145,14 +1147,25 @@ public enum CommandInsertPointerFocus {
         }
     }
 
-    /// Chromium browsers, ProseMirror page composers, and ChatGPT apps get
-    /// Cmd+V paste — not unicode CGEvent. Cursor compact AXTextArea stays AX.
+    /// Safari / WebKit browsers. Wave 7 Cmd+V used to miss these because
+    /// `hostsChromium` only listed Chromium IDs, so Safari kept posting unicode.
+    public static func hostsWebKit(bundleIdentifier: String?) -> Bool {
+        let id = bundleIdentifier ?? ""
+        if id.hasPrefix("com.apple.Safari") { return true }
+        if id.hasPrefix("com.apple.WebKit") { return true }
+        return id == "org.webkit.MiniBrowser"
+    }
+
+    /// Chromium browsers, Safari/WebKit, ProseMirror page composers, and
+    /// ChatGPT apps get Cmd+V paste — not unicode CGEvent. Cursor compact
+    /// AXTextArea stays AX.
     public static func prefersCommandVPaste(
         chromium: Bool,
         bundleIdentifier: String?,
         role: String,
         frame: CGRect? = nil
     ) -> Bool {
+        if hostsWebKit(bundleIdentifier: bundleIdentifier) { return true }
         if !chromium { return false }
         if chromiumAXValueIsALie(bundleIdentifier: bundleIdentifier) { return true }
         let id = bundleIdentifier ?? ""
@@ -1371,7 +1384,27 @@ public enum CommandInsertPasteboard {
 
 /// Layout-resolved Cmd+V (virtual key for `v` on the current keyboard).
 public enum CommandInsertKeyLayout {
-    public static func keyCode(forCharacter ch: UniChar, fallback: CGKeyCode) -> CGKeyCode {
+    /// UCKeyTranslate `modifierKeyState` for Command held.
+    /// Carbon `cmdKey` is bit 8 of `EventRecord.modifiers`; UCKeyTranslate
+    /// wants that field already shifted right by 8, so Command is bit 0 (`1`).
+    public static let commandModifierKeyState: UInt32 = UInt32(cmdKey) >> 8
+
+    /// Leftover ⌃⌥⇧ from the ⌃⌘B hotkey. Command is intentionally absent —
+    /// Cmd+V must keep Command held.
+    public static let leftoverHotkeyModifierKeyCodes: [CGKeyCode] = [
+        CGKeyCode(kVK_Control),
+        CGKeyCode(kVK_RightControl),
+        CGKeyCode(kVK_Option),
+        CGKeyCode(kVK_RightOption),
+        CGKeyCode(kVK_Shift),
+        CGKeyCode(kVK_RightShift)
+    ]
+
+    public static func keyCode(
+        forCharacter ch: UniChar,
+        fallback: CGKeyCode,
+        modifierKeyState: UInt32 = 0
+    ) -> CGKeyCode {
         guard let inputSource = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
               let raw = TISGetInputSourceProperty(inputSource, kTISPropertyUnicodeKeyLayoutData) else {
             return fallback
@@ -1389,7 +1422,7 @@ public enum CommandInsertKeyLayout {
                     layoutPtr,
                     UInt16(code),
                     UInt16(kUCKeyActionDisplay),
-                    0,
+                    modifierKeyState,
                     UInt32(LMGetKbdType()),
                     OptionBits(kUCKeyTranslateNoDeadKeysBit),
                     &deadKeyState,
@@ -1405,12 +1438,38 @@ public enum CommandInsertKeyLayout {
         }
     }
 
+    /// Physical key macOS treats as `v` while Command is held (Dvorak / non-Latin).
+    public static func commandVKeyCode(fallback: CGKeyCode = CGKeyCode(kVK_ANSI_V)) -> CGKeyCode {
+        let vChar = UniChar(UnicodeScalar("v").value)
+        return keyCode(
+            forCharacter: vChar,
+            fallback: fallback,
+            modifierKeyState: commandModifierKeyState
+        )
+    }
+
+    /// Key-ups to post before Cmd+V so leftover ⌃⌥⇧ do not chord. Command stays held.
+    public static func leftoverModifierKeyUps(isPressed: (CGKeyCode) -> Bool) -> [CGKeyCode] {
+        leftoverHotkeyModifierKeyCodes.filter(isPressed)
+    }
+
+    public static func releaseLeftoverHotkeyModifiers(source: CGEventSource) throws {
+        let ups = leftoverModifierKeyUps { CGEventSource.keyState(.hidSystemState, key: $0) }
+        for key in ups {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else {
+                throw CommandInsertSynthError.event
+            }
+            event.flags = .maskCommand
+            event.post(tap: .cghidEventTap)
+        }
+    }
+
     public static func postCommandV() throws {
         guard let source = CGEventSource(stateID: .hidSystemState) else {
             throw CommandInsertSynthError.source
         }
-        let vChar = UniChar(UnicodeScalar("v").value)
-        let vKey = keyCode(forCharacter: vChar, fallback: CGKeyCode(kVK_ANSI_V))
+        try releaseLeftoverHotkeyModifiers(source: source)
+        let vKey = commandVKeyCode()
         let cmd = CGKeyCode(kVK_Command)
         func post(_ key: CGKeyCode, down: Bool, flags: CGEventFlags) throws {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else {
