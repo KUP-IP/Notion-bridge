@@ -11,6 +11,7 @@
 // live ToolRegistration (no dispatch, mirroring SystemModuleTests).
 
 import Foundation
+import Contacts
 import MCP
 import TheBridgeLib
 
@@ -183,5 +184,18 @@ func runPermissionsModuleTests() async {
         for g in PermissionManager.Grant.allCases {
             try expect(!g.settingsHint.isEmpty, "\(g) has empty settingsHint")
         }
+    }
+
+    await test("Contacts .limited authorization is sufficient") {
+        // CNAuthorizationStatus.limited is API_UNAVAILABLE(macos) in the Swift
+        // overlay; Sequoia Selected Contacts still reports rawValue 4 at runtime.
+        // Keep this test here: runPermissionManagerTests() is skipped (checkAll hangs).
+        let limited = CNAuthorizationStatus(rawValue: 4)!
+        try expect(PermissionManager.isContactsAuthorizationSufficient(limited),
+                   "Selected Contacts (.limited) must be enough for contacts_* tools")
+        try expect(PermissionManager.isContactsAuthorizationSufficient(.authorized))
+        try expect(!PermissionManager.isContactsAuthorizationSufficient(.denied))
+        try expect(!PermissionManager.isContactsAuthorizationSufficient(.restricted))
+        try expect(!PermissionManager.isContactsAuthorizationSufficient(.notDetermined))
     }
 }
