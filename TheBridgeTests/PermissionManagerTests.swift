@@ -69,7 +69,12 @@ func runPermissionManagerTests() async {
     }
 
     await test("Contacts .limited authorization is sufficient") {
-        try expect(PermissionManager.isContactsAuthorizationSufficient(.limited),
+        // The Swift overlay marks CNAuthorizationStatus.limited unavailable
+        // on macOS (API_UNAVAILABLE(macos)), even though Sequoia Selected
+        // Contacts reports rawValue 4 at runtime. Construct via rawValue so
+        // the test compiles and still covers PermissionManager's .limited arm.
+        let limited = CNAuthorizationStatus(rawValue: 4)!
+        try expect(PermissionManager.isContactsAuthorizationSufficient(limited),
                    "Selected Contacts (.limited) must be enough for contacts_* tools")
         try expect(PermissionManager.isContactsAuthorizationSufficient(.authorized))
         try expect(!PermissionManager.isContactsAuthorizationSufficient(.denied))
