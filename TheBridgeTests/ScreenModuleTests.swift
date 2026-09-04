@@ -466,7 +466,7 @@ func runScreenModuleTests() async {
     await test("screen_capture fallback artifact emits exact warning") {
         let image = try makeScreenTestImage()
         let artifact = ScreenCaptureArtifact(
-            filePath: "/tmp/nb-screen-fixture.png",
+            filePath: "/tmp/b-fixture.png",
             width: 1,
             height: 1,
             bytes: 4,

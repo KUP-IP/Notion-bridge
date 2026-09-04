@@ -737,6 +737,7 @@ await runNotionModuleTests()
 await runNotionWave2RESTTests()
 await runAccessibilityModuleTests()
 await runScreenModuleTests()
+await runScreenArtifactNamingTests() // #256 Time Keepr–style b-W.D-NN filenames
 await runAppleScriptModuleTests()
 await runBuiltinModuleTests()
 await runConfigManagerTests()

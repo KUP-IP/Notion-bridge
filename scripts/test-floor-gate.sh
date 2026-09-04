@@ -154,7 +154,12 @@
 #   SkillsModuleTests (purge orphans requires routeReceipt). Floor is
 #   3942 + net-new after rebase onto #252. Pre-rebase isolated CI
 #   measured 3940 (run 33895348693); CI must re-measure 3947.
-FLOOR="${BRIDGE_TEST_FLOOR:-3947}"
+# 2026-09-04: 3947 → 3967 (+20) — #256 Time Keepr–style b-W.D-NN screen
+#   filenames. +20 hermetic ScreenArtifactNamingTests (ISO week/day with
+#   injected America/Chicago, shared png+mp4 sequence, new-day reset,
+#   leftover epoch names ignored, cleanup keeps today / deletes prior day).
+#   Floor is main 3947 + net-new tests after rebase onto #253.
+FLOOR="${BRIDGE_TEST_FLOOR:-3967}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

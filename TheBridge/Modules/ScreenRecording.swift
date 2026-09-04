@@ -5,7 +5,8 @@
 //   screen_record_start (notify), screen_record_stop (notify).
 // Uses SCStream with SCStreamOutput delegate writing to AVAssetWriter.
 // Recording state managed by actor-isolated RecordingManager.
-// Files written to <configuredDir>/nb-screen-<timestamp>.mp4 (default ~/Desktop, fallback /tmp).
+// Files written to <configuredDir>/b-{ISOWeek}.{ISOWeekday}-{NN}.mp4
+// (default ~/Desktop, fallback /tmp). Sequence is shared with captures.
 
 import MCP
 import ScreenCaptureKit
@@ -333,10 +334,12 @@ private actor RecordingManager {
         let width = display.width
         let height = display.height
 
-        // Output file (same nb-screen-* pattern as captures, uses configured directory)
-        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
+        // Shared daily b-W.D-NN sequence with captures; type is extension only.
         let resolved = ConfigManager.shared.resolvedScreenOutputDir()
-        let outputPath = "\(resolved.path)/nb-screen-\(timestamp).mp4"
+        let outputPath = ScreenArtifactNaming.allocatePath(
+            directory: resolved.path,
+            ext: "mp4"
+        )
         let outputURL = URL(fileURLWithPath: outputPath)
 
         // AVAssetWriter + H.264 video input
