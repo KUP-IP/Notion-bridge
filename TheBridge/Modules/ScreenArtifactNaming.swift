@@ -114,7 +114,8 @@ public enum ScreenArtifactNaming {
               let weekday = Int(weekdayStr), (1...7).contains(weekday) else { return nil }
         guard !seqStr.isEmpty, seqStr.allSatisfy(\.isNumber),
               let sequence = Int(seqStr), sequence >= 1 else { return nil }
-        guard !ext.isEmpty, ext.allSatisfy(\.isLetter) else { return nil }
+        // png/jpg/mp4 — digits are allowed so `.mp4` parses (not letters-only).
+        guard !ext.isEmpty, ext.allSatisfy({ $0.isLetter || $0.isNumber }) else { return nil }
         return ParsedName(
             isoWeek: week,
             isoWeekday: weekday,

@@ -117,6 +117,9 @@ func runScreenArtifactNamingTests() async {
         try expect(parsed == ScreenArtifactNaming.ParsedName(
             isoWeek: 36, isoWeekday: 5, sequence: 1, ext: "png"
         ))
+        try expect(ScreenArtifactNaming.parse("b-36.5-02.mp4") == ScreenArtifactNaming.ParsedName(
+            isoWeek: 36, isoWeekday: 5, sequence: 2, ext: "mp4"
+        ), "mp4 must parse — the digit in the extension is legal")
         try expect(ScreenArtifactNaming.parse("nb-screen-1710000000000.png") == nil)
         try expect(ScreenArtifactNaming.parse("nb-screen-fixture.png") == nil)
         try expect(ScreenArtifactNaming.parse("b-36.5.png") == nil)
