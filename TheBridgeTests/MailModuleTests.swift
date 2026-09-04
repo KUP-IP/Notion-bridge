@@ -113,7 +113,7 @@ func runMailModuleTests() async {
         try expect(try tier("mail_archive") == .notify, "mail_archive must be .notify")
         try expect(try tier("mail_mark") == .notify, "mail_mark must be .notify")
         try expect(try tier("mail_trash") == .request, "mail_trash must be .request")
-        try expect(try neverAuto("mail_trash") == true, "mail_trash must neverAutoApprove")
+        try expect(try neverAuto("mail_trash") == false, "mail_trash Always Allow must be available")
         try expect(try tier("mail_send") == .request, "mail_send must be .request")
     }
 
@@ -604,16 +604,25 @@ func runMailModuleTests() async {
         }
     }
 
-    await test("batch force-request resolves effective tier to .request via neverAutoApprove") {
+    await test("batch archive defaults to Request and honors a Notify override") {
         let forced = ToolRouter.resolveEffectiveTier(
             toolName: "mail_archive",
             module: "mail",
-            registeredTier: .notify,
-            neverAutoApprove: true,
+            registeredTier: .request,
+            neverAutoApprove: false,
             toolOverrides: [:],
             moduleOverrides: [:]
         )
-        try expect(forced == .request, "forced neverAutoApprove → request")
+        try expect(forced == .request, "batch registered default is Request")
+        let sticky = ToolRouter.resolveEffectiveTier(
+            toolName: "mail_archive",
+            module: "mail",
+            registeredTier: .request,
+            neverAutoApprove: true,
+            toolOverrides: ["mail_archive": "notify"],
+            moduleOverrides: [:]
+        )
+        try expect(sticky == .notify, "Always Allow / Tools override must win for batch mail")
         let single = ToolRouter.resolveEffectiveTier(
             toolName: "mail_archive",
             module: "mail",

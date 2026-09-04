@@ -472,7 +472,7 @@ func runWave1BrokerTests() async {
             await DoctrineSyncModule.register(on: router)
             let registration = await router.allRegistrations().first(where: { $0.name == "doctrine_sync" })
             try expect(registration?.tier == .request)
-            try expect(registration?.neverAutoApprove == true)
+            try expect(registration?.neverAutoApprove == false)
 
             let report = try DoctrineSync().sync(markdown: nil)
             try expect(report.ok)

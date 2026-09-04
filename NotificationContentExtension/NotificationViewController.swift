@@ -225,7 +225,8 @@ final class NotificationViewController: NSViewController, UNNotificationContentE
         ])
     }
 
-    /// SECURITY_APPROVAL_NO_ALWAYS — request-tier for neverAutoApprove tools.
+    /// SECURITY_APPROVAL_NO_ALWAYS — legacy category (no Always Allow).
+    /// New Confirm prompts always use SECURITY_APPROVAL (#258).
     /// Layout: warning strip | ⚠️ toolName | monospaced command preview
     private func renderSecurityApprovalNoAlways(toolName: String,
                                                 argumentsSummary: String,

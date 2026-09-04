@@ -125,12 +125,14 @@ func runToolAnnotationAuditTests() async {
                    "Open-tier screen_capture remains ungated in this slice")
     }
 
-    await test("requiresConfirmation mirrors the Bridge security model (request/neverAutoApprove)") {
+    await test("requiresConfirmation mirrors registered Request tier") {
         for reg in regs {
             guard let ann = ToolAnnotationCatalog.annotations(for: reg.name) else { continue }
-            let shouldConfirm = reg.tier == .request || reg.neverAutoApprove
+            let shouldConfirm = reg.tier == .request
             try expect(ann.requiresConfirmation == shouldConfirm,
-                       "\(reg.name): requiresConfirmation=\(ann.requiresConfirmation) but tier=\(reg.tier.rawValue) nap=\(reg.neverAutoApprove)")
+                       "\(reg.name): requiresConfirmation=\(ann.requiresConfirmation) but tier=\(reg.tier.rawValue)")
+            try expect(reg.neverAutoApprove == false,
+                       "\(reg.name): neverAutoApprove must not be a confirmation floor")
         }
     }
 
@@ -146,56 +148,43 @@ func runToolAnnotationAuditTests() async {
                    "file_read must be read-only, non-destructive")
     }
 
-    // Regression guard for the 2026-05-19 security remediation (v3-hub
-    // Decision row 29): notion_datasource_delete trashes an ENTIRE data
-    // source. It must stay human-gated (.request) AND non-auto-approvable
-    // (neverAutoApprove — wins over a user tier override), with the
-    // catalog accurately mirroring that as destructive + requires
-    // confirmation. The mirror-invariant test above only checks
-    // annotation == (tier==.request||nap); this pins the INTENDED posture
-    // so a future edit that drops neverAutoApprove (and flips the
-    // annotation to keep the mirror green) is still caught.
-    await test("notion_datasource_delete is human-gated + non-auto-approvable + destructive (sec remediation)") {
+    // Regression guard: notion_datasource_delete stays human-gated (.request)
+    // and destructive. #258 dropped the neverAutoApprove floor — Always Allow
+    // persists sticky Notify; Confirm remains the registered default.
+    await test("notion_datasource_delete is human-gated + Always-Allowable + destructive") {
         guard let reg = regs.first(where: { $0.name == "notion_datasource_delete" }) else {
             throw TestError.assertion("notion_datasource_delete must be registered")
         }
         try expect(reg.tier == .request,
                    "notion_datasource_delete tier must be .request; got \(reg.tier.rawValue)")
-        try expect(reg.neverAutoApprove == true,
-                   "notion_datasource_delete must be neverAutoApprove (non-downgradable destructive delete)")
+        try expect(reg.neverAutoApprove == false,
+                   "notion_datasource_delete must offer Always Allow")
         let ann = ToolAnnotationCatalog.annotations(for: "notion_datasource_delete")
         try expect(ann?.destructiveHint == true && ann?.requiresConfirmation == true,
                    "notion_datasource_delete annotation must be destructive + requiresConfirmation; got \(String(describing: ann))")
     }
 
-    // Regression guard for the 2026-06 delete-tool security hardening
-    // (commits 1e85bb6 / 28c46ca): job_delete removes a scheduled LaunchAgent
-    // job; skill_delete removes a skill — both irreversible. Like
-    // notion_datasource_delete above, the mirror-invariant test only checks
-    // annotation == (tier==.request||nap); these pin the INTENDED posture so a
-    // future edit that drops neverAutoApprove (and flips the annotation to keep
-    // the mirror green) is still caught.
-    await test("job_delete is human-gated + non-auto-approvable + destructive (sec hardening)") {
+    await test("job_delete is human-gated + Always-Allowable + destructive") {
         guard let reg = regs.first(where: { $0.name == "job_delete" }) else {
             throw TestError.assertion("job_delete must be registered")
         }
         try expect(reg.tier == .request,
                    "job_delete tier must be .request; got \(reg.tier.rawValue)")
-        try expect(reg.neverAutoApprove == true,
-                   "job_delete must be neverAutoApprove (irreversible scheduled-job delete)")
+        try expect(reg.neverAutoApprove == false,
+                   "job_delete must offer Always Allow")
         let ann = ToolAnnotationCatalog.annotations(for: "job_delete")
         try expect(ann?.destructiveHint == true && ann?.requiresConfirmation == true,
                    "job_delete annotation must be destructive + requiresConfirmation; got \(String(describing: ann))")
     }
 
-    await test("skill_delete is human-gated + non-auto-approvable + destructive (sec hardening)") {
+    await test("skill_delete is human-gated + Always-Allowable + destructive") {
         guard let reg = regs.first(where: { $0.name == "skill_delete" }) else {
             throw TestError.assertion("skill_delete must be registered")
         }
         try expect(reg.tier == .request,
                    "skill_delete tier must be .request; got \(reg.tier.rawValue)")
-        try expect(reg.neverAutoApprove == true,
-                   "skill_delete must be neverAutoApprove (irreversible skill delete)")
+        try expect(reg.neverAutoApprove == false,
+                   "skill_delete must offer Always Allow")
         let ann = ToolAnnotationCatalog.annotations(for: "skill_delete")
         try expect(ann?.destructiveHint == true && ann?.requiresConfirmation == true,
                    "skill_delete annotation must be destructive + requiresConfirmation; got \(String(describing: ann))")

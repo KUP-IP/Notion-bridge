@@ -41,13 +41,13 @@ func runConnectionsModuleTests() async {
         }
     }
 
-    await test("connections_reset is request-tier and never auto-approved") {
+    await test("connections_reset is request-tier with Always Allow available") {
         let tools = await router.registrations(forModule: "connections")
         guard let tool = tools.first(where: { $0.name == "connections_reset" }) else {
             throw TestError.assertion("connections_reset not found")
         }
         try expect(tool.tier == .request, "reset must remain operator-gated")
-        try expect(tool.neverAutoApprove, "reset must not inherit an always-allow grant")
+        try expect(!tool.neverAutoApprove, "reset must offer Always Allow")
         try expect(RemoteControlPlanePolicy.isAlwaysBlocked(tool: tool), "reset must be unconditionally local-only")
     }
 

@@ -11,7 +11,7 @@
 //         · ApprovalCoalescer: pure concurrency-collapsing contract (begin /
 //           drain / idempotency / per-key isolation / waiter resumption count);
 //         · ToolRouter.resolveEffectiveTier: per-tool > per-module > default
-//           precedence, with neverAutoApprove forcing .request.
+//           precedence. neverAutoApprove is not an execution floor (#258).
 //   (3) make the approval UX less easy to miss than the silent 30s timeout —
 //       MCP callers wait 25s then receive awaiting_approval (not auto-deny);
 //       prompts are posted time-sensitive; the wait is injectable so tests stay fast.
@@ -193,17 +193,16 @@ func runSecurityGateUXTests() async {
                    "a more-specific per-tool override must win over the module override: got \(t.rawValue)")
     }
 
-    await test("resolveEffectiveTier: neverAutoApprove forces .request despite overrides") {
-        // snippets_delete is neverAutoApprove — no override (tool or module) may
-        // lower it below an explicit prompt.
+    await test("resolveEffectiveTier: neverAutoApprove no longer forces .request") {
+        // #258 — former neverAuto tools honor per-tool / per-module overrides.
         let t = ToolRouter.resolveEffectiveTier(
             toolName: "snippets_delete", module: "snippets",
             registeredTier: .request, neverAutoApprove: true,
-            toolOverrides: ["snippets_delete": "open"],
+            toolOverrides: ["snippets_delete": "notify"],
             moduleOverrides: ["snippets": "open"]
         )
-        try expect(t == .request,
-                   "neverAutoApprove must always resolve to .request: got \(t.rawValue)")
+        try expect(t == .notify,
+                   "Always Allow / Tools override must win over neverAutoApprove: got \(t.rawValue)")
     }
 
     await test("resolveEffectiveTier: module override ignored when module is empty") {
@@ -235,7 +234,7 @@ func runSecurityGateUXTests() async {
         try expect(t == .open, "messages_send must follow an operator Open override: got \(t.rawValue)")
     }
 
-    await test("resolveEffectiveTier: mail_trash and snippets_delete stay locked at request") {
+    await test("resolveEffectiveTier: mail_trash and snippets_delete honor Open overrides") {
         for name in ["mail_trash", "snippets_delete"] {
             let t = ToolRouter.resolveEffectiveTier(
                 toolName: name, module: name == "mail_trash" ? "mail" : "snippets",
@@ -243,8 +242,8 @@ func runSecurityGateUXTests() async {
                 toolOverrides: [name: "open"],
                 moduleOverrides: ["mail": "open", "snippets": "open"]
             )
-            try expect(t == .request,
-                       "\(name) must remain neverAutoApprove-locked at .request: got \(t.rawValue)")
+            try expect(t == .open,
+                       "\(name) must honor a Tools Open override: got \(t.rawValue)")
         }
     }
 
@@ -369,5 +368,152 @@ func runSecurityGateUXTests() async {
         default: throw TestError.assertion("explicit fake approval must allow, got \(decision)")
         }
         try expect(provider.approvalRequestCount == 1, "fake provider must be called exactly once")
+    }
+
+    // ============================================================
+    // MARK: - #258 notify-default + Always Allow everywhere
+    // ============================================================
+
+    await test("ToolRegistration default tier is Notify unless explicitly Request") {
+        let reg = ToolRegistration(
+            name: "issue258_default_tier",
+            module: "issue258",
+            description: "default-tier probe",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([:]),
+                "required": .array([])
+            ]),
+            handler: { _ in .object(["ok": .bool(true)]) }
+        )
+        try expect(reg.tier == .notify, "new tools default to .notify; got \(reg.tier.rawValue)")
+        try expect(reg.neverAutoApprove == false, "default neverAutoApprove must be false")
+    }
+
+    await test("migration: former neverAuto .notify registration is not hard-forced to Request") {
+        let t = ToolRouter.resolveEffectiveTier(
+            toolName: "standing_orders_delete", module: "standing_orders",
+            registeredTier: .notify, neverAutoApprove: true,
+            toolOverrides: [:], moduleOverrides: [:]
+        )
+        try expect(t == .notify,
+                   "existing installs must stop forcing Request for former neverAuto tools: got \(t.rawValue)")
+    }
+
+    await test("standing_orders_delete Confirm card offers Always Allow") {
+        let provider = TestSecurityApprovalProvider(decision: .allow)
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await gate.enforce(
+            toolName: "standing_orders_delete",
+            tier: .request,
+            neverAutoApprove: true,
+            arguments: .object(["id": .string("ord-258")]),
+            module: "standing_orders"
+        )
+        switch decision {
+        case .allow: break
+        default: throw TestError.assertion("expected .allow, got \(decision)")
+        }
+        try expect(provider.lastAllowAlwaysAllowAction == true,
+                   "standing_orders_delete Confirm must offer Always Allow")
+        try expect(provider.approvalRequestCount == 1)
+    }
+
+    await test("Always Allow on former neverAuto tool sticks Notify and skips the next card") {
+        let toolName = "issue258_never_auto_delete"
+        let module = "issue258_mod"
+        let perTool = BridgeDefaults.tierOverrides
+        let perModule = BridgeDefaults.moduleTierOverrides
+        var tools = UserDefaults.standard.dictionary(forKey: perTool) as? [String: String] ?? [:]
+        var mods = UserDefaults.standard.dictionary(forKey: perModule) as? [String: String] ?? [:]
+        let priorTool = tools[toolName]
+        let priorMod = mods[module]
+        defer {
+            var t = UserDefaults.standard.dictionary(forKey: perTool) as? [String: String] ?? [:]
+            var m = UserDefaults.standard.dictionary(forKey: perModule) as? [String: String] ?? [:]
+            if let priorTool { t[toolName] = priorTool } else { t.removeValue(forKey: toolName) }
+            if let priorMod { m[module] = priorMod } else { m.removeValue(forKey: module) }
+            UserDefaults.standard.set(t, forKey: perTool)
+            UserDefaults.standard.set(m, forKey: perModule)
+        }
+
+        let firstProvider = TestSecurityApprovalProvider(decision: .alwaysAllow)
+        let firstGate = SecurityGate(approvalProvider: firstProvider)
+        let first = await firstGate.enforce(
+            toolName: toolName,
+            tier: .request,
+            neverAutoApprove: true,
+            arguments: .object(["id": .string("x")]),
+            module: module
+        )
+        switch first {
+        case .allow: break
+        default: throw TestError.assertion("Always Allow must admit the first call, got \(first)")
+        }
+        try expect(firstProvider.lastAllowAlwaysAllowAction == true)
+
+        tools = UserDefaults.standard.dictionary(forKey: perTool) as? [String: String] ?? [:]
+        mods = UserDefaults.standard.dictionary(forKey: perModule) as? [String: String] ?? [:]
+        try expect(tools[toolName] == SecurityTier.notify.rawValue,
+                   "Always Allow must persist per-tool Notify")
+        try expect(mods[module] == SecurityTier.notify.rawValue,
+                   "Always Allow must persist module Notify")
+
+        let sticky = ToolRouter.resolveEffectiveTier(
+            toolName: toolName, module: module,
+            registeredTier: .request, neverAutoApprove: true,
+            toolOverrides: tools, moduleOverrides: mods
+        )
+        try expect(sticky == .notify, "sticky effective tier must be Notify; got \(sticky.rawValue)")
+
+        let secondProvider = TestSecurityApprovalProvider(decision: .deny)
+        let secondGate = SecurityGate(approvalProvider: secondProvider)
+        let second = await secondGate.enforce(
+            toolName: toolName,
+            tier: sticky,
+            neverAutoApprove: true,
+            arguments: .object(["id": .string("x")]),
+            module: module
+        )
+        switch second {
+        case .allow: break
+        default: throw TestError.assertion("sticky Notify must not prompt; got \(second)")
+        }
+        try expect(secondProvider.approvalRequestCount == 0,
+                   "second former-neverAuto call must not show a Confirm card")
+    }
+
+    await test("Tools UI tier matches runtime effective tier after Always Allow") {
+        let toolOverrides = ["standing_orders_delete": "notify"]
+        let moduleOverrides = ["standing_orders": "notify"]
+        let runtime = ToolRouter.resolveEffectiveTier(
+            toolName: "standing_orders_delete",
+            module: "standing_orders",
+            registeredTier: .request,
+            neverAutoApprove: true,
+            toolOverrides: toolOverrides,
+            moduleOverrides: moduleOverrides
+        )
+        let ui = ToolTierResolution.effectiveTier(
+            toolName: "standing_orders_delete",
+            module: "standing_orders",
+            registeredTier: "request",
+            toolOverrides: toolOverrides,
+            moduleOverrides: moduleOverrides
+        )
+        try expect(runtime == .notify && ui == "notify",
+                   "UI pill (\(ui)) must match runtime (\(runtime.rawValue))")
+    }
+
+    await test("standing_orders_delete is registered Request without neverAutoApprove floor") {
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
+        let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+        await StandingOrdersModule.register(on: router)
+        let regs = await router.registrations(forModule: "standing_orders")
+        guard let del = regs.first(where: { $0.name == "standing_orders_delete" }) else {
+            throw TestError.assertion("standing_orders_delete must be registered")
+        }
+        try expect(del.tier == .request, "delete stays Confirm-first; got \(del.tier.rawValue)")
+        try expect(del.neverAutoApprove == false, "no hard no-Always-Allow floor")
     }
 }

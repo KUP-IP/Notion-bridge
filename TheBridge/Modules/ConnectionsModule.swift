@@ -171,7 +171,6 @@ public enum ConnectionsModule {
             name: "connections_reset",
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
             description: "Reset and re-run canonical Bridge initialization for the current LOCAL broker session. Rotates the governance record while keeping the response-capable transport alive; safe to repeat. Remote tunnel callers are always refused by the control-plane policy.",
             inputSchema: .object([
                 "type": .string("object"),

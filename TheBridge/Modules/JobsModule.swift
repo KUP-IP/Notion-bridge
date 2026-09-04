@@ -89,7 +89,7 @@ public enum JobsModule {
 
     private static func makeJobDelete() -> ToolRegistration {
         ToolRegistration(
-            name: "job_delete", module: moduleName, tier: .request, neverAutoApprove: true,
+            name: "job_delete", module: moduleName, tier: .request,
             description: "Permanently delete a job: unregister LaunchAgent, remove plist, drop DB record (cascades execution history). Irreversible.",
             inputSchema: .object([
                 "type": .string("object"),

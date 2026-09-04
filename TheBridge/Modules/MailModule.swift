@@ -12,7 +12,7 @@
 //   - draft / reply / forward / move / archive / mark → .notify
 //     (reply/forward are draft-only; never auto-send)
 //   - send                               → .request + confirm:'SEND'
-//   - trash                              → .request + confirm:'DELETE' + neverAutoApprove
+//   - trash                              → .request + confirm:'DELETE' (Always Allow)
 // Mutations require messageIds (Mail AS id). Never target by subject/sender alone.
 // Batch cap: 25 ids. dryRun previews with zero seam side effects.
 
@@ -219,8 +219,9 @@ public enum MailModule {
             """
     }
 
-    /// Batch (>1 unique messageId) archive/move must force SecurityGate `.request`
-    /// + neverAutoApprove. Single-id stays at the tool's registered `.notify` tier.
+    /// Batch (>1 unique messageId) archive/move uses Request as the registered
+    /// default for that invocation. Always Allow and Tools-UI overrides still
+    /// apply (#258). Single-id stays at the tool's registered `.notify` tier.
     public static func forcesBatchHumanApproval(toolName: String, arguments: Value) -> Bool {
         guard toolName == "mail_archive" || toolName == "mail_move" else { return false }
         guard case .object(let args) = arguments, case .array(let arr) = args["messageIds"] else {
@@ -730,7 +731,7 @@ public enum MailModule {
             name: "mail_move",
             module: moduleName,
             tier: .notify,
-            description: "Move Mail messages by AppleScript id. Requires account + destinationMailbox + messageIds (max 25). Single-id is Notify-tier; batch (>1 id) forces Request + neverAutoApprove (human modal) and confirm:'MOVE'. planOnly/dryRun is plan-only. Prefer mail_archive for standard cleanup.",
+            description: "Move Mail messages by AppleScript id. Requires account + destinationMailbox + messageIds (max 25). Single-id is Notify-tier; batch (>1 id) defaults to Request (Always Allow available) and confirm:'MOVE'. planOnly/dryRun is plan-only. Prefer mail_archive for standard cleanup.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -787,7 +788,7 @@ public enum MailModule {
             name: "mail_archive",
             module: moduleName,
             tier: .notify,
-            description: "Archive Mail messages by id into account's Archive mailbox (Gmail may surface as All Mail). Requires account + messageIds (max 25). Single-id is Notify-tier; batch (>1 id) forces Request + neverAutoApprove (human modal) and confirm:'ARCHIVE'. planOnly/dryRun is plan-only. Triage candidateArchive is advisory — not mutate authority.",
+            description: "Archive Mail messages by id into account's Archive mailbox (Gmail may surface as All Mail). Requires account + messageIds (max 25). Single-id is Notify-tier; batch (>1 id) defaults to Request (Always Allow available) and confirm:'ARCHIVE'. planOnly/dryRun is plan-only. Triage candidateArchive is advisory — not mutate authority.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -896,13 +897,12 @@ public enum MailModule {
             }
         ))
 
-        // MARK: 10. mail_trash – request + DELETE confirm + neverAutoApprove
+        // MARK: 10. mail_trash – request + DELETE confirm (Always Allow)
         await router.register(ToolRegistration(
             name: "mail_trash",
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
-            description: "Move Mail messages to Trash by id. GUARDED: confirm:'DELETE' + .request + neverAutoApprove. Requires account. Does NOT empty Trash. planOnly/dryRun is plan-only.",
+            description: "Move Mail messages to Trash by id. GUARDED: confirm:'DELETE' + .request (Always Allow available). Requires account. Does NOT empty Trash. planOnly/dryRun is plan-only.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

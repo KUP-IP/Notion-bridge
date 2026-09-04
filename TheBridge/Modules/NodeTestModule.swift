@@ -327,7 +327,6 @@ public enum NodeTestModule {
             name: toolName,
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
             description: "Run 1...32 trusted Node test files through the built-in node:test API in one live claimed Git worktree. The executable and argument shape are fixed: node --permission plus one --import per existing relative .js/.mjs/.cjs path. Requires the exact ownerSession, a claim that outlives the bounded foreground process, sanitized environment, and post-run identity revalidation. Network, child-process, worker, native-addon, inspector, WASI, and FFI permissions remain denied; filesystem access is bounded to the worktree. Returns process id, exact executable/arguments, exit code, duration, stdout, stderr, and timeout evidence. It accepts no shell text, arbitrary flags, environment overrides, package scripts, redirection, command substitution, or detached execution.",
             inputSchema: .object([
                 "type": .string("object"),

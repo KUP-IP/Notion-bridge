@@ -110,7 +110,7 @@ func runBgProcessModuleTests() async {
     }
 
     await test("bg_run annotation requiresConfirmation (mirrors .request); bg_poll/bg_kill do not") {
-        // Mirror invariant: requiresConfirmation == (tier == .request || neverAutoApprove).
+        // Mirror invariant: requiresConfirmation == (tier == .request).
         try expect(ToolAnnotationCatalog.annotations(for: "bg_run")?.requiresConfirmation == true,
                    "bg_run must requiresConfirmation (it is .request)")
         try expect(ToolAnnotationCatalog.annotations(for: "bg_poll")?.requiresConfirmation == false,

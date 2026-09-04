@@ -68,7 +68,7 @@ func runVoiceMemoSuiteAuditTests() async {
     await test("Voice suite: requiresConfirmation mirrors tier") {
         for reg in voiceTools {
             guard let ann = ToolAnnotationCatalog.annotations(for: reg.name) else { continue }
-            let expected = reg.tier == .request || reg.neverAutoApprove
+            let expected = reg.tier == .request
             try expect(ann.requiresConfirmation == expected,
                        "\(reg.name) requiresConfirmation mismatch tier=\(reg.tier.rawValue)")
         }

@@ -143,13 +143,13 @@ func runDevSuiteAuditTests() async {
         try expect(bad.isEmpty, "malformed Dev inputSchemas: \(bad.sorted())")
     }
 
-    await test("Dev tool requiresConfirmation annotation mirrors tier/neverAutoApprove") {
+    await test("Dev tool requiresConfirmation annotation mirrors Request tier") {
         let router = await makeDevRouter()
         for reg in await router.registrations(forModule: "dev") {
             guard let ann = ToolAnnotationCatalog.annotations(for: reg.name) else { continue }
-            let shouldConfirm = reg.tier == .request || reg.neverAutoApprove
+            let shouldConfirm = reg.tier == .request
             try expect(ann.requiresConfirmation == shouldConfirm,
-                       "\(reg.name): requiresConfirmation=\(ann.requiresConfirmation) but tier=\(reg.tier.rawValue) nap=\(reg.neverAutoApprove)")
+                       "\(reg.name): requiresConfirmation=\(ann.requiresConfirmation) but tier=\(reg.tier.rawValue)")
         }
     }
 

@@ -22,8 +22,9 @@ public enum BridgeDefaults {
     /// 3-way-parallel snippets operation now covers all snippets_* siblings).
     /// Read by ToolRouter when resolving a tool's effective tier: a per-tool
     /// override (more specific) wins over a per-module override, which wins over
-    /// the registered default. `neverAutoApprove` tools always force `.request`
-    /// regardless of any override. ABSENT ⇒ no module overrides.
+    /// the registered default. `neverAutoApprove` is not an execution floor
+    /// (#258) — Always Allow and Tools-UI overrides apply to every tool.
+    /// ABSENT ⇒ no module overrides.
     public static let moduleTierOverrides = "com.notionbridge.moduleTierOverrides"
 
     /// Retired issue #126 send-only mode key. No longer read or written.

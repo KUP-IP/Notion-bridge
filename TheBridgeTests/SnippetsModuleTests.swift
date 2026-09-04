@@ -46,10 +46,11 @@ func runSnippetsModuleTests() async {
         }
     }
 
-    await test("snippets_delete carries neverAutoApprove (destructive consent)") {
+    await test("snippets_delete is Request without neverAutoApprove floor") {
         let regs = await router.registrations(forModule: "snippets")
         let del = regs.first { $0.name == "snippets_delete" }
-        try expect(del?.neverAutoApprove == true, "snippets_delete must require confirmation")
+        try expect(del?.tier == .request, "snippets_delete must stay Confirm-first")
+        try expect(del?.neverAutoApprove == false, "Always Allow must be available")
     }
 
     // ── CRUD round-trip ───────────────────────────────────────────────

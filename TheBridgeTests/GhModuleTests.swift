@@ -304,7 +304,7 @@ func runGhModuleTests() async {
         try expect(error.contains("duplicateOf"), "error should mention duplicateOf, got \(error)")
     }
 
-    await test("gh_pr_review is neverAutoApprove") {
+    await test("gh_pr_review is Request without neverAutoApprove floor") {
         let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
         let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
         await GhModule.register(on: router)
@@ -313,7 +313,7 @@ func runGhModuleTests() async {
             throw TestError.assertion("gh_pr_review not registered")
         }
         try expect(review.tier == .request, "gh_pr_review tier=\(review.tier.rawValue)")
-        try expect(review.neverAutoApprove == true, "gh_pr_review must be neverAutoApprove")
+        try expect(review.neverAutoApprove == false, "gh_pr_review must offer Always Allow")
         guard case .object(let schema) = review.inputSchema,
               case .object(let props) = schema["properties"],
               case .object(let event) = props["event"],

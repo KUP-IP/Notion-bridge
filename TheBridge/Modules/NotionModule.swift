@@ -1860,20 +1860,17 @@ public enum NotionModule {
             }
         ))
 
-        // MARK: 22b. notion_datasource_delete - request + neverAutoApprove
+        // MARK: 22b. notion_datasource_delete - request (Always Allow available)
         //   Destructive: trashes an ENTIRE data source (a whole DB). The
         //   soft-delete is trash-recoverable, but the blast radius is a
-        //   full collection, so this is human-gated (.request) AND
-        //   non-auto-approvable (neverAutoApprove wins over any user tier
-        //   override — see ToolRouter effectiveTier resolution), mirroring
-        //   the snippets_delete posture. The in-handler confirm:true guard
+        //   full collection, so this is human-gated (.request). Always Allow
+        //   persists sticky Notify (#258). The in-handler confirm:true guard
         //   stays as defense-in-depth against an accidental LLM call.
         await router.register(ToolRegistration(
             name: "notion_datasource_delete",
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
-            description: "Move a data source to Notion's trash (soft-delete, recoverable). Notion has no hard delete — the data source is trashed via in_trash:true. Destructive: requires confirm:true AND human approval (neverAutoApprove). Use mode:'restore' to untrash.",
+            description: "Move a data source to Notion's trash (soft-delete, recoverable). Notion has no hard delete — the data source is trashed via in_trash:true. Destructive: requires confirm:true AND human approval (Always Allow available). Use mode:'restore' to untrash.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -2354,7 +2351,6 @@ public enum NotionModule {
             name: "notion_view_delete",
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
             description: "Permanently delete a Notion database view (DELETE /v1/views/{id}). Irreversible. Last remaining view returns REST validation_error. Requires confirm:true.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -2390,7 +2386,6 @@ public enum NotionModule {
             name: "notion_page_trash",
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
             description: "Trash or restore a Notion page via PATCH in_trash. No hard delete. No is_locked. Requires confirm:true.",
             inputSchema: .object([
                 "type": .string("object"),
@@ -2473,7 +2468,6 @@ public enum NotionModule {
             name: "notion_comment_delete",
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
             description: "DELETE a comment you created (own-comments only; otherwise 404). Requires confirm:true.",
             inputSchema: .object([
                 "type": .string("object"),

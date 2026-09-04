@@ -36,10 +36,11 @@ func runCommandsModuleTests() async {
         }
     }
 
-    await test("commands_delete carries neverAutoApprove") {
+    await test("commands_delete is Request without neverAutoApprove floor") {
         let regs = await router.registrations(forModule: "commands")
         let del = regs.first { $0.name == "commands_delete" }
-        try expect(del?.neverAutoApprove == true)
+        try expect(del?.tier == .request)
+        try expect(del?.neverAutoApprove == false)
     }
 
     await test("commands_list + get round-trip via dispatch") {

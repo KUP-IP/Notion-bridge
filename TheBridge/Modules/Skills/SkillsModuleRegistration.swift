@@ -148,7 +148,6 @@ extension SkillsModule {
             name: "skill_delete",
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
             description: "Delete one skill by name after SKILLS Keepr approves the lifecycle route. Requires routeReceipt. Replaces manage_skill action='delete'.",
             inputSchema: .object([
                 "type": .string("object"),

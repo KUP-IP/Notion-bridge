@@ -116,7 +116,7 @@ func runNodeTestModuleTests() async {
             .filter { $0.name == "node_test" }
         try expect(tools.count == 1)
         try expect(tools[0].tier == .request)
-        try expect(tools[0].neverAutoApprove)
+        try expect(!tools[0].neverAutoApprove, "node_test must offer Always Allow")
     }
 
     await test("node_test environment is fixed and drops inherited execution controls") {

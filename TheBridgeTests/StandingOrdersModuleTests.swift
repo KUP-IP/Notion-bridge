@@ -45,17 +45,22 @@ func runStandingOrdersModuleTests() async {
         try expect(regs.count == 4, "expected 4, got \(regs.count)")
     }
 
-    await test("all 4 standing_orders tools are tier .notify (writes must not auto-execute)") {
+    await test("standing_orders list/read/save stay Notify; delete is Request") {
         let regs = await router.registrations(forModule: "standing_orders")
         for r in regs {
-            try expect(r.tier == .notify, "\(r.name) must be .notify, got \(r.tier.rawValue)")
+            if r.name == "standing_orders_delete" {
+                try expect(r.tier == .request, "\(r.name) must be .request, got \(r.tier.rawValue)")
+            } else {
+                try expect(r.tier == .notify, "\(r.name) must be .notify, got \(r.tier.rawValue)")
+            }
         }
     }
 
-    await test("standing_orders_delete carries neverAutoApprove (destructive consent)") {
+    await test("standing_orders_delete has no neverAutoApprove floor") {
         let regs = await router.registrations(forModule: "standing_orders")
         let del = regs.first { $0.name == "standing_orders_delete" }
-        try expect(del?.neverAutoApprove == true, "standing_orders_delete must require confirmation")
+        try expect(del?.neverAutoApprove == false, "Always Allow must be available")
+        try expect(del?.tier == .request, "delete stays Confirm-first")
     }
 
     // ── store: CRUD round-trip ────────────────────────────────────────
