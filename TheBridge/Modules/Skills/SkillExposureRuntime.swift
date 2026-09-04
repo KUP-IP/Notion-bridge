@@ -243,6 +243,33 @@ public actor SkillRuntimeGenerationStore {
         UserDefaults.standard.set(normalized, forKey: BridgeDefaults.skillExposureEmergencyDenylist)
     }
 
+    /// Drop named entries from the active published generation in place.
+    /// Does not create a new generation ID and does not run publish reconcile.
+    /// Returns the normalized UUIDs that were actually removed.
+    @discardableResult
+    public func dropPublishedEntries(pageIDs: Set<String>) throws -> [String] {
+        let normalized = Set(pageIDs.map(SkillExposureIdentity.normalize).filter(SkillExposureIdentity.isValid))
+        guard !normalized.isEmpty, let generation = activeGeneration() else { return [] }
+        let removed = generation.entries
+            .filter { normalized.contains($0.notionPageUUID) }
+            .map(\.notionPageUUID)
+        guard !removed.isEmpty else { return [] }
+        let remaining = generation.entries.filter { !normalized.contains($0.notionPageUUID) }
+        let updated = SkillRuntimeGeneration(
+            schemaVersion: generation.schemaVersion,
+            generationID: generation.generationID,
+            snapshotID: generation.snapshotID,
+            compilerVersion: generation.compilerVersion,
+            compiledAt: generation.compiledAt,
+            entries: remaining
+        )
+        try stage(updated)
+        guard self.generation(id: generation.generationID) == updated else {
+            throw StoreError.stagedVerificationFailed(generation.generationID)
+        }
+        return removed.sorted()
+    }
+
     public enum StoreError: Error, LocalizedError {
         case generationMissing(String), stagedVerificationFailed(String), pointerVerificationFailed
         public var errorDescription: String? {
@@ -514,6 +541,59 @@ public struct SkillExposureReconciler: Sendable {
         var hash: UInt64 = 14695981039346656037
         for byte in raw.utf8 { hash ^= UInt64(byte); hash &*= 1099511628211 }
         return String(hash, radix: 16)
+    }
+}
+
+/// Explicit local+published orphan drop. Default reconcile never calls this.
+public enum SkillExposureOrphanPurger {
+    public static func apply(
+        pageIDs: [String],
+        generationStore: SkillRuntimeGenerationStore
+    ) async throws -> SkillExposureOrphanPurge.Outcome {
+        let classified = SkillExposureOrphanPurge.classify(pageIDs)
+        let admitted = Set(classified.admitted)
+        guard !admitted.isEmpty else {
+            return .init(
+                purgedLocal: [],
+                purgedPublished: [],
+                held: classified.held,
+                notFound: [],
+                invalid: classified.invalid
+            )
+        }
+
+        let purgedLocal = dropLocalSkills(pageIDs: admitted)
+        let purgedPublished = try await generationStore.dropPublishedEntries(pageIDs: admitted)
+        let found = Set(purgedLocal).union(purgedPublished)
+        let notFound = classified.admitted.filter { !found.contains($0) }
+
+        if let gate = await generationStore.gate() {
+            await SkillRuntimeCachePruner.prune(using: gate)
+        }
+
+        return .init(
+            purgedLocal: purgedLocal,
+            purgedPublished: purgedPublished,
+            held: classified.held,
+            notFound: notFound,
+            invalid: classified.invalid
+        )
+    }
+
+    private static func dropLocalSkills(pageIDs: Set<String>) -> [String] {
+        let all = SkillsModule.readAllSkills()
+        var removed: [String] = []
+        let kept = all.filter { skill in
+            guard !skill.source.isFile else { return true }
+            let id = SkillExposureIdentity.normalize(skill.notionPageId)
+            guard SkillExposureIdentity.isValid(id), pageIDs.contains(id) else { return true }
+            removed.append(id)
+            return false
+        }
+        if !removed.isEmpty {
+            SkillsModule.writeSkills(kept)
+        }
+        return Array(Set(removed)).sorted()
     }
 }
 

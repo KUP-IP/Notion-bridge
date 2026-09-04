@@ -23,9 +23,9 @@ func runSkillsModuleTests() async {
     // MARK: - Tool Registration (fetch_skill, list_routing_skills, manage_skill)
     // ============================================================
 
-    await test("SkillsModule registers 10 tools including Runtime Exposure controls") {
+    await test("SkillsModule registers 11 tools including Runtime Exposure controls") {
         let tools = await router.registrations(forModule: "skills")
-        try expect(tools.count == 10, "Expected 10 skills tools, got \(tools.count)")
+        try expect(tools.count == 11, "Expected 11 skills tools, got \(tools.count)")
     }
 
     await test("Sprint A · #2: 5 skill_* split primitives are registered") {
@@ -47,6 +47,8 @@ func runSkillsModuleTests() async {
                    "skills_exposure_reconcile must be notify")
         try expect(byName["skills_exposure_denylist"]?.tier == .notify,
                    "skills_exposure_denylist must be notify")
+        try expect(byName["skills_exposure_purge_orphans"]?.tier == .notify,
+                   "skills_exposure_purge_orphans must be notify")
     }
 
     await test("Runtime Exposure status is available before first publication") {
@@ -89,6 +91,22 @@ func runSkillsModuleTests() async {
         } catch let error as ToolRouterError {
             try expect(String(describing: error).contains("routeReceipt"),
                        "Denylist mutation should identify the missing routeReceipt")
+        }
+    }
+
+    await test("Runtime Exposure orphan purge stops when routeReceipt is absent") {
+        do {
+            _ = try await router.dispatch(
+                toolName: "skills_exposure_purge_orphans",
+                arguments: .object([
+                    "pageIds": .array([.string("e7dddd02-c340-4515-80eb-f6a6947d3313")]),
+                    "names": .array([.string("block-planning")])
+                ])
+            )
+            throw TestError.assertion("Expected missing routeReceipt error for orphan purge")
+        } catch let error as ToolRouterError {
+            try expect(String(describing: error).contains("routeReceipt"),
+                       "Orphan purge should identify the missing routeReceipt")
         }
     }
 
@@ -519,7 +537,8 @@ func runSkillsModuleTests() async {
     await test("Every skill mutation schema exposes routeReceipt") {
         let tools = await router.registrations(forModule: "skills")
         for name in ["skill_create", "skill_delete", "skill_update", "skill_rename", "skill_sync_notion",
-                     "skills_exposure_reconcile", "skills_exposure_denylist"] {
+                     "skills_exposure_reconcile", "skills_exposure_denylist",
+                     "skills_exposure_purge_orphans"] {
             guard let tool = tools.first(where: { $0.name == name }) else {
                 throw TestError.assertion("Missing \(name)")
             }

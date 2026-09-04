@@ -385,10 +385,10 @@ func runEndToEndTests() async {
         let chrome = await router.registrations(forModule: "chrome")
         let skills = await router.registrations(forModule: "skills")
         // v3.7.11 resurface: Chrome family removed entirely. Skills now exposes
-        // fetch_skill, skills_routing_list, 5 skill_* primitives, and the 3-tool
-        // Runtime Exposure control plane = 10.
+        // fetch_skill, skills_routing_list, 5 skill_* primitives, and the 4-tool
+        // Runtime Exposure control plane = 11.
         try expect(chrome.isEmpty, "ChromeModule removed in v3.7.11 — expected 0 chrome tools")
-        try expect(skills.count == 10, "SkillsModule: expected 10 with Runtime Exposure controls")
+        try expect(skills.count == 11, "SkillsModule: expected 11 with Runtime Exposure controls")
 
         let credential = await router.registrations(forModule: "credential")
         try expect(credential.count == 4, "CredentialModule: expected 4")
