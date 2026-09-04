@@ -2,6 +2,17 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Confirm delivery fallback (#258 live-verify)** — `#258` / PR 259 did **not**
+  break the UN path: `standing_orders_delete` still posts `SECURITY_APPROVAL`
+  and returns `awaiting_approval`. Remote origin is not a second gate. The
+  gap is that Confirm was notification-only, so a granted-but-invisible
+  banner (Focus, style None, Time Sensitive off, or
+  `UNNotificationExtensionDefaultContentHidden`) left MAC ATTENTION at 0 and
+  no menu-bar card. In-flight Request prompts now publish a menu-bar Confirm
+  card (Allow / Always Allow / Deny) and count toward Security ATTENTION.
+  Request notifications populate PKT-553 `userInfo`; the content extension
+  no longer hides default title/body. OAuth / tunnel / TCC unchanged. Floor
+  **3973 → 3983** (+10). Not Installed or Released.
 - **Security UX (#258)** — Notify is the default registration tier. Confirm is
   opt-in via registered `.request` or Tools pills. `neverAutoApprove` is no
   longer an execution floor: overrides apply, and every Confirm notification

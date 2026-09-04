@@ -164,7 +164,11 @@
 #   offer Always Allow; standing_orders_delete registered Request; default
 #   ToolRegistration tier is Notify. +6 SecurityGateUXTests. CI must
 #   re-measure.
-FLOOR="${BRIDGE_TEST_FLOOR:-3973}"
+# 2026-09-04: 3973 → 3983 (+10) — #258 live-verify Confirm delivery
+#   fallback. Menu-bar Confirm + ATTENTION for in-flight Request (remote
+#   and local); DefaultContentHidden=false; request userInfo. +10
+#   SecurityGateUXTests. CI must re-measure.
+FLOOR="${BRIDGE_TEST_FLOOR:-3983}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

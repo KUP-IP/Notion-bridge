@@ -235,7 +235,7 @@ public actor SecurityGate {
         // Origin (local vs remote) is not a second gate. ToolRouter already
         // resolved the operator's effective open/notify/request tier; this
         // method honors that tier for every session, including tunnel/cloud.
-        _ = context
+        // Origin is recorded on the menu-bar Confirm surface only.
         let allStrings = extractStrings(from: arguments)
         let combined = allStrings.joined(separator: " ")
         let detail = requestDetail(toolName: toolName, arguments: arguments, fallback: combined)
@@ -251,7 +251,7 @@ public actor SecurityGate {
         // must NOT be able to short-circuit the sensitive-path gate. The gate
         // canonicalizes each path argument (Finding 1) so `..` / symlink /
         // non-canonical forms cannot slip past the prefix comparison.
-        if let sensitiveResult = await checkSensitivePaths(allStrings, toolName: toolName) {
+        if let sensitiveResult = await checkSensitivePaths(allStrings, toolName: toolName, origin: context.origin) {
             return sensitiveResult
         }
 
@@ -281,7 +281,8 @@ public actor SecurityGate {
                 toolName: toolName,
                 module: module,
                 detail: detail,
-                neverAutoApprove: neverAutoApprove
+                neverAutoApprove: neverAutoApprove,
+                origin: context.origin
             )
         }
     }
@@ -377,7 +378,7 @@ public actor SecurityGate {
 
     // MARK: Sensitive Path Check
 
-    public func checkSensitivePaths(_ strings: [String], toolName: String) async -> GateDecision? {
+    public func checkSensitivePaths(_ strings: [String], toolName: String, origin: ToolDispatchOrigin = .local) async -> GateDecision? {
         // Pre-canonicalize the configured sensitive prefixes once. Each becomes a
         // list of path components rooted at "/", so matching is done on whole
         // components (Finding 1) — `~/.config` will NOT match `~/.config-x`,
@@ -409,12 +410,23 @@ public actor SecurityGate {
                 // Sensitive path approvals must not set global tool tier overrides.
                 // Option B: Allow = session only; Always Allow = permanent path grant (UserDefaults).
                 let body = String("Access sensitive path: \(sensitive)".prefix(120))
-                let approval = await approvalProvider.requestApproval(
-                    title: "The Bridge wants to \(toolName)",
+                let title = "The Bridge wants to \(toolName)"
+                let prompt = PendingApprovalPrompt(
+                    id: SecurityApprovalReceipt.digest(.string("\(toolName)\n\(sensitive)")),
+                    title: title,
                     body: body,
-                    allowAlwaysAllowAction: true,
-                    forceModalReview: false
+                    toolName: toolName,
+                    allowAlwaysAllow: true,
+                    origin: origin
                 )
+                let approval = await withVisibleApproval(prompt) {
+                    await approvalProvider.requestApproval(
+                        title: title,
+                        body: body,
+                        allowAlwaysAllowAction: true,
+                        forceModalReview: false
+                    )
+                }
                 switch approval {
                 case .allow:
                     sessionAllowedPaths.insert(sensitive)
@@ -509,18 +521,31 @@ public actor SecurityGate {
         toolName: String,
         module: String,
         detail: String,
-        neverAutoApprove: Bool
+        neverAutoApprove: Bool,
+        origin: ToolDispatchOrigin
     ) async -> GateDecision {
         // Request-tier Confirm always offers Always Allow (#258). Full detail
         // stays on the card so a former neverAuto / destructive tool is still
         // reviewable; compact 120-char bodies remain for ordinary Request tools.
         let approvalBody = neverAutoApprove ? detail : String(detail.prefix(120))
-        let decision = await approvalProvider.requestApproval(
-            title: "The Bridge wants to \(toolName)",
+        let title = "The Bridge wants to \(toolName)"
+        let promptId = SecurityApprovalReceipt.digest(.string("\(toolName)\n\(detail)"))
+        let prompt = PendingApprovalPrompt(
+            id: promptId,
+            title: title,
             body: approvalBody,
-            allowAlwaysAllowAction: true,
-            forceModalReview: false
+            toolName: toolName,
+            allowAlwaysAllow: true,
+            origin: origin
         )
+        let decision = await withVisibleApproval(prompt) {
+            await approvalProvider.requestApproval(
+                title: title,
+                body: approvalBody,
+                allowAlwaysAllowAction: true,
+                forceModalReview: false
+            )
+        }
 
         switch decision {
         case .allow:
@@ -531,9 +556,23 @@ public actor SecurityGate {
         case .deny:
             return .reject(reason: "User denied via notification (or approval timeout)")
         case .pending:
-            let id = SecurityApprovalReceipt.digest(.string("\(toolName)\n\(detail)"))
-            return .awaitingApproval(id: id)
+            return .awaitingApproval(id: promptId)
         }
+    }
+
+    /// Publish a Confirm onto the menu-bar / ATTENTION surface for the whole
+    /// wait, including remote-origin. Keep it after `.pending` (awaiting_approval)
+    /// so the operator can still Allow when the UN banner never appeared.
+    private func withVisibleApproval(
+        _ prompt: PendingApprovalPrompt,
+        _ request: () async -> SecurityApprovalDecision
+    ) async -> SecurityApprovalDecision {
+        PendingApprovalSurface.shared.publish(prompt)
+        let decision = await request()
+        if decision != .pending {
+            PendingApprovalSurface.shared.remove(id: prompt.id)
+        }
+        return decision
     }
 
     /// Persist an Always-Allow grant. Writes the legacy per-tool override and,
@@ -716,6 +755,10 @@ public struct ApprovalCoalescer: Sendable {
         identifierToKey[identifier]
     }
 
+    public func identifier(forCoalesceKey key: String) -> String? {
+        keyToIdentifier[key]
+    }
+
     /// Take parked waiters but keep the prompt marked in-flight so a retry
     /// coalesces instead of posting a second notification (issue #184).
     public mutating func takeWaitersKeepingInFlight(forIdentifier identifier: String) -> [String] {
@@ -747,6 +790,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
     private let lock = NSLock()
     private var pendingApprovals: [String: CheckedContinuation<ApprovalDecision, Never>] = [:]
+    private var surfaceSubmitObserver: NSObjectProtocol?
 
     // fb-securitygate (point 2): in-flight coalescing. Concurrent Request-tier
     // calls that share the same prompt (same title+body, e.g. a 3-way-parallel
@@ -770,6 +814,15 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
     static let categoryIdentifier = "SECURITY_APPROVAL"
     static let categoryIdentifierNoAlways = "SECURITY_APPROVAL_NO_ALWAYS"
+
+    /// Shared coalesce key for UN banners and the menu-bar Confirm card.
+    public static func coalesceKey(
+        allowAlwaysAllowAction: Bool,
+        title: String,
+        body: String
+    ) -> String {
+        "\(allowAlwaysAllowAction ? "1" : "0")\u{1}\(title)\u{1}\(body)"
+    }
     static let allowActionIdentifier = "ALLOW_ACTION"
     static let cancelActionIdentifier = "CANCEL_ACTION"
     static let alwaysAllowActionIdentifier = "ALWAYS_ALLOW"
@@ -803,6 +856,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             self.center = nil
         }
         super.init()
+        observeSurfaceSubmit()
         if let center {
             center.delegate = self
             registerCategories()
@@ -844,6 +898,88 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         }
         hasPermission = granted
         print("[SecurityGate] Init seed: hasPermission=\(granted) (authorizationStatus=\(settings.authorizationStatus.rawValue))")
+    }
+
+    deinit {
+        if let surfaceSubmitObserver {
+            NotificationCenter.default.removeObserver(surfaceSubmitObserver)
+        }
+    }
+
+    private func observeSurfaceSubmit() {
+        surfaceSubmitObserver = NotificationCenter.default.addObserver(
+            forName: .pendingApprovalSurfaceSubmit,
+            object: nil,
+            queue: nil
+        ) { [weak self] note in
+            guard let self,
+                  let id = note.userInfo?[PendingApprovalSurfaceUserInfo.idKey] as? String,
+                  let raw = note.userInfo?[PendingApprovalSurfaceUserInfo.decisionKey] as? String,
+                  let decision = SecurityApprovalDecision.fromSurfaceRaw(raw)
+            else { return }
+            self.applySurfaceDecision(id: id, decision: decision)
+        }
+    }
+
+    /// Menu-bar Confirm card → same resume / late-Allow path as a banner tap.
+    public func applySurfaceDecision(id: String, decision: ApprovalDecision) {
+        guard let prompt = PendingApprovalSurface.shared.prompt(id: id) else { return }
+        let key = prompt.coalesceKey
+        lock.lock()
+        let identifier = coalescer.identifier(forCoalesceKey: key)
+        lock.unlock()
+        applyNotificationDecision(
+            identifier: identifier,
+            coalesceKey: key,
+            decision: decision
+        )
+        PendingApprovalSurface.shared.remove(id: id)
+        if let identifier, let center {
+            center.removeDeliveredNotifications(withIdentifiers: [identifier])
+            center.removePendingNotificationRequests(withIdentifiers: [identifier])
+        }
+    }
+
+    private func applyNotificationDecision(
+        identifier: String?,
+        coalesceKey: String?,
+        decision: ApprovalDecision
+    ) {
+        let waiters: [CheckedContinuation<ApprovalDecision, Never>]
+        if let identifier, let continuation = removePending(forKey: identifier) {
+            waiters = drainCoalescedWaiters(forIdentifier: identifier, decision: decision)
+            continuation.resume(returning: decision)
+        } else if let identifier {
+            waiters = drainCoalescedWaiters(forIdentifier: identifier, decision: decision)
+            if let coalesceKey {
+                recordOrClearLateDecision(coalesceKey: coalesceKey, decision: decision)
+            }
+        } else {
+            waiters = []
+            if let coalesceKey {
+                recordOrClearLateDecision(coalesceKey: coalesceKey, decision: decision)
+            }
+        }
+        for w in waiters { w.resume(returning: decision) }
+        if let identifier {
+            if waiters.isEmpty {
+                print("[SecurityGate] Approval decision: \(decision) for \(identifier)")
+            } else {
+                print("[SecurityGate] Approval decision: \(decision) for \(identifier) (+\(waiters.count) coalesced)")
+            }
+        }
+    }
+
+    private nonisolated func recordOrClearLateDecision(
+        coalesceKey: String,
+        decision: ApprovalDecision
+    ) {
+        switch decision {
+        case .allow, .alwaysAllow:
+            recordLateDecision(coalesceKey: coalesceKey, decision: decision)
+        case .deny, .pending:
+            clearTimedOutPending(coalesceKey: coalesceKey)
+        }
     }
 
     // MARK: Thread-Safe Helpers (nonisolated — safe from async contexts)
@@ -1196,7 +1332,11 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         // fb-securitygate (point 2): coalesce identical concurrent prompts. The
         // key folds in whether the prompt offers Always Allow so a NO_ALWAYS
         // prompt never silently inherits an Always-Allow-capable one's answer.
-        let coalesceKey = "\(allowAlwaysAllowAction ? "1" : "0")\u{1}\(title)\u{1}\(body)"
+        let coalesceKey = Self.coalesceKey(
+            allowAlwaysAllowAction: allowAlwaysAllowAction,
+            title: title,
+            body: body
+        )
 
         if let late = consumeLateDecision(coalesceKey: coalesceKey) {
             print("[SecurityGate] Consumed late Allow for \(title)")
@@ -1235,6 +1375,20 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         // under Focus / Do Not Disturb, making the silent-timeout failure mode
         // far harder to miss.
         content.interruptionLevel = .timeSensitive
+        // PKT-553 content-extension contract — Request banners previously
+        // omitted userInfo, so DefaultContentHidden extensions rendered empty.
+        let toolName: String = {
+            let prefix = "The Bridge wants to "
+            return title.hasPrefix(prefix) ? String(title.dropFirst(prefix.count)) : title
+        }()
+        content.userInfo = [
+            "toolName": toolName,
+            "argumentsSummary": body,
+            "riskLevel": "high",
+            "categoryType": allowAlwaysAllowAction
+                ? Self.categoryIdentifier
+                : Self.categoryIdentifierNoAlways
+        ]
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
 
         do {
@@ -1378,28 +1532,19 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         // If the MCP caller already received `.pending`, store a one-shot
         // Allow ticket keyed by the prompt so the retry can send.
         let promptKey = peekCoalesceKey(identifier: identifier)
-        let waiters: [CheckedContinuation<ApprovalDecision, Never>]
-        if let continuation = removePending(forKey: identifier) {
-            waiters = drainCoalescedWaiters(forIdentifier: identifier, decision: decision)
-            continuation.resume(returning: decision)
-        } else {
-            waiters = drainCoalescedWaiters(forIdentifier: identifier, decision: decision)
-            if let promptKey {
-                switch decision {
-                case .allow, .alwaysAllow:
-                    recordLateDecision(coalesceKey: promptKey, decision: decision)
-                case .deny, .pending:
-                    clearTimedOutPending(coalesceKey: promptKey)
-                }
-            }
-        }
-        for w in waiters { w.resume(returning: decision) }
-
-        if waiters.isEmpty {
-            print("[SecurityGate] Notification response: \(decision) for \(identifier)")
-        } else {
-            print("[SecurityGate] Notification response: \(decision) for \(identifier) (+\(waiters.count) coalesced)")
-        }
+        applyNotificationDecision(
+            identifier: identifier,
+            coalesceKey: promptKey,
+            decision: decision
+        )
+        let title = response.notification.request.content.title
+        let body = response.notification.request.content.body
+        PendingApprovalSurface.shared.removeMatching(
+            title: title,
+            body: body,
+            allowAlwaysAllow: response.notification.request.content.categoryIdentifier
+                != Self.categoryIdentifierNoAlways
+        )
 
         completionHandler()
     }
@@ -1409,6 +1554,6 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .sound])
+        completionHandler([.banner, .list, .sound])
     }
 }

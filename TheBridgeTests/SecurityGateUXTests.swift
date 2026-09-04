@@ -15,6 +15,8 @@
 //   (3) make the approval UX less easy to miss than the silent 30s timeout —
 //       MCP callers wait 25s then receive awaiting_approval (not auto-deny);
 //       prompts are posted time-sensitive; the wait is injectable so tests stay fast.
+//   (4) #258 live-verify: remote-origin Request publishes a menu-bar Confirm
+//       surface + ATTENTION count even when the UN banner is not visible.
 //
 // Harness: standalone executable runner (no XCTest). Entry point
 // `runSecurityGateUXTests()` is invoked from TestRunner.swift.
@@ -515,5 +517,176 @@ func runSecurityGateUXTests() async {
         }
         try expect(del.tier == .request, "delete stays Confirm-first; got \(del.tier.rawValue)")
         try expect(del.neverAutoApprove == false, "no hard no-Always-Allow floor")
+    }
+
+    // ============================================================
+    // MARK: - Remote-origin Confirm surface (#258 live-verify blocker)
+    // ============================================================
+
+    await test("PendingApprovalSurface publish then snapshot") {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        let prompt = PendingApprovalPrompt(
+            id: "p1",
+            title: "The Bridge wants to standing_orders_delete",
+            body: "id=ad74d213",
+            toolName: "standing_orders_delete",
+            allowAlwaysAllow: true,
+            origin: .remote
+        )
+        PendingApprovalSurface.shared.publish(prompt)
+        try expect(PendingApprovalSurface.shared.pendingCount == 1)
+        try expect(PendingApprovalSurface.shared.snapshot().map(\.id) == ["p1"])
+        try expect(PendingApprovalSurface.shared.prompt(id: "p1")?.origin == .remote)
+    }
+
+    await test("PendingApprovalSurface remove is idempotent") {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        PendingApprovalSurface.shared.publish(PendingApprovalPrompt(
+            id: "p2", title: "t", body: "b", toolName: "tool",
+            allowAlwaysAllow: true, origin: .local
+        ))
+        PendingApprovalSurface.shared.remove(id: "p2")
+        PendingApprovalSurface.shared.remove(id: "p2")
+        try expect(PendingApprovalSurface.shared.pendingCount == 0)
+    }
+
+    await test("remote-origin Request publishes menu-bar Confirm surface") {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        let provider = TestSecurityApprovalProvider(decision: .pending)
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await gate.enforce(
+            toolName: "standing_orders_delete",
+            tier: .request,
+            arguments: .object(["id": .string("ad74d213")]),
+            module: "standing_orders",
+            context: ToolDispatchContext(
+                transportSessionId: ToolDispatchContext.remoteConnectorJSONSessionID,
+                origin: .remote,
+                client: "remote-connector"
+            )
+        )
+        switch decision {
+        case .awaitingApproval: break
+        default: throw TestError.assertion("expected awaitingApproval, got \(decision)")
+        }
+        try expect(PendingApprovalSurface.shared.pendingCount == 1,
+                   "remote-origin Confirm must land on the menu-bar surface")
+        try expect(PendingApprovalSurface.shared.snapshot().first?.origin == .remote,
+                   "surface must record remote origin, not drop it")
+        try expect(PendingApprovalSurface.shared.snapshot().first?.allowAlwaysAllow == true)
+    }
+
+    await test("local-origin Request also publishes Confirm surface") {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        let provider = TestSecurityApprovalProvider(decision: .pending)
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await gate.enforce(
+            toolName: "standing_orders_delete",
+            tier: .request,
+            arguments: .object(["id": .string("local-1")]),
+            module: "standing_orders",
+            context: .localDefault
+        )
+        switch decision {
+        case .awaitingApproval: break
+        default: throw TestError.assertion("expected awaitingApproval, got \(decision)")
+        }
+        try expect(PendingApprovalSurface.shared.pendingCount == 1,
+                   "local Confirm must also publish — origin is not a second gate")
+    }
+
+    await test("awaiting_approval keeps Confirm surface after MCP pending") {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        let provider = TestSecurityApprovalProvider(decision: .pending)
+        let gate = SecurityGate(approvalProvider: provider)
+        _ = await gate.enforce(
+            toolName: "standing_orders_delete",
+            tier: .request,
+            arguments: .object(["id": .string("keep-1")]),
+            module: "standing_orders",
+            context: ToolDispatchContext(
+                transportSessionId: "cloud-agent-1",
+                origin: .remote
+            )
+        )
+        try expect(PendingApprovalSurface.shared.pendingCount == 1,
+                   "after awaiting_approval the Confirm card must stay so ATTENTION > 0")
+    }
+
+    await test("Allow clears Confirm surface") {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        let provider = TestSecurityApprovalProvider(decision: .allow)
+        let gate = SecurityGate(approvalProvider: provider)
+        let decision = await gate.enforce(
+            toolName: "standing_orders_delete",
+            tier: .request,
+            arguments: .object(["id": .string("clear-1")]),
+            module: "standing_orders",
+            context: ToolDispatchContext(
+                transportSessionId: ToolDispatchContext.remoteConnectorJSONSessionID,
+                origin: .remote
+            )
+        )
+        switch decision {
+        case .allow: break
+        default: throw TestError.assertion("expected .allow, got \(decision)")
+        }
+        try expect(PendingApprovalSurface.shared.pendingCount == 0,
+                   "terminal Allow must clear the menu-bar Confirm card")
+    }
+
+    await test("Security ATTENTION includes pending Confirm count") {
+        try expect(SecurityPostureMetrics.attentionTotal(credentialIssues: 0, pendingApprovals: 0) == 0)
+        try expect(SecurityPostureMetrics.attentionTotal(credentialIssues: 2, pendingApprovals: 0) == 2)
+        try expect(SecurityPostureMetrics.attentionTotal(credentialIssues: 0, pendingApprovals: 1) == 1,
+                   "MAC ATTENTION must count in-flight Confirm, not only vault issues")
+        try expect(SecurityPostureMetrics.attentionTotal(credentialIssues: 3, pendingApprovals: 2) == 5)
+    }
+
+    await test("Coalescer can look up identifier from coalesce key") {
+        var c = ApprovalCoalescer()
+        _ = c.begin(coalesceKey: "k-surface", identifier: "id-surface", waiterToken: "w1")
+        try expect(c.identifier(forCoalesceKey: "k-surface") == "id-surface")
+        try expect(c.identifier(forCoalesceKey: "missing") == nil)
+    }
+
+    await test("coalesceKey is shared between banner and menu-bar card") {
+        let key = NotificationApprovalManager.coalesceKey(
+            allowAlwaysAllowAction: true,
+            title: "The Bridge wants to standing_orders_delete",
+            body: "id=x"
+        )
+        let prompt = PendingApprovalPrompt(
+            id: "k",
+            title: "The Bridge wants to standing_orders_delete",
+            body: "id=x",
+            toolName: "standing_orders_delete",
+            allowAlwaysAllow: true,
+            origin: .remote
+        )
+        try expect(prompt.coalesceKey == key,
+                   "menu-bar Allow must hash the same prompt as SECURITY_APPROVAL")
+        try expect(key.hasPrefix("1"), "Always Allow cards use the SECURITY_APPROVAL key prefix")
+    }
+
+    await test("Notification content extension keeps default banner title/body visible") {
+        let plist = try String(
+            contentsOfFile: "NotificationContentExtension/Info.plist",
+            encoding: .utf8
+        )
+        try expect(
+            plist.contains("UNNotificationExtensionDefaultContentHidden"),
+            "extension must declare DefaultContentHidden"
+        )
+        try expect(
+            plist.contains("<key>UNNotificationExtensionDefaultContentHidden</key>\n\t\t\t<false/>"),
+            "DefaultContentHidden=false so compact banners still show title/body when the custom UI does not load"
+        )
     }
 }

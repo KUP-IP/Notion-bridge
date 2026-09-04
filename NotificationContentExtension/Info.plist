@@ -38,7 +38,7 @@
 				<string>CURSOR_AGENT_NEEDS_APPROVAL</string>
 			</array>
 			<key>UNNotificationExtensionDefaultContentHidden</key>
-			<true/>
+			<false/>
 			<key>UNNotificationExtensionInitialContentSizeRatio</key>
 			<real>0.5</real>
 		</dict>
