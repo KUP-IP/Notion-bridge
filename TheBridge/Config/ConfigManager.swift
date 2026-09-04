@@ -434,6 +434,7 @@ public final class ConfigManager: @unchecked Sendable {
     /// Read/write the screen output directory from config.json.
     /// Falls back to ~/Desktop if key is missing.
     /// Path with ~ is expanded to absolute path at read time.
+    /// #256 is rename-only (`b-W.D-NN`); this default path is unchanged.
     public var screenOutputDir: String {
         get {
             queue.sync {

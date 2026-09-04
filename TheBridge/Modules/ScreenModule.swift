@@ -12,8 +12,10 @@
 //   - ImageIO: CGImageDestination for PNG/JPEG encoding (Sendable-safe)
 //   - CoreGraphics: CGPreflightScreenCaptureAccess for TCC detection
 //
-// Capture files: <configuredDir>/nb-screen-<timestamp>.<ext> (default ~/Desktop, fallback /tmp)
-// Cleanup: On each screen_capture call, delete files >1hr old, cap at 20.
+// Capture files: <configuredDir>/b-{ISOWeek}.{ISOWeekday}-{NN}.{ext}
+//   (default ~/Desktop, fallback /tmp). Sequence is shared with recordings.
+// Cleanup (#256): on each screen_capture, delete prior local-day `b-*` files.
+// Same-day 01…NN are kept (no 1-hour wipe). Legacy epoch names are left on disk.
 
 import AppKit
 import CoreGraphics
@@ -695,44 +697,8 @@ private enum ScreenModuleLive {
 
     static func cleanupCaptureFiles() {
         let resolved = ConfigManager.shared.resolvedScreenOutputDir()
-        let directory = resolved.path
-        let prefix = "nb-screen-"
-        let oneHourAgo = Date().addingTimeInterval(-3600)
-        let fileManager = FileManager.default
-
-        do {
-            let captureFiles = try fileManager.contentsOfDirectory(atPath: directory)
-                .filter { $0.hasPrefix(prefix) }
-
-            for name in captureFiles {
-                let path = "\(directory)/\(name)"
-                if let attributes = try? fileManager.attributesOfItem(atPath: path),
-                   let modified = attributes[.modificationDate] as? Date,
-                   modified < oneHourAgo {
-                    try? fileManager.removeItem(atPath: path)
-                }
-            }
-
-            let remaining = try fileManager.contentsOfDirectory(atPath: directory)
-                .filter { $0.hasPrefix(prefix) }
-                .compactMap { name -> (path: String, date: Date)? in
-                    let path = "\(directory)/\(name)"
-                    guard let attributes = try? fileManager.attributesOfItem(atPath: path),
-                          let modified = attributes[.modificationDate] as? Date else {
-                        return nil
-                    }
-                    return (path, modified)
-                }
-                .sorted { $0.date < $1.date }
-
-            if remaining.count > 20 {
-                for file in remaining.prefix(remaining.count - 20) {
-                    try? fileManager.removeItem(atPath: file.path)
-                }
-            }
-        } catch {
-            // Best-effort cleanup must never block capture.
-        }
+        // End-of-day local retention for b-W.D-NN.*; never wipes today's sequence.
+        ScreenArtifactNaming.cleanup(in: resolved.path)
     }
 
     private static func getShareableContent() async throws -> SCShareableContent {
@@ -891,9 +857,11 @@ private enum ScreenModuleLive {
 
     static func persistCaptureArtifact(_ image: CGImage, format: String) throws -> ScreenCaptureArtifact {
         let fileExtension = format == "jpg" ? "jpg" : "png"
-        let timestamp = Int(Date().timeIntervalSince1970 * 1000)
         let resolved = ConfigManager.shared.resolvedScreenOutputDir()
-        let filePath = "\(resolved.path)/nb-screen-\(timestamp).\(fileExtension)"
+        let filePath = ScreenArtifactNaming.allocatePath(
+            directory: resolved.path,
+            ext: fileExtension
+        )
 
         do {
             try writeImage(image, format: format, to: filePath)

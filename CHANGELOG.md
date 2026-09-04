@@ -2,6 +2,16 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Screen filenames (#256)** — Captures and recordings use Time Keepr–style
+  `b-{ISOWeek}.{ISOWeekday}-{NN}.{ext}` (example Fri 2026-09-04:
+  `b-36.5-01.png`, next same day `b-36.5-02.mp4`). Sequence is shared per
+  Mac local calendar day; type is extension only. Counter scans the
+  configured `screenOutputDir` (default `~/Desktop`, `/tmp` if invalid) so
+  it survives relaunch. Legacy `nb-screen-*` files are left on disk and
+  ignored by the counter. Cleanup is retargeted to `b-*`: same-day 01…NN
+  are never wiped mid-day (the old 1-hour / cap-20 rule is gone);
+  previous local calendar days are removed on the next `screen_capture`
+  (end-of-day). Not Installed or Released.
 - **Runtime Exposure reconcile (fleet skill sync 2026-09-04)** — Missing
   SKILLS `Deprecation Date` is optional (`schema_optional_missing` warning),
   not a `schema_missing` hard-fail. Status / Maturity retirement still
