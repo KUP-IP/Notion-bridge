@@ -13,7 +13,8 @@
   `outreach-dispatch` (`bcebfc86-3998-4bff-838e-97f15f8ec593`) is HOLD and
   is refused by classify / generic sweep / apply. Does not bypass the 11
   `approval_required` exposure expansions. `staticFeatureModuleToolCount`
-  **237 → 238**.
+  **237 → 238**. Floor **3942 → 3947** after rebase onto #252 (pre-rebase
+  isolated CI 33895348693 measured 3940 / +5).
 - **Command insert (#251)** — Cmd+V web paste restores the prior pasteboard
   only after a consume window (`prePasteDelay` 60ms / `postPasteDelay` 120ms,
   ≥ Handy 60/60). Destination apps read `.general` asynchronously; restoring

@@ -152,7 +152,8 @@
 #   SkillExposureAuthorityTests (missing-column compile, optional warning,
 #   explicit named purge, generic sweep HOLD for outreach-dispatch) +1
 #   SkillsModuleTests (purge orphans requires routeReceipt). Floor is
-#   3942 + net-new after rebase onto #252; CI must re-measure.
+#   3942 + net-new after rebase onto #252. Pre-rebase isolated CI
+#   measured 3940 (run 33895348693); CI must re-measure 3947.
 FLOOR="${BRIDGE_TEST_FLOOR:-3947}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
