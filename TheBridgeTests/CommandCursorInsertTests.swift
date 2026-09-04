@@ -837,11 +837,17 @@ func runCommandCursorInsertTests() async {
         let hitName = NSPasteboard.Name("bridge.251.publish-hit.\(UUID().uuidString)")
         let hit = NSPasteboard(name: hitName)
         hit.clearContents()
-        let before = hit.changeCount
+        hit.setString("PRIOR-CLIP", forType: .string)
+        // Sample before the write, matching withTransientString. clear+setString
+        // after this count is what `changeCount > prior` means; sampling after
+        // clearContents can miss a coalesced setString on named pasteboards.
+        let beforeWrite = hit.changeCount
+        hit.clearContents()
         hit.setString("BODY-ONLY", forType: .string)
+        try expect(hit.string(forType: .string) == "BODY-ONLY")
         try expect(CommandInsertPasteboard.waitUntilPublished(
-            "BODY-ONLY", on: hit, fromChangeCount: before),
-                   "published write must succeed without polling")
+            "BODY-ONLY", on: hit, fromChangeCount: beforeWrite),
+                   "write must publish (changeCount \(hit.changeCount) vs \(beforeWrite))")
         hit.releaseGlobally()
 
         let missName = NSPasteboard.Name("bridge.251.publish-miss.\(UUID().uuidString)")

@@ -1385,6 +1385,8 @@ public enum CommandInsertPasteboard {
 
     /// Bounded poll until `changeCount` has advanced past `priorCount` and
     /// `string` equals `body`. Cmd+V must not fire against a stale pboard view.
+    /// `priorCount` must be sampled **before** `clearContents`/`setString`
+    /// (same order as `withTransientString`).
     @discardableResult
     public static func waitUntilPublished(
         _ body: String,
