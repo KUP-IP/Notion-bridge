@@ -448,6 +448,34 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // PKT-353: Set up right-click context menu for Quit action on status item
         statusBar.setupContextMenu()
 
+        // Confirm body host: status-item click + pending Request publish
+        // must open Deny / Allow / Always Allow and keep them visible.
+        // MenuBarExtra popover is not the Confirm host (PR #260 live-fail).
+        statusBar.setupConfirmClickHandler { [weak self] in
+            ConfirmPanelHost.shared.handleStatusItemClick()
+            self?.syncConfirmPanel()
+        }
+        NotificationCenter.default.addObserver(
+            forName: .pendingApprovalSurfaceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                ConfirmPanelHost.shared.handleSurfaceChange()
+                self?.syncConfirmPanel()
+            }
+        }
+        NotificationCenter.default.addObserver(
+            forName: .pendingApprovalSurfacePresentBody,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                ConfirmPanelHost.shared.handlePresentBodyRequest()
+                self?.syncConfirmPanel()
+            }
+        }
+
         // PKT-350 F1: Re-validate token when changed from Settings
         NotificationCenter.default.addObserver(forName: .notionTokenDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
@@ -1077,6 +1105,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.scheduleLaunchHotkeyRetry()   // still taken — try again (bounded)
             }
         }
+    }
+
+    /// Sticky Confirm body. Independent of MenuBarExtra — stays visible
+    /// until Deny / Allow / Always Allow or the surface empties.
+    private func syncConfirmPanel() {
+        ConfirmPanelController.shared.sync()
     }
 
     /// v3.7.6: present the standalone Dashboard popover for the Command Bridge

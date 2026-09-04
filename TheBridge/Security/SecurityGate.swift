@@ -933,6 +933,9 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             coalesceKey: key,
             decision: decision
         )
+        if decision == .alwaysAllow {
+            Self.persistTierOverride(toolName: prompt.toolName, tier: SecurityTier.notify.rawValue)
+        }
         PendingApprovalSurface.shared.remove(id: id)
         if let identifier, let center {
             center.removeDeliveredNotifications(withIdentifiers: [identifier])
@@ -1515,6 +1518,39 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             return
         default:
             break
+        }
+
+        let category = response.notification.request.content.categoryIdentifier
+        let isConfirm = category == Self.categoryIdentifier
+            || category == Self.categoryIdentifierNoAlways
+        if isConfirm {
+            switch ConfirmPresentation.outcome(forNotificationActionIdentifier: response.actionIdentifier) {
+            case .presentBody:
+                // Banner tap / swipe-away / unknown: open the Confirm body.
+                // Do not Deny and do not clear the badge.
+                NotificationCenter.default.post(name: .pendingApprovalSurfacePresentBody, object: nil)
+                completionHandler()
+                return
+            case .resolve(let decision):
+                let promptKey = peekCoalesceKey(identifier: identifier)
+                applyNotificationDecision(
+                    identifier: identifier,
+                    coalesceKey: promptKey,
+                    decision: decision
+                )
+                if decision == .alwaysAllow, let toolName = userInfo["toolName"] as? String {
+                    Self.persistTierOverride(toolName: toolName, tier: SecurityTier.notify.rawValue)
+                }
+                let title = response.notification.request.content.title
+                let body = response.notification.request.content.body
+                PendingApprovalSurface.shared.removeMatching(
+                    title: title,
+                    body: body,
+                    allowAlwaysAllow: category != Self.categoryIdentifierNoAlways
+                )
+                completionHandler()
+                return
+            }
         }
 
         let decision: ApprovalDecision
