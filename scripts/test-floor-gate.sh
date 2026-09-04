@@ -147,7 +147,14 @@
 #   consumer, empty-prior restore, restore-on-throw still waits postDelay.
 #   +7 net-new CommandCursorInsertTests. CI measured 3942 passed, 0 failed
 #   on cursor/fix-251-cmdv-prior-clipboard-f9ab (run 33897067337).
-FLOOR="${BRIDGE_TEST_FLOOR:-3942}"
+# 2026-09-04: 3942 → 3947 (+5) — Runtime Exposure: optional Deprecation Date
+#   (warn, not schema_missing) + governed orphan purge API. +4 hermetic
+#   SkillExposureAuthorityTests (missing-column compile, optional warning,
+#   explicit named purge, generic sweep HOLD for outreach-dispatch) +1
+#   SkillsModuleTests (purge orphans requires routeReceipt). Floor is
+#   3942 + net-new after rebase onto #252. Pre-rebase isolated CI
+#   measured 3940 (run 33895348693); CI must re-measure 3947.
+FLOOR="${BRIDGE_TEST_FLOOR:-3947}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

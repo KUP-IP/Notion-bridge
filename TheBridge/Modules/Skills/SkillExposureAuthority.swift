@@ -183,10 +183,20 @@ public struct SkillExposureCompilationResult: Sendable, Equatable {
 
 public enum SkillExposureCompiler {
     public static let compilerVersion = "1.0.0"
+    /// Columns that must exist on the SKILLS data source before reconcile
+    /// may compile. `Deprecation Date` is intentionally not required —
+    /// fleet SKILLS SSOT (audit 2026-09-04) has no such property, and
+    /// retirement still works from Status / Maturity when the column is
+    /// absent. A present-but-wrong type still hard-fails.
     public static let requiredSchema: [String: String] = [
         "Skill Name": "title", "Slug": "rich_text", "Status": "status",
-        "Maturity": "select", "Deprecation Date": "date", "Runtime Exposure": "select",
+        "Maturity": "select", "Runtime Exposure": "select",
     ]
+    /// Optional SKILLS columns. Missing → warning, not `schema_missing`.
+    public static let optionalSchema: [String: String] = [
+        "Deprecation Date": "date",
+    ]
+    public static let optionalSchemaMissingPrefix = "schema_optional_missing:"
 
     public static func transition(from previous: SkillRuntimeExposure?,
                                   to requested: SkillRuntimeExposure) -> SkillExposureTransition {
@@ -224,6 +234,13 @@ public enum SkillExposureCompiler {
         }
         for (name, expected) in requiredSchema {
             guard let actual = snapshot.schemaColumns[name] else { errors.append("schema_missing:\(name)"); continue }
+            if actual != expected { errors.append("schema_type_mismatch:\(name):\(actual):expected_\(expected)") }
+        }
+        for (name, expected) in optionalSchema {
+            guard let actual = snapshot.schemaColumns[name] else {
+                warnings.append("\(optionalSchemaMissingPrefix)\(name)")
+                continue
+            }
             if actual != expected { errors.append("schema_type_mismatch:\(name):\(actual):expected_\(expected)") }
         }
 
@@ -350,5 +367,73 @@ public extension SkillExposureBaselineEntry {
             let exposure: SkillRuntimeExposure = skill.inCommandPalette ? .command : (skill.routingDiscoverable ? .routing : .standard)
             return .init(notionPageUUID: skill.notionPageId, displayName: skill.name, exposure: exposure)
         }
+    }
+}
+
+/// Governed orphan drop for skills deleted in Notion but still present in
+/// Bridge local + published Runtime Exposure registries.
+///
+/// Default reconcile still hard-fails `orphan_local_skill` /
+/// `orphan_published_skill`. Operators must name UUIDs after a SKILLS
+/// lifecycle decision. A generic sweep never admits HOLD identities.
+public enum SkillExposureOrphanPurge {
+    /// `outreach-dispatch` — HOLD until SKILLS Keepr restore-vs-retire
+    /// (fleet skill sync audit 2026-09-04). Never auto-purge.
+    public static let outreachDispatchHoldPageID =
+        SkillExposureIdentity.normalize("bcebfc86-3998-4bff-838e-97f15f8ec593")
+
+    public static let holdPageIDs: Set<String> = [outreachDispatchHoldPageID]
+
+    /// Named orphans from the 2026-09-04 fleet receipt
+    /// (`97caa4c8-488b-40bd-8234-750b01111f5c`). HOLD is restore-vs-retire.
+    public static let fleetOrphans20260904: [(slug: String, pageID: String, hold: Bool)] = [
+        ("block-planning", "e7dddd02-c340-4515-80eb-f6a6947d3313", false),
+        ("blocks-router", "caeec784-edf8-4219-bf2a-fc91cac1709d", false),
+        ("discourse", "23337454-5b9d-46ac-8ec6-e59ce084d094", false),
+        ("outreach-dispatch", "bcebfc86-3998-4bff-838e-97f15f8ec593", true),
+        ("post-production", "3c813864-1c3a-49a4-9c07-618912184b66", false),
+        ("production", "33ecbb58-889e-8195-a374-c84fe4c347fa", false),
+    ]
+
+    public struct Classification: Sendable, Equatable {
+        public let admitted: [String]
+        public let held: [String]
+        public let invalid: [String]
+    }
+
+    public struct Outcome: Sendable, Equatable {
+        public let purgedLocal: [String]
+        public let purgedPublished: [String]
+        public let held: [String]
+        public let notFound: [String]
+        public let invalid: [String]
+    }
+
+    /// Split requested IDs into admitted / HOLD / invalid. Dedupes.
+    public static func classify(_ pageIDs: [String]) -> Classification {
+        var admitted: [String] = []
+        var held: [String] = []
+        var invalid: [String] = []
+        var seen = Set<String>()
+        for raw in pageIDs {
+            guard SkillExposureIdentity.isValid(raw) else {
+                invalid.append(raw)
+                continue
+            }
+            let id = SkillExposureIdentity.normalize(raw)
+            if seen.contains(id) { continue }
+            seen.insert(id)
+            if holdPageIDs.contains(id) {
+                held.append(id)
+            } else {
+                admitted.append(id)
+            }
+        }
+        return .init(admitted: admitted, held: held, invalid: invalid)
+    }
+
+    /// Generic orphan sweep: admit only valid non-HOLD UUIDs.
+    public static func admittedForSweep(_ pageIDs: [String]) -> [String] {
+        classify(pageIDs).admitted
     }
 }

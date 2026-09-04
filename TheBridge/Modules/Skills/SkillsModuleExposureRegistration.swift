@@ -6,8 +6,9 @@ import MCP
 
 extension SkillsModule {
     /// Register the Runtime Exposure control plane. The desired-state compiler
-    /// and generation store remain the only mutation path; these tools only
-    /// inspect it, invoke reconciliation, or apply a monotonic emergency gate.
+    /// and generation store remain the publication path; these tools inspect
+    /// it, invoke reconciliation, apply a monotonic emergency gate, or drop
+    /// named orphans after an explicit SKILLS lifecycle decision.
     static func registerExposurePrimitives(on router: ToolRouter) async {
         await router.register(ToolRegistration(
             name: "skills_exposure_status",
@@ -224,6 +225,99 @@ extension SkillsModule {
                 ])
             }
         ))
+
+        await router.register(ToolRegistration(
+            name: "skills_exposure_purge_orphans",
+            module: moduleName,
+            tier: .notify,
+            description: "Drop named skill UUIDs from Bridge local + published Runtime Exposure registries after a SKILLS lifecycle decision. Default reconcile never auto-purges. pageIds must be explicit — there is no wildcard. outreach-dispatch (bcebfc86-3998-4bff-838e-97f15f8ec593) is HOLD and is refused. Does not approve exposure expansions and does not run publish reconcile. Requires a current SKILLS Keepr routeReceipt covering names.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "pageIds": .object([
+                        "type": .string("array"),
+                        "description": .string("Explicit Notion skill UUIDs to drop from local + published registries. Required. Empty/omitted is refused (no implicit sweep)."),
+                        "items": .object(["type": .string("string")])
+                    ]),
+                    "names": .object([
+                        "type": .string("array"),
+                        "description": .string("Governed skill names matching pageIds, for routeReceipt.targetSkills coverage."),
+                        "items": .object(["type": .string("string")])
+                    ]),
+                    "routeReceipt": SkillRouteReceiptValidator.schema
+                ]),
+                "required": .array([.string("pageIds"), .string("names")])
+            ]),
+            handler: { arguments in
+                let args = Self.unpackArgsObject(arguments)
+                let pageIds = try Self.parseNonEmptyStringArray(
+                    args["pageIds"],
+                    field: "pageIds",
+                    toolName: "skills_exposure_purge_orphans"
+                )
+                let names = try Self.parseNonEmptyStringArray(
+                    args["names"],
+                    field: "names",
+                    toolName: "skills_exposure_purge_orphans"
+                )
+                guard names.count == pageIds.count else {
+                    throw ToolRouterError.invalidArguments(
+                        toolName: "skills_exposure_purge_orphans",
+                        reason: "names must have the same count as pageIds"
+                    )
+                }
+                try Self.requireSkillRouteReceipt(
+                    args,
+                    expectedTargets: names,
+                    toolName: "skills_exposure_purge_orphans"
+                )
+                let outcome = try await SkillExposureOrphanPurger.apply(
+                    pageIDs: pageIds,
+                    generationStore: .shared,
+                    pruneCaches: true
+                )
+                return .object([
+                    "purgedLocal": .array(outcome.purgedLocal.map(Value.string)),
+                    "purgedPublished": .array(outcome.purgedPublished.map(Value.string)),
+                    "held": .array(outcome.held.map(Value.string)),
+                    "notFound": .array(outcome.notFound.map(Value.string)),
+                    "invalid": .array(outcome.invalid.map(Value.string)),
+                    "purgedLocalCount": .int(outcome.purgedLocal.count),
+                    "purgedPublishedCount": .int(outcome.purgedPublished.count),
+                    "heldCount": .int(outcome.held.count),
+                    "holdPageIds": .array(SkillExposureOrphanPurge.holdPageIDs.sorted().map(Value.string))
+                ])
+            }
+        ))
+    }
+
+    private static func parseNonEmptyStringArray(
+        _ value: Value?,
+        field: String,
+        toolName: String
+    ) throws -> [String] {
+        guard case .array(let values)? = value, !values.isEmpty else {
+            throw ToolRouterError.invalidArguments(
+                toolName: toolName,
+                reason: "\(field) must be a non-empty array of strings"
+            )
+        }
+        return try values.enumerated().map { index, item in
+            guard case .string(let raw) = item else {
+                throw ToolRouterError.invalidArguments(
+                    toolName: toolName,
+                    reason: "\(field)[\(index)] must be a string"
+                )
+            }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw ToolRouterError.invalidArguments(
+                    toolName: toolName,
+                    reason: "\(field)[\(index)] must be a non-empty string"
+                )
+            }
+            return trimmed
+        }
     }
 
     private struct ExposureApprovalRequest {

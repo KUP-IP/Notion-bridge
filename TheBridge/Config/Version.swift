@@ -498,7 +498,9 @@ public enum BridgeConstants {
     ///   (mail_reply + mail_forward; existing mail family). 232 + 2 = 234.
     /// Wave 6 GitHub MCP (2026-09-02): +3
     ///   (gh_issue_list, gh_pr_list, gh_pr_review). 234 + 3 = 237.
-    public static let staticFeatureModuleToolCount = 237
+    /// Runtime Exposure orphan purge (2026-09-04): +1
+    ///   (skills_exposure_purge_orphans; existing skills family). 237 + 1 = 238.
+    public static let staticFeatureModuleToolCount = 238
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.

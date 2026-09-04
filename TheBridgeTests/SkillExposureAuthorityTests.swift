@@ -77,6 +77,30 @@ private func publishedGeneration(
                           url: "https://www.notion.so/\(id)")])
 }
 
+private func generationWithEntries(
+    _ items: [(id: String, name: String)],
+    compiledAt: Date = exposureNow,
+    generationID: String = "generation-purge"
+) -> SkillRuntimeGeneration {
+    .init(generationID: generationID, snapshotID: "snapshot-1",
+          compilerVersion: "1.0.0", compiledAt: compiledAt,
+          entries: items.map { item in
+              .init(notionPageUUID: item.id, displayName: item.name, slug: item.name,
+                    desiredExposure: .standard, publishedExposure: .standard,
+                    lifecycleOverrideReason: nil, approvalID: "approval-1",
+                    notionLastEditedTime: "2026-07-28T00:00:00.000Z",
+                    url: "https://www.notion.so/\(item.id)")
+          })
+}
+
+private func restoreSkillsDefaults(_ prior: Data?) {
+    if let prior {
+        UserDefaults.standard.set(prior, forKey: BridgeDefaults.skills)
+    } else {
+        UserDefaults.standard.removeObject(forKey: BridgeDefaults.skills)
+    }
+}
+
 private func statusProperty(_ key: String, _ value: String) -> [String: Any] {
     [key: ["type": key == "Status" ? "status" : "select",
            key == "Status" ? "status" : "select": ["name": value]]]
@@ -101,6 +125,35 @@ func runSkillExposureAuthorityTests() async {
         let result = compile(snapshot: exposureSnapshot(schema: schema))
         try expect(result.candidate == nil, "missing required column must block")
         try expect(result.errors.contains("schema_missing:Runtime Exposure"), "missing schema reason absent")
+    }
+
+    await test("missing Deprecation Date does not emit schema_missing and does not block solely for that") {
+        var schema = exposureSchema()
+        schema.removeValue(forKey: "Deprecation Date")
+        let result = compile(
+            snapshot: exposureSnapshot(rows: [exposureRow(desired: .standard)], schema: schema),
+            baseline: [baseline(.standard)]
+        )
+        try expect(!result.errors.contains("schema_missing:Deprecation Date"),
+                   "optional column must not hard-fail: \(result.errors)")
+        try expect(result.errors.isEmpty,
+                   "missing Deprecation Date must not be the sole blocker: \(result.errors)")
+        try expect(result.candidate != nil, "compile must proceed without Deprecation Date")
+        try expect(result.candidate?.entry(pageID: exposureUUIDA)?.publishedExposure == .standard,
+                   "unchanged Standard row must compile")
+    }
+
+    await test("missing Deprecation Date emits schema_optional_missing warning") {
+        var schema = exposureSchema()
+        schema.removeValue(forKey: "Deprecation Date")
+        let result = compile(
+            snapshot: exposureSnapshot(rows: [exposureRow(desired: .standard)], schema: schema),
+            baseline: [baseline(.standard)]
+        )
+        try expect(
+            result.warnings.contains("\(SkillExposureCompiler.optionalSchemaMissingPrefix)Deprecation Date"),
+            "optional missing warning absent: \(result.warnings)"
+        )
     }
 
     await test("Unreviewed preserves baseline in shadow mode") {
@@ -170,6 +223,88 @@ func runSkillExposureAuthorityTests() async {
         let result = compile(snapshot: exposureSnapshot(rows: []), baseline: [baseline()])
         try expect(result.candidate == nil, "orphan must block")
         try expect(result.errors.contains(where: { $0.hasPrefix("orphan_local_skill:") }), "orphan reason absent")
+    }
+
+    await test("explicit orphan purge removes named UUID from local and published") {
+        let prior = UserDefaults.standard.data(forKey: BridgeDefaults.skills)
+        defer { restoreSkillsDefaults(prior) }
+        UserDefaults.standard.removeObject(forKey: BridgeDefaults.skills)
+
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bridge-orphan-purge-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SkillRuntimeGenerationStore(baseDirectory: root)
+
+        let purgeID = SkillExposureIdentity.normalize("e7dddd02-c340-4515-80eb-f6a6947d3313")
+        let keepID = exposureUUIDB
+        let generation = generationWithEntries([
+            (purgeID, "block-planning"),
+            (keepID, "Beta")
+        ])
+        _ = try await store.stage(generation)
+        _ = try await store.promote(generationID: generation.generationID)
+        SkillRuntimeProjectionPublisher.apply(generation)
+
+        let outcome = try await SkillExposureOrphanPurger.apply(
+            pageIDs: [purgeID],
+            generationStore: store
+        )
+        try expect(outcome.purgedLocal == [purgeID], "local purge missed: \(outcome.purgedLocal)")
+        try expect(outcome.purgedPublished == [purgeID], "published purge missed: \(outcome.purgedPublished)")
+        try expect(outcome.held.isEmpty, "named non-HOLD must not be held")
+
+        let published = await store.activeGeneration()
+        try expect(published?.entry(pageID: purgeID) == nil, "published still has purged UUID")
+        try expect(published?.entry(pageID: keepID) != nil, "unrelated published entry was dropped")
+
+        let local = await MainActor.run {
+            SkillExposureBaselineEntry.fromSkillsManager(SkillsManager())
+        }
+        try expect(!local.contains(where: { $0.notionPageUUID == purgeID }), "local still has purged UUID")
+        try expect(local.contains(where: { $0.notionPageUUID == keepID }), "unrelated local skill was dropped")
+    }
+
+    await test("generic orphan sweep skips outreach-dispatch HOLD") {
+        let prior = UserDefaults.standard.data(forKey: BridgeDefaults.skills)
+        defer { restoreSkillsDefaults(prior) }
+        UserDefaults.standard.removeObject(forKey: BridgeDefaults.skills)
+
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("bridge-orphan-hold-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SkillRuntimeGenerationStore(baseDirectory: root)
+
+        let fleet = SkillExposureOrphanPurge.fleetOrphans20260904
+        let hold = SkillExposureOrphanPurge.outreachDispatchHoldPageID
+        let generation = generationWithEntries(fleet.map { (SkillExposureIdentity.normalize($0.pageID), $0.slug) })
+        _ = try await store.stage(generation)
+        _ = try await store.promote(generationID: generation.generationID)
+        SkillRuntimeProjectionPublisher.apply(generation)
+
+        let requested = fleet.map(\.pageID)
+        try expect(
+            !SkillExposureOrphanPurge.admittedForSweep(requested).contains(hold),
+            "generic sweep helper must exclude outreach-dispatch"
+        )
+
+        let outcome = try await SkillExposureOrphanPurger.apply(
+            pageIDs: requested,
+            generationStore: store
+        )
+        try expect(outcome.held == [hold], "HOLD must be reported, got \(outcome.held)")
+        try expect(!outcome.purgedLocal.contains(hold), "HOLD must not be purged from local")
+        try expect(!outcome.purgedPublished.contains(hold), "HOLD must not be purged from published")
+        try expect(outcome.purgedLocal.count == 5, "five non-HOLD locals, got \(outcome.purgedLocal)")
+        try expect(outcome.purgedPublished.count == 5, "five non-HOLD published, got \(outcome.purgedPublished)")
+
+        let published = await store.activeGeneration()
+        try expect(published?.entry(pageID: hold) != nil, "outreach-dispatch must remain published")
+        let local = await MainActor.run {
+            SkillExposureBaselineEntry.fromSkillsManager(SkillsManager())
+        }
+        try expect(local.contains(where: { $0.notionPageUUID == hold }),
+                   "outreach-dispatch must remain local")
+        try expect(local.count == 1, "only HOLD should remain locally, got \(local.map(\.displayName))")
     }
 
     await test("degraded generation keeps exact fetch but suppresses ambient surfaces") {

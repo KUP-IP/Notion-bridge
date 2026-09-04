@@ -2,6 +2,19 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Runtime Exposure reconcile (fleet skill sync 2026-09-04)** — Missing
+  SKILLS `Deprecation Date` is optional (`schema_optional_missing` warning),
+  not a `schema_missing` hard-fail. Status / Maturity retirement still
+  applies; a present-but-wrong type still errors. Do not add the Notion
+  column from Bridge.
+- **`skills_exposure_purge_orphans`** — SKILLS-lifecycle-gated drop of named
+  UUIDs from local + published registries after a restore-vs-retire
+  decision. Default reconcile still errors on orphans and never auto-purges.
+  `outreach-dispatch` (`bcebfc86-3998-4bff-838e-97f15f8ec593`) is HOLD and
+  is refused by classify / generic sweep / apply. Does not bypass the 11
+  `approval_required` exposure expansions. `staticFeatureModuleToolCount`
+  **237 → 238**. Floor **3942 → 3947** after rebase onto #252 (pre-rebase
+  isolated CI 33895348693 measured 3940 / +5).
 - **Command insert (#251)** — Cmd+V web paste restores the prior pasteboard
   only after a consume window (`prePasteDelay` 60ms / `postPasteDelay` 120ms,
   ≥ Handy 60/60). Destination apps read `.general` asynchronously; restoring

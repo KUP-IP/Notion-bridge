@@ -213,6 +213,7 @@ public enum ToolAnnotationCatalog {
         "skills_exposure_status": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, requiresConfirmation: false, openWorld: false),
         "skills_exposure_reconcile": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),
         "skills_exposure_denylist": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: true, requiresConfirmation: false, openWorld: false),
+        "skills_exposure_purge_orphans": .init(readOnlyHint: false, destructiveHint: true, idempotentHint: true, requiresConfirmation: false, openWorld: false),
         // v3.7·H (PKT-961) + inbox management harden: Apple Mail family.
         // list/read/search/mailboxes/triage → read-only (.open).
         // draft/mark → .notify; move/archive → .notify + handler batch confirm MOVE/ARCHIVE.
