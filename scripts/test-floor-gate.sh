@@ -139,7 +139,8 @@
 #   allowSmsDespiteLiveService on messages_send. Inherit-or-refuse held for
 #   omit and iMessage↔SMS mismatch; RCS stays out of the send enum.
 #   +8 net-new MessagesModuleTests (RCS/unknown refuse + authorized SMS +
-#   mismatch + resolveSendService matrix). CI must confirm measured green.
+#   mismatch + resolveSendService matrix). CI measured 3935 passed, 0 failed
+#   on cursor/rcs-sms-operator-override-394d (run 33825894053).
 FLOOR="${BRIDGE_TEST_FLOOR:-3935}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
