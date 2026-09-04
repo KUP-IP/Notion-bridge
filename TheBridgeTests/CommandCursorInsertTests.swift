@@ -1,4 +1,4 @@
-// CommandCursorInsertTests.swift — issue #129
+// CommandCursorInsertTests.swift — issue #129 / #251
 // TheBridge · Tests
 //
 // Headless coverage for cursor-insert command activation:
@@ -8,6 +8,8 @@
 //   (C) CommandBridgeController.applyCommit — inserts via seam, never
 //       writes the clipboard; no-target / AX-denied leave the clipboard
 //       byte-for-byte unchanged.
+//   (D) #251 Cmd+V pasteboard: Handy-floor delays, restore only after
+//       perform + consume window, fake delayed consumer, restore-on-throw.
 // Live AX insertion against a native field + a browser input remains
 // the operator smoke ceiling (docs/operator/command-bridge-smoke-checklist.md).
 
@@ -17,7 +19,7 @@ import Carbon.HIToolbox
 import TheBridgeLib
 
 func runCommandCursorInsertTests() async {
-    print("\n\u{1F4DD} Command Cursor Insert Tests (issue #129)")
+    print("\n\u{1F4DD} Command Cursor Insert Tests (issue #129 / #251)")
 
     func coord() -> CommandPaletteCoordinator {
         CommandPaletteCoordinator(
@@ -690,5 +692,232 @@ func runCommandCursorInsertTests() async {
                        "must restore prior pasteboard on throw, got \(pb.string(forType: .string) ?? "nil")")
         }
         pb.releaseGlobally()
+    }
+
+    await test("Cmd+V delays are ≥ Handy 60/60; postDelay is 2× because we restore (#251)") {
+        try expect(CommandInsertPasteboard.handyPasteDelay == 60.0 / 1_000.0)
+        try expect(CommandInsertPasteboard.handyPasteDelayAfter == 60.0 / 1_000.0)
+        try expect(CommandInsertPasteboard.prePasteDelay >= CommandInsertPasteboard.handyPasteDelay,
+                   "prePasteDelay \(CommandInsertPasteboard.prePasteDelay) < Handy 60ms")
+        try expect(CommandInsertPasteboard.postPasteDelay >= CommandInsertPasteboard.handyPasteDelayAfter,
+                   "postPasteDelay \(CommandInsertPasteboard.postPasteDelay) < Handy 60ms")
+        try expect(CommandInsertPasteboard.postPasteDelay >= 120.0 / 1_000.0,
+                   "restore tax: postPasteDelay must be ≥ 120ms, got \(CommandInsertPasteboard.postPasteDelay)")
+        try expect(CommandInsertPasteboard.prePasteDelay == CommandInsertPasteboard.handyPasteDelay)
+        try expect(CommandInsertPasteboard.publishPollInterval * Double(CommandInsertPasteboard.publishPollLimit)
+                   >= CommandInsertPasteboard.handyPasteDelay - 0.000_1,
+                   "publish poll cap must cover Handy pre-delay")
+    }
+
+    await test("restore does not run before perform completes (recording sleep double, #251)") {
+        let name = NSPasteboard.Name("bridge.251.restore-after-perform.\(UUID().uuidString)")
+        let pb = NSPasteboard(name: name)
+        pb.clearContents()
+        pb.setString("PRIOR-CLIP", forType: .string)
+        let countBefore = pb.changeCount
+        let recorder = RecordingInsertPasteSleep()
+        var sawBodyDuringPerform = false
+        var restoredDuringPerform = false
+        try CommandInsertPasteboard.withTransientString(
+            "BODY-ONLY",
+            on: pb,
+            preDelay: CommandInsertPasteboard.prePasteDelay,
+            postDelay: CommandInsertPasteboard.postPasteDelay,
+            timing: recorder.timing
+        ) {
+            sawBodyDuringPerform = pb.string(forType: .string) == "BODY-ONLY"
+            restoredDuringPerform = pb.string(forType: .string) != "BODY-ONLY"
+            try expect(pb.changeCount > countBefore, "write must advance changeCount before perform")
+        }
+        try expect(sawBodyDuringPerform, "perform must see the command body")
+        try expect(!restoredDuringPerform, "restore must not run before perform returns")
+        try expect(pb.string(forType: .string) == "PRIOR-CLIP",
+                   "must restore after perform, got \(pb.string(forType: .string) ?? "nil")")
+        try expect(recorder.calls.contains(CommandInsertPasteboard.prePasteDelay),
+                   "preDelay sleep recorded, got \(recorder.calls)")
+        try expect(recorder.calls.last == CommandInsertPasteboard.postPasteDelay,
+                   "postDelay sleep is the last wait (restore follows), got \(recorder.calls)")
+        pb.releaseGlobally()
+    }
+
+    await test("restore-on-throw still sleeps postDelay then restores (recording sleep, #251)") {
+        enum PasteBoom: Error { case exploded }
+        let name = NSPasteboard.Name("bridge.251.restore-on-throw-delay.\(UUID().uuidString)")
+        let pb = NSPasteboard(name: name)
+        pb.clearContents()
+        pb.setString("PRIOR-CLIP", forType: .string)
+        let recorder = RecordingInsertPasteSleep()
+        do {
+            try CommandInsertPasteboard.withTransientString(
+                "BODY-ONLY",
+                on: pb,
+                postDelay: CommandInsertPasteboard.postPasteDelay,
+                timing: recorder.timing
+            ) {
+                try expect(pb.string(forType: .string) == "BODY-ONLY")
+                throw PasteBoom.exploded
+            }
+            throw TestError.assertion("perform must propagate the throw")
+        } catch is PasteBoom {
+            try expect(pb.string(forType: .string) == "PRIOR-CLIP",
+                       "must restore prior pasteboard on throw, got \(pb.string(forType: .string) ?? "nil")")
+            try expect(recorder.calls.last == CommandInsertPasteboard.postPasteDelay,
+                       "defer must still wait the consume window on throw, got \(recorder.calls)")
+        }
+        pb.releaseGlobally()
+    }
+
+    await test("empty prior pasteboard is restored after the consume window (#251)") {
+        let name = NSPasteboard.Name("bridge.251.empty-prior.\(UUID().uuidString)")
+        let pb = NSPasteboard(name: name)
+        pb.clearContents()
+        try expect(pb.string(forType: .string) == nil)
+        let recorder = RecordingInsertPasteSleep()
+        try CommandInsertPasteboard.withTransientString(
+            "BODY-ONLY",
+            on: pb,
+            postDelay: CommandInsertPasteboard.postPasteDelay,
+            timing: recorder.timing
+        ) {
+            try expect(pb.string(forType: .string) == "BODY-ONLY")
+        }
+        try expect(pb.string(forType: .string) == nil,
+                   "empty prior must restore to empty, got \(pb.string(forType: .string) ?? "nil")")
+        try expect(recorder.calls.last == CommandInsertPasteboard.postPasteDelay)
+        pb.releaseGlobally()
+    }
+
+    await test("fake delayed Cmd+V consumer sees body during postPasteDelay, not prior (#251)") {
+        // Destination apps read `.general` asynchronously after HID Cmd+V.
+        // The Timing double sleeps 30ms (destination lag), reads, then
+        // finishes the 120ms consume window — all on this thread, before restore.
+        let name = NSPasteboard.Name("bridge.251.delayed-consumer.\(UUID().uuidString)")
+        let pb = NSPasteboard(name: name)
+        pb.clearContents()
+        pb.setString("PRIOR-CLIP", forType: .string)
+        let consumer = DelayedInsertPasteConsumer(
+            pasteboard: pb,
+            consumeAfter: 0.03,
+            consumeWindow: CommandInsertPasteboard.postPasteDelay
+        )
+        try CommandInsertPasteboard.withTransientString(
+            "BODY-ONLY",
+            on: pb,
+            postDelay: CommandInsertPasteboard.postPasteDelay,
+            timing: consumer.timing
+        ) {
+            try expect(pb.string(forType: .string) == "BODY-ONLY")
+        }
+        try expect(consumer.consumed == "BODY-ONLY",
+                   "async consumer must read body before restore, got \(consumer.consumed ?? "nil")")
+        try expect(pb.string(forType: .string) == "PRIOR-CLIP",
+                   "prior must restore after the consume window")
+        pb.releaseGlobally()
+    }
+
+    await test("async consume race: restore before delayed read yields prior clipboard (#251)") {
+        // Documents the #251 failure mode: postDelay 0 restores as soon as
+        // perform returns, so a destination that arrives 40ms later reads PRIOR.
+        let name = NSPasteboard.Name("bridge.251.race-document.\(UUID().uuidString)")
+        let pb = NSPasteboard(name: name)
+        pb.clearContents()
+        pb.setString("PRIOR-CLIP", forType: .string)
+        try CommandInsertPasteboard.withTransientString("BODY-ONLY", on: pb, postDelay: 0) {
+            try expect(pb.string(forType: .string) == "BODY-ONLY")
+        }
+        // Destination Cmd+V is async; with no consume window the prior is
+        // already restored by the time that read would run.
+        try await Task.sleep(for: .milliseconds(40))
+        try expect(pb.string(forType: .string) == "PRIOR-CLIP",
+                   "zero postDelay restores before async consume")
+        pb.releaseGlobally()
+    }
+
+    await test("waitUntilPublished: changeCount+string match, bounded miss (#251)") {
+        let hitName = NSPasteboard.Name("bridge.251.publish-hit.\(UUID().uuidString)")
+        let hit = NSPasteboard(name: hitName)
+        hit.clearContents()
+        hit.setString("PRIOR-CLIP", forType: .string)
+        // Sample before the write, matching withTransientString. clear+setString
+        // after this count is what `changeCount > prior` means; sampling after
+        // clearContents can miss a coalesced setString on named pasteboards.
+        let beforeWrite = hit.changeCount
+        hit.clearContents()
+        hit.setString("BODY-ONLY", forType: .string)
+        try expect(hit.string(forType: .string) == "BODY-ONLY")
+        try expect(CommandInsertPasteboard.waitUntilPublished(
+            "BODY-ONLY", on: hit, fromChangeCount: beforeWrite),
+                   "write must publish (changeCount \(hit.changeCount) vs \(beforeWrite))")
+        hit.releaseGlobally()
+
+        let missName = NSPasteboard.Name("bridge.251.publish-miss.\(UUID().uuidString)")
+        let miss = NSPasteboard(name: missName)
+        miss.clearContents()
+        miss.setString("OTHER", forType: .string)
+        let recorder = RecordingInsertPasteSleep()
+        let published = CommandInsertPasteboard.waitUntilPublished(
+            "BODY-ONLY",
+            on: miss,
+            fromChangeCount: miss.changeCount,
+            timing: recorder.timing,
+            limit: 3
+        )
+        try expect(!published, "mismatched body must not count as published")
+        try expect(recorder.calls.count == 3, "bounded poll, got \(recorder.calls.count)")
+        miss.releaseGlobally()
+    }
+}
+
+/// Test double for #251: records sleep calls without waiting, so restore
+/// ordering can be asserted without wall-clock delay.
+private final class RecordingInsertPasteSleep: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _calls: [TimeInterval] = []
+    var calls: [TimeInterval] {
+        lock.lock(); defer { lock.unlock() }
+        return _calls
+    }
+    var timing: CommandInsertPasteboard.Timing {
+        CommandInsertPasteboard.Timing { [self] interval in
+            self.lock.lock(); self._calls.append(interval); self.lock.unlock()
+        }
+    }
+}
+
+/// Fake destination Cmd+V consumer (#251): during the postDelay consume
+/// window, sleep `consumeAfter` (destination lag), read the pasteboard on
+/// this thread, then sleep the remainder. Restore must not have run yet.
+private final class DelayedInsertPasteConsumer: @unchecked Sendable {
+    let pasteboard: NSPasteboard
+    let consumeAfter: TimeInterval
+    let consumeWindow: TimeInterval
+    private let lock = NSLock()
+    private var _consumed: String?
+    var consumed: String? {
+        lock.lock(); defer { lock.unlock() }
+        return _consumed
+    }
+
+    init(pasteboard: NSPasteboard, consumeAfter: TimeInterval, consumeWindow: TimeInterval) {
+        self.pasteboard = pasteboard
+        self.consumeAfter = consumeAfter
+        self.consumeWindow = consumeWindow
+    }
+
+    var timing: CommandInsertPasteboard.Timing {
+        CommandInsertPasteboard.Timing { [self] interval in
+            guard interval > 0 else { return }
+            if abs(interval - self.consumeWindow) < 0.000_1 {
+                if self.consumeAfter > 0 {
+                    Thread.sleep(forTimeInterval: self.consumeAfter)
+                }
+                let s = self.pasteboard.string(forType: .string)
+                self.lock.lock(); self._consumed = s; self.lock.unlock()
+                let rest = interval - self.consumeAfter
+                if rest > 0 { Thread.sleep(forTimeInterval: rest) }
+            } else {
+                Thread.sleep(forTimeInterval: interval)
+            }
+        }
     }
 }

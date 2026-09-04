@@ -1319,10 +1319,42 @@ public enum CommandInsertUnicodeTyping {
 }
 
 /// Transient pasteboard write with guaranteed restore (never leave the body).
+///
+/// Destination apps consume Cmd+V **asynchronously** (#251). Restoring the
+/// prior clipboard as soon as `perform` returns races that read: fire 1 pastes
+/// the stale/empty pasteboard, fire 2 pastes the body. Restore stays, but only
+/// after a consume window. Handy (`paste_delay_ms` / `paste_delay_after_ms` =
+/// 60/60) does **not** restore (`clipboard_handling: dont_modify`); Bridge
+/// does, so `postPasteDelay` is 2× Handy after-delay.
 public enum CommandInsertPasteboard {
-    public static let prePasteDelay: TimeInterval = 0.03
+    /// Handy `paste_delay_ms` (60). Floor for `prePasteDelay`.
+    public static let handyPasteDelay: TimeInterval = 60.0 / 1_000.0
+    /// Handy `paste_delay_after_ms` (60). Floor for `postPasteDelay`.
+    public static let handyPasteDelayAfter: TimeInterval = 60.0 / 1_000.0
+
+    /// Settle after writing the body, before Cmd+V. ≥ Handy 60ms.
+    public static let prePasteDelay: TimeInterval = handyPasteDelay
     public static let modifierHold: TimeInterval = 0.1
-    public static let postPasteDelay: TimeInterval = 0.03
+    /// Consume window after Cmd+V before restore. ≥ Handy 60ms; 2× because
+    /// Bridge restores and the destination read is async (#251).
+    public static let postPasteDelay: TimeInterval = 120.0 / 1_000.0
+
+    /// Poll interval while waiting for `changeCount` + string to publish.
+    public static let publishPollInterval: TimeInterval = 5.0 / 1_000.0
+    /// 12 × 5ms = 60ms cap, matching Handy pre-delay.
+    public static let publishPollLimit: Int = 12
+
+    /// Injected sleep for tests. Production uses `thread` (`Thread.sleep`).
+    public struct Timing: Sendable {
+        public let sleep: @Sendable (TimeInterval) -> Void
+        public init(sleep: @escaping @Sendable (TimeInterval) -> Void) {
+            self.sleep = sleep
+        }
+        public static let thread = Timing { interval in
+            guard interval > 0 else { return }
+            Thread.sleep(forTimeInterval: interval)
+        }
+    }
 
     public static func snapshot(_ pasteboard: NSPasteboard) -> [[String: Data]] {
         guard let items = pasteboard.pasteboardItems else { return [] }
@@ -1351,21 +1383,55 @@ public enum CommandInsertPasteboard {
         }
     }
 
+    /// Bounded poll until `changeCount` has advanced past `priorCount` and
+    /// `string` equals `body`. Cmd+V must not fire against a stale pboard view.
+    /// `priorCount` must be sampled **before** `clearContents`/`setString`
+    /// (same order as `withTransientString`).
+    @discardableResult
+    public static func waitUntilPublished(
+        _ body: String,
+        on pasteboard: NSPasteboard,
+        fromChangeCount priorCount: Int,
+        timing: Timing = .thread,
+        pollInterval: TimeInterval = publishPollInterval,
+        limit: Int = publishPollLimit
+    ) -> Bool {
+        func isPublished() -> Bool {
+            pasteboard.changeCount > priorCount
+                && pasteboard.string(forType: .string) == body
+        }
+        if isPublished() { return true }
+        var tries = 0
+        while tries < limit {
+            timing.sleep(pollInterval)
+            tries += 1
+            if isPublished() { return true }
+        }
+        return isPublished()
+    }
+
     public static func withTransientString(
         _ body: String,
         on pasteboard: NSPasteboard,
         preDelay: TimeInterval = 0,
         postDelay: TimeInterval = 0,
+        timing: Timing = .thread,
         perform: () throws -> Void
     ) rethrows {
         let prior = snapshot(pasteboard)
+        let countBeforeWrite = pasteboard.changeCount
         defer {
-            if postDelay > 0 { Thread.sleep(forTimeInterval: postDelay) }
+            // Consume window: destination Cmd+V reads `.general` asynchronously.
+            // Restore must not run until that read has happened, or until this
+            // delay (proven ≥ Handy 60ms, 2× because we restore) has elapsed.
+            if postDelay > 0 { timing.sleep(postDelay) }
             restore(prior, onto: pasteboard)
         }
         pasteboard.clearContents()
         pasteboard.setString(body, forType: .string)
-        if preDelay > 0 { Thread.sleep(forTimeInterval: preDelay) }
+        waitUntilPublished(
+            body, on: pasteboard, fromChangeCount: countBeforeWrite, timing: timing)
+        if preDelay > 0 { timing.sleep(preDelay) }
         try perform()
     }
 
