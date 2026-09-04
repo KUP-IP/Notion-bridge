@@ -825,7 +825,9 @@ func runCommandCursorInsertTests() async {
         try CommandInsertPasteboard.withTransientString("BODY-ONLY", on: pb, postDelay: 0) {
             try expect(pb.string(forType: .string) == "BODY-ONLY")
         }
-        Thread.sleep(forTimeInterval: 0.04)
+        // Destination Cmd+V is async; with no consume window the prior is
+        // already restored by the time that read would run.
+        try await Task.sleep(for: .milliseconds(40))
         try expect(pb.string(forType: .string) == "PRIOR-CLIP",
                    "zero postDelay restores before async consume")
         pb.releaseGlobally()
