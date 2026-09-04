@@ -145,8 +145,8 @@
 #   Handy-floor 60/60 delays (post 120ms because Bridge restores), changeCount
 #   publish poll, restore-after-perform recording sleep double, fake delayed
 #   consumer, empty-prior restore, restore-on-throw still waits postDelay.
-#   +7 net-new CommandCursorInsertTests. Floor projected from net-new count;
-#   CI must confirm measured green.
+#   +7 net-new CommandCursorInsertTests. CI measured 3942 passed, 0 failed
+#   on cursor/fix-251-cmdv-prior-clipboard-f9ab (run 33897067337).
 FLOOR="${BRIDGE_TEST_FLOOR:-3942}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
