@@ -122,9 +122,10 @@ public final class StatusBarController {
     /// to ensure MenuBarExtra has created its status item.
     public func setupContextMenu() {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseUp) { [weak self] event in
-            // Only trigger on clicks targeting a status bar button
+            // Status bar / MenuBarExtra only — never the Confirm panel.
             guard event.window?.className.contains("NSStatusBar") == true
-                  || event.window is NSPanel else {
+                  || (event.window is NSPanel
+                      && event.window?.title != ConfirmPanelController.windowTitle) else {
                 return event
             }
             self?.showContextMenu(at: event)
@@ -141,7 +142,9 @@ public final class StatusBarController {
         confirmClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
             guard Self.isStatusItemEvent(event) else { return event }
             guard PendingApprovalSurface.shared.pendingCount > 0 else { return event }
-            self?.confirmClickHandler?()
+            Task { @MainActor in
+                self?.confirmClickHandler?()
+            }
             return nil
         }
     }
