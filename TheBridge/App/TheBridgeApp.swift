@@ -36,6 +36,7 @@ struct TheBridgeApp: App {
     /// Always non-nil — `loadMenuBarIcon()` degrades to an SF Symbol rather than
     /// returning nil / trapping (fix(sparkle), 2026-06-05).
     private let menuBarIcon: NSImage = loadMenuBarIcon()
+    @State private var approvalBadge = PendingApprovalBadgeCounter.shared
 
     var body: some Scene {
         MenuBarExtra {
@@ -52,7 +53,21 @@ struct TheBridgeApp: App {
             // "NB" text fallback is no longer reachable — the resolver never
             // returns nil — but the icon is always present so the menu-bar item
             // stays clickable even with a corrupt resource bundle.
-            Image(nsImage: menuBarIcon)
+            ZStack(alignment: .topTrailing) {
+                Image(nsImage: menuBarIcon)
+                if approvalBadge.pendingCount > 0 {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 7, height: 7)
+                        .offset(x: 2, y: -2)
+                        .accessibilityHidden(true)
+                }
+            }
+            .accessibilityLabel(
+                approvalBadge.pendingCount > 0
+                    ? "The Bridge, \(approvalBadge.pendingCount) Confirm waiting"
+                    : "The Bridge"
+            )
         }
         .menuBarExtraStyle(.window)
     }

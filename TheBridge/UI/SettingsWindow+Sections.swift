@@ -455,6 +455,9 @@ struct SecuritySection: View {
         .onReceive(NotificationCenter.default.publisher(for: .notionBridgeCredentialsFeatureDidChange)) { _ in
             refreshMetrics()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .pendingApprovalSurfaceDidChange)) { _ in
+            refreshMetrics()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .notionBridgeTierOverridesDidChange)) { _ in
             refreshTierCounts()
         }
@@ -748,13 +751,16 @@ struct SecuritySection: View {
     private func refreshCredentialCounts() {
         guard let entries = try? CredentialManager.shared.list() else {
             storedCount = 0
-            attentionCount = 0
+            attentionCount = SecurityPostureMetrics.attentionTotal(
+                credentialIssues: 0,
+                pendingApprovals: PendingApprovalSurface.shared.pendingCount
+            )
             return
         }
         storedCount = entries.count
         let store = CredentialHealthStore()
         let health = store.load()
-        attentionCount = entries.filter { entry in
+        let vaultIssues = entries.filter { entry in
             if entry.type == .card {
                 return CredentialCardExpiry.health(
                     expMonth: entry.metadata.expMonth,
@@ -764,6 +770,10 @@ struct SecuritySection: View {
             let key = CredentialHealthStore.key(service: entry.service, account: entry.account)
             return (health[key] ?? .unchecked).health.needsAttention
         }.count
+        attentionCount = SecurityPostureMetrics.attentionTotal(
+            credentialIssues: vaultIssues,
+            pendingApprovals: PendingApprovalSurface.shared.pendingCount
+        )
     }
 
     /// Tool tier counts from the SAME resolution Tools/router use (per-tool

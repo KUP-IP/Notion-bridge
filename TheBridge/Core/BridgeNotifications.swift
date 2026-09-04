@@ -51,6 +51,14 @@ public extension Notification.Name {
     /// the running `ServerManager` WITHOUT a relaunch. The `userInfo` carries
     /// the new boolean under `cloudAccessEnabledKey`.
     static let cloudAccessEnabledDidChange = Notification.Name("com.notionbridge.cloudAccessEnabledDidChange")
+
+    /// In-flight Request-tier Confirm prompts changed (posted / resolved).
+    /// Dashboard, menu-bar badge, and Security ATTENTION refresh from this.
+    static let pendingApprovalSurfaceDidChange = Notification.Name("com.notionbridge.pendingApprovalSurfaceDidChange")
+
+    /// Operator tapped Allow / Always Allow / Deny on the menu-bar Confirm card.
+    /// `NotificationApprovalManager` resumes the same path as SECURITY_APPROVAL.
+    static let pendingApprovalSurfaceSubmit = Notification.Name("com.notionbridge.pendingApprovalSurfaceSubmit")
 }
 
 /// `userInfo` key on `.cloudAccessEnabledDidChange` carrying the new

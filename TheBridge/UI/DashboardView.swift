@@ -59,10 +59,16 @@ public struct DashboardView: View {
     /// license-expired); silent for trial-active / licensed /
     /// grandfathered states so the popover stays clean for paid users.
     @State private var licenseStatus: LicenseStatus = .trial(daysRemaining: 30)
+    @State private var pendingApprovals: [PendingApprovalPrompt] = []
 
     public var body: some View {
         VStack(spacing: 0) {
             headerSection
+            if !pendingApprovals.isEmpty {
+                pendingApprovalSection
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 4)
+            }
             if !licenseStatus.isActive {
                 licenseExpiredBanner
                     .padding(.horizontal, 12)
@@ -93,9 +99,13 @@ public struct DashboardView: View {
         .task {
             await permissionManager.checkAllAsync()
             await refreshLicenseStatus()
+            pendingApprovals = PendingApprovalSurface.shared.snapshot()
         }
         .onReceive(NotificationCenter.default.publisher(for: .licenseStateDidChange)) { _ in
             Task { await refreshLicenseStatus() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .pendingApprovalSurfaceDidChange)) { _ in
+            pendingApprovals = PendingApprovalSurface.shared.snapshot()
         }
     }
 
@@ -132,6 +142,70 @@ public struct DashboardView: View {
         .clipShape(shape)
         // Ingredient 4 — the e4 popover drop shadow (ambient + contact).
         .bridgeShadow(BridgeTokens.shadowE4)
+    }
+
+    // MARK: - Confirm fallback (remote + local)
+
+    /// Menu-bar Confirm card. Shown whenever a Request-tier prompt is
+    /// in-flight — including after `awaiting_approval` — so a missing
+    /// UN banner (Focus / style None / content-extension hide) cannot
+    /// stall a remote agent with ATTENTION=0.
+    private var pendingApprovalSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(pendingApprovals) { prompt in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "lock.shield")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text("Confirm")
+                            .font(BridgeTokens.Typeface.micro.weight(.semibold))
+                            .textCase(.uppercase)
+                            .tracking(0.5)
+                        if prompt.origin == .remote {
+                            Text("remote")
+                                .font(BridgeTokens.Typeface.micro.weight(.semibold))
+                                .textCase(.uppercase)
+                                .tracking(0.4)
+                                .foregroundStyle(BridgeTokens.warnText)
+                        }
+                        Spacer(minLength: 4)
+                    }
+                    .foregroundStyle(BridgeTokens.warnText)
+                    Text(prompt.title)
+                        .font(BridgeTokens.Typeface.sub.weight(.semibold))
+                        .foregroundStyle(BridgeTokens.fg1)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(prompt.body)
+                        .font(BridgeTokens.Typeface.micro.monospaced())
+                        .foregroundStyle(BridgeTokens.fg3)
+                        .lineLimit(3)
+                    HStack(spacing: 6) {
+                        BridgeButton("Deny", variant: .danger) {
+                            PendingApprovalSurface.shared.submit(id: prompt.id, decision: .deny)
+                        }
+                        BridgeButton("Allow") {
+                            PendingApprovalSurface.shared.submit(id: prompt.id, decision: .allow)
+                        }
+                        if prompt.allowAlwaysAllow {
+                            BridgeButton("Always Allow", variant: .primary) {
+                                PendingApprovalSurface.shared.submit(id: prompt.id, decision: .alwaysAllow)
+                            }
+                        }
+                    }
+                }
+                .padding(10)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(BridgeTokens.warn.opacity(0.12))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(BridgeTokens.warn.opacity(0.28), lineWidth: 0.5)
+                        )
+                )
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Confirm \(prompt.toolName)")
+            }
+        }
     }
 
     // MARK: - License banner
