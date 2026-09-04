@@ -2,6 +2,12 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Command insert (#251)** — Cmd+V web paste restores the prior pasteboard
+  only after a consume window (`prePasteDelay` 60ms / `postPasteDelay` 120ms,
+  ≥ Handy 60/60). Destination apps read `.general` asynchronously; restoring
+  at 30ms pasted the stale clipboard on fire 1. Native AppKit AX path still
+  never touches the clipboard. Unicode CGEvent is not reintroduced. Restore
+  remains guaranteed (body is not left on the pasteboard). Not Installed.
 - **Command insert (#238 follow-up)** — Safari/WebKit prefers Cmd+V paste.
   Before paste, leftover Control/Option/Shift from ⌃⌘B are keyed-up via HID
   (`CGEventSourceStateID.hidSystemState`); Command stays held. V is resolved
