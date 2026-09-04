@@ -9,8 +9,9 @@
 // Reflow Protocol §4 Type A pattern (PM-decisive REVIEW disposition).
 //
 // macOS 26 Tahoe permission model:
-//   - Synthetic input requires the host app to be granted Accessibility AND
-//     Input Monitoring TCC entitlements.
+//   - Synthetic input requires Accessibility (AXIsProcessTrusted). Input
+//     Monitoring is a separate TCC class and is NOT required for CGEvent
+//     keyboard/mouse synthesis on this path.
 //   - First-run path: AXIsProcessTrusted() == false → tool returns
 //     `capability_missing` immediately with a settings deep-link hint. The
 //     existing PermissionView surface (used by AccessibilityModule) remains
@@ -40,7 +41,7 @@ public enum SyntheticInputModule {
             switch self {
             case .notTrusted:
                 return .object([
-                    "error": .string("capability_missing: Accessibility + Input Monitoring permissions required for synthetic input. Open System Settings > Privacy & Security > Accessibility and grant The Bridge."),
+                    "error": .string("capability_missing: Accessibility permission required for synthetic input. Open System Settings > Privacy & Security > Accessibility and grant The Bridge."),
                     "code":          .string("capability_missing"),
                     "settingsHint":  .string("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
                 ])
@@ -81,10 +82,9 @@ public enum SyntheticInputModule {
 
     private static func ensureTrusted() throws {
         // AXIsProcessTrusted gates the synthetic-input path on macOS 26 Tahoe.
-        // Input Monitoring is a separate TCC class but CGEventPost() inherits
-        // from the Accessibility grant for keyboard/mouse synthesis on this
-        // platform; sites that need Input Monitoring specifically (e.g. raw
-        // hot-key listeners) are out of scope for this packet.
+        // Input Monitoring is a separate TCC class and is not required here;
+        // CGEventPost() for keyboard/mouse synthesis follows the Accessibility
+        // grant. Raw event-tap listeners (out of scope) are the IM surface.
         guard AXIsProcessTrusted() else { throw SynthError.notTrusted }
     }
 
@@ -136,7 +136,7 @@ public enum SyntheticInputModule {
             name: "keyboard_type",
             module: moduleName,
             tier: .notify,
-            description: "Synthetic typing via CGEvent — Unicode-safe, works against AX-incompatible apps (Adobe-class). Requires Accessibility + Input Monitoring TCC grants. Returns code='capability_missing' on permission denial (never silent fail).",
+            description: "Synthetic typing via CGEvent — Unicode-safe, works against AX-incompatible apps (Adobe-class). Requires Accessibility TCC. Returns code='capability_missing' on permission denial (never silent fail).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

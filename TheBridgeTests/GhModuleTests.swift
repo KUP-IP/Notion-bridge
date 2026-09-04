@@ -314,6 +314,21 @@ func runGhModuleTests() async {
         }
         try expect(review.tier == .request, "gh_pr_review tier=\(review.tier.rawValue)")
         try expect(review.neverAutoApprove == true, "gh_pr_review must be neverAutoApprove")
+        guard case .object(let schema) = review.inputSchema,
+              case .object(let props) = schema["properties"],
+              case .object(let event) = props["event"],
+              case .array(let values) = event["enum"] else {
+            throw TestError.assertion("gh_pr_review event enum missing")
+        }
+        let names: [String] = values.compactMap { v in
+            if case .string(let s) = v { return s }
+            return nil
+        }
+        try expect(names == ["approve", "request_changes"],
+                   "event must be approve|request_changes only, got \(names)")
+        try expect(!names.contains("comment"), "red-team: omit comment; use gh_pr_comment")
+        try expect(!review.description.lowercased().contains("or comment"),
+                   "description must not advertise a comment review event")
     }
 
     await test("gh_pr_review refuses an invalid event") {
@@ -333,5 +348,29 @@ func runGhModuleTests() async {
             throw TestError.assertion("expected status field, got \(result)")
         }
         try expect(status == "invalid_argument", "expected invalid_argument, got \(status)")
+    }
+
+    await test("gh_pr_review refuses the comment event") {
+        let gate = SecurityGate(approvalProvider: TestSecurityApprovalProvider())
+        let router = ToolRouter(securityGate: gate, auditLog: AuditLog())
+        let runtime = GhRuntime(ghPath: "/nonexistent/gh-binary-xyz")
+        await GhModule.register(on: router, runtime: runtime)
+        let result = try await router.dispatch(
+            toolName: "gh_pr_review",
+            arguments: .object([
+                "number": .int(12),
+                "event": .string("comment")
+            ])
+        )
+        guard case .object(let dict) = result,
+              case .string(let status) = dict["status"],
+              case .string(let error) = dict["error"] else {
+            throw TestError.assertion("expected invalid_argument envelope, got \(result)")
+        }
+        try expect(status == "invalid_argument", "comment event must be refused, got \(status)")
+        try expect(error.contains("approve") && error.contains("request_changes"),
+                   "error should name the allowed events, got \(error)")
+        try expect(!error.contains("|comment") && !error.contains("or comment"),
+                   "error must not still advertise comment, got \(error)")
     }
 }

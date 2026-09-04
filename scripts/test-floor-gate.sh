@@ -126,7 +126,16 @@
 #   attachments, shortcut identifiers, SpeechAnalyzer opt-in off,
 #   registrationChannel, displayIndex, Cmd+V web paste (#214 #211 #213
 #   #212 #223 #224 #238). Measured 3920 passed, 0 failed on wave7-mac-ui.
-FLOOR="${BRIDGE_TEST_FLOOR:-3920}"
+# 2026-09-03: 3920 → 3927 (+7) — hotfix #238 Safari/WebKit Cmd+V paste,
+#   leftover ⌃⌥⇧ HID key-up, Command-held UCKeyTranslate, pasteboard
+#   restore-on-throw; gh_pr_review comment event dropped; keyboard_type
+#   copy drops Input Monitoring claim; Contacts .limited unit coverage
+#   (in PermissionsModuleTests — runPermissionManagerTests is skipped).
+#   LaunchAgent AssociatedBundleIdentifiers asserted in existing plist
+#   test (no extra count). CI measured 3926 passed / 0 failed on 1f18ed4
+#   before the Contacts test was moved to a live runner; floor 3927 after
+#   that move.
+FLOOR="${BRIDGE_TEST_FLOOR:-3927}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

@@ -86,6 +86,9 @@ func runJobsModuleTests() async {
         let plistSingle = LaunchAgentPlist.build(jobId: "test-single", intervals: single, ssePort: 9700)
         try expect(plistSingle["Label"] as? String == "solutions.kup.notionbridge.job.test-single")
         try expect(plistSingle["StartCalendarInterval"] is [String: Any])
+        let associated = plistSingle["AssociatedBundleIdentifiers"] as? [String]
+        try expect(associated == [BundleIDDefaultsMigration.canonicalBundleID],
+                   "LaunchAgent must associate The Bridge bundle, got \(String(describing: associated))")
 
         let multi = try CronParser.parse("0 9 * * 1,3,5")
         let plistMulti = LaunchAgentPlist.build(jobId: "test-multi", intervals: multi, ssePort: 9700)

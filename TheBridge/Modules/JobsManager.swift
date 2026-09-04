@@ -901,7 +901,8 @@ public enum LaunchAgentPlist {
             "KeepAlive": false,
             "StandardOutPath": stdoutPath,
             "StandardErrorPath": stderrPath,
-            "ProcessType": "Background"
+            "ProcessType": "Background",
+            "AssociatedBundleIdentifiers": [BundleIDDefaultsMigration.canonicalBundleID]
         ]
         if !envVars.isEmpty {
             plist["EnvironmentVariables"] = envVars
