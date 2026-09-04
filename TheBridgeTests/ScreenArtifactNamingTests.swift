@@ -135,8 +135,13 @@ func runScreenArtifactNamingTests() async {
 
     await test("png and mp4 share one daily sequence") {
         let day = ScreenArtifactNaming.DayKey(isoWeek: 36, isoWeekday: 5)
+        let png = ScreenArtifactNaming.parse("b-36.5-01.png")
+        let mp4 = ScreenArtifactNaming.parse("b-36.5-02.mp4")
+        try expect(png?.sequence == 1 && png?.ext == "png" && png?.day == day, "png parse: \(String(describing: png))")
+        try expect(mp4?.sequence == 2 && mp4?.ext == "mp4" && mp4?.day == day, "mp4 must parse and share the day: \(String(describing: mp4))")
         let names = ["b-36.5-01.png", "b-36.5-02.mp4", "readme.txt"]
-        try expect(ScreenArtifactNaming.nextSequence(existingNames: names, day: day) == 3)
+        try expect(ScreenArtifactNaming.nextSequence(existingNames: names, day: day) == 3,
+                   "mixed png+mp4 must share the counter, got \(ScreenArtifactNaming.nextSequence(existingNames: names, day: day))")
     }
 
     await test("Leftover epoch names are ignored by the counter") {
@@ -178,11 +183,16 @@ func runScreenArtifactNamingTests() async {
 
     await test("Cleanup deletes prior local-day b-* files") {
         try withTempDir { dir in
+            // Pin both instants in America/Chicago — cleanup keys off injected
+            // now+timezone + filename stem, not the host calendar or mtime.
             let now = civilDate(2026, 9, 4, hour: 10, timeZone: chicago)
             let yesterday = civilDate(2026, 9, 3, hour: 18, timeZone: chicago)
-            try touch(dir, "b-36.4-01.png", mtime: yesterday)
-            try touch(dir, "b-36.4-02.mp4", mtime: yesterday)
-            try touch(dir, "b-36.5-01.png", mtime: now)
+            try expect(ScreenArtifactNaming.dayKey(for: now, timeZone: chicago).stem == "36.5")
+            try expect(ScreenArtifactNaming.dayKey(for: yesterday, timeZone: chicago).stem == "36.4")
+            try expect(ScreenArtifactNaming.parse("b-36.4-02.mp4")?.day.stem == "36.4")
+            try touch(dir, "b-36.4-01.png")
+            try touch(dir, "b-36.4-02.mp4")
+            try touch(dir, "b-36.5-01.png")
             ScreenArtifactNaming.cleanup(in: dir.path, now: now, timeZone: chicago)
             let left = Set(try FileManager.default.contentsOfDirectory(atPath: dir.path))
             try expect(left == ["b-36.5-01.png"], "expected only today, got \(left)")
@@ -207,23 +217,27 @@ func runScreenArtifactNamingTests() async {
     await test("allocatePath scans the dir and skips an occupied sequence") {
         try withTempDir { dir in
             let now = civilDate(2026, 9, 4, timeZone: chicago)
+            try expect(ScreenArtifactNaming.dayKey(for: now, timeZone: chicago).stem == "36.5")
             try touch(dir, "b-36.5-01.png")
+            try touch(dir, "b-36.5-02.mp4")
             try touch(dir, "nb-screen-1710000000000.png")
             let first = ScreenArtifactNaming.allocatePath(
-                directory: dir.path,
-                ext: "mp4",
-                now: now,
-                timeZone: chicago
-            )
-            try expect((first as NSString).lastPathComponent == "b-36.5-02.mp4", first)
-            try Data().write(to: URL(fileURLWithPath: first))
-            let second = ScreenArtifactNaming.allocatePath(
                 directory: dir.path,
                 ext: "png",
                 now: now,
                 timeZone: chicago
             )
-            try expect((second as NSString).lastPathComponent == "b-36.5-03.png", second)
+            try expect((first as NSString).lastPathComponent == "b-36.5-03.png",
+                       "occupied 01.png+02.mp4 must skip to 03, got \(first)")
+            try Data().write(to: URL(fileURLWithPath: first))
+            let second = ScreenArtifactNaming.allocatePath(
+                directory: dir.path,
+                ext: "mp4",
+                now: now,
+                timeZone: chicago
+            )
+            try expect((second as NSString).lastPathComponent == "b-36.5-04.mp4",
+                       "occupied 03.png must skip to 04, got \(second)")
         }
     }
 

@@ -169,7 +169,8 @@ public enum ScreenArtifactNaming {
 
     /// End-of-day retention for `b-W.D-NN.*` in `directory`.
     ///
-    /// - Never deletes today's files (stem matches today, or mtime is today).
+    /// - Never deletes today's files (filename stem matches `now` in `timeZone`).
+    ///   Host clock and file mtime are not consulted — tests inject Chicago.
     ///   The old 1-hour same-day wipe is gone so 01…NN stay useful mid-day.
     /// - Deletes prior local-calendar-day `b-*` files on the next cleanup.
     /// - Leaves legacy epoch names and unrelated files untouched.
@@ -186,18 +187,14 @@ public enum ScreenArtifactNaming {
             return
         }
 
+        // "Today" is the ISO week.day of `now` in `timeZone` — not the host
+        // clock and not file mtime — so tests can pin America/Chicago.
         let today = dayKey(for: now, timeZone: timeZone)
-        let civil = civilCalendar(timeZone: timeZone)
 
         for name in names {
             guard let parsed = parse(name) else { continue }
+            if parsed.day == today { continue }
             let path = (directory as NSString).appendingPathComponent(name)
-            let mtime = (try? fileManager.attributesOfItem(atPath: path)[.modificationDate] as? Date) ?? now
-            let stemIsToday = parsed.day == today
-            let mtimeIsToday = civil.isDate(mtime, inSameDayAs: now)
-            if stemIsToday || mtimeIsToday {
-                continue
-            }
             try? fileManager.removeItem(atPath: path)
         }
     }
