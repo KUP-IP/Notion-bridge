@@ -273,7 +273,8 @@ extension SkillsModule {
                 )
                 let outcome = try await SkillExposureOrphanPurger.apply(
                     pageIDs: pageIds,
-                    generationStore: .shared
+                    generationStore: .shared,
+                    pruneCaches: true
                 )
                 return .object([
                     "purgedLocal": .array(outcome.purgedLocal.map(Value.string)),

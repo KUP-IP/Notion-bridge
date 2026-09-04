@@ -548,7 +548,8 @@ public struct SkillExposureReconciler: Sendable {
 public enum SkillExposureOrphanPurger {
     public static func apply(
         pageIDs: [String],
-        generationStore: SkillRuntimeGenerationStore
+        generationStore: SkillRuntimeGenerationStore,
+        pruneCaches: Bool = false
     ) async throws -> SkillExposureOrphanPurge.Outcome {
         let classified = SkillExposureOrphanPurge.classify(pageIDs)
         let admitted = Set(classified.admitted)
@@ -567,7 +568,10 @@ public enum SkillExposureOrphanPurger {
         let found = Set(purgedLocal).union(purgedPublished)
         let notFound = classified.admitted.filter { !found.contains($0) }
 
-        if let gate = await generationStore.gate() {
+        // Tests use a temp generation store. Pruning against that gate would
+        // evict the process-global body/routing caches for every page not in
+        // the fixture. Only the MCP tool (shared store) opts in.
+        if pruneCaches, let gate = await generationStore.gate() {
             await SkillRuntimeCachePruner.prune(using: gate)
         }
 
