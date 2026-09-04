@@ -405,7 +405,7 @@ func runMessagesModuleTests() async {
         try expect(attempt.error?.contains("does not match live inbound") == true)
     }
 
-    await test("RCS inbound refuses SMS fallback and omit-inherit") {
+    await test("live RCS + service=SMS without flag refuses") {
         let probe = InvocationProbe()
         let explicitSMS = MessagesModule.performOneToOneSend(
             recipient: "+12537920959", body: "test", confirm: "SEND",
@@ -415,16 +415,157 @@ func runMessagesModuleTests() async {
         )
         try expect(!explicitSMS.invoked)
         try expect(probe.services.isEmpty)
-        try expect(explicitSMS.error?.contains("RCS") == true || explicitSMS.error?.contains("silent fallback") == true)
+        try expect(explicitSMS.error?.contains("allowSmsDespiteLiveService:true") == true,
+                   "missing-flag error must name the operator override, got \(explicitSMS.error ?? "nil")")
+        try expect(explicitSMS.error?.contains("service=SMS") == true)
+    }
 
+    await test("live RCS + service=SMS + allowSmsDespiteLiveService uses SMS") {
+        let probe = InvocationProbe()
+        let attempt = MessagesModule.performOneToOneSend(
+            recipient: "+12537920959", body: "test", confirm: "SEND",
+            serviceOverride: "SMS", afterId: 1, preparedAt: Date(),
+            liveInboundRaw: "RCS",
+            allowSmsDespiteLiveService: true,
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(attempt.invoked)
+        try expect(probe.services == [.sms])
+        try expect(attempt.service == "SMS")
+        try expect(attempt.error == nil)
+    }
+
+    await test("live iMessage + service=SMS + flag still refuses mismatch") {
+        let probe = InvocationProbe()
+        let attempt = MessagesModule.performOneToOneSend(
+            recipient: "+16056013705", body: "test", confirm: "SEND",
+            serviceOverride: "SMS", afterId: 1, preparedAt: Date(),
+            liveInboundRaw: "iMessage",
+            allowSmsDespiteLiveService: true,
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(!attempt.invoked)
+        try expect(probe.services.isEmpty)
+        try expect(attempt.error?.contains("does not match live inbound") == true,
+                   "flag must not unlock iMessage→SMS, got \(attempt.error ?? "nil")")
+    }
+
+    await test("omit service on RCS still refuses") {
+        let probe = InvocationProbe()
         let omit = MessagesModule.performOneToOneSend(
             recipient: "+12537920959", body: "test", confirm: "SEND",
             serviceOverride: nil, afterId: 1, preparedAt: Date(),
             liveInboundRaw: "RCS",
+            allowSmsDespiteLiveService: true,
             invoke: probe.invoke, verify: probe.verify
         )
         try expect(!omit.invoked)
         try expect(probe.services.isEmpty)
+        try expect(omit.error?.localizedCaseInsensitiveContains("inherit") == true
+                   || omit.error?.contains("omit") == true,
+                   "omit on RCS must stay inherit-only, got \(omit.error ?? "nil")")
+    }
+
+    await test("live unknown + service=SMS without flag refuses") {
+        let probe = InvocationProbe()
+        let explicitSMS = MessagesModule.performOneToOneSend(
+            recipient: "+15550001111", body: "test", confirm: "SEND",
+            serviceOverride: "SMS", afterId: 1, preparedAt: Date(),
+            liveInboundRaw: "unknown",
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(!explicitSMS.invoked)
+        try expect(probe.services.isEmpty)
+        try expect(explicitSMS.error?.contains("allowSmsDespiteLiveService:true") == true,
+                   "unknown missing-flag error must name the operator override, got \(explicitSMS.error ?? "nil")")
+    }
+
+    await test("live unknown + service=SMS + allowSmsDespiteLiveService uses SMS") {
+        let probe = InvocationProbe()
+        let attempt = MessagesModule.performOneToOneSend(
+            recipient: "+15550001111", body: "test", confirm: "SEND",
+            serviceOverride: "SMS", afterId: 1, preparedAt: Date(),
+            liveInboundRaw: "unknown",
+            allowSmsDespiteLiveService: true,
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(attempt.invoked)
+        try expect(probe.services == [.sms])
+        try expect(attempt.service == "SMS")
+    }
+
+    await test("omit service on unknown still refuses") {
+        let probe = InvocationProbe()
+        let omit = MessagesModule.performOneToOneSend(
+            recipient: "+15550001111", body: "test", confirm: "SEND",
+            serviceOverride: nil, afterId: 1, preparedAt: Date(),
+            liveInboundRaw: "unknown",
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(!omit.invoked)
+        try expect(probe.services.isEmpty)
+    }
+
+    await test("flag does not unlock iMessage send on RCS inbound") {
+        let probe = InvocationProbe()
+        let attempt = MessagesModule.performOneToOneSend(
+            recipient: "+12537920959", body: "test", confirm: "SEND",
+            serviceOverride: "iMessage", afterId: 1, preparedAt: Date(),
+            liveInboundRaw: "RCS",
+            allowSmsDespiteLiveService: true,
+            invoke: probe.invoke, verify: probe.verify
+        )
+        try expect(!attempt.invoked)
+        try expect(probe.services.isEmpty)
+        try expect(attempt.error?.contains("silent fallback") == true
+                   || attempt.error?.contains("RCS") == true)
+    }
+
+    await test("resolveSendService RCS/unknown override matrix") {
+        switch MessagesModule.resolveSendService(requested: "SMS", liveInboundRaw: "RCS") {
+        case .refuse(let reason):
+            try expect(reason.contains("allowSmsDespiteLiveService:true"))
+        case .use:
+            throw TestError.assertion("RCS + SMS without flag must refuse")
+        }
+        switch MessagesModule.resolveSendService(
+            requested: "SMS", liveInboundRaw: "RCS", allowSmsDespiteLiveService: true
+        ) {
+        case .use(let service):
+            try expect(service == .sms)
+        case .refuse(let reason):
+            throw TestError.assertion("RCS + SMS + flag must use SMS, got \(reason)")
+        }
+        switch MessagesModule.resolveSendService(
+            requested: "SMS", liveInboundRaw: "iMessage", allowSmsDespiteLiveService: true
+        ) {
+        case .refuse(let reason):
+            try expect(reason.contains("does not match live inbound"))
+        case .use:
+            throw TestError.assertion("flag must not unlock iMessage↔SMS mismatch")
+        }
+        switch MessagesModule.resolveSendService(
+            requested: nil, liveInboundRaw: "RCS", allowSmsDespiteLiveService: true
+        ) {
+        case .refuse:
+            break
+        case .use:
+            throw TestError.assertion("omit on RCS must refuse even with the flag")
+        }
+        switch MessagesModule.resolveSendService(
+            requested: "SMS", liveInboundRaw: "unknown", allowSmsDespiteLiveService: true
+        ) {
+        case .use(let service):
+            try expect(service == .sms)
+        case .refuse(let reason):
+            throw TestError.assertion("unknown + SMS + flag must use SMS, got \(reason)")
+        }
+        switch MessagesModule.resolveSendService(requested: "RCS", liveInboundRaw: nil) {
+        case .refuse(let reason):
+            try expect(reason.contains("not a sendable"))
+        case .use:
+            throw TestError.assertion("RCS must stay out of the send enum")
+        }
     }
 
     await test("messages_chat catalog mentions service for inherit binding") {
@@ -441,6 +582,15 @@ func runMessagesModuleTests() async {
                    "messages_send must document inherit-or-fail-closed")
         try expect(send.description.localizedCaseInsensitiveContains("fallback"),
                    "messages_send must still name the no-fallback rule")
+        try expect(send.description.contains("allowSmsDespiteLiveService"),
+                   "messages_send must name the RCS/unknown SMS operator override")
+        guard case .object(let schema) = send.inputSchema,
+              case .object(let props)? = schema["properties"] else {
+            throw TestError.assertion("messages_send schema not inspectable")
+        }
+        try expect(props["allowSmsDespiteLiveService"] != nil,
+                   "messages_send schema must advertise allowSmsDespiteLiveService")
+        try expect(props["service"] != nil)
     }
 
     await test("SMS rejects an email recipient before invocation") {

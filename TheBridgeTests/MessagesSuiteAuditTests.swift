@@ -228,7 +228,8 @@ func runMessagesSuiteAuditTests() async {
     await test("clean Messages param keys produce no false-positive did-you-mean") {
         try expect(BridgeToolAliases.didYouMean(
             providedKeys: ["query", "limit", "contact", "messageId",
-                           "chatIdentifier", "recipient", "body", "confirm", "service"]) == nil,
+                           "chatIdentifier", "recipient", "body", "confirm", "service",
+                           "allowSmsDespiteLiveService"]) == nil,
             "Messages canonical keys must not collide with the alias map")
     }
 
@@ -249,6 +250,8 @@ func runMessagesSuiteAuditTests() async {
         try expect(requiredStrings == Set(["confirm"]),
                    "messages_send should require confirm globally; payload is body XOR filePath; target is recipient OR chatIdentifier")
         try expect(props["filePath"] != nil, "messages_send schema missing filePath")
+        try expect(props["allowSmsDespiteLiveService"] != nil,
+                   "messages_send schema missing allowSmsDespiteLiveService")
     }
 
     // ============================================================
