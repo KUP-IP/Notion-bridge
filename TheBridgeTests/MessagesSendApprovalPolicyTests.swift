@@ -5,7 +5,8 @@
 // request). Catalog default stays .request with neverAutoApprove false so
 // Settings can lower it, including for remote/tunnel sessions. confirm:SEND
 // remains handler-required. Ordinary send inherits live inbound iMessage/SMS
-// or fails closed (#198). No live Messages.app send.
+// or fails closed (#198). Explicit SMS on RCS/unknown requires
+// allowSmsDespiteLiveService (#249). No live Messages.app send.
 
 import Foundation
 import MCP

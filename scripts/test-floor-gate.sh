@@ -135,7 +135,12 @@
 #   test (no extra count). CI measured 3926 passed / 0 failed on 1f18ed4
 #   before the Contacts test was moved to a live runner; floor 3927 after
 #   that move.
-FLOOR="${BRIDGE_TEST_FLOOR:-3927}"
+# 2026-09-04: 3927 → 3935 (+8) — #249 RCS/unknown SMS operator override:
+#   allowSmsDespiteLiveService on messages_send. Inherit-or-refuse held for
+#   omit and iMessage↔SMS mismatch; RCS stays out of the send enum.
+#   +8 net-new MessagesModuleTests (RCS/unknown refuse + authorized SMS +
+#   mismatch + resolveSendService matrix). CI must confirm measured green.
+FLOOR="${BRIDGE_TEST_FLOOR:-3935}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

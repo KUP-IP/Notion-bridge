@@ -177,9 +177,12 @@ public enum MessagesService: String, Sendable, Equatable, CaseIterable {
     }
 }
 
-/// Ordinary `messages_send` service choice (#198): inherit live inbound
-/// iMessage/SMS, or fail closed. Never map RCS/unknown onto SMS, and never
-/// honor an explicit service that contradicts the live inbound channel.
+/// Ordinary `messages_send` service choice (#198 / #249): inherit live inbound
+/// iMessage/SMS, or fail closed. Never map RCS/unknown onto SMS on omit, and
+/// never honor an explicit service that contradicts a live iMessage/SMS
+/// channel. Explicit SMS on RCS/unknown is allowed only with
+/// `allowSmsDespiteLiveService: true` — the flag does not unlock iMessage↔SMS
+/// mismatch and does not make RCS a sendable service.
 public enum MessagesServiceResolution: Equatable, Sendable {
     case use(MessagesService)
     case refuse(String)
@@ -220,7 +223,8 @@ extension MessagesModule {
 
     public static func resolveSendService(
         requested: String?,
-        liveInboundRaw: String?
+        liveInboundRaw: String?,
+        allowSmsDespiteLiveService: Bool = false
     ) -> MessagesServiceResolution {
         let live = classifyChatDbService(liveInboundRaw)
         let liveUnsupported: String? = {
@@ -240,6 +244,12 @@ extension MessagesModule {
                 return .refuse("unsupported Messages service '\(requested)'; expected exactly 'iMessage' or 'SMS', or omit service to inherit live inbound")
             }
             if let liveUnsupported {
+                if explicit == .sms, allowSmsDespiteLiveService {
+                    return .use(.sms)
+                }
+                if explicit == .sms {
+                    return .refuse("live inbound service is '\(liveUnsupported)' (not iMessage/SMS); pass service=SMS and allowSmsDespiteLiveService:true for operator-authorized SMS on an RCS/unknown thread")
+                }
                 return .refuse("live inbound service is '\(liveUnsupported)' (not iMessage/SMS); refusing \(explicit.rawValue) as a silent fallback")
             }
             if let live, live != explicit {
@@ -865,9 +875,10 @@ public enum MessagesModule {
 
     /// One-to-one delivery primitive for ordinary messages_send and the bounded
     /// THREAD M1 receipt engine. It preserves the exact SEND token, inherits
-    /// live inbound iMessage/SMS or fails closed (#198), invokes once with no
-    /// fallback, and returns local-record correlation evidence without mutating
-    /// relationship state.
+    /// live inbound iMessage/SMS or fails closed (#198), allows explicit SMS
+    /// on RCS/unknown only with `allowSmsDespiteLiveService` (#249), invokes
+    /// once with no fallback, and returns local-record correlation evidence
+    /// without mutating relationship state.
     public static func performOneToOneSend(
         recipient: String,
         body: String,
@@ -875,7 +886,8 @@ public enum MessagesModule {
         serviceOverride: String?,
         afterId: Int,
         preparedAt: Date,
-        liveInboundRaw: String? = nil
+        liveInboundRaw: String? = nil,
+        allowSmsDespiteLiveService: Bool = false
     ) -> MessagesDeliveryAttempt {
         performOneToOneSend(
             recipient: recipient,
@@ -885,6 +897,7 @@ public enum MessagesModule {
             afterId: afterId,
             preparedAt: preparedAt,
             liveInboundRaw: liveInboundRaw,
+            allowSmsDespiteLiveService: allowSmsDespiteLiveService,
             invoke: invokeAppleScript,
             verify: { target, approvedBody, watermark, prepared in
                 verifyExactDelivery(
@@ -905,6 +918,7 @@ public enum MessagesModule {
         afterId: Int,
         preparedAt: Date,
         liveInboundRaw: String? = nil,
+        allowSmsDespiteLiveService: Bool = false,
         invoke: MessagesServiceInvoker,
         verify: MessagesLocalRecordVerifier
     ) -> MessagesDeliveryAttempt {
@@ -916,7 +930,11 @@ public enum MessagesModule {
             )
         }
         let service: MessagesService
-        switch resolveSendService(requested: serviceOverride, liveInboundRaw: liveInboundRaw) {
+        switch resolveSendService(
+            requested: serviceOverride,
+            liveInboundRaw: liveInboundRaw,
+            allowSmsDespiteLiveService: allowSmsDespiteLiveService
+        ) {
         case .refuse(let reason):
             return .init(
                 invoked: false,
@@ -1506,13 +1524,14 @@ public enum MessagesModule {
         // (tool or module override, Always Allow) can lower it to .notify or
         // .open — including for remote/tunnel sessions. confirm:'SEND' remains
         // handler-required. Ordinary one-to-one inherits live inbound
-        // iMessage/SMS or fails closed (#198); THREAD M1 still binds explicit
-        // service. Jobs still require explicit service.
+        // iMessage/SMS or fails closed (#198); explicit SMS on RCS/unknown
+        // requires allowSmsDespiteLiveService (#249). THREAD M1 still binds
+        // explicit service. Jobs still require explicit service.
         await router.register(ToolRegistration(
             name: "messages_send",
             module: moduleName,
             tier: .request,
-            description: "Send one exact iMessage or SMS after confirm:'SEND'. Resolve raw chatNNN via messages_participants; names via contacts_resolve_handle. Omit service to inherit the latest inbound iMessage/SMS for that recipient, or pass exactly iMessage or SMS. Fail closed on RCS/unknown/mismatch — never silent iMessage→SMS fallback. Optional filePath XOR non-empty body: attachments are 1:1 iMessage only (no SMS/RCS, no chatIdentifier/groups). Existing-group text send uses chatIdentifier; group create is not built. Bounded THREAD M1 still binds recipient/service/body. Local chat.db correlation is not provider delivery (never providerDeliveryConfirmed). Catalog default is Request; Settings can lower the tool to Notify or Open.",
+            description: "Send one exact iMessage or SMS after confirm:'SEND'. Resolve raw chatNNN via messages_participants; names via contacts_resolve_handle. Omit service to inherit the latest inbound iMessage/SMS for that recipient, or pass exactly iMessage or SMS. Fail closed on RCS/unknown/mismatch — never silent iMessage→SMS fallback. Operator-authorized SMS on a live RCS/unknown thread requires service=SMS and allowSmsDespiteLiveService:true; the flag does not unlock iMessage↔SMS mismatch. Optional filePath XOR non-empty body: attachments are 1:1 iMessage only (no SMS/RCS, no chatIdentifier/groups). Existing-group text send uses chatIdentifier; group create is not built. Bounded THREAD M1 still binds recipient/service/body. Local chat.db correlation is not provider delivery (never providerDeliveryConfirmed). Catalog default is Request; Settings can lower the tool to Notify or Open.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -1521,7 +1540,8 @@ public enum MessagesModule {
                     "body": .object(["type": .string("string"), "description": .string("Message body text. XOR with filePath — do not send caption+file as one bubble.")]),
                     "filePath": .object(["type": .string("string"), "description": .string("Optional local file to send as a separate 1:1 iMessage. XOR with body. Same confirm:'SEND'.")]),
                     "confirm": .object(["type": .string("string"), "description": .string("Must be exactly 'SEND' to proceed")]),
-                    "service": .object(["type": .string("string"), "enum": .array([.string("iMessage"), .string("SMS")]), "description": .string("Optional for ordinary one-to-one sends. Omit to inherit the latest inbound iMessage/SMS. Exact value only when passed. RCS/unknown live inbound or an explicit mismatch fail closed — no SMS fallback.")]),
+                    "service": .object(["type": .string("string"), "enum": .array([.string("iMessage"), .string("SMS")]), "description": .string("Optional for ordinary one-to-one sends. Omit to inherit the latest inbound iMessage/SMS. Exact value only when passed. RCS/unknown live inbound or an explicit mismatch fail closed — no SMS fallback. SMS on RCS/unknown requires allowSmsDespiteLiveService:true.")]),
+                    "allowSmsDespiteLiveService": .object(["type": .string("boolean"), "description": .string("Operator-authorized SMS when live inbound is RCS/unknown (unsupported). Required together with service=SMS. Does not unlock iMessage↔SMS mismatch or omit-service inherit. Never auto-maps RCS to SMS. Default false.")]),
                     "threadPageId": .object(["type": .string("string"), "description": .string("Canonical THREAD page ID for the bounded one-to-one M1 transaction.")]),
                     "actionId": .object(["type": .string("string"), "description": .string("Stable idempotency action ID for the bounded M1 transaction.")]),
                     "approvalBasis": .object(["type": .string("string"), "description": .string("Fresh operator approval basis bound to exact recipient, service, and body.")]),
@@ -1534,11 +1554,13 @@ public enum MessagesModule {
                 title: "Messages: Send",
                 whenToUse: ["send to a known phone/email with confirm:'SEND'",
                             "send text to an existing group via chatIdentifier",
-                            "send one 1:1 iMessage file via filePath XOR body"],
+                            "send one 1:1 iMessage file via filePath XOR body",
+                            "send SMS on an RCS/unknown thread with service=SMS and allowSmsDespiteLiveService:true"],
                 whenNotToUse: ["raw chatNNN: resolve with messages_participants",
                                "contact name only: use contacts_resolve_handle",
                                "creating a new Messages group — group create is not built",
-                               "treating imessage:open?addresses=… plus UI Return as a successful group create"],
+                               "treating imessage:open?addresses=… plus UI Return as a successful group create",
+                               "silent RCS→SMS or iMessage→SMS fallback — omit still fails closed"],
                 relatedTools: ["messages_participants", "contacts_resolve_handle", "messages_chat"]
             ),
             handler: { arguments in
@@ -1844,6 +1866,10 @@ public enum MessagesModule {
                     if case .string(let value)? = args["service"] { return value }
                     return nil
                 }()
+                let allowSmsDespiteLiveService: Bool = {
+                    if case .bool(let value)? = args["allowSmsDespiteLiveService"] { return value }
+                    return false
+                }()
                 let liveInboundRaw: String?
                 do {
                     liveInboundRaw = try lookupLiveInboundService(recipient: recipient)
@@ -1857,7 +1883,11 @@ public enum MessagesModule {
                         "error": .string("Could not read live inbound service: \(error.localizedDescription)")
                     ])
                 }
-                switch resolveSendService(requested: serviceOverride, liveInboundRaw: liveInboundRaw) {
+                switch resolveSendService(
+                    requested: serviceOverride,
+                    liveInboundRaw: liveInboundRaw,
+                    allowSmsDespiteLiveService: allowSmsDespiteLiveService
+                ) {
                 case .refuse(let reason):
                     return .object([
                         "sent": .bool(false),
@@ -1965,7 +1995,8 @@ public enum MessagesModule {
                     serviceOverride: serviceOverride,
                     afterId: preSendMaxId,
                     preparedAt: preparedAt,
-                    liveInboundRaw: liveInboundRaw
+                    liveInboundRaw: liveInboundRaw,
+                    allowSmsDespiteLiveService: allowSmsDespiteLiveService
                 )
                 return .object(oneToOneSendMCPFields(
                     recipient: recipient,
