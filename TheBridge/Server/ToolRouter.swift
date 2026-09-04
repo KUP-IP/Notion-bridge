@@ -55,7 +55,7 @@ public struct ToolRegistration: Sendable {
     public init(
         name: String,
         module: String,
-        tier: SecurityTier,
+        tier: SecurityTier = .notify,
         neverAutoApprove: Bool = false,
         description: String,
         inputSchema: Value,
@@ -725,20 +725,19 @@ public actor ToolRouter {
         //
         // Calendar–Registry private-smoke hatch: with sync env + AUTO_APPROVE=1,
         // downgrade Request→Notify for the attended automation window only.
-        let registeredTier: SecurityTier
-        var neverAutoApprove: Bool
+        var registeredTier: SecurityTier
         if toolName == CalendarRegistryModule.toolName && CalendarRegistryFeature.autoApproveEnabled {
             registeredTier = .notify
-            neverAutoApprove = false
         } else {
             registeredTier = tool.tier
-            neverAutoApprove = tool.neverAutoApprove
         }
-        // Mail organize Option A: batch (>1 id) archive/move forces human modal
-        // even though the tool stays registered as .notify for single-id UX.
+        // Mail organize: batch (>1 id) archive/move uses Request as the
+        // registered default for that invocation. Always Allow + operator
+        // overrides still win (#258 — no neverAutoApprove floor).
         if MailModule.forcesBatchHumanApproval(toolName: toolName, arguments: arguments) {
-            neverAutoApprove = true
+            registeredTier = .request
         }
+        let neverAutoApprove = tool.neverAutoApprove
         let effectiveTier = ToolRouter.resolveEffectiveTier(
             toolName: toolName,
             module: tool.module,
@@ -1110,8 +1109,9 @@ public actor ToolRouter {
     /// the two override layers, with precedence:
     ///   per-tool override  >  per-module override  >  registered default.
     ///
-    /// `neverAutoApprove` tools always resolve to `.request` — no override (tool
-    /// or module) can lower a step-up-consent tool below an explicit prompt.
+    /// `neverAutoApprove` is accepted for call-site compatibility and is **not**
+    /// an execution floor (#258). Confirm is the registered `.request` default
+    /// or an operator Tools-UI override; Always Allow persists Notify.
     ///
     /// Pure (reads UserDefaults snapshots passed in) so it is unit-testable
     /// without a live router or notification center.
@@ -1123,7 +1123,7 @@ public actor ToolRouter {
         toolOverrides: [String: String]? = nil,
         moduleOverrides: [String: String]? = nil
     ) -> SecurityTier {
-        if neverAutoApprove { return .request }
+        _ = neverAutoApprove
 
         let tools = toolOverrides ?? (UserDefaults.standard.dictionary(
             forKey: BridgeDefaults.tierOverrides

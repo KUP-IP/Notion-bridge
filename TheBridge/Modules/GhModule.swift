@@ -263,7 +263,6 @@ public enum GhModule {
             name: "gh_pr_review",
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
             description: "Submit a pull-request review via `gh pr review` (approve or request changes). Optional body. Does not create inline path/line comments — use gh_pr_comment for a top-level discussion comment.",
             inputSchema: schemaObj([
                 "number": intProp("PR number (required)."),

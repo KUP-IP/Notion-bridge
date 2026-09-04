@@ -70,7 +70,7 @@ func runCalendarRegistryModuleTests() async {
             throw TestError.assertion("calendar_registry_pair not registered")
         }
         try expect(tool.tier == .request, "tier must be .request")
-        try expect(tool.neverAutoApprove == true, "neverAutoApprove for attended smoke")
+        try expect(tool.neverAutoApprove == false, "Always Allow available for attended smoke")
         try expect(tool.module == "calendar", "family calendar")
     }
 

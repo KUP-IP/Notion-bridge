@@ -192,7 +192,7 @@ func runNotionWave2RESTTests() async {
                 throw TestError.assertion("missing \(name)")
             }
             try expect(tool.tier == .request, "\(name) must be request-tier")
-            try expect(tool.neverAutoApprove, "\(name) neverAutoApprove")
+            try expect(!tool.neverAutoApprove, "\(name) must offer Always Allow")
             let result = try await tool.handler(.object(["viewId": .string("x"), "pageId": .string("x"), "commentId": .string("x"), "confirm": .bool(false)]))
             guard case .object(let o) = result, case .string(let err)? = o["error"] else {
                 throw TestError.assertion("\(name) confirm:false must refuse")

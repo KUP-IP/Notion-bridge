@@ -194,9 +194,8 @@ public enum StandingOrdersModule {
         ToolRegistration(
             name: "standing_orders_delete",
             module: moduleName,
-            tier: .notify,
-            neverAutoApprove: true,
-            description: "Soft-delete a standing order by id (archives the row — it is not purged). Idempotent — deleting an already-archived order succeeds. Returns the archived {id, archived: true, archivedAt}.",
+            tier: .request,
+            description: "Soft-delete a standing order by id (archives the row — it is not purged). Idempotent — deleting an already-archived order succeeds. Returns the archived {id, archived: true, archivedAt}. Confirm offers Always Allow (sticky Notify).",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([

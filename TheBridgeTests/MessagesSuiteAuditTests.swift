@@ -11,7 +11,7 @@
 //   • per-tool argument hardening: wrong-type, empty-string, wrong-key.
 //   • camelCase schema-key convention (BridgeToolAliases / lint contract).
 //   • annotation coherence (every Messages tool has an explicit catalog
-//     entry; requiresConfirmation mirrors tier/neverAutoApprove).
+//     entry; requiresConfirmation mirrors registered Request tier).
 //   • messages_send confirm-gate + raw-chat-id reject + chat-id format
 //     handling — all network- and Messages.app-free (argument/guard layer
 //     only; NEVER a live send).
@@ -284,7 +284,7 @@ func runMessagesSuiteAuditTests() async {
             guard let a = ToolAnnotationCatalog.annotations(for: reg.name) else {
                 throw TestError.assertion("\(reg.name) has no annotation")
             }
-            let should = reg.tier == .request || reg.neverAutoApprove
+            let should = reg.tier == .request
             try expect(a.requiresConfirmation == should,
                        "\(reg.name): confirm=\(a.requiresConfirmation) tier=\(reg.tier.rawValue)")
         }

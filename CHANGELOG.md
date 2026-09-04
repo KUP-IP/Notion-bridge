@@ -2,6 +2,14 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Security UX (#258)** — Notify is the default registration tier. Confirm is
+  opt-in via registered `.request` or Tools pills. `neverAutoApprove` is no
+  longer an execution floor: overrides apply, and every Confirm notification
+  offers Always Allow (sticky Notify + module grant). `standing_orders_delete`
+  is registered Request so the first card can Always Allow. Mail batch
+  archive/move still defaults that invocation to Request, but Always Allow
+  and Tools overrides win. OAuth / tunnel / Mac TCC unchanged. Floor
+  **3967 → 3973** (+6). Not Installed or Released.
 - **Screen filenames (#256)** — Captures and recordings use Time Keepr–style
   `b-{ISOWeek}.{ISOWeekday}-{NN}.{ext}` (example Fri 2026-09-04:
   `b-36.5-01.png`, next same day `b-36.5-02.mp4`). Sequence is shared per

@@ -159,7 +159,12 @@
 #   injected America/Chicago, shared png+mp4 sequence, new-day reset,
 #   leftover epoch names ignored, cleanup keeps today / deletes prior day).
 #   Floor is main 3947 + net-new tests after rebase onto #253.
-FLOOR="${BRIDGE_TEST_FLOOR:-3967}"
+# 2026-09-04: 3967 → 3973 (+6) — #258 notify-default + Always Allow
+#   everywhere. Drop neverAutoApprove execution floor; Confirm cards always
+#   offer Always Allow; standing_orders_delete registered Request; default
+#   ToolRegistration tier is Notify. +6 SecurityGateUXTests. CI must
+#   re-measure.
+FLOOR="${BRIDGE_TEST_FLOOR:-3973}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

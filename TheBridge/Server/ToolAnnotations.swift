@@ -44,8 +44,8 @@ public struct BridgeToolAnnotations: Sendable, Equatable, Hashable {
     /// MCP `idempotentHint`. Sprint A · mcp-builder Top-15 #13 added this
     /// axis with the same hard-fail invariant as `requiresConfirmation`.
     public let idempotentHint: Bool
-    /// Dispatch is gated on human confirmation. Mirrors the existing
-    /// Bridge security model: `tier == .request` OR `neverAutoApprove`.
+    /// Dispatch is gated on human confirmation. Mirrors registered
+    /// `tier == .request` (#258 — `neverAutoApprove` is not a confirmation floor).
     public let requiresConfirmation: Bool
     /// Tool interacts with an open world of external entities (network,
     /// other apps, the wider machine) rather than a closed local domain.
@@ -217,7 +217,7 @@ public enum ToolAnnotationCatalog {
         // v3.7·H (PKT-961) + inbox management harden: Apple Mail family.
         // list/read/search/mailboxes/triage → read-only (.open).
         // draft/mark → .notify; move/archive → .notify + handler batch confirm MOVE/ARCHIVE.
-        // send → .request + confirm SEND; trash → .request + confirm DELETE + neverAutoApprove.
+        // send → .request + confirm SEND; trash → .request + confirm DELETE (Always Allow).
         // All openWorld (Mail.app is an external surface).
         "mail_archive": .init(readOnlyHint: false, destructiveHint: true, idempotentHint: false, requiresConfirmation: false, openWorld: true),
         "mail_draft": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),

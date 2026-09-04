@@ -6,7 +6,7 @@
 // - Request: actionable pre-execution approval (Allow / Deny / Always Allow)
 //   - Safe commands (read-only): auto-allow for shell/cli tools
 //   - Always Allow (notifications): persists tier override to Notify (not learned prefixes).
-//   - `neverAutoApprove` tools: no Always Allow action (use Tool Registry).
+//   - Every Confirm prompt offers Always Allow (#258). `neverAutoApprove` is not a product floor.
 //   - Alert fallback: Allow/Deny only — tier change via Tool Registry.
 // - Sensitive path: Allow = session; Always Allow = permanent path allow (no tier override).
 // - Nuclear handoff for fork bomb patterns only
@@ -273,8 +273,8 @@ public actor SecurityGate {
             return .allow
         case .request:
             // Learned command prefixes no longer bypass Request prompts — use Tool Registry
-            // (tier override) or per-call approval. `neverAutoApprove` tools use notification
-            // category NO_ALWAYS (no Always Allow action); alert fallback is Allow/Deny only.
+            // (tier override) or per-call approval. Every Confirm notification offers
+            // Always Allow (#258). Alert fallback stays Allow/Deny only.
             // `messages_send` is not special here: Open/Notify already returned
             // `.allow` above, so a remote Open override never reaches this prompt.
             return await requestToolTierApproval(
@@ -511,15 +511,14 @@ public actor SecurityGate {
         detail: String,
         neverAutoApprove: Bool
     ) async -> GateDecision {
-        // Consequence tools marked neverAutoApprove must show the complete
-        // payload prepared by requestDetail. Other Request tools — including
-        // `messages_send` and `mail_send` — keep the compact notification
-        // treatment. Do not re-special-case send into a forced NSAlert.
+        // Request-tier Confirm always offers Always Allow (#258). Full detail
+        // stays on the card so a former neverAuto / destructive tool is still
+        // reviewable; compact 120-char bodies remain for ordinary Request tools.
         let approvalBody = neverAutoApprove ? detail : String(detail.prefix(120))
         let decision = await approvalProvider.requestApproval(
             title: "The Bridge wants to \(toolName)",
             body: approvalBody,
-            allowAlwaysAllowAction: !neverAutoApprove,
+            allowAlwaysAllowAction: true,
             forceModalReview: false
         )
 

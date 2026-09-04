@@ -5,9 +5,7 @@
 // Read-only tools (snippets_list/get/search) are tier .open (FB-5: read-only
 // list/get/search tools execute without confirmation); the mutating tools
 // (create/update/rename/delete/import/export) remain tier .request.
-// snippets_delete carries neverAutoApprove (the existing
-// confirmation mechanism) — the formal ToolAnnotations field + ratchet audit
-// is WS-B's deliverable per Decision D1; wiring it here would do WS-B's job.
+// snippets_delete is Request-tier; Always Allow persists sticky Notify (#258).
 
 import Foundation
 import MCP
@@ -209,7 +207,6 @@ public enum SnippetsModule {
     private static func makeDelete(_ store: SnippetStore) -> ToolRegistration {
         ToolRegistration(
             name: "snippets_delete", module: moduleName, tier: .request,
-            neverAutoApprove: true,   // destructive — step-up consent (D1: formal destructiveHint = WS-B ratchet)
             description: "Delete a snippet by id → {ok}. Destructive; requires confirmation.",
             inputSchema: .object([
                 "type": .string("object"),

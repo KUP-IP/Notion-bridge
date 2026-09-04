@@ -102,7 +102,6 @@ public enum DoctrineSyncModule {
             name: toolName,
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
             description: "Refresh the local doctrine-core.md artifact used by bridge_initialize v2. "
                 + "This is the single request-tier writer for the doctrine core; without it, "
                 + "bridge_initialize returns an interim Quickload capsule.",

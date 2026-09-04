@@ -26,7 +26,6 @@ public enum CalendarRegistryModule {
             name: toolName,
             module: moduleName,
             tier: .request,
-            neverAutoApprove: true,
             description: """
             Pair one pre-existing Registry-authority Notion EVENT with one allowlisted \
             private local EventKit item (registry-first). Requires an attended approval \

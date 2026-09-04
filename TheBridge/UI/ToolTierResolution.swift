@@ -23,9 +23,9 @@ public enum ToolTierSource: Equatable, Sendable {
 
 /// Pure resolution of a tool's effective tier + its source. Mirrors
 /// `ToolRouter.resolveEffectiveTier` precedence exactly: per-tool override >
-/// per-module override > registered default. `neverAutoApprove` is not modelled
-/// here because `ToolInfo` (the UI struct) does not carry it; the router remains
-/// the authority for execution-time gating.
+/// per-module override > registered default. `neverAutoApprove` is ignored by
+/// both the UI and the router (#258), so Tools pills match runtime effective
+/// tier.
 public enum ToolTierResolution {
 
     /// Effective tier rawValue. Delegates to `ToolRouter.resolveEffectiveTier`

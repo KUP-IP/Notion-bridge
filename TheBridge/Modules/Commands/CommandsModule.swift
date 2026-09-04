@@ -249,7 +249,6 @@ public enum CommandsModule {
     private static func makeDelete(_ store: CommandStore) -> ToolRegistration {
         ToolRegistration(
             name: "commands_delete", module: moduleName, tier: .request,
-            neverAutoApprove: true,
             description: "Delete a Bridge Command by slug. Destructive; requires confirmation.",
             inputSchema: .object([
                 "type": .string("object"),

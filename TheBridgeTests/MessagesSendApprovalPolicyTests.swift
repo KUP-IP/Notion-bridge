@@ -240,7 +240,7 @@ func runMessagesSendApprovalPolicyTests() async {
         }
     }
 
-    await test("live mail_trash and snippets_delete remain neverAutoApprove") {
+    await test("live mail_trash and snippets_delete are Request without neverAutoApprove floor") {
         let router = ToolRouter(
             securityGate: SecurityGate(approvalProvider: TestSecurityApprovalProvider()),
             auditLog: AuditLog()
@@ -252,17 +252,17 @@ func runMessagesSendApprovalPolicyTests() async {
         let sendMail = await router.registrations(forModule: "mail").first { $0.name == "mail_send" }
         let snippets = await router.registrations(forModule: "snippets").first { $0.name == "snippets_delete" }
         let send = await router.registrations(forModule: "messages").first { $0.name == "messages_send" }
-        try expect(trash?.neverAutoApprove == true, "mail_trash must stay locked")
-        try expect(snippets?.neverAutoApprove == true, "snippets_delete must stay locked")
+        try expect(trash?.neverAutoApprove == false, "mail_trash Always Allow must be available")
+        try expect(snippets?.neverAutoApprove == false, "snippets_delete Always Allow must be available")
         try expect(sendMail?.neverAutoApprove == false && sendMail?.tier == .request,
-                   "mail_send is the sibling pattern: request without neverAutoApprove")
+                   "mail_send is request without neverAutoApprove")
         try expect(send?.neverAutoApprove == false && send?.tier == .request,
                    "messages_send must match mail_send: request without neverAutoApprove")
         try expect(trash?.tier == .request)
         try expect(snippets?.tier == .request)
     }
 
-    await test("neverAutoApprove tools stay locked while messages_send does not") {
+    await test("mail_trash and snippets_delete honor overrides like messages_send") {
         let send = ToolRouter.resolveEffectiveTier(
             toolName: "messages_send", module: "messages",
             registeredTier: .request, neverAutoApprove: false,
@@ -275,14 +275,14 @@ func runMessagesSendApprovalPolicyTests() async {
             registeredTier: .request, neverAutoApprove: true,
             toolOverrides: ["mail_trash": "open"], moduleOverrides: ["mail": "open"]
         )
-        try expect(trash == .request, "mail_trash must remain locked")
+        try expect(trash == .open, "mail_trash must honor an Open override")
 
         let snippets = ToolRouter.resolveEffectiveTier(
             toolName: "snippets_delete", module: "snippets",
             registeredTier: .request, neverAutoApprove: true,
             toolOverrides: ["snippets_delete": "notify"], moduleOverrides: ["snippets": "open"]
         )
-        try expect(snippets == .request, "snippets_delete must remain locked")
+        try expect(snippets == .notify, "snippets_delete must honor a Notify override")
     }
 
     await test("Gates UI no longer hosts a send-only approval card") {
