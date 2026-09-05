@@ -36,7 +36,7 @@ struct TheBridgeApp: App {
     /// Always non-nil — `loadMenuBarIcon()` degrades to an SF Symbol rather than
     /// returning nil / trapping (fix(sparkle), 2026-06-05).
     private let menuBarIcon: NSImage = loadMenuBarIcon()
-    @State private var approvalBadge = PendingApprovalBadgeCounter.shared
+    @State private var pendingConfirmCount: Int = PendingApprovalSurface.shared.pendingCount
 
     var body: some Scene {
         MenuBarExtra {
@@ -53,9 +53,14 @@ struct TheBridgeApp: App {
             // "NB" text fallback is no longer reachable — the resolver never
             // returns nil — but the icon is always present so the menu-bar item
             // stays clickable even with a corrupt resource bundle.
+            //
+            // Badge/title bind the surface count via NotificationCenter so a
+            // MenuBarExtra remount cannot show a stale 0 while a Confirm is
+            // still pending. Click does not clear this — only Deny / Allow /
+            // Always Allow or expiry does.
             ZStack(alignment: .topTrailing) {
                 Image(nsImage: menuBarIcon)
-                if approvalBadge.pendingCount > 0 {
+                if pendingConfirmCount > 0 {
                     Circle()
                         .fill(Color.red)
                         .frame(width: 7, height: 7)
@@ -64,10 +69,14 @@ struct TheBridgeApp: App {
                 }
             }
             .accessibilityLabel(
-                approvalBadge.pendingCount > 0
-                    ? "The Bridge, \(approvalBadge.pendingCount) Confirm waiting"
+                pendingConfirmCount > 0
+                    ? "The Bridge, \(pendingConfirmCount) Confirm waiting"
                     : "The Bridge"
             )
+            .onAppear { pendingConfirmCount = PendingApprovalSurface.shared.pendingCount }
+            .onReceive(NotificationCenter.default.publisher(for: .pendingApprovalSurfaceDidChange)) { _ in
+                pendingConfirmCount = PendingApprovalSurface.shared.pendingCount
+            }
         }
         .menuBarExtraStyle(.window)
     }

@@ -2,6 +2,16 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Confirm body on status-item click (#258 / #260 live-fail)** — Installed
+  main `c1f8fad` (PR #260) showed ATTENTION / "N Confirm waiting" then a
+  status-item click cleared the badge and never presented Deny / Allow /
+  Always Allow (0 AXButtons, popover window count 0). Confirm now lives in
+  a sticky panel (not MenuBarExtra-only): status-item click and a pending
+  Request open the same Allow / Always Allow / Deny path as
+  `SECURITY_APPROVAL`. Banner tap and swipe-away present the body — they
+  no longer Deny. Badge stays until the operator acts or the approval
+  expires. Always Allow still sticks Notify. OAuth / tunnel / TCC
+  unchanged. Floor **3983 → 3989** (+6). Not Installed or Released.
 - **Confirm delivery fallback (#258 live-verify)** — `#258` / PR 259 did **not**
   break the UN path: `standing_orders_delete` still posts `SECURITY_APPROVAL`
   and returns `awaiting_approval`. Remote origin is not a second gate. The

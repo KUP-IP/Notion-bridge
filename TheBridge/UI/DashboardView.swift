@@ -151,61 +151,7 @@ public struct DashboardView: View {
     /// UN banner (Focus / style None / content-extension hide) cannot
     /// stall a remote agent with ATTENTION=0.
     private var pendingApprovalSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(pendingApprovals) { prompt in
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "lock.shield")
-                            .font(.system(size: 12, weight: .semibold))
-                        Text("Confirm")
-                            .font(BridgeTokens.Typeface.micro.weight(.semibold))
-                            .textCase(.uppercase)
-                            .tracking(0.5)
-                        if prompt.origin == .remote {
-                            Text("remote")
-                                .font(BridgeTokens.Typeface.micro.weight(.semibold))
-                                .textCase(.uppercase)
-                                .tracking(0.4)
-                                .foregroundStyle(BridgeTokens.warnText)
-                        }
-                        Spacer(minLength: 4)
-                    }
-                    .foregroundStyle(BridgeTokens.warnText)
-                    Text(prompt.title)
-                        .font(BridgeTokens.Typeface.sub.weight(.semibold))
-                        .foregroundStyle(BridgeTokens.fg1)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(prompt.body)
-                        .font(BridgeTokens.Typeface.micro.monospaced())
-                        .foregroundStyle(BridgeTokens.fg3)
-                        .lineLimit(3)
-                    HStack(spacing: 6) {
-                        BridgeButton("Deny", variant: .danger) {
-                            PendingApprovalSurface.shared.submit(id: prompt.id, decision: .deny)
-                        }
-                        BridgeButton("Allow") {
-                            PendingApprovalSurface.shared.submit(id: prompt.id, decision: .allow)
-                        }
-                        if prompt.allowAlwaysAllow {
-                            BridgeButton("Always Allow", variant: .primary) {
-                                PendingApprovalSurface.shared.submit(id: prompt.id, decision: .alwaysAllow)
-                            }
-                        }
-                    }
-                }
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(BridgeTokens.warn.opacity(0.12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .strokeBorder(BridgeTokens.warn.opacity(0.28), lineWidth: 0.5)
-                        )
-                )
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel("Confirm \(prompt.toolName)")
-            }
-        }
+        ConfirmCardStack(prompts: pendingApprovals)
     }
 
     // MARK: - License banner

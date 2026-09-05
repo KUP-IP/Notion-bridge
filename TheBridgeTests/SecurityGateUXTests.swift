@@ -23,6 +23,7 @@
 
 import Foundation
 import AppKit
+import UserNotifications
 import MCP
 import TheBridgeLib
 
@@ -688,5 +689,154 @@ func runSecurityGateUXTests() async {
             plist.contains("<key>UNNotificationExtensionDefaultContentHidden</key>\n\t\t\t<false/>"),
             "DefaultContentHidden=false so compact banners still show title/body when the custom UI does not load"
         )
+    }
+
+    // ============================================================
+    // MARK: - Confirm body host (PR #260 live-fail: badge without actions)
+    // ============================================================
+
+    await test("pending Confirm status click presents Deny/Allow/Always Allow") {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        await MainActor.run { ConfirmPanelHost.shared.resetForTesting() }
+        PendingApprovalSurface.shared.publish(PendingApprovalPrompt(
+            id: "click-1",
+            title: "The Bridge wants to standing_orders_delete",
+            body: "id=c96df73d",
+            toolName: "standing_orders_delete",
+            allowAlwaysAllow: true,
+            origin: .remote
+        ))
+        try expect(StatusBarController.shouldPresentConfirmOnStatusItemClick(pendingCount: 1),
+                   "status-item click while pending must present Confirm")
+        let titles = await MainActor.run { () -> [String] in
+            ConfirmPanelHost.shared.handleStatusItemClick()
+            return ConfirmPanelHost.shared.visibleActionTitles
+        }
+        let presented = await MainActor.run { ConfirmPanelHost.shared.isPresented }
+        try expect(presented, "status-item click must open the Confirm body")
+        try expect(titles == ["Deny", "Allow", "Always Allow"],
+                   "Confirm body must show Deny/Allow/Always Allow, got \(titles)")
+        try expect(PendingApprovalSurface.shared.pendingCount == 1,
+                   "click must not clear the pending Confirm")
+    }
+
+    await test("badge stays until Confirm is resolved") {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        await MainActor.run { ConfirmPanelHost.shared.resetForTesting() }
+        PendingApprovalSurface.shared.publish(PendingApprovalPrompt(
+            id: "badge-1",
+            title: "The Bridge wants to standing_orders_delete",
+            body: "id=keep",
+            toolName: "standing_orders_delete",
+            allowAlwaysAllow: true,
+            origin: .remote
+        ))
+        await MainActor.run { ConfirmPanelHost.shared.handleStatusItemClick() }
+        let badgeAfterClick = await MainActor.run { ConfirmPanelHost.shared.badgeCount }
+        try expect(badgeAfterClick == 1, "badge must survive status-item click, got \(badgeAfterClick)")
+        await MainActor.run { ConfirmPanelHost.shared.handlePresentBodyRequest() }
+        try expect(PendingApprovalSurface.shared.pendingCount == 1,
+                   "present-body must not clear the badge")
+        await MainActor.run { ConfirmPanelHost.shared.handleStatusItemClick() }
+        try expect(await MainActor.run { ConfirmPanelHost.shared.isPresented },
+                   "second click while pending must keep the body open")
+        try expect(PendingApprovalSurface.shared.pendingCount == 1)
+    }
+
+    await test("Always Allow from Confirm body sticks Notify") {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        await MainActor.run { ConfirmPanelHost.shared.resetForTesting() }
+        let overridesKey = BridgeDefaults.tierOverrides
+        let prior = UserDefaults.standard.dictionary(forKey: overridesKey)
+        defer {
+            if let prior {
+                UserDefaults.standard.set(prior, forKey: overridesKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: overridesKey)
+            }
+        }
+        var cleared = UserDefaults.standard.dictionary(forKey: overridesKey) as? [String: String] ?? [:]
+        cleared.removeValue(forKey: "standing_orders_delete")
+        UserDefaults.standard.set(cleared, forKey: overridesKey)
+
+        let prompt = PendingApprovalPrompt(
+            id: "aa-1",
+            title: "The Bridge wants to standing_orders_delete",
+            body: "id=sticky",
+            toolName: "standing_orders_delete",
+            allowAlwaysAllow: true,
+            origin: .remote
+        )
+        PendingApprovalSurface.shared.publish(prompt)
+        let approvalManager = NotificationApprovalManager(approvalTimeout: 1)
+        await MainActor.run { ConfirmPanelHost.shared.handleStatusItemClick() }
+        try expect(await MainActor.run { ConfirmPanelHost.shared.visibleActionTitles.contains("Always Allow") })
+        PendingApprovalSurface.shared.submit(id: prompt.id, decision: .alwaysAllow)
+        _ = approvalManager
+        try expect(PendingApprovalSurface.shared.pendingCount == 0,
+                   "Always Allow must clear the Confirm surface")
+        let stored = UserDefaults.standard.dictionary(forKey: overridesKey) as? [String: String] ?? [:]
+        try expect(stored["standing_orders_delete"] == SecurityTier.notify.rawValue,
+                   "Always Allow must persist Notify, got \(stored["standing_orders_delete"] ?? "nil")")
+        await MainActor.run { ConfirmPanelHost.shared.handleSurfaceChange() }
+        try expect(await MainActor.run { ConfirmPanelHost.shared.isPresented } == false,
+                   "resolved Confirm must hide the body")
+    }
+
+    await test("notification default tap and dismiss present body, do not Deny") {
+        try expect(
+            ConfirmPresentation.outcome(forNotificationActionIdentifier: UNNotificationDefaultActionIdentifier)
+                == .presentBody,
+            "banner tap must open Confirm, not Deny"
+        )
+        try expect(
+            ConfirmPresentation.outcome(forNotificationActionIdentifier: UNNotificationDismissActionIdentifier)
+                == .presentBody,
+            "banner dismiss must not clear pending"
+        )
+        try expect(
+            ConfirmPresentation.outcome(forNotificationActionIdentifier: "ALLOW_ACTION")
+                == .resolve(.allow)
+        )
+        try expect(
+            ConfirmPresentation.outcome(forNotificationActionIdentifier: "ALWAYS_ALLOW")
+                == .resolve(.alwaysAllow)
+        )
+        try expect(
+            ConfirmPresentation.outcome(forNotificationActionIdentifier: "CANCEL_ACTION")
+                == .resolve(.deny)
+        )
+    }
+
+    await test("remote Request publish auto-presents Confirm body") {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        await MainActor.run { ConfirmPanelHost.shared.resetForTesting() }
+        PendingApprovalSurface.shared.publish(PendingApprovalPrompt(
+            id: "auto-1",
+            title: "The Bridge wants to standing_orders_delete",
+            body: "id=remote",
+            toolName: "standing_orders_delete",
+            allowAlwaysAllow: true,
+            origin: .remote
+        ))
+        let titles = await MainActor.run { () -> [String] in
+            ConfirmPanelHost.shared.handleSurfaceChange()
+            return ConfirmPanelHost.shared.visibleActionTitles
+        }
+        try expect(await MainActor.run { ConfirmPanelHost.shared.isPresented })
+        try expect(await MainActor.run { ConfirmPanelHost.shared.lastPresentReason } == .pendingRequest)
+        try expect(titles.contains("Always Allow"))
+        try expect(PendingApprovalSurface.shared.pendingCount == 1,
+                   "auto-present must not clear pending")
+    }
+
+    await test("test process never opens a live Confirm NSPanel") {
+        try expect(ConfirmPanelController.canPresentPanel == false,
+                   "TheBridgeTests must not create a WindowServer Confirm panel")
+        try expect(ConfirmPanelController.windowTitle == "Confirm")
     }
 }

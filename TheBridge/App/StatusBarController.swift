@@ -110,6 +110,11 @@ public final class StatusBarController {
     /// Retained to allow cleanup if needed.
     private var eventMonitor: Any?
 
+    /// Left-click monitor: when a Confirm is pending, present the sticky
+    /// body instead of letting MenuBarExtra toggle (and miss) its popover.
+    private var confirmClickMonitor: Any?
+    private var confirmClickHandler: (() -> Void)?
+
     /// Set up a right-click context menu with "Quit The Bridge" action.
     /// Uses a local event monitor to detect right-clicks on any NSStatusBarButton,
     /// then presents the context menu at the click location.
@@ -117,14 +122,44 @@ public final class StatusBarController {
     /// to ensure MenuBarExtra has created its status item.
     public func setupContextMenu() {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseUp) { [weak self] event in
-            // Only trigger on clicks targeting a status bar button
+            // Status bar / MenuBarExtra only — never the Confirm panel.
             guard event.window?.className.contains("NSStatusBar") == true
-                  || event.window is NSPanel else {
+                  || (event.window is NSPanel
+                      && event.window?.title != ConfirmPanelController.windowTitle) else {
                 return event
             }
             self?.showContextMenu(at: event)
             return nil  // Consume the event
         }
+    }
+
+    /// When a Request is pending, a status-item click must open the Confirm
+    /// body (Deny / Allow / Always Allow) and must not clear the badge.
+    /// Consumes the click so MenuBarExtra cannot dismiss ATTENTION without
+    /// presenting. Pass-through when nothing is pending.
+    public func setupConfirmClickHandler(_ handler: @escaping () -> Void) {
+        confirmClickHandler = handler
+        confirmClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard Self.isStatusItemEvent(event) else { return event }
+            guard PendingApprovalSurface.shared.pendingCount > 0 else { return event }
+            Task { @MainActor in
+                self?.confirmClickHandler?()
+            }
+            return nil
+        }
+    }
+
+    /// Test seam: status-bar button only — never the Confirm NSPanel
+    /// (consuming those clicks would eat Deny / Allow / Always Allow).
+    /// `nonisolated` so the NSEvent monitor and the test harness can call
+    /// it under `-strict-concurrency=complete`.
+    public nonisolated static func isStatusItemEvent(_ event: NSEvent) -> Bool {
+        event.window?.className.contains("NSStatusBar") == true
+    }
+
+    /// Test seam: status-item click while a Confirm is pending.
+    public nonisolated static func shouldPresentConfirmOnStatusItemClick(pendingCount: Int) -> Bool {
+        pendingCount > 0
     }
 
     /// Build and display the context menu at the event location.

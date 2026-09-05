@@ -168,7 +168,12 @@
 #   fallback. Menu-bar Confirm + ATTENTION for in-flight Request (remote
 #   and local); DefaultContentHidden=false; request userInfo. +10
 #   SecurityGateUXTests. CI must re-measure.
-FLOOR="${BRIDGE_TEST_FLOOR:-3983}"
+# 2026-09-04: 3983 → 3989 (+6) — #260 live-fail Confirm body. Status-item
+#   click / pending Request presents Deny/Allow/Always Allow; badge not
+#   cleared until resolved; banner default/dismiss present-body not Deny;
+#   Always Allow still sticky Notify. +6 SecurityGateUXTests. CI must
+#   re-measure.
+FLOOR="${BRIDGE_TEST_FLOOR:-3989}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

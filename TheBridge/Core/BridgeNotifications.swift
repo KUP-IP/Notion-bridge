@@ -59,6 +59,10 @@ public extension Notification.Name {
     /// Operator tapped Allow / Always Allow / Deny on the menu-bar Confirm card.
     /// `NotificationApprovalManager` resumes the same path as SECURITY_APPROVAL.
     static let pendingApprovalSurfaceSubmit = Notification.Name("com.notionbridge.pendingApprovalSurfaceSubmit")
+
+    /// Banner tap / swipe-away / ATTENTION click — present the Confirm body
+    /// without resolving. Observers (AppDelegate) show the sticky panel.
+    static let pendingApprovalSurfacePresentBody = Notification.Name("com.notionbridge.pendingApprovalSurfacePresentBody")
 }
 
 /// `userInfo` key on `.cloudAccessEnabledDidChange` carrying the new
