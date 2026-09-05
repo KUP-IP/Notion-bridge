@@ -13,7 +13,7 @@ import SwiftUI
 public final class ConfirmPanelController {
     public static let shared = ConfirmPanelController()
 
-    public static let windowTitle = "Confirm"
+    public nonisolated static let windowTitle = "Confirm"
 
     private var panel: NSPanel?
 
@@ -83,7 +83,9 @@ public final class ConfirmPanelController {
     }
 
     /// Real NSPanel only in the bundled app — never in TheBridgeTests.
-    public static var canPresentPanel: Bool {
+    /// `nonisolated` so SecurityGateUXTests can read it off the main actor
+    /// under `-strict-concurrency=complete`.
+    public nonisolated static var canPresentPanel: Bool {
         let processName = ProcessInfo.processInfo.processName.lowercased()
         if processName.contains("thebridgetests") || processName.contains("notionbridgetests") {
             return false

@@ -151,12 +151,14 @@ public final class StatusBarController {
 
     /// Test seam: status-bar button only — never the Confirm NSPanel
     /// (consuming those clicks would eat Deny / Allow / Always Allow).
-    public static func isStatusItemEvent(_ event: NSEvent) -> Bool {
+    /// `nonisolated` so the NSEvent monitor and the test harness can call
+    /// it under `-strict-concurrency=complete`.
+    public nonisolated static func isStatusItemEvent(_ event: NSEvent) -> Bool {
         event.window?.className.contains("NSStatusBar") == true
     }
 
     /// Test seam: status-item click while a Confirm is pending.
-    public static func shouldPresentConfirmOnStatusItemClick(pendingCount: Int) -> Bool {
+    public nonisolated static func shouldPresentConfirmOnStatusItemClick(pendingCount: Int) -> Bool {
         pendingCount > 0
     }
 
