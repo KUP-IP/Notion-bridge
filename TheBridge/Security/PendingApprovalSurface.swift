@@ -4,9 +4,9 @@
 // Request-tier approvals are posted as UN notifications. On a menu-bar
 // (LSUIElement) app those banners are easy to miss: Focus, notification
 // style None, Time Sensitive not enabled, or a content extension that
-// hides default title/body. After 25s the MCP caller gets
-// `awaiting_approval` while ATTENTION stayed 0 and the menu bar had no
-// Confirm card — especially for remote-origin (cloud) sessions.
+// hides default title/body. The MCP caller now gets `awaiting_approval`
+// immediately (#263) while this surface keeps ATTENTION > 0 and the
+// menu-bar Confirm card — especially for remote-origin (cloud) sessions.
 //
 // This surface is origin-agnostic. SecurityGate publishes as soon as a
 // Confirm is requested (local or remote). The Dashboard popover and

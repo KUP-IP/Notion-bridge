@@ -2,6 +2,13 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Request-tier `awaiting_approval` (#263)** — Remote `standing_orders_delete`
+  (and every other Request-tier tool) no longer blocks the MCP caller on a
+  25s UN wait or LSUIElement `NSAlert`. The first call with clean prefs
+  returns `{ approvalStatus: "awaiting_approval" }` without running the
+  handler. Explicit Allow / Always Allow is a one-shot retry ticket; Always
+  Allow still persists Notify. Does not change #264 (notify sticky without
+  Always Allow) or #262 (Confirm UX). Not Installed or Released.
 - **Calendar free/busy v0 (Isaiah GO 2026-09-06)** — Read-only
   `calendar_free_busy` on the existing EventKit `calendar_*` family.
   Occupancy SSOT is the FOCUS EventKit id

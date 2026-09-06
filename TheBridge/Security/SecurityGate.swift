@@ -773,18 +773,22 @@ public struct ApprovalCoalescer: Sendable {
 // MARK: - NotificationApprovalManager
 
 /// Manages UNUserNotificationCenter-based approval flow.
-/// Falls back to synchronous NSAlert if notification permission is denied.
-/// Thread safety: NSLock via nonisolated synchronous helpers (Swift 6 safe).
+/// MCP Request-tier calls return `.pending` immediately (Confirm + optional
+/// banner stay up). Do not fall back to blocking NSAlert on that path —
+/// accessory / LSUIElement alerts can auto-resolve and skip `awaiting_approval`.
+/// `forceModalReview` still uses NSAlert. Thread safety: NSLock via
+/// nonisolated synchronous helpers (Swift 6 safe).
 public final class NotificationApprovalManager: NSObject, @unchecked Sendable, UNUserNotificationCenterDelegate, SecurityApprovalProviding {
 
     public typealias ApprovalDecision = SecurityApprovalDecision
 
     private let center: UNUserNotificationCenter?
     private var hasPermission: Bool = false
-    /// How long an MCP caller waits before receiving `awaiting_approval`.
-    /// Must stay under typical MCP client timeouts (~60s). The on-device
-    /// prompt remains until Allow/Deny — this is not an auto-deny.
-    /// Injectable for deterministic tests.
+    /// Historical wait before `awaiting_approval` (issue #184). Kept as a
+    /// test-seam initializer argument. #263: the MCP caller must not block
+    /// here — a mid-wait Allow / Always Allow (including LSUIElement NC
+    /// misfire) executed the handler on the first call and never returned
+    /// `awaiting_approval`. The prompt still stays until Allow/Deny.
     private let approvalTimeout: TimeInterval
     private let lateDecisionTTL: TimeInterval = 120
 
@@ -846,8 +850,10 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
     }
 
     /// Timeout-injecting designated initializer (test seam).
-    /// Production waits 25s then returns `.pending` so MCP clients (~60s)
-    /// receive `awaiting_approval` instead of JSON-RPC -32001. The prompt stays.
+    /// Production returns `.pending` immediately after publishing the Confirm
+    /// so the first MCP response is `awaiting_approval` (#263). The prompt
+    /// stays; Allow is a one-shot retry ticket. `approvalTimeout` is retained
+    /// for call-site compatibility and is not a blocking wait.
     public init(approvalTimeout: TimeInterval) {
         self.approvalTimeout = approvalTimeout
         if Self.canUseUserNotifications {
@@ -1291,7 +1297,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         if granted {
             print("[SecurityGate] Notification permission active (authorizationStatus=\(settings.authorizationStatus.rawValue))")
         } else {
-            print("[SecurityGate] Notification permission not granted — NSAlert fallback will be used (authorizationStatus=\(settings.authorizationStatus.rawValue))")
+            print("[SecurityGate] Notification permission not granted — Confirm surface pending (no NSAlert MCP wait) (authorizationStatus=\(settings.authorizationStatus.rawValue))")
         }
     }
 
@@ -1306,32 +1312,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         if forceModalReview {
             return await requestViaAlert(title: title, body: body)
         }
-        // PKT-548: Diagnostic log to surface which approval path is chosen.
-        // Helps diagnose cases where Request-tier tool calls fall back to NSAlert
-        // despite notifications being granted at the OS level.
-        let path = hasPermission ? "notification" : "alert-fallback"
-        print("[SecurityGate] Approval path: \(path) for \(title)")
-        if hasPermission {
-            return await requestViaNotification(
-                title: title,
-                body: body,
-                allowAlwaysAllowAction: allowAlwaysAllowAction
-            )
-        } else {
-            return await requestViaAlert(title: title, body: body)
-        }
-    }
 
-    private func requestViaNotification(
-        title: String,
-        body: String,
-        allowAlwaysAllowAction: Bool
-    ) async -> ApprovalDecision {
-        guard let center else {
-            return await requestViaAlert(title: title, body: body)
-        }
-
-        let identifier = UUID().uuidString
         // fb-securitygate (point 2): coalesce identical concurrent prompts. The
         // key folds in whether the prompt offers Always Allow so a NO_ALWAYS
         // prompt never silently inherits an Always-Allow-capable one's answer.
@@ -1350,22 +1331,43 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             return .pending
         }
 
-        // Phase 1 (synchronous): claim or join the prompt BEFORE any await so a
-        // concurrent burst deterministically elects exactly one owner.
+        let identifier = UUID().uuidString
         let reservation = reserveCoalesced(coalesceKey: coalesceKey, identifier: identifier)
-
-        guard reservation.isFirst else {
-            // Joined an in-flight prompt — do NOT post a second notification.
-            // Park and await the shared decision (resolved by the owner's
-            // delegate/timeout path via drainCoalescedWaiters).
+        if !reservation.isFirst {
+            // Joined an in-flight prompt — do NOT post a second notification
+            // and do NOT wait. The first MCP response must be pending (#263).
             print("[SecurityGate] Coalesced into in-flight approval prompt: \(title)")
-            return await withCheckedContinuation { continuation in
-                parkCoalescedWaiter(token: reservation.waiterToken, continuation: continuation)
-            }
+            return .pending
         }
 
-        // Phase 2 (owner): post the notification (await OUTSIDE any spawned Task
-        // so the non-Sendable `center` is never captured into a child closure).
+        // #263: never block the MCP caller on UN wait or NSAlert. A mid-wait
+        // Allow / Always Allow (NC misfire, LSUIElement alert auto-dismiss)
+        // executed the handler on the first remote call and skipped
+        // `awaiting_approval`. Publish Confirm + optional banner, then return
+        // `.pending`. Explicit Allow is a one-shot late ticket for the retry.
+        let useNotification = hasPermission && center != nil
+        let path = useNotification ? "notification-pending" : "confirm-surface-pending"
+        print("[SecurityGate] Approval path: \(path) for \(title)")
+        if useNotification {
+            await postApprovalNotification(
+                identifier: identifier,
+                title: title,
+                body: body,
+                allowAlwaysAllowAction: allowAlwaysAllowAction
+            )
+        }
+        markTimedOutPending(identifier: identifier)
+        print("[SecurityGate] Request-tier returned pending immediately (timeout seam \(Int(approvalTimeout))s is not a wait)")
+        return .pending
+    }
+
+    private func postApprovalNotification(
+        identifier: String,
+        title: String,
+        body: String,
+        allowAlwaysAllowAction: Bool
+    ) async {
+        guard let center else { return }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
@@ -1375,8 +1377,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             : Self.categoryIdentifierNoAlways
         // fb-securitygate (point 3): a pre-execution approval is not
         // informational — raise it to time-sensitive so macOS surfaces it even
-        // under Focus / Do Not Disturb, making the silent-timeout failure mode
-        // far harder to miss.
+        // under Focus / Do Not Disturb.
         content.interruptionLevel = .timeSensitive
         // PKT-553 content-extension contract — Request banners previously
         // omitted userInfo, so DefaultContentHidden extensions rendered empty.
@@ -1393,42 +1394,12 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
                 : Self.categoryIdentifierNoAlways
         ]
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
-
         do {
             try await center.add(request)
         } catch {
             print("[SecurityGate] Failed to deliver notification: \(error.localizedDescription)")
-            // Owner + every joined waiter fall back to the synchronous alert so
-            // none of them hang. The owner's decision is shared with the group.
-            let decision = await requestViaAlert(title: title, body: body)
-            let waiters = drainCoalescedWaiters(forIdentifier: identifier, decision: decision)
-            for w in waiters { w.resume(returning: decision) }
-            return decision
-        }
-
-        // Phase 3 (owner): await the user's answer. After `approvalTimeout` the
-        // MCP caller receives `.pending` (awaiting_approval) instead of deny, so
-        // clients under ~60s do not hit JSON-RPC -32001. The prompt stays up;
-        // a later Allow is stored as a one-shot ticket for the retry.
-        // `self` is the only capture in the timeout Task — `center`/`request`
-        // are not — so it is concurrency-clean.
-        return await withCheckedContinuation { continuation in
-            storePending(forKey: identifier, continuation: continuation)
-            Task { [weak self] in
-                guard let self else { return }
-                try? await Task.sleep(for: .seconds(self.approvalTimeout))
-                // Only acts if still pending — a user answer already removed it.
-                if let owner = self.removePending(forKey: identifier) {
-                    self.markTimedOutPending(identifier: identifier)
-                    let waiters = self.takeWaitersKeepingInFlight(
-                        forIdentifier: identifier,
-                        decision: .pending
-                    )
-                    owner.resume(returning: .pending)
-                    for w in waiters { w.resume(returning: .pending) }
-                    print("[SecurityGate] Approval wait \(Int(self.approvalTimeout))s elapsed — awaiting_approval (\(waiters.count + 1) caller(s)); prompt still open")
-                }
-            }
+            // Confirm surface remains; do not fall back to NSAlert (LSUIElement
+            // accessory alerts can auto-resolve and skip awaiting_approval).
         }
     }
 

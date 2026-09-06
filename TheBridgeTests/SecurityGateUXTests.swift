@@ -13,8 +13,9 @@
 //         · ToolRouter.resolveEffectiveTier: per-tool > per-module > default
 //           precedence. neverAutoApprove is not an execution floor (#258).
 //   (3) make the approval UX less easy to miss than the silent 30s timeout —
-//       MCP callers wait 25s then receive awaiting_approval (not auto-deny);
-//       prompts are posted time-sensitive; the wait is injectable so tests stay fast.
+//       MCP callers receive awaiting_approval immediately (#263) so a mid-wait
+//       Allow cannot execute the handler on the first call; prompts are
+//       posted time-sensitive; approvalTimeout remains a test-seam argument.
 //   (4) #258 live-verify: remote-origin Request publishes a menu-bar Confirm
 //       surface + ATTENTION count even when the UN banner is not visible.
 //
@@ -839,4 +840,204 @@ func runSecurityGateUXTests() async {
                    "TheBridgeTests must not create a WindowServer Confirm panel")
         try expect(ConfirmPanelController.windowTitle == "Confirm")
     }
+
+    // ============================================================
+    // MARK: - #263 Request-tier first call must return awaiting_approval
+    // ============================================================
+
+    await test("NAM requestApproval returns pending immediately (no UN wait, no NSAlert)") {
+        let mgr = NotificationApprovalManager(approvalTimeout: 8)
+        let title = "The Bridge wants to standing_orders_delete"
+        let body = "id=issue-263-immediate-\(UUID().uuidString)"
+        let start = ContinuousClock.now
+        let decision = await mgr.requestApproval(
+            title: title,
+            body: body,
+            allowAlwaysAllowAction: true,
+            forceModalReview: false
+        )
+        let elapsed = start.duration(to: ContinuousClock.now)
+        let ms = Double(elapsed.components.seconds) * 1000
+            + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000.0
+        guard case .pending = decision else {
+            throw TestError.assertion("first Request must be pending, got \(decision)")
+        }
+        try expect(ms < 1500, "must not wait approvalTimeout or runModal, took \(Int(ms))ms")
+    }
+
+    await test("NAM late Always Allow ticket is consumed on retry") {
+        try await withCleanStandingOrderTierOverrides {
+        PendingApprovalSurface.shared.resetForTesting()
+        defer { PendingApprovalSurface.shared.resetForTesting() }
+        let mgr = NotificationApprovalManager(approvalTimeout: 8)
+        let title = "The Bridge wants to standing_orders_delete"
+        let body = "id=issue-263-late-aa"
+        let prompt = PendingApprovalPrompt(
+            id: "263-late-aa",
+            title: title,
+            body: body,
+            toolName: "standing_orders_delete",
+            allowAlwaysAllow: true,
+            origin: .remote
+        )
+        PendingApprovalSurface.shared.publish(prompt)
+        let first = await mgr.requestApproval(
+            title: title, body: body,
+            allowAlwaysAllowAction: true, forceModalReview: false
+        )
+        guard case .pending = first else {
+            throw TestError.assertion("first NAM call must be pending, got \(first)")
+        }
+        mgr.applySurfaceDecision(id: prompt.id, decision: .alwaysAllow)
+        let second = await mgr.requestApproval(
+            title: title, body: body,
+            allowAlwaysAllowAction: true, forceModalReview: false
+        )
+        guard case .alwaysAllow = second else {
+            throw TestError.assertion("retry must consume late Always Allow, got \(second)")
+        }
+        }
+    }
+
+    await test("#263 clean prefs + remote Request delete returns awaiting_approval and does not archive") {
+        try await withCleanStandingOrderTierOverrides {
+            let storeURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("nb-so-263-\(UUID().uuidString).json")
+            let store = StandingOrdersRecordStore(storeURL: storeURL)
+            let created = try await store.save(
+                title: "263-probe", body: "safe to archive", scope: .global
+            )
+            let provider = TestSecurityApprovalProvider(decision: .pending)
+            let log = AuditLog()
+            let gate = SecurityGate(approvalProvider: provider)
+            let router = ToolRouter(securityGate: gate, auditLog: log)
+            await StandingOrdersModule.register(on: router, store: store)
+
+            let result = try await router.dispatch(
+                toolName: "standing_orders_delete",
+                arguments: .object(["id": .string(created.id)]),
+                context: ToolDispatchContext(
+                    transportSessionId: ToolDispatchContext.remoteConnectorJSONSessionID,
+                    origin: .remote,
+                    client: "remote-connector"
+                )
+            )
+            guard case .object(let object) = result else {
+                throw TestError.assertion("awaiting_approval must be an object, got \(result)")
+            }
+            try expect(object["approvalStatus"] == .string("awaiting_approval"),
+                       "clean-prefs Request must return awaiting_approval, got \(object)")
+            try expect(object["sent"] == .bool(false))
+            try expect(object["consequencePossible"] == .bool(false))
+            try expect(object["resume"] != nil)
+
+            let stillListed = await store.list()
+            try expect(stillListed.contains(where: { $0.id == created.id }),
+                       "handler must not archive before Allow")
+            let awaiting = await log.entries(withStatus: .awaiting)
+            try expect(awaiting.count == 1, "audit must record awaiting, got \(awaiting.count)")
+            try expect(awaiting.first?.toolName == "standing_orders_delete")
+            try expect(awaiting.first?.tier == .request)
+            try expect(awaiting.first?.origin == .remote)
+            try expect(provider.approvalRequestCount == 1)
+            let approved = await log.entries(withStatus: .approved)
+            try expect(approved.isEmpty, "approved must wait for explicit Allow")
+        }
+    }
+
+    await test("#263 Always Allow then retry archives and sticks Notify") {
+        try await withCleanStandingOrderTierOverrides {
+            let storeURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("nb-so-263-aa-\(UUID().uuidString).json")
+            let store = StandingOrdersRecordStore(storeURL: storeURL)
+            let created = try await store.save(
+                title: "263-aa", body: "safe to archive", scope: .global
+            )
+            let provider = SequenceApprovalProvider([.pending, .alwaysAllow])
+            let log = AuditLog()
+            let gate = SecurityGate(approvalProvider: provider)
+            let router = ToolRouter(securityGate: gate, auditLog: log)
+            await StandingOrdersModule.register(on: router, store: store)
+            let remote = ToolDispatchContext(
+                transportSessionId: ToolDispatchContext.remoteConnectorJSONSessionID,
+                origin: .remote,
+                client: "remote-connector"
+            )
+            let args = Value.object(["id": .string(created.id)])
+
+            let first = try await router.dispatch(
+                toolName: "standing_orders_delete", arguments: args, context: remote
+            )
+            guard case .object(let pendingObject) = first else {
+                throw TestError.assertion("first call must be an object")
+            }
+            try expect(pendingObject["approvalStatus"] == .string("awaiting_approval"))
+            try expect(await store.list().contains(where: { $0.id == created.id }),
+                       "first call must not archive")
+
+            let second = try await router.dispatch(
+                toolName: "standing_orders_delete", arguments: args, context: remote
+            )
+            guard case .object(let allowed) = second else {
+                throw TestError.assertion("retry after Always Allow must be an object")
+            }
+            try expect(allowed["approvalStatus"] == nil,
+                       "handler result must not look like awaiting_approval")
+            try expect(allowed["ok"] == .bool(true), "retry must run the delete handler")
+            try expect(await store.list(includeArchived: false).isEmpty,
+                       "Always Allow + retry must archive")
+            try expect(await store.list(includeArchived: true).contains(where: { $0.id == created.id }))
+
+            let awaiting = await log.entries(withStatus: .awaiting)
+            let approved = await log.entries(withStatus: .approved)
+            try expect(awaiting.count == 1, "pending audit stays awaiting")
+            try expect(approved.count == 1, "explicit Always Allow retry is approved")
+            try expect(approved.first?.tier == .request,
+                       "retry still audited at request until override is read on a later call")
+
+            let stored = UserDefaults.standard.dictionary(forKey: BridgeDefaults.tierOverrides)
+                as? [String: String] ?? [:]
+            try expect(stored["standing_orders_delete"] == SecurityTier.notify.rawValue,
+                       "Always Allow must persist Notify, got \(stored["standing_orders_delete"] ?? "nil")")
+            let modules = UserDefaults.standard.dictionary(forKey: BridgeDefaults.moduleTierOverrides)
+                as? [String: String] ?? [:]
+            try expect(modules["standing_orders"] == SecurityTier.notify.rawValue,
+                       "Always Allow must persist module Notify")
+        }
+    }
+}
+
+private func withCleanStandingOrderTierOverrides(_ body: () async throws -> Void) async throws {
+    let toolKey = BridgeDefaults.tierOverrides
+    let moduleKey = BridgeDefaults.moduleTierOverrides
+    let governedKey = BridgeDefaults.brokerRemoteGovernedSessionRequired
+    let previousTool = UserDefaults.standard.object(forKey: toolKey)
+    let previousModule = UserDefaults.standard.object(forKey: moduleKey)
+    let previousGoverned = UserDefaults.standard.object(forKey: governedKey)
+    defer {
+        if let previousTool {
+            UserDefaults.standard.set(previousTool, forKey: toolKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: toolKey)
+        }
+        if let previousModule {
+            UserDefaults.standard.set(previousModule, forKey: moduleKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: moduleKey)
+        }
+        if let previousGoverned {
+            UserDefaults.standard.set(previousGoverned, forKey: governedKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: governedKey)
+        }
+    }
+    var tools = UserDefaults.standard.dictionary(forKey: toolKey) as? [String: String] ?? [:]
+    tools.removeValue(forKey: "standing_orders_delete")
+    UserDefaults.standard.set(tools, forKey: toolKey)
+    var modules = UserDefaults.standard.dictionary(forKey: moduleKey) as? [String: String] ?? [:]
+    modules.removeValue(forKey: "standing_orders")
+    UserDefaults.standard.set(modules, forKey: moduleKey)
+    // Isolate the Request-tier contract from the broker governed-session gate.
+    UserDefaults.standard.set(false, forKey: governedKey)
+    try await body()
 }
