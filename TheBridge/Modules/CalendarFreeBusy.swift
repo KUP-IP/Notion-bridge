@@ -15,7 +15,24 @@ import Foundation
 public enum CalendarFreeBusy {
 
     /// FOCUS EventKit calendar identifier (Isaiah GO 2026-09-06 default).
+    /// This is the only implicit target — `calendar_free_busy` never queries
+    /// "all calendars".
     public static let focusCalendarId = "A33CAC6E-9D15-44F4-BC35-54F204F4DA39"
+
+    /// Resolve the target calendar. Omitted / blank → FOCUS id above.
+    /// Never returns an empty id (that would silently scan every calendar).
+    public static func resolveCalendarId(_ raw: String?) -> String {
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? focusCalendarId : trimmed
+    }
+
+    /// Fail closed unless the target calendar is present in the store list.
+    /// A missing calendar must not be reported as "free" (empty busy).
+    public static func requireKnownCalendar(id: String, calendars: [CalendarInfo]) throws {
+        guard calendars.contains(where: { $0.id == id }) else {
+            throw CalendarModuleError.calendarNotFound(id)
+        }
+    }
 
     /// Compact busy interval returned to MCP callers.
     public struct BusyEvent: Sendable, Equatable {

@@ -27,6 +27,9 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
     private(set) var items: [String: CalendarEvent] = [:]
     private var seq = 0
     private(set) var lastSpan: CalendarEventSpan = .thisEvent
+    private(set) var createCount = 0
+    private(set) var updateCount = 0
+    private(set) var deleteCount = 0
 
     init(authStatus: CalendarAuthStatus = .authorized, calendars: [CalendarInfo]? = nil) {
         self.authStatus = authStatus
@@ -81,6 +84,7 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
 
     func create(_ draft: CalendarEventDraft) async throws -> CalendarEvent {
         try await ensureAccess()
+        createCount += 1
         let calId = draft.calendarId ?? "cal-home"
         guard cals.contains(where: { $0.id == calId }) else {
             throw CalendarModuleError.calendarNotFound(calId)
@@ -114,6 +118,7 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
 
     func update(id: String, _ draft: CalendarEventDraft, span: CalendarEventSpan) async throws -> CalendarEvent {
         try await ensureAccess()
+        updateCount += 1
         lastSpan = span
         guard var event = items[id] else { throw CalendarModuleError.notFound(id) }
         if let t = draft.title { event.title = t }
@@ -150,6 +155,7 @@ final class MockCalendarStore: CalendarStoring, @unchecked Sendable {
 
     func delete(id: String, span: CalendarEventSpan) async throws {
         try await ensureAccess()
+        deleteCount += 1
         lastSpan = span
         guard items[id] != nil else { throw CalendarModuleError.notFound(id) }
         items[id] = nil
@@ -732,6 +738,25 @@ func runCalendarModuleTests() async {
         try expect(check.overlappingEventIds.isEmpty)
     }
 
+    await test("CalendarFreeBusy.resolveCalendarId defaults omitted/blank to FOCUS-only id") {
+        try expect(CalendarFreeBusy.focusCalendarId == "A33CAC6E-9D15-44F4-BC35-54F204F4DA39")
+        try expect(CalendarFreeBusy.resolveCalendarId(nil) == CalendarFreeBusy.focusCalendarId)
+        try expect(CalendarFreeBusy.resolveCalendarId("") == CalendarFreeBusy.focusCalendarId)
+        try expect(CalendarFreeBusy.resolveCalendarId("   ") == CalendarFreeBusy.focusCalendarId)
+        try expect(CalendarFreeBusy.resolveCalendarId("cal-home") == "cal-home")
+    }
+
+    await test("CalendarFreeBusy.requireKnownCalendar fails closed on a missing id") {
+        let calendars = [CalendarInfo(id: "cal-home", title: "Home", isDefault: true, allowsModify: true)]
+        do {
+            try CalendarFreeBusy.requireKnownCalendar(id: CalendarFreeBusy.focusCalendarId, calendars: calendars)
+            throw TestError.assertion("expected calendarNotFound for missing FOCUS id")
+        } catch let e as CalendarModuleError {
+            try expect(e == .calendarNotFound(CalendarFreeBusy.focusCalendarId))
+        }
+        try CalendarFreeBusy.requireKnownCalendar(id: "cal-home", calendars: calendars)
+    }
+
     await test("CalendarFreeBusy: inverted range throws invertedRange") {
         let (ws, we) = try parseWindow("2026-09-08T16:00:00Z", "2026-09-08T15:00:00Z")
         do {
@@ -758,6 +783,7 @@ func runCalendarModuleTests() async {
             "calendarId": .string("cal-home")
         ]))
         try expect(calField(result, "overlaps") == .bool(true))
+        try expect(calField(result, "calendarId") == .string("cal-home"))
         try expect(try stringList(calField(result, "overlappingEventIds")) == ["evt-focus-standup"])
         guard case .array(let busy)? = calField(result, "busy") else {
             throw TestError.assertion("missing busy array")
@@ -801,7 +827,25 @@ func runCalendarModuleTests() async {
             "end": .string("2026-09-08T16:00:00Z")
         ]))
         try expect(calField(result, "overlaps") == .bool(true))
+        try expect(calField(result, "calendarId") == .string(CalendarFreeBusy.focusCalendarId))
         try expect(try stringList(calField(result, "overlappingEventIds")) == ["evt-focus"])
+    }
+
+    await test("calendar_free_busy missing FOCUS default fails closed (not empty-free)") {
+        // Default store has cal-home / cal-work only — FOCUS id is absent.
+        let router = await makeCalendarRouter(MockCalendarStore())
+        do {
+            let result = try await callCalendarHandler(router, "calendar_free_busy", .object([
+                "start": .string("2026-09-08T15:00:00Z"),
+                "end": .string("2026-09-08T16:00:00Z")
+            ]))
+            throw TestError.assertion("must not look free; got \(result)")
+        } catch let e as CalendarModuleError {
+            try expect(
+                e == .calendarNotFound(CalendarFreeBusy.focusCalendarId),
+                "expected FOCUS calendarNotFound, got \(e)"
+            )
+        }
     }
 
     await test("calendar_free_busy inverted window fails before a store read") {
@@ -851,10 +895,40 @@ func runCalendarModuleTests() async {
             "calendarId": .string("cal-home")
         ]))
         try expect(calField(result, "overlaps") == .bool(false))
+        try expect(calField(result, "calendarId") == .string("cal-home"))
         try expect(try stringList(calField(result, "overlappingEventIds")).isEmpty)
         guard case .array(let busy)? = calField(result, "busy") else {
             throw TestError.assertion("missing busy array")
         }
         try expect(busy.isEmpty, "empty calendar must return empty busy")
+    }
+
+    await test("calendar_free_busy invalid ISO date fails closed (not empty-free)") {
+        let router = await makeCalendarRouter(MockCalendarStore())
+        do {
+            let result = try await callCalendarHandler(router, "calendar_free_busy", .object([
+                "start": .string("not-a-date"),
+                "end": .string("2026-09-08T16:00:00Z"),
+                "calendarId": .string("cal-home")
+            ]))
+            throw TestError.assertion("must not look free; got \(result)")
+        } catch let e as CalendarModuleError {
+            if case .invalidDate = e { return }
+            throw TestError.assertion("expected invalidDate, got \(e)")
+        }
+    }
+
+    await test("calendar_free_busy is read-only — no EventKit writes") {
+        let store = MockCalendarStore()
+        store.seed(fixtureBusy)
+        let router = await makeCalendarRouter(store)
+        _ = try await callCalendarHandler(router, "calendar_free_busy", .object([
+            "start": .string("2026-09-08T15:00:00Z"),
+            "end": .string("2026-09-08T16:00:00Z"),
+            "calendarId": .string("cal-home")
+        ]))
+        try expect(store.createCount == 0, "create must not run")
+        try expect(store.updateCount == 0, "update must not run")
+        try expect(store.deleteCount == 0, "delete must not run")
     }
 }

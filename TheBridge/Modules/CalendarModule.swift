@@ -803,7 +803,7 @@ public enum CalendarModule {
             name: "calendar_free_busy",
             module: moduleName,
             tier: .open,
-            description: "Read-only FOCUS calendar free/busy + overlap check. Given a candidate invite window [start, end) (ISO-8601; end exclusive), list busy events on the target EventKit calendar that overlap that window. `overlaps` is true iff any busy interval overlaps; `overlappingEventIds` lists those event ids. Default calendarId is the FOCUS EventKit calendar (A33CAC6E-9D15-44F4-BC35-54F204F4DA39). Does not create, update, or delete events. When to use: check whether a proposed meeting window is free before inviting. Not for: sending invites, Notion writes, or Google Calendar writes. Related: calendar_events, calendar_list.",
+            description: "Read-only FOCUS calendar free/busy + overlap check. Given a candidate invite window [start, end) (ISO-8601; end exclusive), list busy events on the target EventKit calendar that overlap that window. `overlaps` is true iff any busy interval overlaps; `overlappingEventIds` lists those event ids. Default calendarId is FOCUS-only (A33CAC6E-9D15-44F4-BC35-54F204F4DA39) — never queries all calendars. Fail-closed: missing calendar or denied Calendar permission throws (never returns empty busy that looks free). Does not create, update, or delete events; no Notion or Google writes. When to use: check whether a proposed meeting window is free before inviting. Not for: sending invites, Notion writes, or Google Calendar writes. Related: calendar_events, calendar_list.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
@@ -821,11 +821,7 @@ public enum CalendarModule {
                 guard let end = stringArg(args, "end") else {
                     throw ToolRouterError.invalidArguments(toolName: "calendar_free_busy", reason: "missing 'end'")
                 }
-                let requested = stringArg(args, "calendarId")?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let calendarId = requested.isEmpty
-                    ? CalendarFreeBusy.focusCalendarId
-                    : requested
+                let calendarId = CalendarFreeBusy.resolveCalendarId(stringArg(args, "calendarId"))
                 let windowStart = try CalendarISOParsing.parse(start)
                 let windowEnd = try CalendarISOParsing.parse(end)
                 // Fail closed on inverted windows before any store read.
@@ -833,6 +829,10 @@ public enum CalendarModule {
                     windowStart: windowStart,
                     windowEnd: windowEnd
                 )
+                // Prove the calendar exists (and that TCC is granted) before
+                // treating an empty event list as "free".
+                let calendars = try await store.calendars()
+                try CalendarFreeBusy.requireKnownCalendar(id: calendarId, calendars: calendars)
                 let query = CalendarEventQuery(
                     start: start,
                     end: end,
@@ -845,6 +845,7 @@ public enum CalendarModule {
                     windowEnd: windowEnd
                 )
                 return .object([
+                    "calendarId": .string(calendarId),
                     "busy": .array(check.busy.map { item in
                         .object([
                             "id": .string(item.id),

@@ -9,7 +9,9 @@
   `{ busy, overlaps, overlappingEventIds }`. Open-tier; no calendar /
   Notion / Google writes. Google Calendar `freeBusy` cross-check is
   deferred (no in-repo client). `staticFeatureModuleToolCount` **238 →
-  239**. Floor **3989 → 4007** (+18). Not Installed or Released.
+  239**. Floor **3989 → 4012** (+23). Fail-closed: missing calendar /
+  denied permission / bad dates throw — never an empty busy that looks
+  free. Not Installed or Released.
 - **Confirm body on status-item click (#258 / #260 live-fail)** — Installed
   main `c1f8fad` (PR #260) showed ATTENTION / "N Confirm waiting" then a
   status-item click cleared the badge and never presented Deny / Allow /
