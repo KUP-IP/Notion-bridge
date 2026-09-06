@@ -177,7 +177,11 @@
 #   Read-only calendar_free_busy; occupancy SSOT = FOCUS EventKit only
 #   (Meetings / Google Meetings freeBusy out of scope). +23
 #   CalendarModuleTests + 1 access-denied nested. CI must re-measure.
-FLOOR="${BRIDGE_TEST_FLOOR:-4013}"
+# 2026-09-06: 4013 → 4017 (+4) — #263 Request-tier awaiting_approval.
+#   First Request call returns pending immediately (no 25s UN wait /
+#   NSAlert auto-allow). +4 SecurityGateUXTests. CI run 34060644427
+#   measured 4017 passed, 0 failed on 4d91254.
+FLOOR="${BRIDGE_TEST_FLOOR:-4017}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

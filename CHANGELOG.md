@@ -8,7 +8,9 @@
   returns `{ approvalStatus: "awaiting_approval" }` without running the
   handler. Explicit Allow / Always Allow is a one-shot retry ticket; Always
   Allow still persists Notify. Does not change #264 (notify sticky without
-  Always Allow) or #262 (Confirm UX). Not Installed or Released.
+  Always Allow) or #262 (Confirm UX). Floor **4013 → 4017** (+4). CI
+  `4d91254` run 34060644427: 4017 passed, 0 failed. Not Installed or
+  Released.
 - **Calendar free/busy v0 (Isaiah GO 2026-09-06)** — Read-only
   `calendar_free_busy` on the existing EventKit `calendar_*` family.
   Occupancy SSOT is the FOCUS EventKit id
