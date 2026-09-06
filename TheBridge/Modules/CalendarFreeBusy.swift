@@ -14,16 +14,22 @@ import Foundation
 /// Read-only free/busy overlap check over already-fetched EventKit events.
 public enum CalendarFreeBusy {
 
-    /// FOCUS EventKit calendar identifier (Isaiah GO 2026-09-06 default).
-    /// This is the only implicit target — `calendar_free_busy` never queries
-    /// "all calendars".
+    /// FOCUS EventKit calendar identifier — v0 occupancy SSOT
+    /// (ISAIAH Keepr live probe 2026-09-06). Meetings calendar /
+    /// Google `suggest_time` / `freeBusy` on Meetings
+    /// (isaiah@kup.solutions) is out of scope: that surface offered
+    /// Mon 9:15–17:00 as free over SLAY/LIFT FOCUS blocks.
     public static let focusCalendarId = "A33CAC6E-9D15-44F4-BC35-54F204F4DA39"
 
-    /// Resolve the target calendar. Omitted / blank → FOCUS id above.
+    /// Resolve occupancy calendar. Omitted / blank / exact FOCUS id → FOCUS.
+    /// Any other id (Meetings, Home, …) throws `occupancyNotFocus`.
     /// Never returns an empty id (that would silently scan every calendar).
-    public static func resolveCalendarId(_ raw: String?) -> String {
+    public static func resolveCalendarId(_ raw: String?) throws -> String {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? focusCalendarId : trimmed
+        if trimmed.isEmpty || trimmed == focusCalendarId {
+            return focusCalendarId
+        }
+        throw CalendarModuleError.occupancyNotFocus(trimmed)
     }
 
     /// Fail closed unless the target calendar is present in the store list.

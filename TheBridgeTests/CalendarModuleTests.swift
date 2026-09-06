@@ -210,8 +210,8 @@ private func busyFixture(
     title: String,
     start: String,
     end: String,
-    calendarId: String = "cal-home",
-    calendarTitle: String = "Home"
+    calendarId: String = CalendarFreeBusy.focusCalendarId,
+    calendarTitle: String = "FOCUS"
 ) -> CalendarEvent {
     CalendarEvent(
         id: id,
@@ -224,6 +224,17 @@ private func busyFixture(
         location: nil,
         notes: nil
     )
+}
+
+private func makeFocusStore() -> MockCalendarStore {
+    MockCalendarStore(calendars: [
+        CalendarInfo(
+            id: CalendarFreeBusy.focusCalendarId,
+            title: "FOCUS",
+            isDefault: true,
+            allowsModify: true
+        )
+    ])
 }
 
 private func parseWindow(_ start: String, _ end: String) throws -> (Date, Date) {
@@ -540,8 +551,7 @@ func runCalendarModuleTests() async {
             "start": .string("2026-06-05T00:00:00Z"), "end": .string("2026-06-06T00:00:00Z")
         ]))
         await expectDenied("calendar_free_busy", .object([
-            "start": .string("2026-06-05T09:00:00Z"), "end": .string("2026-06-05T10:00:00Z"),
-            "calendarId": .string("cal-home")
+            "start": .string("2026-06-05T09:00:00Z"), "end": .string("2026-06-05T10:00:00Z")
         ]))
         await expectDenied("calendar_create", .object([
             "title": .string("x"), "start": .string("2026-06-05T09:00:00Z"),
@@ -740,10 +750,26 @@ func runCalendarModuleTests() async {
 
     await test("CalendarFreeBusy.resolveCalendarId defaults omitted/blank to FOCUS-only id") {
         try expect(CalendarFreeBusy.focusCalendarId == "A33CAC6E-9D15-44F4-BC35-54F204F4DA39")
-        try expect(CalendarFreeBusy.resolveCalendarId(nil) == CalendarFreeBusy.focusCalendarId)
-        try expect(CalendarFreeBusy.resolveCalendarId("") == CalendarFreeBusy.focusCalendarId)
-        try expect(CalendarFreeBusy.resolveCalendarId("   ") == CalendarFreeBusy.focusCalendarId)
-        try expect(CalendarFreeBusy.resolveCalendarId("cal-home") == "cal-home")
+        try expect(try CalendarFreeBusy.resolveCalendarId(nil) == CalendarFreeBusy.focusCalendarId)
+        try expect(try CalendarFreeBusy.resolveCalendarId("") == CalendarFreeBusy.focusCalendarId)
+        try expect(try CalendarFreeBusy.resolveCalendarId("   ") == CalendarFreeBusy.focusCalendarId)
+        try expect(try CalendarFreeBusy.resolveCalendarId(CalendarFreeBusy.focusCalendarId)
+            == CalendarFreeBusy.focusCalendarId)
+    }
+
+    await test("CalendarFreeBusy.resolveCalendarId refuses Meetings / non-FOCUS occupancy") {
+        do {
+            _ = try CalendarFreeBusy.resolveCalendarId("Meetings")
+            throw TestError.assertion("Meetings calendar must not be occupancy SSOT")
+        } catch let e as CalendarModuleError {
+            try expect(e == .occupancyNotFocus("Meetings"), "expected occupancyNotFocus, got \(e)")
+        }
+        do {
+            _ = try CalendarFreeBusy.resolveCalendarId("cal-home")
+            throw TestError.assertion("non-FOCUS id must be refused")
+        } catch let e as CalendarModuleError {
+            try expect(e == .occupancyNotFocus("cal-home"))
+        }
     }
 
     await test("CalendarFreeBusy.requireKnownCalendar fails closed on a missing id") {
@@ -768,7 +794,7 @@ func runCalendarModuleTests() async {
     }
 
     await test("calendar_free_busy returns busy payload and overlapping ids") {
-        let store = MockCalendarStore()
+        let store = makeFocusStore()
         store.seed(fixtureBusy)
         store.seed(busyFixture(
             id: "evt-later",
@@ -780,10 +806,10 @@ func runCalendarModuleTests() async {
         let result = try await callCalendarHandler(router, "calendar_free_busy", .object([
             "start": .string("2026-09-08T15:30:00Z"),
             "end": .string("2026-09-08T16:30:00Z"),
-            "calendarId": .string("cal-home")
+            "calendarId": .string(CalendarFreeBusy.focusCalendarId)
         ]))
         try expect(calField(result, "overlaps") == .bool(true))
-        try expect(calField(result, "calendarId") == .string("cal-home"))
+        try expect(calField(result, "calendarId") == .string(CalendarFreeBusy.focusCalendarId))
         try expect(try stringList(calField(result, "overlappingEventIds")) == ["evt-focus-standup"])
         guard case .array(let busy)? = calField(result, "busy") else {
             throw TestError.assertion("missing busy array")
@@ -854,7 +880,6 @@ func runCalendarModuleTests() async {
             _ = try await callCalendarHandler(router, "calendar_free_busy", .object([
                 "start": .string("2026-09-08T16:00:00Z"),
                 "end": .string("2026-09-08T15:00:00Z"),
-                "calendarId": .string("cal-home")
             ]))
             throw TestError.assertion("expected invertedRange")
         } catch let e as CalendarModuleError {
@@ -872,30 +897,31 @@ func runCalendarModuleTests() async {
         } catch is ToolRouterError { /* expected */ }
     }
 
-    await test("calendar_free_busy unknown calendarId surfaces calendarNotFound") {
-        let router = await makeCalendarRouter(MockCalendarStore())
+    await test("calendar_free_busy refuses Meetings calendarId (occupancyNotFocus)") {
+        let store = makeFocusStore()
+        store.seed(fixtureBusy)
+        let router = await makeCalendarRouter(store)
         do {
-            _ = try await callCalendarHandler(router, "calendar_free_busy", .object([
+            let result = try await callCalendarHandler(router, "calendar_free_busy", .object([
                 "start": .string("2026-09-08T15:00:00Z"),
                 "end": .string("2026-09-08T16:00:00Z"),
-                "calendarId": .string("cal-missing")
+                "calendarId": .string("Meetings")
             ]))
-            throw TestError.assertion("expected calendarNotFound")
+            throw TestError.assertion("Meetings must not look free; got \(result)")
         } catch let e as CalendarModuleError {
-            try expect(e == .calendarNotFound("cal-missing"), "expected calendarNotFound, got \(e)")
+            try expect(e == .occupancyNotFocus("Meetings"), "expected occupancyNotFocus, got \(e)")
         }
     }
 
     await test("calendar_free_busy empty calendar returns overlaps false") {
-        let store = MockCalendarStore()
+        let store = makeFocusStore()
         let router = await makeCalendarRouter(store)
         let result = try await callCalendarHandler(router, "calendar_free_busy", .object([
             "start": .string("2026-09-08T15:00:00Z"),
-            "end": .string("2026-09-08T16:00:00Z"),
-            "calendarId": .string("cal-home")
+            "end": .string("2026-09-08T16:00:00Z")
         ]))
         try expect(calField(result, "overlaps") == .bool(false))
-        try expect(calField(result, "calendarId") == .string("cal-home"))
+        try expect(calField(result, "calendarId") == .string(CalendarFreeBusy.focusCalendarId))
         try expect(try stringList(calField(result, "overlappingEventIds")).isEmpty)
         guard case .array(let busy)? = calField(result, "busy") else {
             throw TestError.assertion("missing busy array")
@@ -909,7 +935,6 @@ func runCalendarModuleTests() async {
             let result = try await callCalendarHandler(router, "calendar_free_busy", .object([
                 "start": .string("not-a-date"),
                 "end": .string("2026-09-08T16:00:00Z"),
-                "calendarId": .string("cal-home")
             ]))
             throw TestError.assertion("must not look free; got \(result)")
         } catch let e as CalendarModuleError {
@@ -919,13 +944,12 @@ func runCalendarModuleTests() async {
     }
 
     await test("calendar_free_busy is read-only — no EventKit writes") {
-        let store = MockCalendarStore()
+        let store = makeFocusStore()
         store.seed(fixtureBusy)
         let router = await makeCalendarRouter(store)
         _ = try await callCalendarHandler(router, "calendar_free_busy", .object([
             "start": .string("2026-09-08T15:00:00Z"),
-            "end": .string("2026-09-08T16:00:00Z"),
-            "calendarId": .string("cal-home")
+            "end": .string("2026-09-08T16:00:00Z")
         ]))
         try expect(store.createCount == 0, "create must not run")
         try expect(store.updateCount == 0, "update must not run")

@@ -284,6 +284,8 @@ public enum CalendarModuleError: LocalizedError, Equatable {
     case invalidSpan(String)
     /// Candidate window is not a positive half-open range (`start >= end`).
     case invertedRange
+    /// v0 occupancy SSOT is FOCUS EventKit only (ISAIAH Keepr live probe).
+    case occupancyNotFocus(String)
 
     public var errorDescription: String? {
         switch self {
@@ -305,6 +307,8 @@ public enum CalendarModuleError: LocalizedError, Equatable {
             return "span must be thisEvent or futureEvents, got: \(raw)"
         case .invertedRange:
             return "Invalid range: start must be before end (half-open [start, end))."
+        case .occupancyNotFocus(let id):
+            return "Occupancy SSOT is the FOCUS EventKit calendar (\(CalendarFreeBusy.focusCalendarId)). Refusing calendarId \(id). Meetings / Google Meetings freeBusy is out of scope for v0."
         }
     }
 }
@@ -803,13 +807,13 @@ public enum CalendarModule {
             name: "calendar_free_busy",
             module: moduleName,
             tier: .open,
-            description: "Read-only FOCUS calendar free/busy + overlap check. Given a candidate invite window [start, end) (ISO-8601; end exclusive), list busy events on the target EventKit calendar that overlap that window. `overlaps` is true iff any busy interval overlaps; `overlappingEventIds` lists those event ids. Default calendarId is FOCUS-only (A33CAC6E-9D15-44F4-BC35-54F204F4DA39) — never queries all calendars. Fail-closed: missing calendar or denied Calendar permission throws (never returns empty busy that looks free). Does not create, update, or delete events; no Notion or Google writes. When to use: check whether a proposed meeting window is free before inviting. Not for: sending invites, Notion writes, or Google Calendar writes. Related: calendar_events, calendar_list.",
+            description: "Read-only FOCUS EventKit occupancy check. Occupancy SSOT is the FOCUS calendar (A33CAC6E-9D15-44F4-BC35-54F204F4DA39) only — not Meetings, not Google Meetings freeBusy / suggest_time (isaiah@kup.solutions). Given a candidate invite window [start, end) (ISO-8601; end exclusive), list busy events on FOCUS that overlap that window. `overlaps` is true iff any busy interval overlaps; `overlappingEventIds` lists those event ids. calendarId is optional and must be the FOCUS id when supplied. Fail-closed: non-FOCUS calendarId, missing FOCUS calendar, or denied Calendar permission throws (never returns empty busy that looks free). Does not create, update, or delete events; no Notion or Google writes. When to use: check whether a proposed meeting window is free against FOCUS blocks. Not for: Meetings freeBusy, sending invites, Notion writes, or Google Calendar writes. Related: calendar_events, calendar_list.",
             inputSchema: .object([
                 "type": .string("object"),
                 "properties": .object([
                     "start": .object(["type": .string("string"), "description": .string("ISO-8601 candidate window start (required; inclusive)")]),
                     "end": .object(["type": .string("string"), "description": .string("ISO-8601 candidate window end (required; exclusive)")]),
-                    "calendarId": .object(["type": .string("string"), "description": .string("EKCalendar.calendarIdentifier (default: FOCUS EventKit id A33CAC6E-9D15-44F4-BC35-54F204F4DA39)")])
+                    "calendarId": .object(["type": .string("string"), "description": .string("Must be the FOCUS EventKit id A33CAC6E-9D15-44F4-BC35-54F204F4DA39 when supplied. Default: that FOCUS id. Meetings / other calendars are rejected.")])
                 ]),
                 "required": .array([.string("start"), .string("end")])
             ]),
@@ -821,7 +825,7 @@ public enum CalendarModule {
                 guard let end = stringArg(args, "end") else {
                     throw ToolRouterError.invalidArguments(toolName: "calendar_free_busy", reason: "missing 'end'")
                 }
-                let calendarId = CalendarFreeBusy.resolveCalendarId(stringArg(args, "calendarId"))
+                let calendarId = try CalendarFreeBusy.resolveCalendarId(stringArg(args, "calendarId"))
                 let windowStart = try CalendarISOParsing.parse(start)
                 let windowEnd = try CalendarISOParsing.parse(end)
                 // Fail closed on inverted windows before any store read.
