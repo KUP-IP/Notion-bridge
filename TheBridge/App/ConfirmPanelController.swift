@@ -14,6 +14,9 @@ public final class ConfirmPanelController {
     public static let shared = ConfirmPanelController()
 
     public nonisolated static let windowTitle = "Confirm"
+    /// Confirm never assigns an AppKit default button. Always Allow must
+    /// not fire on Return / Focus delivery (#264).
+    public nonisolated static let assignsDefaultButton = false
 
     private var panel: NSPanel?
 
@@ -47,6 +50,7 @@ public final class ConfirmPanelController {
         panel.contentView = host.view
         panel.setContentSize(size)
         position(panel, size: size)
+        panel.defaultButtonCell = nil
         panel.orderFrontRegardless()
         self.panel = panel
     }
@@ -70,6 +74,7 @@ public final class ConfirmPanelController {
         panel.becomesKeyOnlyIfNeeded = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
+        panel.defaultButtonCell = nil
         return panel
     }
 

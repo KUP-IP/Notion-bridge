@@ -2,6 +2,17 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Notify stickies only on explicit Always Allow (#264)** — Compact
+  `SECURITY_APPROVAL` first action is now Allow (not Always Allow), so a
+  first-action / Focus / LSUIElement default-button misfire cannot rewrite
+  `tierOverrides` / `moduleTierOverrides` to notify. Confirm never assigns
+  an AppKit default button to Always Allow. Persist is a single chokepoint
+  that logs tool, module, and decision source (`confirm_surface` /
+  `notification_always_allow` / `request_approval`). Plain Allow, Deny,
+  timeout→pending, tool exec, launch, and remote session start do not
+  mutate notify stickies. Always Allow still persists per-tool + module
+  Notify as designed. Rebased onto #263 (`awaiting_approval` pending-return).
+  Does not implement #262 Confirm UX polish. Not Installed or Released.
 - **Request-tier `awaiting_approval` (#263)** — Remote `standing_orders_delete`
   (and every other Request-tier tool) no longer blocks the MCP caller on a
   25s UN wait or LSUIElement `NSAlert`. The first call with clean prefs

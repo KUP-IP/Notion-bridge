@@ -25,6 +25,12 @@ public enum ConfirmNotificationOutcome: Equatable, Sendable {
     case presentBody
 }
 
+/// Keyboard / default-button role for Confirm actions (#264).
+public enum ConfirmKeyboardRole: String, Sendable, Equatable {
+    case cancel
+    case none
+}
+
 /// Pure mapping + presented-state host for the Confirm body.
 public enum ConfirmPresentation {
     public static let denyTitle = "Deny"
@@ -38,6 +44,31 @@ public enum ConfirmPresentation {
             return [denyTitle, allowTitle, alwaysAllowTitle]
         }
         return [denyTitle, allowTitle]
+    }
+
+    /// Compact `SECURITY_APPROVAL` banner actions. **Allow is first** so a
+    /// first-action / Focus / compact-button misfire is one-shot Allow and
+    /// cannot persist a Notify sticky (#264). Always Allow stays the second
+    /// visible compact action (macOS shows the first two without expanding).
+    public static func compactBannerActionIdentifiers(allowAlwaysAllow: Bool) -> [String] {
+        if allowAlwaysAllow {
+            return [
+                NotificationApprovalManager.allowActionIdentifier,
+                NotificationApprovalManager.alwaysAllowActionIdentifier,
+                NotificationApprovalManager.cancelActionIdentifier
+            ]
+        }
+        return [
+            NotificationApprovalManager.allowActionIdentifier,
+            NotificationApprovalManager.cancelActionIdentifier
+        ]
+    }
+
+    /// LSUIElement / AppKit keyboard role. Always Allow must never be the
+    /// default button — Return / Focus delivery must not persist Notify (#264).
+    public static func keyboardRole(forActionTitle title: String) -> ConfirmKeyboardRole {
+        if title == denyTitle { return .cancel }
+        return .none
     }
 
     /// SECURITY_APPROVAL actions only. Unknown / default / dismiss
