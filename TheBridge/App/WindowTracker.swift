@@ -63,6 +63,15 @@ public final class WindowTracker {
                 Task { @MainActor in self?.evaluatePolicy() }
             }
         )
+        // Confirm uses orderOut (not close) — willClose never fires.
+        observers.append(
+            NotificationCenter.default.addObserver(
+                forName: .confirmPanelDidChange,
+                object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.evaluatePolicy() }
+            }
+        )
     }
 
     /// Evaluate whether any Settings-class or Confirm windows are visible

@@ -115,6 +115,11 @@ func runConfirmPresentationUXTests() async {
         try expect(ConfirmDelivery.isConfirmWindowTitle(ConfirmPanelController.windowTitle))
         try expect(ConfirmDelivery.isConfirmWindowTitle("Settings") == false)
         try expect(ConfirmDelivery.panelWindowLevelName == "statusBar")
+        try expect(
+            Notification.Name.confirmPanelDidChange.rawValue
+                == "com.notionbridge.confirmPanelDidChange",
+            "dismiss must notify WindowTracker — orderOut does not fire willClose"
+        )
     }
 
     await test("dual-notify mitigation is grouping + operator OS/Grok docs") {

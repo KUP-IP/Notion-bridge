@@ -63,6 +63,10 @@ public extension Notification.Name {
     /// Banner tap / swipe-away / ATTENTION click — present the Confirm body
     /// without resolving. Observers (AppDelegate) show the sticky panel.
     static let pendingApprovalSurfacePresentBody = Notification.Name("com.notionbridge.pendingApprovalSurfacePresentBody")
+
+    /// Confirm NSPanel presented or ordered out. `WindowTracker` re-evaluates
+    /// accessory vs regular — `orderOut` does not fire `willClose`.
+    static let confirmPanelDidChange = Notification.Name("com.notionbridge.confirmPanelDidChange")
 }
 
 /// `userInfo` key on `.cloudAccessEnabledDidChange` carrying the new

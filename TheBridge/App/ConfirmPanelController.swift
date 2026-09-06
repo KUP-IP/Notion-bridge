@@ -54,11 +54,13 @@ public final class ConfirmPanelController {
         panel.defaultButtonCell = nil
         ConfirmFrontApplicator.apply(to: panel)
         self.panel = panel
+        NotificationCenter.default.post(name: .confirmPanelDidChange, object: nil)
     }
 
     public func dismiss() {
         panel?.orderOut(nil)
         panel = nil
+        NotificationCenter.default.post(name: .confirmPanelDidChange, object: nil)
     }
 
     private func makePanel(size: NSSize) -> NSPanel {
