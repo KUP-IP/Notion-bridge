@@ -2,6 +2,21 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Calendar free/busy v0 (Isaiah GO 2026-09-06)** — Read-only
+  `calendar_free_busy` on the existing EventKit `calendar_*` family.
+  Occupancy SSOT is the FOCUS EventKit id
+  `A33CAC6E-9D15-44F4-BC35-54F204F4DA39` only (ISAIAH Keepr live probe).
+  **Meetings calendar / Google Meetings `freeBusy` / `suggest_time`
+  (isaiah@kup.solutions) is out of scope** — that surface offered Mon
+  9:15–17:00 as free over SLAY/LIFT FOCUS blocks. Non-FOCUS
+  `calendarId` throws `occupancyNotFocus`. Candidate window is
+  half-open `[start, end)`. Returns `{ calendarId, busy, overlaps,
+  overlappingEventIds }`. Open-tier; no calendar / Notion / Google
+  writes. Notion URLs on Google FOCUS descriptions are v1, not this
+  spike. `staticFeatureModuleToolCount` **238 → 239**. Floor **3989 →
+  4013** (+24). Fail-closed: missing FOCUS / denied permission / bad
+  dates / non-FOCUS calendar throw — never an empty busy that looks
+  free. Not Installed or Released.
 - **Confirm body on status-item click (#258 / #260 live-fail)** — Installed
   main `c1f8fad` (PR #260) showed ATTENTION / "N Confirm waiting" then a
   status-item click cleared the badge and never presented Deny / Allow /

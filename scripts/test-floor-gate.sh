@@ -173,7 +173,11 @@
 #   cleared until resolved; banner default/dismiss present-body not Deny;
 #   Always Allow still sticky Notify. +6 SecurityGateUXTests. CI must
 #   re-measure.
-FLOOR="${BRIDGE_TEST_FLOOR:-3989}"
+# 2026-09-06: 3989 → 4013 (+24) — calendar free/busy v0 spike (Isaiah GO).
+#   Read-only calendar_free_busy; occupancy SSOT = FOCUS EventKit only
+#   (Meetings / Google Meetings freeBusy out of scope). +23
+#   CalendarModuleTests + 1 access-denied nested. CI must re-measure.
+FLOOR="${BRIDGE_TEST_FLOOR:-4013}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

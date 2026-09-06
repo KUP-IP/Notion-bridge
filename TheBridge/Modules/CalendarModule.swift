@@ -1,7 +1,8 @@
 // CalendarModule.swift – Calendar Tools (native EventKit Calendar CRUD)
 // TheBridge · Modules
 //
-// Five tools: calendar_list (open), calendar_events (open),
+// Six tools: calendar_list (open), calendar_events (open),
+// calendar_free_busy (open, read-only FOCUS overlap check),
 // calendar_create (notify), calendar_update (notify),
 // calendar_delete (request).
 //
@@ -281,6 +282,10 @@ public enum CalendarModuleError: LocalizedError, Equatable {
     case missingRequired(String)
     case invalidTimeZone(String)
     case invalidSpan(String)
+    /// Candidate window is not a positive half-open range (`start >= end`).
+    case invertedRange
+    /// v0 occupancy SSOT is FOCUS EventKit only (ISAIAH Keepr live probe).
+    case occupancyNotFocus(String)
 
     public var errorDescription: String? {
         switch self {
@@ -300,6 +305,10 @@ public enum CalendarModuleError: LocalizedError, Equatable {
             return "Invalid IANA time zone identifier: \(identifier)"
         case .invalidSpan(let raw):
             return "span must be thisEvent or futureEvents, got: \(raw)"
+        case .invertedRange:
+            return "Invalid range: start must be before end (half-open [start, end))."
+        case .occupancyNotFocus(let id):
+            return "Occupancy SSOT is the FOCUS EventKit calendar (\(CalendarFreeBusy.focusCalendarId)). Refusing calendarId \(id). Meetings / Google Meetings freeBusy is out of scope for v0."
         }
     }
 }
@@ -793,7 +802,69 @@ public enum CalendarModule {
             }
         ))
 
-        // MARK: 3. calendar_create – notify (write, non-destructive)
+        // MARK: 3. calendar_free_busy – open (read-only overlap check)
+        await router.register(ToolRegistration(
+            name: "calendar_free_busy",
+            module: moduleName,
+            tier: .open,
+            description: "Read-only FOCUS EventKit occupancy check. Occupancy SSOT is the FOCUS calendar (A33CAC6E-9D15-44F4-BC35-54F204F4DA39) only — not Meetings, not Google Meetings freeBusy / suggest_time (isaiah@kup.solutions). Given a candidate invite window [start, end) (ISO-8601; end exclusive), list busy events on FOCUS that overlap that window. `overlaps` is true iff any busy interval overlaps; `overlappingEventIds` lists those event ids. calendarId is optional and must be the FOCUS id when supplied. Fail-closed: non-FOCUS calendarId, missing FOCUS calendar, or denied Calendar permission throws (never returns empty busy that looks free). Does not create, update, or delete events; no Notion or Google writes. When to use: check whether a proposed meeting window is free against FOCUS blocks. Not for: Meetings freeBusy, sending invites, Notion writes, or Google Calendar writes. Related: calendar_events, calendar_list.",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "start": .object(["type": .string("string"), "description": .string("ISO-8601 candidate window start (required; inclusive)")]),
+                    "end": .object(["type": .string("string"), "description": .string("ISO-8601 candidate window end (required; exclusive)")]),
+                    "calendarId": .object(["type": .string("string"), "description": .string("Must be the FOCUS EventKit id A33CAC6E-9D15-44F4-BC35-54F204F4DA39 when supplied. Default: that FOCUS id. Meetings / other calendars are rejected.")])
+                ]),
+                "required": .array([.string("start"), .string("end")])
+            ]),
+            handler: { arguments in
+                let args = objectArgs(arguments)
+                guard let start = stringArg(args, "start") else {
+                    throw ToolRouterError.invalidArguments(toolName: "calendar_free_busy", reason: "missing 'start'")
+                }
+                guard let end = stringArg(args, "end") else {
+                    throw ToolRouterError.invalidArguments(toolName: "calendar_free_busy", reason: "missing 'end'")
+                }
+                let calendarId = try CalendarFreeBusy.resolveCalendarId(stringArg(args, "calendarId"))
+                let windowStart = try CalendarISOParsing.parse(start)
+                let windowEnd = try CalendarISOParsing.parse(end)
+                // Fail closed on inverted windows before any store read.
+                try CalendarFreeBusy.requirePositiveRange(
+                    windowStart: windowStart,
+                    windowEnd: windowEnd
+                )
+                // Prove the calendar exists (and that TCC is granted) before
+                // treating an empty event list as "free".
+                let calendars = try await store.calendars()
+                try CalendarFreeBusy.requireKnownCalendar(id: calendarId, calendars: calendars)
+                let query = CalendarEventQuery(
+                    start: start,
+                    end: end,
+                    calendarId: calendarId
+                )
+                let events = try await store.events(query)
+                let check = try CalendarFreeBusy.evaluate(
+                    events: events,
+                    windowStart: windowStart,
+                    windowEnd: windowEnd
+                )
+                return .object([
+                    "calendarId": .string(calendarId),
+                    "busy": .array(check.busy.map { item in
+                        .object([
+                            "id": .string(item.id),
+                            "title": .string(item.title),
+                            "start": .string(item.start),
+                            "end": .string(item.end)
+                        ])
+                    }),
+                    "overlaps": .bool(check.overlaps),
+                    "overlappingEventIds": .array(check.overlappingEventIds.map(Value.string))
+                ])
+            }
+        ))
+
+        // MARK: 4. calendar_create – notify (write, non-destructive)
         await router.register(ToolRegistration(
             name: "calendar_create",
             module: moduleName,
@@ -854,7 +925,7 @@ public enum CalendarModule {
             }
         ))
 
-        // MARK: 4. calendar_update – notify (write, non-destructive)
+        // MARK: 5. calendar_update – notify (write, non-destructive)
         await router.register(ToolRegistration(
             name: "calendar_update",
             module: moduleName,
@@ -913,7 +984,7 @@ public enum CalendarModule {
             }
         ))
 
-        // MARK: 5. calendar_delete – request (DESTRUCTIVE)
+        // MARK: 6. calendar_delete – request (DESTRUCTIVE)
         await router.register(ToolRegistration(
             name: "calendar_delete",
             module: moduleName,
