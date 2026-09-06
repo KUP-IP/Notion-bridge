@@ -1,7 +1,8 @@
 // CalendarModuleTests.swift
 // TheBridge · Tests
 //
-// PKT-962 (v3.7·I): unit tests for the calendar_* tool family against the
+// PKT-962 (v3.7·I) + 2026-09-06 calendar_free_busy v0: unit tests for the
+// calendar_* tool family against the
 // injectable `CalendarStoring` seam — no live EventKit / TCC. Covers tool
 // registration + tiering, CRUD round-trips, date-range filtering, and the
 // access-denied path. Handlers are invoked directly off their
@@ -197,23 +198,64 @@ private func calField(_ v: Value, _ key: String) -> Value? {
     return nil
 }
 
+/// Fixture busy interval. ISO-8601 Z times so string order matches Date order.
+private func busyFixture(
+    id: String,
+    title: String,
+    start: String,
+    end: String,
+    calendarId: String = "cal-home",
+    calendarTitle: String = "Home"
+) -> CalendarEvent {
+    CalendarEvent(
+        id: id,
+        title: title,
+        start: start,
+        end: end,
+        allDay: false,
+        calendarId: calendarId,
+        calendarTitle: calendarTitle,
+        location: nil,
+        notes: nil
+    )
+}
+
+private func parseWindow(_ start: String, _ end: String) throws -> (Date, Date) {
+    (try CalendarISOParsing.parse(start), try CalendarISOParsing.parse(end))
+}
+
+private func stringList(_ v: Value?) throws -> [String] {
+    guard case .array(let arr)? = v else {
+        throw TestError.assertion("expected string array")
+    }
+    return try arr.map { item in
+        guard case .string(let s) = item else {
+            throw TestError.assertion("expected string in array")
+        }
+        return s
+    }
+}
+
 func runCalendarModuleTests() async {
     print("\n\u{1F4C5} CalendarModule Tests (PKT-962 · v3.7·I)")
 
     // MARK: registration + tiering
 
-    await test("CalendarModule registers exactly 5 tools") {
+    await test("CalendarModule registers exactly 6 tools") {
         let router = await makeCalendarRouter(MockCalendarStore())
         let tools = await router.registrations(forModule: "calendar")
-        try expect(tools.count == 5, "expected 5 calendar tools, got \(tools.count)")
+        try expect(tools.count == 6, "expected 6 calendar tools, got \(tools.count)")
+        let names = Set(tools.map(\.name))
+        try expect(names.contains("calendar_free_busy"), "calendar_free_busy must be registered")
     }
 
-    await test("calendar tiering: list/events open, create/update notify, delete request") {
+    await test("calendar tiering: list/events/free_busy open, create/update notify, delete request") {
         let router = await makeCalendarRouter(MockCalendarStore())
         let tools = await router.registrations(forModule: "calendar")
         let byName = Dictionary(tools.map { ($0.name, $0) }, uniquingKeysWith: { a, _ in a })
         try expect(byName["calendar_list"]?.tier == .open, "list must be .open")
         try expect(byName["calendar_events"]?.tier == .open, "events must be .open")
+        try expect(byName["calendar_free_busy"]?.tier == .open, "free_busy must be .open")
         try expect(byName["calendar_create"]?.tier == .notify, "create must be .notify")
         try expect(byName["calendar_update"]?.tier == .notify, "update must be .notify")
         try expect(byName["calendar_delete"]?.tier == .request, "delete must be .request")
@@ -491,6 +533,10 @@ func runCalendarModuleTests() async {
         await expectDenied("calendar_events", .object([
             "start": .string("2026-06-05T00:00:00Z"), "end": .string("2026-06-06T00:00:00Z")
         ]))
+        await expectDenied("calendar_free_busy", .object([
+            "start": .string("2026-06-05T09:00:00Z"), "end": .string("2026-06-05T10:00:00Z"),
+            "calendarId": .string("cal-home")
+        ]))
         await expectDenied("calendar_create", .object([
             "title": .string("x"), "start": .string("2026-06-05T09:00:00Z"),
             "end": .string("2026-06-05T10:00:00Z")
@@ -595,5 +641,220 @@ func runCalendarModuleTests() async {
             "alarms": .array([])
         ]))
         try expect(calField(cleared, "event").flatMap { calField($0, "alarms") } == nil)
+    }
+
+    // MARK: calendar_free_busy — half-open [start, end) overlap
+
+    // Fixture busy block: 2026-09-08T15:00:00Z – 2026-09-08T16:00:00Z
+    let fixtureBusy = busyFixture(
+        id: "evt-focus-standup",
+        title: "Standup",
+        start: "2026-09-08T15:00:00Z",
+        end: "2026-09-08T16:00:00Z"
+    )
+
+    await test("CalendarFreeBusy: no overlap when event is entirely before the window") {
+        let (ws, we) = try parseWindow("2026-09-08T16:30:00Z", "2026-09-08T17:30:00Z")
+        let check = try CalendarFreeBusy.evaluate(events: [fixtureBusy], windowStart: ws, windowEnd: we)
+        try expect(check.overlaps == false, "event before window must not overlap")
+        try expect(check.busy.isEmpty, "busy must be empty")
+        try expect(check.overlappingEventIds.isEmpty, "ids must be empty")
+    }
+
+    await test("CalendarFreeBusy: no overlap when event is entirely after the window") {
+        let (ws, we) = try parseWindow("2026-09-08T13:00:00Z", "2026-09-08T14:00:00Z")
+        let check = try CalendarFreeBusy.evaluate(events: [fixtureBusy], windowStart: ws, windowEnd: we)
+        try expect(check.overlaps == false, "event after window must not overlap")
+        try expect(check.busy.isEmpty)
+    }
+
+    await test("CalendarFreeBusy: partial overlap when window starts inside the event") {
+        let (ws, we) = try parseWindow("2026-09-08T15:30:00Z", "2026-09-08T16:30:00Z")
+        let check = try CalendarFreeBusy.evaluate(events: [fixtureBusy], windowStart: ws, windowEnd: we)
+        try expect(check.overlaps == true, "partial end overlap")
+        try expect(check.overlappingEventIds == ["evt-focus-standup"])
+        try expect(check.busy.first?.title == "Standup")
+        try expect(check.busy.first?.start == "2026-09-08T15:00:00Z")
+        try expect(check.busy.first?.end == "2026-09-08T16:00:00Z")
+    }
+
+    await test("CalendarFreeBusy: partial overlap when window ends inside the event") {
+        let (ws, we) = try parseWindow("2026-09-08T14:30:00Z", "2026-09-08T15:30:00Z")
+        let check = try CalendarFreeBusy.evaluate(events: [fixtureBusy], windowStart: ws, windowEnd: we)
+        try expect(check.overlaps == true, "partial start overlap")
+        try expect(check.overlappingEventIds == ["evt-focus-standup"])
+    }
+
+    await test("CalendarFreeBusy: contained — event fully inside the window") {
+        let (ws, we) = try parseWindow("2026-09-08T14:00:00Z", "2026-09-08T17:00:00Z")
+        let check = try CalendarFreeBusy.evaluate(events: [fixtureBusy], windowStart: ws, windowEnd: we)
+        try expect(check.overlaps == true, "contained event overlaps")
+        try expect(check.overlappingEventIds == ["evt-focus-standup"])
+    }
+
+    await test("CalendarFreeBusy: contained — window fully inside the event") {
+        let (ws, we) = try parseWindow("2026-09-08T15:15:00Z", "2026-09-08T15:45:00Z")
+        let check = try CalendarFreeBusy.evaluate(events: [fixtureBusy], windowStart: ws, windowEnd: we)
+        try expect(check.overlaps == true, "window inside event overlaps")
+        try expect(check.overlappingEventIds == ["evt-focus-standup"])
+    }
+
+    await test("CalendarFreeBusy: exact window match overlaps") {
+        let (ws, we) = try parseWindow("2026-09-08T15:00:00Z", "2026-09-08T16:00:00Z")
+        let check = try CalendarFreeBusy.evaluate(events: [fixtureBusy], windowStart: ws, windowEnd: we)
+        try expect(check.overlaps == true, "identical [start, end) overlaps")
+        try expect(check.overlappingEventIds == ["evt-focus-standup"])
+    }
+
+    await test("CalendarFreeBusy: touching at event end is exclusive (no overlap)") {
+        // Event occupies [15:00, 16:00). Window [16:00, 17:00) shares the
+        // instant 16:00 only — half-open, so not busy.
+        let (ws, we) = try parseWindow("2026-09-08T16:00:00Z", "2026-09-08T17:00:00Z")
+        let check = try CalendarFreeBusy.evaluate(events: [fixtureBusy], windowStart: ws, windowEnd: we)
+        try expect(check.overlaps == false, "touching end must be exclusive")
+        try expect(check.overlappingEventIds.isEmpty)
+    }
+
+    await test("CalendarFreeBusy: touching at event start is exclusive (no overlap)") {
+        // Event occupies [15:00, 16:00). Window [14:00, 15:00) shares the
+        // instant 15:00 only — half-open, so not busy.
+        let (ws, we) = try parseWindow("2026-09-08T14:00:00Z", "2026-09-08T15:00:00Z")
+        let check = try CalendarFreeBusy.evaluate(events: [fixtureBusy], windowStart: ws, windowEnd: we)
+        try expect(check.overlaps == false, "touching start must be exclusive")
+        try expect(check.overlappingEventIds.isEmpty)
+    }
+
+    await test("CalendarFreeBusy: empty calendar yields overlaps false") {
+        let (ws, we) = try parseWindow("2026-09-08T15:00:00Z", "2026-09-08T16:00:00Z")
+        let check = try CalendarFreeBusy.evaluate(events: [], windowStart: ws, windowEnd: we)
+        try expect(check.overlaps == false)
+        try expect(check.busy.isEmpty)
+        try expect(check.overlappingEventIds.isEmpty)
+    }
+
+    await test("CalendarFreeBusy: inverted range throws invertedRange") {
+        let (ws, we) = try parseWindow("2026-09-08T16:00:00Z", "2026-09-08T15:00:00Z")
+        do {
+            _ = try CalendarFreeBusy.evaluate(events: [fixtureBusy], windowStart: ws, windowEnd: we)
+            throw TestError.assertion("expected invertedRange")
+        } catch let e as CalendarModuleError {
+            try expect(e == .invertedRange, "expected invertedRange, got \(e)")
+        }
+    }
+
+    await test("calendar_free_busy returns busy payload and overlapping ids") {
+        let store = MockCalendarStore()
+        store.seed(fixtureBusy)
+        store.seed(busyFixture(
+            id: "evt-later",
+            title: "Later",
+            start: "2026-09-08T18:00:00Z",
+            end: "2026-09-08T19:00:00Z"
+        ))
+        let router = await makeCalendarRouter(store)
+        let result = try await callCalendarHandler(router, "calendar_free_busy", .object([
+            "start": .string("2026-09-08T15:30:00Z"),
+            "end": .string("2026-09-08T16:30:00Z"),
+            "calendarId": .string("cal-home")
+        ]))
+        try expect(calField(result, "overlaps") == .bool(true))
+        try expect(try stringList(calField(result, "overlappingEventIds")) == ["evt-focus-standup"])
+        guard case .array(let busy)? = calField(result, "busy") else {
+            throw TestError.assertion("missing busy array")
+        }
+        try expect(busy.count == 1, "expected one overlapping busy interval")
+        try expect(calField(busy[0], "id") == .string("evt-focus-standup"))
+        try expect(calField(busy[0], "title") == .string("Standup"))
+        try expect(calField(busy[0], "start") == .string("2026-09-08T15:00:00Z"))
+        try expect(calField(busy[0], "end") == .string("2026-09-08T16:00:00Z"))
+    }
+
+    await test("calendar_free_busy defaults to the FOCUS EventKit calendar id") {
+        let focus = CalendarInfo(
+            id: CalendarFreeBusy.focusCalendarId,
+            title: "FOCUS",
+            isDefault: true,
+            allowsModify: true
+        )
+        let store = MockCalendarStore(calendars: [
+            focus,
+            CalendarInfo(id: "cal-home", title: "Home", isDefault: false, allowsModify: true)
+        ])
+        store.seed(busyFixture(
+            id: "evt-focus",
+            title: "FOCUS block",
+            start: "2026-09-08T15:00:00Z",
+            end: "2026-09-08T16:00:00Z",
+            calendarId: CalendarFreeBusy.focusCalendarId,
+            calendarTitle: "FOCUS"
+        ))
+        store.seed(busyFixture(
+            id: "evt-home",
+            title: "Home block",
+            start: "2026-09-08T15:00:00Z",
+            end: "2026-09-08T16:00:00Z",
+            calendarId: "cal-home"
+        ))
+        let router = await makeCalendarRouter(store)
+        let result = try await callCalendarHandler(router, "calendar_free_busy", .object([
+            "start": .string("2026-09-08T15:00:00Z"),
+            "end": .string("2026-09-08T16:00:00Z")
+        ]))
+        try expect(calField(result, "overlaps") == .bool(true))
+        try expect(try stringList(calField(result, "overlappingEventIds")) == ["evt-focus"])
+    }
+
+    await test("calendar_free_busy inverted window fails before a store read") {
+        let router = await makeCalendarRouter(MockCalendarStore())
+        do {
+            _ = try await callCalendarHandler(router, "calendar_free_busy", .object([
+                "start": .string("2026-09-08T16:00:00Z"),
+                "end": .string("2026-09-08T15:00:00Z"),
+                "calendarId": .string("cal-home")
+            ]))
+            throw TestError.assertion("expected invertedRange")
+        } catch let e as CalendarModuleError {
+            try expect(e == .invertedRange, "expected invertedRange, got \(e)")
+        }
+    }
+
+    await test("calendar_free_busy requires start and end") {
+        let router = await makeCalendarRouter(MockCalendarStore())
+        do {
+            _ = try await callCalendarHandler(router, "calendar_free_busy", .object([
+                "start": .string("2026-09-08T15:00:00Z")
+            ]))
+            throw TestError.assertion("expected invalidArguments for missing end")
+        } catch is ToolRouterError { /* expected */ }
+    }
+
+    await test("calendar_free_busy unknown calendarId surfaces calendarNotFound") {
+        let router = await makeCalendarRouter(MockCalendarStore())
+        do {
+            _ = try await callCalendarHandler(router, "calendar_free_busy", .object([
+                "start": .string("2026-09-08T15:00:00Z"),
+                "end": .string("2026-09-08T16:00:00Z"),
+                "calendarId": .string("cal-missing")
+            ]))
+            throw TestError.assertion("expected calendarNotFound")
+        } catch let e as CalendarModuleError {
+            try expect(e == .calendarNotFound("cal-missing"), "expected calendarNotFound, got \(e)")
+        }
+    }
+
+    await test("calendar_free_busy empty calendar returns overlaps false") {
+        let store = MockCalendarStore()
+        let router = await makeCalendarRouter(store)
+        let result = try await callCalendarHandler(router, "calendar_free_busy", .object([
+            "start": .string("2026-09-08T15:00:00Z"),
+            "end": .string("2026-09-08T16:00:00Z"),
+            "calendarId": .string("cal-home")
+        ]))
+        try expect(calField(result, "overlaps") == .bool(false))
+        try expect(try stringList(calField(result, "overlappingEventIds")).isEmpty)
+        guard case .array(let busy)? = calField(result, "busy") else {
+            throw TestError.assertion("missing busy array")
+        }
+        try expect(busy.isEmpty, "empty calendar must return empty busy")
     }
 }

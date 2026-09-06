@@ -2,6 +2,14 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Calendar free/busy v0 (Isaiah GO 2026-09-06)** — Read-only
+  `calendar_free_busy` on the existing EventKit `calendar_*` family.
+  Candidate window is half-open `[start, end)`; default `calendarId` is
+  the FOCUS EventKit id `A33CAC6E-9D15-44F4-BC35-54F204F4DA39`. Returns
+  `{ busy, overlaps, overlappingEventIds }`. Open-tier; no calendar /
+  Notion / Google writes. Google Calendar `freeBusy` cross-check is
+  deferred (no in-repo client). `staticFeatureModuleToolCount` **238 →
+  239**. Floor **3989 → 4007** (+18). Not Installed or Released.
 - **Confirm body on status-item click (#258 / #260 live-fail)** — Installed
   main `c1f8fad` (PR #260) showed ATTENTION / "N Confirm waiting" then a
   status-item click cleared the badge and never presented Deny / Allow /

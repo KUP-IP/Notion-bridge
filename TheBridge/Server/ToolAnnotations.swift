@@ -356,13 +356,14 @@ public enum ToolAnnotationCatalog {
         "permissions_status": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, requiresConfirmation: false, openWorld: false),
         "process_list": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: false),
         // PKT-962 (v3.7·I): Calendar family over EventKit (.event entities,
-        // reusing v3.7·D's store + calendars entitlement). list/events are
-        // read-only (.open); create/update non-destructive but writing
-        // (.notify); delete is destructive + confirmation-gated (tier
-        // .request). Mirrors the reminders annotations below.
+        // reusing v3.7·D's store + calendars entitlement). list/events/
+        // free_busy are read-only (.open); create/update non-destructive
+        // but writing (.notify); delete is destructive + confirmation-gated
+        // (tier .request). Mirrors the reminders annotations below.
         "calendar_create": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),
         "calendar_delete": .init(readOnlyHint: false, destructiveHint: true, idempotentHint: true, requiresConfirmation: true, openWorld: true),
         "calendar_events": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),
+        "calendar_free_busy": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, requiresConfirmation: false, openWorld: true),
         "calendar_list": .init(readOnlyHint: true, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),
         "calendar_registry_pair": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: true, requiresConfirmation: true, openWorld: true),
         "calendar_update": .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, requiresConfirmation: false, openWorld: true),

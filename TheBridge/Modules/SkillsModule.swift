@@ -181,10 +181,11 @@ public enum SkillsModule {
     A Shortcut can do anything, so shortcuts_run is Notify-tier and never \
     auto-executes silently.
     Calendar: the calendar_* family is native EventKit (.event entities) — \
-    calendar_list (enumerate calendars) and calendar_events (query a date \
-    range) are read-only/Open-tier; calendar_create and calendar_update are \
-    Notify-tier writes; calendar_delete is Request-tier (confirmation \
-    required, irreversible). Events use ISO-8601 start/end times.
+    calendar_list (enumerate calendars), calendar_events (query a date \
+    range), and calendar_free_busy (FOCUS default free/busy + overlap \
+    check on [start, end)) are read-only/Open-tier; calendar_create and \
+    calendar_update are Notify-tier writes; calendar_delete is Request-tier \
+    (confirmation required, irreversible). Events use ISO-8601 start/end times.
     """
 
     public static func buildRoutingInstructions() -> String {

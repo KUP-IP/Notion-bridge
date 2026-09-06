@@ -500,7 +500,10 @@ public enum BridgeConstants {
     ///   (gh_issue_list, gh_pr_list, gh_pr_review). 234 + 3 = 237.
     /// Runtime Exposure orphan purge (2026-09-04): +1
     ///   (skills_exposure_purge_orphans; existing skills family). 237 + 1 = 238.
-    public static let staticFeatureModuleToolCount = 238
+    /// FOCUS calendar free/busy v0 (2026-09-06): +1
+    ///   (calendar_free_busy; existing calendar family, read-only EventKit
+    ///   overlap check, Isaiah GO). 238 + 1 = 239.
+    public static let staticFeatureModuleToolCount = 239
 
     /// Distinct `module` string families included in `staticFeatureModuleToolCount` (Stripe and `builtin` excluded).
     /// v2.2 · 0.1 (PKT-738): 15 + 1 (dev) = 16.
