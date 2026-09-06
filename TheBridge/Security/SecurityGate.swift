@@ -941,7 +941,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         var settings = await center.notificationSettings()
         if settings.authorizationStatus == .notDetermined {
             do {
-                _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+                _ = try await center.requestAuthorization(options: ConfirmDelivery.authorizationOptions)
             } catch {
                 print("[SecurityGate] Init requestAuthorization error: \(error.localizedDescription)")
             }
@@ -1369,7 +1369,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             return
         }
         do {
-            _ = try await center.requestAuthorization(options: [.alert, .sound])
+            _ = try await center.requestAuthorization(options: ConfirmDelivery.authorizationOptions)
         } catch {
             print("[SecurityGate] Notification permission request error: \(error.localizedDescription)")
         }
@@ -1464,14 +1464,11 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
-        content.sound = .default
         content.categoryIdentifier = allowAlwaysAllowAction
             ? Self.categoryIdentifier
             : Self.categoryIdentifierNoAlways
-        // fb-securitygate (point 3): a pre-execution approval is not
-        // informational — raise it to time-sensitive so macOS surfaces it even
-        // under Focus / Do Not Disturb.
-        content.interruptionLevel = .timeSensitive
+        // fb-securitygate (point 3) + #262: Time Sensitive + grouped thread.
+        ConfirmDelivery.applyConfirmContent(content)
         // PKT-553 content-extension contract — Request banners previously
         // omitted userInfo, so DefaultContentHidden extensions rendered empty.
         let toolName: String = {
@@ -1672,6 +1669,6 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        completionHandler([.banner, .list, .sound])
+        completionHandler(ConfirmDelivery.willPresentOptions)
     }
 }

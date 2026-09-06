@@ -151,7 +151,7 @@ public struct DashboardView: View {
     /// UN banner (Focus / style None / content-extension hide) cannot
     /// stall a remote agent with ATTENTION=0.
     private var pendingApprovalSection: some View {
-        ConfirmCardStack(prompts: pendingApprovals)
+        ConfirmDashboardSection(prompts: pendingApprovals)
     }
 
     // MARK: - License banner

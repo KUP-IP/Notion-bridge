@@ -41,3 +41,7 @@ must be approved (or re-tiered via the Tool Registry) individually.
 
 To revoke a per-tool Always-Allow, change the tool's tier back in the Tool
 Registry (the same `tierOverrides` map is the source of truth).
+
+Request-tier Confirm fronts a sticky panel and posts a Time Sensitive
+banner. Focus / TCC limits and the Grok iPhone→Mac dual-notify stack are
+documented in [confirm-focus-and-dual-notify.md](confirm-focus-and-dual-notify.md).

@@ -65,25 +65,39 @@ public final class WindowTracker {
         )
     }
 
-    /// Evaluate whether any Settings-class windows are visible
-    /// and toggle activation policy accordingly.
+    /// Evaluate whether any Settings-class or Confirm windows are visible
+    /// and toggle activation policy accordingly. Confirm must keep `.regular`
+    /// (#262) — accessory LSUIElement windows hide on deactivate.
     public func evaluatePolicy() {
         let hasVisibleSettings = NSApp.windows.contains { window in
             window.isVisible && !window.isMiniaturized && isSettingsWindow(window)
         }
+        let hasVisibleConfirm = NSApp.windows.contains { window in
+            window.isVisible && !window.isMiniaturized
+                && ConfirmDelivery.isConfirmWindowTitle(window.title)
+        }
 
         let currentPolicy = NSApp.activationPolicy()
+        let wantRegular = ConfirmDelivery.shouldUseRegularActivationPolicy(
+            hasVisibleSettings: hasVisibleSettings,
+            hasVisibleConfirm: hasVisibleConfirm
+        )
 
-        if hasVisibleSettings && currentPolicy != .regular {
+        if wantRegular && currentPolicy != .regular {
             NSApp.setActivationPolicy(.regular)
-            // Brief delay before activate to avoid focus stealing (W1 risk mitigation)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                NSApp.activate(ignoringOtherApps: false)
+            // Confirm steals focus; Settings still uses the W1 delayed activate.
+            if hasVisibleConfirm {
+                NSApp.activate(ignoringOtherApps: true)
+                print("[WindowTracker] Activation policy → .regular (Confirm visible)")
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    NSApp.activate(ignoringOtherApps: false)
+                }
+                print("[WindowTracker] Activation policy → .regular (Settings visible)")
             }
-            print("[WindowTracker] Activation policy → .regular (Settings visible)")
-        } else if !hasVisibleSettings && currentPolicy != .accessory {
+        } else if !wantRegular && currentPolicy != .accessory {
             NSApp.setActivationPolicy(.accessory)
-            print("[WindowTracker] Activation policy → .accessory (no Settings windows)")
+            print("[WindowTracker] Activation policy → .accessory (no Settings/Confirm windows)")
         }
     }
 

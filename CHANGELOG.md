@@ -2,6 +2,16 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Security UX Confirm presentation (#262)** — Request-tier Confirm
+  assertively fronts a sticky panel on escalate (activate + `.regular`
+  while visible, status-bar level, becomes key). Always Allow is the
+  full-width visual primary with a Notify hint; it is **not** the
+  Return-key default (#264 / PR #267). Confirm banners request **Time
+  Sensitive** (authorization + `interruptionLevel`) and group on
+  `bridge.confirm`. Focus/TCC limits and Grok iPhone→Mac dual-notify are
+  in `docs/operator/confirm-focus-and-dual-notify.md`. Stacked on #267
+  (`persistNotifySticky` only on Always Allow + Allow-first compact).
+  Floor **4027 → 4034** (+7). Not Installed or Released.
 - **Notify stickies only on explicit Always Allow (#264)** — Compact
   `SECURITY_APPROVAL` first action is now Allow (not Always Allow), so a
   first-action / Focus / LSUIElement default-button misfire cannot rewrite

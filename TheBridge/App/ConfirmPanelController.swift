@@ -2,9 +2,10 @@
 // TheBridge · App
 //
 // MenuBarExtra `.window` on an LSUIElement app is not a reliable Confirm
-// host (PR #260 live-fail: popover window count 0, 0 AXButtons). This
-// panel stays ordered-front until Deny / Allow / Always Allow or the
-// surface empties. It does not hide on deactivate and is not transient.
+// host (PR #260 live-fail: popover window count 0, 0 AXButtons). #262
+// fronts this panel on escalate (activate + `.regular`, status-bar level,
+// becomes key). It stays until Deny / Allow / Always Allow or the surface
+// empties. Always Allow is never the AppKit default button (#264).
 
 import AppKit
 import SwiftUI
@@ -13,7 +14,7 @@ import SwiftUI
 public final class ConfirmPanelController {
     public static let shared = ConfirmPanelController()
 
-    public nonisolated static let windowTitle = "Confirm"
+    public nonisolated static let windowTitle = "The Bridge — Confirm"
     /// Confirm never assigns an AppKit default button. Always Allow must
     /// not fire on Return / Focus delivery (#264).
     public nonisolated static let assignsDefaultButton = false
@@ -41,7 +42,7 @@ public final class ConfirmPanelController {
         guard Self.canPresentPanel else { return }
         let host = NSHostingController(rootView: ConfirmPanelView(prompts: prompts))
         let fitting = host.view.fittingSize
-        let size = NSSize(width: max(fitting.width, 360), height: max(fitting.height, 140))
+        let size = NSSize(width: max(fitting.width, 400), height: max(fitting.height, 220))
         host.view.frame = NSRect(origin: .zero, size: size)
         host.view.wantsLayer = true
 
@@ -51,7 +52,7 @@ public final class ConfirmPanelController {
         panel.setContentSize(size)
         position(panel, size: size)
         panel.defaultButtonCell = nil
-        panel.orderFrontRegardless()
+        ConfirmFrontApplicator.apply(to: panel)
         self.panel = panel
     }
 
@@ -61,18 +62,22 @@ public final class ConfirmPanelController {
     }
 
     private func makePanel(size: NSSize) -> NSPanel {
+        // Key-capable titled panel (not `.nonactivatingPanel`). Accessory
+        // LSUIElement windows hide on deactivate — #262 fronts this as a
+        // regular, key window at status-bar level. Always Allow is never
+        // an AppKit default button (#264 / PR #267).
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .nonactivatingPanel],
+            styleMask: [.titled],
             backing: .buffered,
             defer: true
         )
         panel.title = Self.windowTitle
         panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.level = .statusBar
+        panel.hidesOnDeactivate = ConfirmDelivery.hidesOnDeactivate
+        panel.becomesKeyOnlyIfNeeded = !ConfirmDelivery.becomesKey
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         panel.isReleasedWhenClosed = false
         panel.defaultButtonCell = nil
         return panel

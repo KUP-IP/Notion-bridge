@@ -16,7 +16,7 @@
 // locally in `NotificationColors`.
 //
 // Categories handled:
-//   • SECURITY_APPROVAL            ~120pt  lock icon + command preview + risk accent
+//   • SECURITY_APPROVAL            ~148pt  lock icon + Always Allow hint + preview
 //   • SECURITY_APPROVAL_NO_ALWAYS  ~140pt  warning strip + lock icon + command preview
 //   • NOTIFY_NOTION                 ~90pt  check icon + tool name + notion summary
 //   • NOTIFY_GENERIC                ~70pt  check icon + tool name + command summary
@@ -153,7 +153,7 @@ final class NotificationViewController: NSViewController, UNNotificationContentE
             renderSecurityApproval(toolName: toolName,
                                    argumentsSummary: argumentsSummary,
                                    risk: riskLevel)
-            preferredContentSize = NSSize(width: 360, height: 120)
+            preferredContentSize = NSSize(width: 360, height: 148)
 
         case .securityApprovalNoAlways:
             renderSecurityApprovalNoAlways(toolName: toolName,
@@ -204,11 +204,12 @@ final class NotificationViewController: NSViewController, UNNotificationContentE
                                         argumentsSummary: String,
                                         risk: RiskLevel) {
         let accent = makeAccentBar(color: risk.accentColor)
-        let header = makeHeader(icon: "🔒", title: toolName)
+        let header = makeHeader(icon: "🔒", title: "Needs your OK — \(toolName)")
         let leadIn = makeBodyLabel("\(toolName) wants to run:")
         let codeBlock = makeCodeBlock(text: argumentsSummary)
+        let alwaysHint = makeBodyLabel("Always Allow is the primary action — next time this tool runs as Notify.")
 
-        let stack = verticalStack(spacing: 6, views: [header, leadIn, codeBlock])
+        let stack = verticalStack(spacing: 6, views: [header, leadIn, codeBlock, alwaysHint])
         container.addSubview(accent)
         container.addSubview(stack)
 
