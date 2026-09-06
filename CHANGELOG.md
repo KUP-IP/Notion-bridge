@@ -12,6 +12,7 @@
   timeout→pending, tool exec, launch, and remote session start do not
   mutate notify stickies. Always Allow still persists per-tool + module
   Notify as designed. Rebased onto #263 (`awaiting_approval` pending-return).
+  Floor **4017 → 4027** (+10; pre-rebase isolated measure was 4013 → 4023).
   Does not implement #262 Confirm UX polish. Not Installed or Released.
 - **Request-tier `awaiting_approval` (#263)** — Remote `standing_orders_delete`
   (and every other Request-tier tool) no longer blocks the MCP caller on a
