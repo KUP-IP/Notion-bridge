@@ -64,12 +64,16 @@ public struct ConfirmCard: View {
                 BridgeButton(ConfirmPresentation.denyTitle, variant: .danger) {
                     PendingApprovalSurface.shared.submit(id: prompt.id, decision: .deny)
                 }
+                .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("confirm-deny")
                 BridgeButton(ConfirmPresentation.allowTitle) {
                     PendingApprovalSurface.shared.submit(id: prompt.id, decision: .allow)
                 }
                 .accessibilityIdentifier("confirm-allow")
                 if prompt.allowAlwaysAllow {
+                    // Visual primary only — never `.defaultAction`. Return /
+                    // Focus / LSUIElement default-button delivery must not
+                    // persist Notify (#264). UX polish of this card is #262.
                     BridgeButton(ConfirmPresentation.alwaysAllowTitle, variant: .primary) {
                         PendingApprovalSurface.shared.submit(id: prompt.id, decision: .alwaysAllow)
                     }

@@ -839,6 +839,205 @@ func runSecurityGateUXTests() async {
         try expect(ConfirmPanelController.canPresentPanel == false,
                    "TheBridgeTests must not create a WindowServer Confirm panel")
         try expect(ConfirmPanelController.windowTitle == "Confirm")
+        try expect(ConfirmPanelController.assignsDefaultButton == false,
+                   "Confirm NSPanel must not assign a default button (#264)")
+    }
+
+    // ============================================================
+    // MARK: - #264 Notify stickies only on explicit Always Allow
+    // ============================================================
+
+    await test("#264 compact banner first action is Allow, not Always Allow") {
+        let ids = ConfirmPresentation.compactBannerActionIdentifiers(allowAlwaysAllow: true)
+        try expect(ids.first == "ALLOW_ACTION",
+                   "compact first action must be Allow so a misfire cannot persist Notify")
+        try expect(ids.contains("ALWAYS_ALLOW"),
+                   "Always Allow must remain a visible compact action")
+        try expect(ids != ["ALWAYS_ALLOW", "ALLOW_ACTION", "CANCEL_ACTION"],
+                   "PKT-549 Always-Allow-first order is the #264 false-sticky trigger")
+    }
+
+    await test("#264 Always Allow is never the Confirm keyboard default") {
+        try expect(
+            ConfirmPresentation.keyboardRole(forActionTitle: ConfirmPresentation.alwaysAllowTitle)
+                == .none
+        )
+        try expect(
+            ConfirmPresentation.keyboardRole(forActionTitle: ConfirmPresentation.allowTitle)
+                == .none
+        )
+        try expect(
+            ConfirmPresentation.keyboardRole(forActionTitle: ConfirmPresentation.denyTitle)
+                == .cancel
+        )
+    }
+
+    await test("#264 modal path never returns alwaysAllow") {
+        for response in [
+            NSApplication.ModalResponse.alertFirstButtonReturn,
+            NSApplication.ModalResponse.alertSecondButtonReturn,
+            NSApplication.ModalResponse.alertThirdButtonReturn,
+            NSApplication.ModalResponse.cancel
+        ] {
+            let decision = NotificationApprovalManager.decisionForModalResponse(response)
+            if case .alwaysAllow = decision {
+                throw TestError.assertion("NSAlert fallback must not persist Notify")
+            }
+        }
+    }
+
+    await test("#264 clean prefs + Allow does not write notify stickies") {
+        try await withCleanNotifyStickyPrefs {
+            let provider = TestSecurityApprovalProvider(decision: .allow)
+            let gate = SecurityGate(approvalProvider: provider)
+            let decision = await gate.enforce(
+                toolName: "standing_orders_delete",
+                tier: .request,
+                arguments: .object(["id": .string("264-allow")]),
+                module: "standing_orders",
+                context: ToolDispatchContext(
+                    transportSessionId: ToolDispatchContext.remoteConnectorJSONSessionID,
+                    origin: .remote
+                )
+            )
+            switch decision {
+            case .allow: break
+            default: throw TestError.assertion("Allow must admit, got \(decision)")
+            }
+            try expectNotifyStickiesAbsent()
+            try expect(NotifyStickyPersistLog.lastRecord() == nil,
+                       "Allow must not record a notify sticky persist")
+        }
+    }
+
+    await test("#264 clean prefs + Deny does not write notify stickies") {
+        try await withCleanNotifyStickyPrefs {
+            let provider = TestSecurityApprovalProvider(decision: .deny)
+            let gate = SecurityGate(approvalProvider: provider)
+            let decision = await gate.enforce(
+                toolName: "standing_orders_delete",
+                tier: .request,
+                arguments: .object(["id": .string("264-deny")]),
+                module: "standing_orders"
+            )
+            switch decision {
+            case .reject: break
+            default: throw TestError.assertion("Deny must reject, got \(decision)")
+            }
+            try expectNotifyStickiesAbsent()
+            try expect(NotifyStickyPersistLog.lastRecord() == nil)
+        }
+    }
+
+    await test("#264 clean prefs + pending does not write notify stickies") {
+        try await withCleanNotifyStickyPrefs {
+            let provider = TestSecurityApprovalProvider(decision: .pending)
+            let gate = SecurityGate(approvalProvider: provider)
+            let decision = await gate.enforce(
+                toolName: "standing_orders_delete",
+                tier: .request,
+                arguments: .object(["id": .string("264-pending")]),
+                module: "standing_orders",
+                context: ToolDispatchContext(
+                    transportSessionId: "cloud-agent-264",
+                    origin: .remote
+                )
+            )
+            switch decision {
+            case .awaitingApproval: break
+            default: throw TestError.assertion("pending must await, got \(decision)")
+            }
+            try expectNotifyStickiesAbsent()
+            try expect(NotifyStickyPersistLog.lastRecord() == nil,
+                       "timeout→pending must not persist Notify")
+        }
+    }
+
+    await test("#264 Always Allow still persists per-tool + module notify") {
+        try await withCleanNotifyStickyPrefs {
+            let provider = TestSecurityApprovalProvider(decision: .alwaysAllow)
+            let gate = SecurityGate(approvalProvider: provider)
+            let decision = await gate.enforce(
+                toolName: "standing_orders_delete",
+                tier: .request,
+                arguments: .object(["id": .string("264-aa")]),
+                module: "standing_orders"
+            )
+            switch decision {
+            case .allow: break
+            default: throw TestError.assertion("Always Allow must admit, got \(decision)")
+            }
+            try expectNotifyStickiesPresent()
+            let record = NotifyStickyPersistLog.lastRecord()
+            try expect(record?.toolName == "standing_orders_delete")
+            try expect(record?.module == "standing_orders")
+            try expect(record?.source == .requestApproval)
+            try expect(record?.tier == SecurityTier.notify.rawValue)
+        }
+    }
+
+    await test("#264 Confirm surface Allow does not persist notify") {
+        try await withCleanNotifyStickyPrefs {
+            PendingApprovalSurface.shared.resetForTesting()
+            defer { PendingApprovalSurface.shared.resetForTesting() }
+            let prompt = PendingApprovalPrompt(
+                id: "264-surface-allow",
+                title: "The Bridge wants to standing_orders_delete",
+                body: "id=264-surface-allow",
+                toolName: "standing_orders_delete",
+                module: "standing_orders",
+                allowAlwaysAllow: true,
+                origin: .remote
+            )
+            PendingApprovalSurface.shared.publish(prompt)
+            let approvalManager = NotificationApprovalManager(approvalTimeout: 1)
+            PendingApprovalSurface.shared.submit(id: prompt.id, decision: .allow)
+            _ = approvalManager
+            try expectNotifyStickiesAbsent()
+            try expect(NotifyStickyPersistLog.lastRecord() == nil,
+                       "Confirm Allow must not persist Notify")
+        }
+    }
+
+    await test("#264 Confirm surface Always Allow persists with source") {
+        try await withCleanNotifyStickyPrefs {
+            PendingApprovalSurface.shared.resetForTesting()
+            defer { PendingApprovalSurface.shared.resetForTesting() }
+            let prompt = PendingApprovalPrompt(
+                id: "264-surface-aa",
+                title: "The Bridge wants to standing_orders_delete",
+                body: "id=264-surface-aa",
+                toolName: "standing_orders_delete",
+                module: "standing_orders",
+                allowAlwaysAllow: true,
+                origin: .remote
+            )
+            PendingApprovalSurface.shared.publish(prompt)
+            let approvalManager = NotificationApprovalManager(approvalTimeout: 1)
+            PendingApprovalSurface.shared.submit(id: prompt.id, decision: .alwaysAllow)
+            _ = approvalManager
+            try expectNotifyStickiesPresent()
+            let record = NotifyStickyPersistLog.lastRecord()
+            try expect(record?.source == .confirmSurface,
+                       "surface Always Allow must log confirm_surface, got \(record?.source.rawValue ?? "nil")")
+            try expect(record?.toolName == "standing_orders_delete")
+            try expect(record?.module == "standing_orders")
+        }
+    }
+
+    await test("#264 default/dismiss banner actions are not Always Allow") {
+        try expect(
+            ConfirmPresentation.outcome(forNotificationActionIdentifier: UNNotificationDefaultActionIdentifier)
+                != .resolve(.alwaysAllow)
+        )
+        try expect(
+            ConfirmPresentation.outcome(forNotificationActionIdentifier: UNNotificationDismissActionIdentifier)
+                != .resolve(.alwaysAllow)
+        )
+        try expect(
+            ConfirmPresentation.outcome(forNotificationActionIdentifier: "ALLOW_ACTION")
+                == .resolve(.allow)
+        )
     }
 
     // ============================================================
@@ -1040,4 +1239,56 @@ private func withCleanStandingOrderTierOverrides(_ body: () async throws -> Void
     // Isolate the Request-tier contract from the broker governed-session gate.
     UserDefaults.standard.set(false, forKey: governedKey)
     try await body()
+}
+
+private func withCleanNotifyStickyPrefs(
+    tool: String = "standing_orders_delete",
+    module: String = "standing_orders",
+    _ body: () async throws -> Void
+) async throws {
+    let perTool = BridgeDefaults.tierOverrides
+    let perModule = BridgeDefaults.moduleTierOverrides
+    var tools = UserDefaults.standard.dictionary(forKey: perTool) as? [String: String] ?? [:]
+    var mods = UserDefaults.standard.dictionary(forKey: perModule) as? [String: String] ?? [:]
+    let priorTool = tools[tool]
+    let priorMod = mods[module]
+    defer {
+        var t = UserDefaults.standard.dictionary(forKey: perTool) as? [String: String] ?? [:]
+        var m = UserDefaults.standard.dictionary(forKey: perModule) as? [String: String] ?? [:]
+        if let priorTool { t[tool] = priorTool } else { t.removeValue(forKey: tool) }
+        if let priorMod { m[module] = priorMod } else { m.removeValue(forKey: module) }
+        UserDefaults.standard.set(t, forKey: perTool)
+        UserDefaults.standard.set(m, forKey: perModule)
+        NotifyStickyPersistLog.resetForTesting()
+    }
+    tools.removeValue(forKey: tool)
+    mods.removeValue(forKey: module)
+    UserDefaults.standard.set(tools, forKey: perTool)
+    UserDefaults.standard.set(mods, forKey: perModule)
+    NotifyStickyPersistLog.resetForTesting()
+    try await body()
+}
+
+private func expectNotifyStickiesAbsent(
+    tool: String = "standing_orders_delete",
+    module: String = "standing_orders"
+) throws {
+    let tools = UserDefaults.standard.dictionary(forKey: BridgeDefaults.tierOverrides) as? [String: String] ?? [:]
+    let mods = UserDefaults.standard.dictionary(forKey: BridgeDefaults.moduleTierOverrides) as? [String: String] ?? [:]
+    try expect(tools[tool] != SecurityTier.notify.rawValue,
+               "per-tool notify sticky must be absent, got \(tools[tool] ?? "nil")")
+    try expect(mods[module] != SecurityTier.notify.rawValue,
+               "module notify sticky must be absent, got \(mods[module] ?? "nil")")
+}
+
+private func expectNotifyStickiesPresent(
+    tool: String = "standing_orders_delete",
+    module: String = "standing_orders"
+) throws {
+    let tools = UserDefaults.standard.dictionary(forKey: BridgeDefaults.tierOverrides) as? [String: String] ?? [:]
+    let mods = UserDefaults.standard.dictionary(forKey: BridgeDefaults.moduleTierOverrides) as? [String: String] ?? [:]
+    try expect(tools[tool] == SecurityTier.notify.rawValue,
+               "Always Allow must persist per-tool Notify, got \(tools[tool] ?? "nil")")
+    try expect(mods[module] == SecurityTier.notify.rawValue,
+               "Always Allow must persist module Notify, got \(mods[module] ?? "nil")")
 }

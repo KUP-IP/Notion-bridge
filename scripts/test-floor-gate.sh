@@ -181,7 +181,12 @@
 #   First Request call returns pending immediately (no 25s UN wait /
 #   NSAlert auto-allow). +4 SecurityGateUXTests. CI run 34060644427
 #   measured 4017 passed, 0 failed on 4d91254.
-FLOOR="${BRIDGE_TEST_FLOOR:-4017}"
+# 2026-09-07: 4017 → 4027 (+10) — #264 notify stickies only on explicit
+#   Always Allow, rebased onto #263. Compact banner Allow-first; Confirm
+#   no default button; persistNotifySticky source log. +10
+#   SecurityGateUXTests. Isolated #264 measure was 4013 → 4023 on CI run
+#   34061106853 (SHA 35d2737); stacked floor is additive 4017 + 10.
+FLOOR="${BRIDGE_TEST_FLOOR:-4027}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

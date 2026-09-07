@@ -72,12 +72,71 @@ public enum GateDecision: Sendable {
     case awaitingApproval(id: String)
 }
 
-public enum SecurityApprovalDecision: Sendable {
+public enum SecurityApprovalDecision: Sendable, Equatable {
     case allow
     case deny
     case alwaysAllow
     /// MCP-safe: the caller should return without running the tool; Allow may still arrive.
     case pending
+}
+
+/// Why a Notify sticky was written. Only explicit Always Allow sources
+/// may persist (#264). Compact-banner first action, default button,
+/// Allow, Deny, timeout, launch, and session start are not sources.
+public enum NotifyStickyDecisionSource: String, Sendable, Equatable {
+    case confirmSurface = "confirm_surface"
+    case notificationAlwaysAllow = "notification_always_allow"
+    case requestApproval = "request_approval"
+}
+
+public struct NotifyStickyPersistRecord: Sendable, Equatable {
+    public let toolName: String
+    public let module: String
+    public let source: NotifyStickyDecisionSource
+    public let tier: String
+
+    public init(
+        toolName: String,
+        module: String,
+        source: NotifyStickyDecisionSource,
+        tier: String = SecurityTier.notify.rawValue
+    ) {
+        self.toolName = toolName
+        self.module = module
+        self.source = source
+        self.tier = tier
+    }
+}
+
+/// Instrumented last-persist hook for hermetic tests (#264).
+public enum NotifyStickyPersistLog: Sendable {
+    private final class Box: @unchecked Sendable {
+        let lock = NSLock()
+        var last: NotifyStickyPersistRecord?
+    }
+
+    private static let box = Box()
+
+    public static func resetForTesting() {
+        box.lock.lock()
+        box.last = nil
+        box.lock.unlock()
+    }
+
+    public static func lastRecord() -> NotifyStickyPersistRecord? {
+        box.lock.lock()
+        defer { box.lock.unlock() }
+        return box.last
+    }
+
+    static func record(_ record: NotifyStickyPersistRecord) {
+        box.lock.lock()
+        box.last = record
+        box.lock.unlock()
+        print(
+            "[SecurityGate] Persist notify sticky tool=\(record.toolName) module=\(record.module) source=\(record.source.rawValue)"
+        )
+    }
 }
 
 public protocol SecurityApprovalProviding: Sendable {
@@ -535,6 +594,7 @@ public actor SecurityGate {
             title: title,
             body: approvalBody,
             toolName: toolName,
+            module: module,
             allowAlwaysAllow: true,
             origin: origin
         )
@@ -575,23 +635,15 @@ public actor SecurityGate {
         return decision
     }
 
-    /// Persist an Always-Allow grant. Writes the legacy per-tool override and,
-    /// when a module name is present, a module-scoped override so sibling tools
-    /// in the same module are covered (fb-securitygate point 2).
+    /// Persist an Always-Allow grant. Single chokepoint used by the
+    /// request-tier `.alwaysAllow` return (#264). Writes the legacy per-tool
+    /// override and, when a module name is present, a module-scoped override.
     private func persistNotifyTierOverride(toolName: String, module: String) {
-        let perTool = BridgeDefaults.tierOverrides
-        var toolDict = UserDefaults.standard.dictionary(forKey: perTool) as? [String: String] ?? [:]
-        toolDict[toolName] = SecurityTier.notify.rawValue
-        UserDefaults.standard.set(toolDict, forKey: perTool)
-
-        if !module.isEmpty {
-            let perModule = BridgeDefaults.moduleTierOverrides
-            var modDict = UserDefaults.standard.dictionary(forKey: perModule) as? [String: String] ?? [:]
-            modDict[module] = SecurityTier.notify.rawValue
-            UserDefaults.standard.set(modDict, forKey: perModule)
-        }
-
-        NotificationCenter.default.post(name: .notionBridgeTierOverridesDidChange, object: nil)
+        NotificationApprovalManager.persistNotifySticky(
+            toolName: toolName,
+            module: module,
+            source: .requestApproval
+        )
     }
 
     private func normalizeWhitespace(_ value: String) -> String {
@@ -940,7 +992,11 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             decision: decision
         )
         if decision == .alwaysAllow {
-            Self.persistTierOverride(toolName: prompt.toolName, tier: SecurityTier.notify.rawValue)
+            Self.persistNotifySticky(
+                toolName: prompt.toolName,
+                module: prompt.module,
+                source: .confirmSurface
+            )
         }
         PendingApprovalSurface.shared.remove(id: id)
         if let identifier, let center {
@@ -1145,17 +1201,18 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
     private func registerCategories() {
         guard let center else { return }
-        // PKT-549: Action ordering — Always Allow first (visible in compact banner),
-        // Allow second, Cancel third (destructive/red). macOS only shows first 2 actions
-        // without expanding the notification, so Always Allow + Allow must lead.
-        let alwaysAllowAction = UNNotificationAction(
-            identifier: Self.alwaysAllowActionIdentifier,
-            title: "Always Allow",
-            options: []
-        )
+        // #264: Allow first (visible compact-banner button). A first-action /
+        // Focus / LSUIElement misfire must be one-shot Allow — never Always
+        // Allow, which would rewrite Notify stickies. Always Allow remains the
+        // second compact action (macOS shows the first two without expanding).
         let allowAction = UNNotificationAction(
             identifier: Self.allowActionIdentifier,
             title: "Allow",
+            options: []
+        )
+        let alwaysAllowAction = UNNotificationAction(
+            identifier: Self.alwaysAllowActionIdentifier,
+            title: "Always Allow",
             options: []
         )
         let cancelAction = UNNotificationAction(
@@ -1165,7 +1222,14 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         )
         let category = UNNotificationCategory(
             identifier: Self.categoryIdentifier,
-            actions: [alwaysAllowAction, allowAction, cancelAction],
+            actions: ConfirmPresentation.compactBannerActionIdentifiers(allowAlwaysAllow: true).compactMap { id in
+                switch id {
+                case Self.allowActionIdentifier: return allowAction
+                case Self.alwaysAllowActionIdentifier: return alwaysAllowAction
+                case Self.cancelActionIdentifier: return cancelAction
+                default: return nil
+                }
+            },
             intentIdentifiers: [],
             options: []
         )
@@ -1262,12 +1326,41 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
 
     // PKT-552: Persist a tier override from a notification action handler.
     // Used by Silence (→ "open") and Require Approval (→ "request").
+    // Not the Always-Allow Notify sticky path — that is `persistNotifySticky`.
     static func persistTierOverride(toolName: String, tier: String) {
         let key = BridgeDefaults.tierOverrides
         var dict = UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
         dict[toolName] = tier
         UserDefaults.standard.set(dict, forKey: key)
         NotificationCenter.default.post(name: .notionBridgeTierOverridesDidChange, object: nil)
+    }
+
+    /// Always-Allow Notify sticky. Writes per-tool and, when `module` is
+    /// non-empty, per-module. Call only from explicit Always Allow
+    /// (Confirm surface / NC `ALWAYS_ALLOW` / request-tier `.alwaysAllow`).
+    static func persistNotifySticky(
+        toolName: String,
+        module: String,
+        source: NotifyStickyDecisionSource
+    ) {
+        let perTool = BridgeDefaults.tierOverrides
+        var toolDict = UserDefaults.standard.dictionary(forKey: perTool) as? [String: String] ?? [:]
+        toolDict[toolName] = SecurityTier.notify.rawValue
+        UserDefaults.standard.set(toolDict, forKey: perTool)
+
+        if !module.isEmpty {
+            let perModule = BridgeDefaults.moduleTierOverrides
+            var modDict = UserDefaults.standard.dictionary(forKey: perModule) as? [String: String] ?? [:]
+            modDict[module] = SecurityTier.notify.rawValue
+            UserDefaults.standard.set(modDict, forKey: perModule)
+        }
+
+        NotificationCenter.default.post(name: .notionBridgeTierOverridesDidChange, object: nil)
+        NotifyStickyPersistLog.record(NotifyStickyPersistRecord(
+            toolName: toolName,
+            module: module,
+            source: source
+        ))
     }
 
     public func requestPermission() async {
@@ -1385,8 +1478,21 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             let prefix = "The Bridge wants to "
             return title.hasPrefix(prefix) ? String(title.dropFirst(prefix.count)) : title
         }()
+        // Same key as requestApproval — title/body/Always-Allow fold. Look up
+        // the already-published Confirm card so banner Always Allow can persist
+        // both per-tool and module stickies (#264). Do not use the UN UUID;
+        // surface ids are digest-based.
+        let promptKey = Self.coalesceKey(
+            allowAlwaysAllowAction: allowAlwaysAllowAction,
+            title: title,
+            body: body
+        )
+        let module = PendingApprovalSurface.shared.snapshot()
+            .first(where: { $0.coalesceKey == promptKey })?
+            .module ?? ""
         content.userInfo = [
             "toolName": toolName,
+            "module": module,
             "argumentsSummary": body,
             "riskLevel": "high",
             "categoryType": allowAlwaysAllowAction
@@ -1510,7 +1616,12 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
                     decision: decision
                 )
                 if decision == .alwaysAllow, let toolName = userInfo["toolName"] as? String {
-                    Self.persistTierOverride(toolName: toolName, tier: SecurityTier.notify.rawValue)
+                    let module = userInfo["module"] as? String ?? ""
+                    Self.persistNotifySticky(
+                        toolName: toolName,
+                        module: module,
+                        source: .notificationAlwaysAllow
+                    )
                 }
                 let title = response.notification.request.content.title
                 let body = response.notification.request.content.body

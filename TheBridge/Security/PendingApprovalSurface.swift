@@ -22,6 +22,7 @@ public struct PendingApprovalPrompt: Sendable, Equatable, Identifiable {
     public let title: String
     public let body: String
     public let toolName: String
+    public let module: String
     public let allowAlwaysAllow: Bool
     public let origin: ToolDispatchOrigin
     public let createdAt: Date
@@ -31,6 +32,7 @@ public struct PendingApprovalPrompt: Sendable, Equatable, Identifiable {
         title: String,
         body: String,
         toolName: String,
+        module: String = "",
         allowAlwaysAllow: Bool,
         origin: ToolDispatchOrigin,
         createdAt: Date = Date()
@@ -39,6 +41,7 @@ public struct PendingApprovalPrompt: Sendable, Equatable, Identifiable {
         self.title = title
         self.body = body
         self.toolName = toolName
+        self.module = module
         self.allowAlwaysAllow = allowAlwaysAllow
         self.origin = origin
         self.createdAt = createdAt
