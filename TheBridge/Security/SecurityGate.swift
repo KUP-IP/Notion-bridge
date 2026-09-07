@@ -1478,8 +1478,17 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
             let prefix = "The Bridge wants to "
             return title.hasPrefix(prefix) ? String(title.dropFirst(prefix.count)) : title
         }()
+        // Same key as requestApproval — title/body/Always-Allow fold. Look up
+        // the already-published Confirm card so banner Always Allow can persist
+        // both per-tool and module stickies (#264). Do not use the UN UUID;
+        // surface ids are digest-based.
+        let promptKey = Self.coalesceKey(
+            allowAlwaysAllowAction: allowAlwaysAllowAction,
+            title: title,
+            body: body
+        )
         let module = PendingApprovalSurface.shared.snapshot()
-            .first(where: { $0.coalesceKey == coalesceKey })?
+            .first(where: { $0.coalesceKey == promptKey })?
             .module ?? ""
         content.userInfo = [
             "toolName": toolName,
