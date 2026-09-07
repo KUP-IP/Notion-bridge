@@ -192,7 +192,13 @@
 #   visible, dual-notify / Focus docs. +7 ConfirmPresentationUXTests
 #   stacked on #267's 4027. CI must re-measure (Linux host cannot
 #   compile macOS 26).
-FLOOR="${BRIDGE_TEST_FLOOR:-4034}"
+# 2026-09-07: 4034 → 4038 (+4) — #262 LIVE FAIL rewrite hermetic extras
+#   (auto-front from pending surface, not host flag). CI run 34138318943
+#   on be574b51 measured 4038 total / 4037 passed / 1 failed: surface
+#   observer Task hop raced `second escalate re-asserts presented`.
+#   Observer now MainActor.assumeIsolated; test asserts on one hop.
+#   Floor is the measured green count after that race fix.
+FLOOR="${BRIDGE_TEST_FLOOR:-4038}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

@@ -108,7 +108,9 @@ public enum ConfirmPresentation {
 
 /// AppKit Confirm panel. The host calls this after every surface-driven
 /// present/hide so live fronting does not depend on AppDelegate's
-/// `Task { @MainActor }` hop (#262 LIVE on f1c71cc7).
+/// `Task { @MainActor }` hop (#262 LIVE on f1c71cc7). The surface
+/// observer itself is `MainActor.assumeIsolated` on `queue: .main` —
+/// no second Task hop.
 @MainActor
 public protocol ConfirmPanelPresenting: AnyObject {
     func syncConfirmPanel()
@@ -148,7 +150,12 @@ public final class ConfirmPanelHost {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            // queue: .main already delivers on the main thread. A second
+            // Task hop races status-item click vs. surface re-assert
+            // (CI flake on be574b51: lastPresentReason overwritten
+            // before the next MainActor.run). Same pattern as
+            // EnableCloudAccessFlow's auth callback.
+            MainActor.assumeIsolated {
                 self?.handleSurfaceChange()
             }
         }

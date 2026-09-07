@@ -13,8 +13,13 @@
   surface, not `host.isPresented`. Always Allow on the body is a
   tap-only control (not a SwiftUI `Button` / AppKit default). Compact
   `ALWAYS_ALLOW` requires unlock + foreground. Persist still only on
-  explicit Always Allow. Source Tested only — no install. Floor stays
-  **4034** until Mac CI measures the new green count (expected +4).
+  explicit Always Allow. Source Tested only — no install. Floor
+  **4034 → 4038** (+4). CI run 34138318943 measured 4038 total /
+  4037 passed; the one fail was a MainActor race in
+  `second escalate re-asserts presented` (surface observer Task hop
+  overwrote `statusItemClick` before the next hop). Observer is now
+  `MainActor.assumeIsolated` on the main-queue note; the test asserts
+  click + re-front on one hop.
 - **Security UX Confirm presentation (#262)** — Request-tier Confirm
   assertively fronts a sticky panel on escalate (activate + `.regular`
   while visible, status-bar level, becomes key). Always Allow is the

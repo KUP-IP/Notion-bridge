@@ -74,12 +74,19 @@ func runConfirmPresentationUXTests() async {
             allowAlwaysAllow: true,
             origin: .local
         ))
-        await MainActor.run { ConfirmPanelHost.shared.handleStatusItemClick() }
-        try expect(await MainActor.run { ConfirmPanelHost.shared.lastPresentReason } == .statusItemClick)
-        await MainActor.run { ConfirmPanelHost.shared.handleSurfaceChange() }
-        try expect(await MainActor.run { ConfirmPanelHost.shared.isPresented })
-        try expect(await MainActor.run { ConfirmPanelHost.shared.lastPresentReason } == .pendingRequest,
-                   "surface publish must re-assert escalate, not stay ATTENTION-click-only")
+        try await waitUntilConfirmPresented()
+        // Click + re-assert on one MainActor hop so a leftover surface
+        // observer cannot overwrite statusItemClick before the expect.
+        try await MainActor.run {
+            ConfirmPanelHost.shared.handleStatusItemClick()
+            try expect(ConfirmPanelHost.shared.lastPresentReason == .statusItemClick)
+            ConfirmPanelHost.shared.handleSurfaceChange()
+            try expect(ConfirmPanelHost.shared.isPresented)
+            try expect(
+                ConfirmPanelHost.shared.lastPresentReason == .pendingRequest,
+                "surface publish must re-assert escalate, not stay ATTENTION-click-only"
+            )
+        }
     }
 
     await test("Always Allow is visual primary and never the keyboard default") {
