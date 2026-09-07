@@ -142,11 +142,11 @@ public struct ConfirmCard: View {
         .background(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .fill(BridgeTokens.warn.opacity(0.16))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 11, style: .continuous)
-                        .strokeBorder(BridgeTokens.warn.opacity(0.55), lineWidth: 1.5)
-                )
-        }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(BridgeTokens.warn.opacity(0.55), lineWidth: 1.5)
+        )
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 1.5, style: .continuous)
                 .fill(BridgeTokens.warn)
