@@ -81,15 +81,26 @@ public final class WindowTracker {
         let hasVisibleSettings = NSApp.windows.contains { window in
             window.isVisible && !window.isMiniaturized && isSettingsWindow(window)
         }
-        let hasVisibleConfirm = NSApp.windows.contains { window in
+        var hasVisibleConfirm = NSApp.windows.contains { window in
             window.isVisible && !window.isMiniaturized
                 && ConfirmDelivery.isConfirmWindowTitle(window.title)
+        }
+        let pendingConfirmCount = PendingApprovalSurface.shared.pendingCount
+        // Panel can lose the first orderFront (LSUIElement / Task hop).
+        // Re-sync while a Request is still pending so the body returns.
+        if pendingConfirmCount > 0 && !hasVisibleConfirm {
+            ConfirmPanelController.shared.sync()
+            hasVisibleConfirm = NSApp.windows.contains { window in
+                window.isVisible && !window.isMiniaturized
+                    && ConfirmDelivery.isConfirmWindowTitle(window.title)
+            }
         }
 
         let currentPolicy = NSApp.activationPolicy()
         let wantRegular = ConfirmDelivery.shouldUseRegularActivationPolicy(
             hasVisibleSettings: hasVisibleSettings,
-            hasVisibleConfirm: hasVisibleConfirm
+            hasVisibleConfirm: hasVisibleConfirm,
+            pendingConfirmCount: pendingConfirmCount
         )
 
         if wantRegular && currentPolicy != .regular {

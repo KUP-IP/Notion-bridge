@@ -11,6 +11,36 @@
 
 import SwiftUI
 
+/// Visual-primary Always Allow that is **not** a SwiftUI `Button`.
+/// The first `Button` in an NSHostingController becomes AppKit's
+/// default button after layout; a Return / Focus / activate misfire
+/// then persisted notify stickies without an Always Allow tap (#264).
+public struct ConfirmAlwaysAllowControl: View {
+    let action: () -> Void
+
+    public init(action: @escaping () -> Void) {
+        self.action = action
+    }
+
+    public var body: some View {
+        Text(ConfirmPresentation.alwaysAllowTitle)
+            .font(BridgeTokens.Typeface.base600)
+            .foregroundStyle(BridgeTokens.onAccent)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(BridgeTokens.accent)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { action() }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier("confirm-always-allow")
+            .accessibilityLabel(ConfirmPresentation.alwaysAllowTitle)
+    }
+}
+
 /// Shared Confirm cards — Dashboard popover and the sticky panel.
 public struct ConfirmCardStack: View {
     let prompts: [PendingApprovalPrompt]
@@ -114,11 +144,9 @@ public struct ConfirmCard: View {
                 .lineLimit(4)
             if prompt.allowAlwaysAllow {
                 VStack(alignment: .leading, spacing: 4) {
-                    BridgeButton(ConfirmPresentation.alwaysAllowTitle, variant: .primary) {
+                    ConfirmAlwaysAllowControl {
                         PendingApprovalSurface.shared.submit(id: prompt.id, decision: .alwaysAllow)
                     }
-                    .frame(maxWidth: .infinity)
-                    .accessibilityIdentifier("confirm-always-allow")
                     Text(ConfirmDelivery.alwaysAllowHint)
                         .font(BridgeTokens.Typeface.micro)
                         .foregroundStyle(BridgeTokens.fg3)

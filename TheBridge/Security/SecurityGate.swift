@@ -1213,7 +1213,7 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
         let alwaysAllowAction = UNNotificationAction(
             identifier: Self.alwaysAllowActionIdentifier,
             title: "Always Allow",
-            options: []
+            options: ConfirmDelivery.alwaysAllowNotificationActionOptions
         )
         let cancelAction = UNNotificationAction(
             identifier: Self.cancelActionIdentifier,
@@ -1612,7 +1612,11 @@ public final class NotificationApprovalManager: NSObject, @unchecked Sendable, U
                     coalesceKey: promptKey,
                     decision: decision
                 )
-                if decision == .alwaysAllow, let toolName = userInfo["toolName"] as? String {
+                if decision == .alwaysAllow,
+                   ConfirmPresentation.shouldPersistNotifySticky(
+                    forNotificationActionIdentifier: response.actionIdentifier
+                   ),
+                   let toolName = userInfo["toolName"] as? String {
                     let module = userInfo["module"] as? String ?? ""
                     Self.persistNotifySticky(
                         toolName: toolName,

@@ -11,7 +11,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-public final class ConfirmPanelController {
+public final class ConfirmPanelController: ConfirmPanelPresenting {
     public static let shared = ConfirmPanelController()
 
     public nonisolated static let windowTitle = "The Bridge — Confirm"
@@ -22,6 +22,17 @@ public final class ConfirmPanelController {
     private var panel: NSPanel?
 
     public init() {}
+
+    /// Wire the host so a remote `awaiting_approval` publish fronts
+    /// without waiting on AppDelegate's notification Task.
+    public static func registerAsPresenter() {
+        ConfirmPanelHost.shared.presenter = shared
+        ConfirmPanelHost.shared.bindToSurface()
+    }
+
+    public func syncConfirmPanel() {
+        sync()
+    }
 
     /// True when a Confirm panel is on-screen (tests inspect host state;
     /// this is the AppKit mirror for the live app).
@@ -55,6 +66,15 @@ public final class ConfirmPanelController {
         ConfirmFrontApplicator.apply(to: panel)
         self.panel = panel
         NotificationCenter.default.post(name: .confirmPanelDidChange, object: nil)
+        // SwiftUI's first Button becomes AppKit's default after layout and
+        // overwrites `defaultButtonCell = nil`. Always Allow is no longer a
+        // Button (#264); still re-clear + re-front on the next turn so
+        // LSUIElement cannot swallow the first orderFront (#262).
+        DispatchQueue.main.async { [weak panel] in
+            guard let panel else { return }
+            panel.defaultButtonCell = nil
+            ConfirmFrontApplicator.apply(to: panel)
+        }
     }
 
     public func dismiss() {
@@ -72,7 +92,7 @@ public final class ConfirmPanelController {
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled],
             backing: .buffered,
-            defer: true
+            defer: false
         )
         panel.title = Self.windowTitle
         panel.isFloatingPanel = true
