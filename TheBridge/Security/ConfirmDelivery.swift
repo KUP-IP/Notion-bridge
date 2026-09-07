@@ -33,6 +33,13 @@ public enum ConfirmDelivery {
 
     /// Escalate (surface publish) must open the body without a status-item click.
     public static let autoPresentsOnEscalate = true
+
+    /// AppKit sync keys off the pending surface, not `ConfirmPanelHost.isPresented`.
+    /// A WindowTracker re-front must not no-op while `awaiting_approval` is live
+    /// but the host Task hop has not landed (#262 LIVE).
+    public static func shouldPresentPanel(pendingPromptCount: Int) -> Bool {
+        pendingPromptCount > 0
+    }
     public static let activatesApplication = true
     public static let usesRegularActivationPolicy = true
     public static let becomesKey = true

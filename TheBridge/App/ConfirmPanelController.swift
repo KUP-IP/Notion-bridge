@@ -41,9 +41,9 @@ public final class ConfirmPanelController: ConfirmPanelPresenting {
     }
 
     public func sync() {
-        let host = ConfirmPanelHost.shared
-        if host.isPresented && !host.prompts.isEmpty {
-            present(prompts: host.prompts)
+        let prompts = PendingApprovalSurface.shared.snapshot()
+        if ConfirmDelivery.shouldPresentPanel(pendingPromptCount: prompts.count) {
+            present(prompts: prompts)
         } else {
             dismiss()
         }

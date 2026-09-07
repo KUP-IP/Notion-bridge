@@ -185,6 +185,11 @@ func runConfirmPresentationUXTests() async {
                 pendingConfirmCount: 0
             ) == false
         )
+        try expect(
+            ConfirmDelivery.shouldPresentPanel(pendingPromptCount: 1),
+            "sync must present from the pending surface even if host.isPresented is still false"
+        )
+        try expect(ConfirmDelivery.shouldPresentPanel(pendingPromptCount: 0) == false)
         try expect(ConfirmDelivery.isConfirmWindowTitle(ConfirmPanelController.windowTitle))
         try expect(ConfirmDelivery.isConfirmWindowTitle("Settings") == false)
         try expect(ConfirmDelivery.panelWindowLevelName == "statusBar")

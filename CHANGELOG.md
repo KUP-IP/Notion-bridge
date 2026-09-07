@@ -9,11 +9,12 @@
   Always Allow tap. Host now observes the pending surface and calls a
   presenter (no AppDelegate-only Task hop). WindowTracker keeps
   `.regular` while `pendingCount > 0` and re-syncs if the panel is
-  missing. Always Allow on the body is a tap-only control (not a
-  SwiftUI `Button` / AppKit default). Compact `ALWAYS_ALLOW` requires
-  unlock + foreground. Persist still only on explicit Always Allow.
-  Source Tested only — no install. Floor **4034 → TBD** (measure after
-  tests).
+  missing (re-entrancy guarded). Panel sync keys off the pending
+  surface, not `host.isPresented`. Always Allow on the body is a
+  tap-only control (not a SwiftUI `Button` / AppKit default). Compact
+  `ALWAYS_ALLOW` requires unlock + foreground. Persist still only on
+  explicit Always Allow. Source Tested only — no install. Floor stays
+  **4034** until Mac CI measures the new green count (expected +4).
 - **Security UX Confirm presentation (#262)** — Request-tier Confirm
   assertively fronts a sticky panel on escalate (activate + `.regular`
   while visible, status-bar level, becomes key). Always Allow is the
