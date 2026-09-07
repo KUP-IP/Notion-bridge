@@ -295,7 +295,7 @@ public enum SystemModule {
         if settings.authorizationStatus == .notDetermined {
             // Attempt authorization — ignore the result/error per N2 pattern
             do {
-                _ = try await center.requestAuthorization(options: [.alert, .sound])
+                _ = try await center.requestAuthorization(options: ConfirmDelivery.authorizationOptions)
             } catch {
                 // N2: Do NOT throw here — requestAuthorization error is unreliable.
                 // Fall through to re-check notificationSettings() below.

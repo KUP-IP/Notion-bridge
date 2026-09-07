@@ -759,6 +759,7 @@ await runStripeTokenizationTests()
 await runSecurityAuditTests()
 await runReadOnlyTierAuditTests()
 await runSecurityGateUXTests()        // fb-securitygate: coalescing + module-scoped Always-Allow + timeout seam
+await runConfirmPresentationUXTests() // #262 assertive Confirm + Time Sensitive registration (hermetic)
 await runToolTierResolutionTests()    // fb-securitygate-revoke-ui: module-aware effective tier + source + revoke
 
 

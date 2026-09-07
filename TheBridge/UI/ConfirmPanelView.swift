@@ -4,6 +4,10 @@
 // Hosted in a dedicated NSPanel (`ConfirmPanelController`) so LSUIElement
 // MenuBarExtra popover failure cannot hide the actions. Same submit path
 // as the SECURITY_APPROVAL notification (`PendingApprovalSurface.submit`).
+//
+// #262: Always Allow is the visual primary (full-width + hint). It is not
+// the keyboard default — #264 / PR #267 owns Return-key / compact-banner
+// ordering. Dashboard uses the same card stack under a louder section header.
 
 import SwiftUI
 
@@ -16,13 +20,52 @@ public struct ConfirmCardStack: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(prompts) { prompt in
                 ConfirmCard(prompt: prompt)
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("confirm-panel-body")
+    }
+}
+
+/// Dashboard / Security Confirm section chrome — hierarchy so Always Allow
+/// is not a quiet chip under the header.
+public struct ConfirmDashboardSection: View {
+    let prompts: [PendingApprovalPrompt]
+
+    public init(prompts: [PendingApprovalPrompt]) {
+        self.prompts = prompts
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(BridgeTokens.warnText)
+                Text(ConfirmDelivery.dashboardSectionTitle)
+                    .font(BridgeTokens.Typeface.body.weight(.semibold))
+                    .foregroundStyle(BridgeTokens.fg1)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: 4)
+                Text("\(prompts.count)")
+                    .font(BridgeTokens.Typeface.micro.weight(.bold).monospaced())
+                    .foregroundStyle(BridgeTokens.warnText)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule(style: .continuous)
+                            .fill(BridgeTokens.warn.opacity(0.22))
+                    )
+                    .accessibilityLabel("\(prompts.count) waiting")
+            }
+            ConfirmCardStack(prompts: prompts)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("confirm-dashboard-section")
+        .accessibilityLabel(ConfirmDelivery.dashboardSectionTitle)
     }
 }
 
@@ -34,20 +77,29 @@ public struct ConfirmCard: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "lock.shield")
-                    .font(.system(size: 12, weight: .semibold))
-                Text("Confirm")
-                    .font(BridgeTokens.Typeface.micro.weight(.semibold))
-                    .textCase(.uppercase)
-                    .tracking(0.5)
-                if prompt.origin == .remote {
-                    Text("remote")
-                        .font(BridgeTokens.Typeface.micro.weight(.semibold))
-                        .textCase(.uppercase)
-                        .tracking(0.4)
-                        .foregroundStyle(BridgeTokens.warnText)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(BridgeTokens.warnText)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text("Confirm")
+                            .font(BridgeTokens.Typeface.micro.weight(.semibold))
+                            .textCase(.uppercase)
+                            .tracking(0.5)
+                        if prompt.origin == .remote {
+                            Text("remote")
+                                .font(BridgeTokens.Typeface.micro.weight(.semibold))
+                                .textCase(.uppercase)
+                                .tracking(0.4)
+                                .foregroundStyle(BridgeTokens.warnText)
+                        }
+                    }
+                    Text(prompt.toolName)
+                        .font(BridgeTokens.Typeface.body.weight(.semibold))
+                        .foregroundStyle(BridgeTokens.fg1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 4)
             }
@@ -59,8 +111,22 @@ public struct ConfirmCard: View {
             Text(prompt.body)
                 .font(BridgeTokens.Typeface.micro.monospaced())
                 .foregroundStyle(BridgeTokens.fg3)
-                .lineLimit(3)
-            HStack(spacing: 6) {
+                .lineLimit(4)
+            if prompt.allowAlwaysAllow {
+                VStack(alignment: .leading, spacing: 4) {
+                    BridgeButton(ConfirmPresentation.alwaysAllowTitle, variant: .primary) {
+                        PendingApprovalSurface.shared.submit(id: prompt.id, decision: .alwaysAllow)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier("confirm-always-allow")
+                    Text(ConfirmDelivery.alwaysAllowHint)
+                        .font(BridgeTokens.Typeface.micro)
+                        .foregroundStyle(BridgeTokens.fg3)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("confirm-always-allow-hint")
+                }
+            }
+            HStack(spacing: 8) {
                 BridgeButton(ConfirmPresentation.denyTitle, variant: .danger) {
                     PendingApprovalSurface.shared.submit(id: prompt.id, decision: .deny)
                 }
@@ -70,26 +136,24 @@ public struct ConfirmCard: View {
                     PendingApprovalSurface.shared.submit(id: prompt.id, decision: .allow)
                 }
                 .accessibilityIdentifier("confirm-allow")
-                if prompt.allowAlwaysAllow {
-                    // Visual primary only — never `.defaultAction`. Return /
-                    // Focus / LSUIElement default-button delivery must not
-                    // persist Notify (#264). UX polish of this card is #262.
-                    BridgeButton(ConfirmPresentation.alwaysAllowTitle, variant: .primary) {
-                        PendingApprovalSurface.shared.submit(id: prompt.id, decision: .alwaysAllow)
-                    }
-                    .accessibilityIdentifier("confirm-always-allow")
-                }
             }
         }
-        .padding(10)
+        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .fill(BridgeTokens.warn.opacity(0.12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(BridgeTokens.warn.opacity(0.28), lineWidth: 0.5)
-                )
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(BridgeTokens.warn.opacity(0.16))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .strokeBorder(BridgeTokens.warn.opacity(0.55), lineWidth: 1.5)
+        )
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(BridgeTokens.warn)
+                .frame(width: 4)
+                .padding(.vertical, 10)
+                .padding(.leading, 2)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Confirm \(prompt.toolName)")
     }
@@ -104,18 +168,23 @@ public struct ConfirmPanelView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Confirm")
-                .font(BridgeTokens.Typeface.body.weight(.semibold))
-                .foregroundStyle(BridgeTokens.fg1)
-                .accessibilityAddTraits(.isHeader)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(BridgeTokens.warnText)
+                Text(ConfirmDelivery.panelHeadline)
+                    .font(BridgeTokens.Typeface.body.weight(.semibold))
+                    .foregroundStyle(BridgeTokens.fg1)
+                    .accessibilityAddTraits(.isHeader)
+            }
             ConfirmCardStack(prompts: prompts)
         }
-        .padding(14)
-        .frame(width: 360)
+        .padding(16)
+        .frame(width: 400)
         .background(BridgeTokens.bgCanvas)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("confirm-panel")
-        .accessibilityLabel("Confirm")
+        .accessibilityLabel(ConfirmDelivery.panelHeadline)
     }
 }

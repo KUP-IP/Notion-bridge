@@ -838,7 +838,7 @@ func runSecurityGateUXTests() async {
     await test("test process never opens a live Confirm NSPanel") {
         try expect(ConfirmPanelController.canPresentPanel == false,
                    "TheBridgeTests must not create a WindowServer Confirm panel")
-        try expect(ConfirmPanelController.windowTitle == "Confirm")
+        try expect(ConfirmPanelController.windowTitle == "The Bridge — Confirm")
         try expect(ConfirmPanelController.assignsDefaultButton == false,
                    "Confirm NSPanel must not assign a default button (#264)")
     }

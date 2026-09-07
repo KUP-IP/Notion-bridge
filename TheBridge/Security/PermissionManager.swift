@@ -882,7 +882,7 @@ public final class PermissionManager {
         if settings.authorizationStatus == .notDetermined, !notificationAuthorizationSyncAttempted {
             notificationAuthorizationSyncAttempted = true
             do {
-                _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+                _ = try await center.requestAuthorization(options: ConfirmDelivery.authorizationOptions)
             } catch {
                 print("[PermissionManager] requestAuthorization during checkNotifications: \(error.localizedDescription)")
             }
@@ -907,7 +907,7 @@ public final class PermissionManager {
     public func requestNotificationAccess() async -> Bool {
         let center = UNUserNotificationCenter.current()
         do {
-            _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+            _ = try await center.requestAuthorization(options: ConfirmDelivery.authorizationOptions)
         } catch {
             print("[PermissionManager] requestAuthorization error: \(error.localizedDescription)")
         }
@@ -943,15 +943,15 @@ public final class PermissionManager {
     }
 
     private func notificationSettingsObservedString(_ settings: UNNotificationSettings) -> String {
-        "authorizationStatus=\(settings.authorizationStatus.rawValue), alert=\(settings.alertSetting.rawValue), sound=\(settings.soundSetting.rawValue), badge=\(settings.badgeSetting.rawValue), center=\(settings.notificationCenterSetting.rawValue)"
+        "authorizationStatus=\(settings.authorizationStatus.rawValue), alert=\(settings.alertSetting.rawValue), sound=\(settings.soundSetting.rawValue), badge=\(settings.badgeSetting.rawValue), center=\(settings.notificationCenterSetting.rawValue), timeSensitive=\(settings.timeSensitiveSetting.rawValue)"
     }
 
     private func notificationSettingsDetail(_ settings: UNNotificationSettings) -> String {
         switch notificationStatus {
         case .granted:
-            return "Notifications are authorized and at least one delivery surface is enabled for The Bridge."
+            return "Notifications are authorized and at least one delivery surface is enabled for The Bridge. Confirm uses Time Sensitive — keep that option on in System Settings > Notifications > The Bridge so Focus can still show the banner. See docs/operator/confirm-focus-and-dual-notify.md."
         case .partiallyGranted:
-            return "Notifications are authorized, but all visible delivery surfaces are disabled. Open System Settings > Notifications and enable alerts, Notification Center, sound, or badges for The Bridge."
+            return "Notifications are authorized, but all visible delivery surfaces are disabled. Open System Settings > Notifications and enable alerts, Notification Center, sound, badges, and Time Sensitive for The Bridge."
         case .denied:
             return "Notifications were denied for The Bridge in System Settings."
         case .unknown:

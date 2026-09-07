@@ -186,7 +186,13 @@
 #   no default button; persistNotifySticky source log. +10
 #   SecurityGateUXTests. Isolated #264 measure was 4013 → 4023 on CI run
 #   34061106853 (SHA 35d2737); stacked floor is additive 4017 + 10.
-FLOOR="${BRIDGE_TEST_FLOOR:-4027}"
+# 2026-09-07: 4027 → 4034 (+7) — #262 assertive Confirm + Time Sensitive.
+#   Auto-present on escalate, Always Allow visual primary (not keyboard
+#   default), Time Sensitive registration, regular policy while Confirm
+#   visible, dual-notify / Focus docs. +7 ConfirmPresentationUXTests
+#   stacked on #267's 4027. CI must re-measure (Linux host cannot
+#   compile macOS 26).
+FLOOR="${BRIDGE_TEST_FLOOR:-4034}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests

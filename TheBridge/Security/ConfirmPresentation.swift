@@ -39,6 +39,8 @@ public enum ConfirmPresentation {
 
     /// Titles shown on the Confirm body. Always Allow is on every
     /// Request card (#258) unless the prompt itself opts out.
+    /// Order is Deny / Allow / Always Allow for the contract; the
+    /// view paints Always Allow as the visual primary (#262).
     public static func actionTitles(allowAlwaysAllow: Bool) -> [String] {
         if allowAlwaysAllow {
             return [denyTitle, allowTitle, alwaysAllowTitle]
@@ -129,8 +131,9 @@ public final class ConfirmPanelHost {
         lastPresentReason = .statusItemClick
     }
 
-    /// Surface publish / remove. A new pending Request presents the body
-    /// (remote and local — origin is not a second gate). Empty → hide.
+    /// Surface publish / remove. A new pending Request **always** presents
+    /// the body (remote and local — origin is not a second gate). ATTENTION
+    /// badge alone is not sufficient (#262). Empty → hide.
     public func handleSurfaceChange() {
         refreshPrompts()
         if prompts.isEmpty {
@@ -138,9 +141,7 @@ public final class ConfirmPanelHost {
             lastPresentReason = .none
         } else {
             isPresented = true
-            if lastPresentReason == .none {
-                lastPresentReason = .pendingRequest
-            }
+            lastPresentReason = .pendingRequest
         }
     }
 
