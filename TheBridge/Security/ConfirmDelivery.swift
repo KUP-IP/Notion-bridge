@@ -33,6 +33,13 @@ public enum ConfirmDelivery {
 
     /// Escalate (surface publish) must open the body without a status-item click.
     public static let autoPresentsOnEscalate = true
+
+    /// AppKit sync keys off the pending surface, not `ConfirmPanelHost.isPresented`.
+    /// A WindowTracker re-front must not no-op while `awaiting_approval` is live
+    /// but the host Task hop has not landed (#262 LIVE).
+    public static func shouldPresentPanel(pendingPromptCount: Int) -> Bool {
+        pendingPromptCount > 0
+    }
     public static let activatesApplication = true
     public static let usesRegularActivationPolicy = true
     public static let becomesKey = true
@@ -54,13 +61,26 @@ public enum ConfirmDelivery {
         case groupBridgeBannersDocumentOSMirroring
     }
 
-    /// LSUIElement windows hide on deactivate. Settings *or* Confirm keeps
-    /// `.regular` so the sticky panel can stay frontmost.
+    /// Always Allow on the compact banner must not be a silent/background
+    /// action. A Focus / content-extension / first-action misfire on an
+    /// unlocked Mac was rewriting notify stickies without a tap (#264 LIVE).
+    public static let alwaysAllowRequiresForeground = true
+    public static let alwaysAllowRequiresAuthentication = true
+    public static let alwaysAllowNotificationActionOptions: UNNotificationActionOptions = [
+        .authenticationRequired,
+        .foreground
+    ]
+
+    /// LSUIElement windows hide on deactivate. Settings, a visible Confirm
+    /// window, **or an in-flight Request** keeps `.regular`. WindowTracker
+    /// must not flip to `.accessory` before the panel is in `NSApp.windows`
+    /// (#262 LIVE on f1c71cc7).
     public static func shouldUseRegularActivationPolicy(
         hasVisibleSettings: Bool,
-        hasVisibleConfirm: Bool
+        hasVisibleConfirm: Bool,
+        pendingConfirmCount: Int = 0
     ) -> Bool {
-        hasVisibleSettings || hasVisibleConfirm
+        hasVisibleSettings || hasVisibleConfirm || pendingConfirmCount > 0
     }
 
     public static func isConfirmWindowTitle(_ title: String) -> Bool {

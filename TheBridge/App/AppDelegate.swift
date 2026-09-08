@@ -451,6 +451,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // Confirm body host: status-item click + pending Request publish
         // must open Deny / Allow / Always Allow and keep them visible.
         // MenuBarExtra popover is not the Confirm host (PR #260 live-fail).
+        ConfirmPanelController.registerAsPresenter()
         statusBar.setupConfirmClickHandler { [weak self] in
             ConfirmPanelHost.shared.handleStatusItemClick()
             self?.syncConfirmPanel()

@@ -855,6 +855,48 @@ func runSecurityGateUXTests() async {
                    "Always Allow must remain a visible compact action")
         try expect(ids != ["ALWAYS_ALLOW", "ALLOW_ACTION", "CANCEL_ACTION"],
                    "PKT-549 Always-Allow-first order is the #264 false-sticky trigger")
+        try expect(
+            ConfirmPresentation.shouldPersistNotifySticky(forNotificationActionIdentifier: ids[0])
+                == false,
+            "compact first action must not be a persistNotifySticky source"
+        )
+        try expect(
+            ConfirmPresentation.shouldPersistNotifySticky(forNotificationActionIdentifier: "ALWAYS_ALLOW")
+        )
+    }
+
+    await test("#264 NAM pending-return does not write notify stickies") {
+        try await withCleanNotifyStickyPrefs {
+            PendingApprovalSurface.shared.resetForTesting()
+            defer { PendingApprovalSurface.shared.resetForTesting() }
+            NotifyStickyPersistLog.resetForTesting()
+            let title = "The Bridge wants to standing_orders_delete"
+            let body = "id=264-nam-pending-\(UUID().uuidString)"
+            PendingApprovalSurface.shared.publish(PendingApprovalPrompt(
+                id: "264-nam-pending",
+                title: title,
+                body: body,
+                toolName: "standing_orders_delete",
+                module: "standing_orders",
+                allowAlwaysAllow: true,
+                origin: .remote
+            ))
+            let mgr = NotificationApprovalManager(approvalTimeout: 1)
+            let decision = await mgr.requestApproval(
+                title: title,
+                body: body,
+                allowAlwaysAllowAction: true,
+                forceModalReview: false
+            )
+            guard case .pending = decision else {
+                throw TestError.assertion("NAM must return pending, got \(decision)")
+            }
+            try expectNotifyStickiesAbsent()
+            try expect(NotifyStickyPersistLog.lastRecord() == nil,
+                       "awaiting_approval / pending must not persist Notify")
+            try expect(PendingApprovalSurface.shared.pendingCount == 1,
+                       "pending must keep the Confirm surface")
+        }
     }
 
     await test("#264 Always Allow is never the Confirm keyboard default") {

@@ -2,6 +2,24 @@
 
 ## Unreleased — hotfix on 4.0.7 / build 96 (not a published install)
 
+- **Confirm auto-front + notify-sticky LIVE fail (#262 / #264 on f1c71cc7)** —
+  Remote Request `standing_orders_delete` still returned `awaiting_approval`
+  (#263) but the Confirm NSPanel never auto-fronted and
+  `tierOverrides` / `moduleTierOverrides` rewrote to notify without an
+  Always Allow tap. Host now observes the pending surface and calls a
+  presenter (no AppDelegate-only Task hop). WindowTracker keeps
+  `.regular` while `pendingCount > 0` and re-syncs if the panel is
+  missing (re-entrancy guarded). Panel sync keys off the pending
+  surface, not `host.isPresented`. Always Allow on the body is a
+  tap-only control (not a SwiftUI `Button` / AppKit default). Compact
+  `ALWAYS_ALLOW` requires unlock + foreground. Persist still only on
+  explicit Always Allow. Source Tested only — no install. Floor
+  **4034 → 4038** (+4). CI run 34138318943 measured 4038 total /
+  4037 passed; the one fail was a MainActor race in
+  `second escalate re-asserts presented` (surface observer Task hop
+  overwrote `statusItemClick` before the next hop). Observer is now
+  `MainActor.assumeIsolated` on the main-queue note; the test asserts
+  click + re-front on one hop.
 - **Security UX Confirm presentation (#262)** — Request-tier Confirm
   assertively fronts a sticky panel on escalate (activate + `.regular`
   while visible, status-bar level, becomes key). Always Allow is the

@@ -134,8 +134,13 @@ public final class PendingApprovalSurface: @unchecked Sendable {
     }
 
     private func postChange() {
-        DispatchQueue.main.async {
+        let post = {
             NotificationCenter.default.post(name: .pendingApprovalSurfaceDidChange, object: nil)
+        }
+        if Thread.isMainThread {
+            post()
+        } else {
+            DispatchQueue.main.async(execute: post)
         }
     }
 }

@@ -73,6 +73,20 @@ public enum ConfirmPresentation {
         return .none
     }
 
+    /// Always Allow on the Confirm body is a tap-only control, not a
+    /// SwiftUI `Button`. The first `Button` in an NSHostingController
+    /// becomes AppKit's default button after layout and can fire without
+    /// an Always Allow tap (#264 LIVE on f1c71cc7).
+    public static let alwaysAllowIsDefaultCapableControl = false
+
+    /// Notify stickies persist only for the explicit ALWAYS_ALLOW action.
+    /// Compact first action (Allow), default tap, and dismiss must not.
+    public static func shouldPersistNotifySticky(
+        forNotificationActionIdentifier identifier: String
+    ) -> Bool {
+        identifier == NotificationApprovalManager.alwaysAllowActionIdentifier
+    }
+
     /// SECURITY_APPROVAL actions only. Unknown / default / dismiss
     /// present the body — they must not grant and must not Deny.
     public static func outcome(forNotificationActionIdentifier identifier: String) -> ConfirmNotificationOutcome {
@@ -92,6 +106,16 @@ public enum ConfirmPresentation {
     }
 }
 
+/// AppKit Confirm panel. The host calls this after every surface-driven
+/// present/hide so live fronting does not depend on AppDelegate's
+/// `Task { @MainActor }` hop (#262 LIVE on f1c71cc7). The surface
+/// observer itself is `MainActor.assumeIsolated` on `queue: .main` —
+/// no second Task hop.
+@MainActor
+public protocol ConfirmPanelPresenting: AnyObject {
+    func syncConfirmPanel()
+}
+
 /// In-process Confirm body. AppKit presents a sticky NSPanel from this
 /// state; tests assert presentation without a WindowServer panel.
 @MainActor
@@ -102,6 +126,9 @@ public final class ConfirmPanelHost {
     public private(set) var isPresented: Bool = false
     public private(set) var prompts: [PendingApprovalPrompt] = []
     public private(set) var lastPresentReason: PresentReason = .none
+    /// Live app sets this to `ConfirmPanelController`. Tests inject a recorder.
+    public weak var presenter: ConfirmPanelPresenting?
+    private var surfaceObserver: NSObjectProtocol?
 
     public enum PresentReason: String, Sendable, Equatable {
         case none
@@ -110,7 +137,29 @@ public final class ConfirmPanelHost {
         case notificationPresentBody
     }
 
-    public init() {}
+    public init() {
+        bindToSurface()
+    }
+
+    /// Observe `pendingApprovalSurfaceDidChange` so a remote MCP
+    /// `awaiting_approval` publish auto-presents without AppDelegate.
+    public func bindToSurface() {
+        guard surfaceObserver == nil else { return }
+        surfaceObserver = NotificationCenter.default.addObserver(
+            forName: .pendingApprovalSurfaceDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // queue: .main already delivers on the main thread. A second
+            // Task hop races status-item click vs. surface re-assert
+            // (CI flake on be574b51: lastPresentReason overwritten
+            // before the next MainActor.run). Same pattern as
+            // EnableCloudAccessFlow's auth callback.
+            MainActor.assumeIsolated {
+                self?.handleSurfaceChange()
+            }
+        }
+    }
 
     public var badgeCount: Int {
         PendingApprovalSurface.shared.pendingCount
@@ -129,6 +178,7 @@ public final class ConfirmPanelHost {
         guard !prompts.isEmpty else { return }
         isPresented = true
         lastPresentReason = .statusItemClick
+        presenter?.syncConfirmPanel()
     }
 
     /// Surface publish / remove. A new pending Request **always** presents
@@ -143,6 +193,7 @@ public final class ConfirmPanelHost {
             isPresented = true
             lastPresentReason = .pendingRequest
         }
+        presenter?.syncConfirmPanel()
     }
 
     /// Banner tap or swipe-away: same body as a status-item click.
@@ -151,12 +202,15 @@ public final class ConfirmPanelHost {
         guard !prompts.isEmpty else { return }
         isPresented = true
         lastPresentReason = .notificationPresentBody
+        presenter?.syncConfirmPanel()
     }
 
     public func resetForTesting() {
         isPresented = false
         prompts = []
         lastPresentReason = .none
+        presenter = nil
+        bindToSurface()
     }
 
     private func refreshPrompts() {
