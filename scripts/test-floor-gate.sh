@@ -198,7 +198,13 @@
 #   observer Task hop raced `second escalate re-asserts presented`.
 #   Observer now MainActor.assumeIsolated; test asserts on one hop.
 #   Floor is the measured green count after that race fix.
-FLOOR="${BRIDGE_TEST_FLOOR:-4038}"
+# 2026-09-08: 4038 → 4058 (+20) — #254 skill files catalog + materialize.
+#   Registry Skills seed binds files / googleDriveFile / manager; fetch_skill
+#   files[] + optional assetRoot; skill_materialize_file copies Notion-hosted
+#   binaries into skill-files/<uuid>/. +17 FetchSkillNotionFilesTests +2
+#   RegistryConfigTests +1 SkillsModuleTests. Linux host cannot compile
+#   macOS 26; CI must re-measure.
+FLOOR="${BRIDGE_TEST_FLOOR:-4058}"
 
 echo "🧪 test-floor-gate: building debug test executable + running suite (floor=${FLOOR})..."
 swift build -c debug --product TheBridgeTests
