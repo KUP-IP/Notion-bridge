@@ -17,7 +17,8 @@
   `ConfirmPanelSyncBridge` sync; Always Allow is auth-only (not unique
   foreground); `persistNotifySticky` refuses implicit / escalate /
   default-button sources. `#263` pending return is unchanged. Source
-  Tested only — no install. Floor raised after measure.
+  Tested only — no install. Floor **4038 → 4047** (+9). CI must
+  re-measure (this host cannot compile macOS 26).
 - **Confirm auto-front + notify-sticky LIVE fail (#262 / #264 on f1c71cc7)** —
   Remote Request `standing_orders_delete` still returned `awaiting_approval`
   (#263) but the Confirm NSPanel never auto-fronted and
